@@ -5,9 +5,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/anvil-project/anvil/internal/config"
 )
@@ -70,22 +72,79 @@ func commonArgs(t target, portFlag string) []string {
 	return args
 }
 
-// scpUpload copies localPath to t's remotePath.
-func scpUpload(ctx context.Context, t target, localPath, remotePath string) error {
+// scpUpload copies localPath to t's remotePath. scp's own progress meter
+// only ever writes to a real terminal (it checks stderr's isatty), so
+// redirecting its output into a buffer — the only way to still capture an
+// error message — means a multi-hundred-MB/GB disk transfer otherwise
+// produces zero output until it finishes or fails, which reads as hung
+// rather than working. progress gets a heartbeat line (elapsed time, plus
+// the file's total size so there's at least a sense of scale) every 5
+// seconds for as long as the transfer is still running — not real
+// byte-level progress (that would need parsing scp's own meter, which
+// isn't there to parse in a non-tty), but enough to show it's alive.
+func scpUpload(ctx context.Context, t target, localPath, remotePath string, progress func(status string)) error {
 	scpBin, err := exec.LookPath("scp")
 	if err != nil {
 		return fmt.Errorf("migrate: scp not found on PATH")
 	}
+	var sizeNote string
+	if info, err := os.Stat(localPath); err == nil {
+		sizeNote = fmt.Sprintf(" (%s)", humanBytes(info.Size()))
+	}
+
+	if progress != nil {
+		progress("uploading disk to target" + sizeNote)
+	}
+
 	args := commonArgs(t, "-P")
 	args = append(args, localPath, fmt.Sprintf("%s@%s:%s", t.User, t.Host, remotePath))
 
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, scpBin, args...)
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("migrate: scp to %s@%s: %w", t.User, t.Host, err)
+	}
+
+	done := make(chan struct{})
+	if progress != nil {
+		go func() {
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+			start := time.Now()
+			for {
+				select {
+				case <-done:
+					return
+				case <-ticker.C:
+					progress(fmt.Sprintf("uploading disk to target%s: still running after %s",
+						sizeNote, time.Since(start).Round(time.Second)))
+				}
+			}
+		}()
+	}
+	err = cmd.Wait()
+	close(done)
+	if err != nil {
 		return fmt.Errorf("migrate: scp to %s@%s: %w: %s", t.User, t.Host, err, stderr.String())
 	}
 	return nil
+}
+
+// humanBytes renders n as a short, human-readable size (KiB/MiB/...),
+// just for scpUpload's heartbeat note — not a general-purpose formatter,
+// so it doesn't need to handle negative sizes or anything past exabytes.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // sshRun runs remoteCommand on t, piping stdin to it and returning

@@ -192,6 +192,23 @@ message LaunchRequest {
   string role = 6;
 
   bool no_start = 7;
+
+  // Internal only, not meant to be set by a normal `anvil launch` — used
+  // by `anvil migrate-import` relaunching one member of a migrated
+  // intent, to pin the target's newly-created intent to the exact
+  // subnet/gateway/docker-IP-range — and, for a VM, the exact static
+  // address — the source intent already had, instead of letting
+  // IntentService auto-allocate a fresh one (see
+  // internal/migrate.Manager.migrateIntent's doc comment for why: a
+  // migrated VM's disk skips cloud-init entirely on relaunch, so its
+  // already-baked-in static network config, and whatever peer
+  // /etc/hosts entries it already has, have no chance to catch up to a
+  // brand new subnet on their own). Ignored unless intent_name is also
+  // set; pinned_static_ip is VM-only.
+  string pinned_subnet = 8;
+  string pinned_gateway = 9;
+  string pinned_docker_ip_range = 10;
+  string pinned_static_ip = 11;
 }
 
 message LaunchProgress {
@@ -537,8 +554,8 @@ message HostTestReply {
   string message = 2; // human-readable detail either way, e.g. the remote anvil version, or the SSH error
 }
 
-// MigrateService moves a single instance (M5; a whole intent is M7, not
-// built yet) to a different anvil host. Per the plan: no daemon-to-daemon
+// MigrateService moves a single instance (M5) or a whole intent as one
+// group (M7) to a different anvil host. Per the plan: no daemon-to-daemon
 // gRPC trust — the source daemon SSHes into the target host and drives
 // the target's own local `anvil` CLI (specifically `anvil migrate-import`,
 // a plumbing-only command not meant to be run by hand), which talks to
@@ -553,6 +570,20 @@ service MigrateService {
   // returned key into a target host's ~/.ssh/authorized_keys before
   // migrating to it — `anvil host add` alone grants no trust by itself.
   rpc Key(MigrateKeyRequest) returns (MigrateKeyReply);
+
+  // GuestKey asks the host named by `to` (over the same SSH channel
+  // Migrate itself drives, not a new trust relationship) for its own
+  // default anvil guest-access public key — the one that host's own
+  // `anvil launch` already bakes into every VM it creates (see
+  // internal/cli/commands's resolveSSHKeys/ensureDefaultAnvilKey). The
+  // CLI's own `anvil migrate` calls this *before* migrating a VM and
+  // injects the returned key into that VM's guest directly over SSH
+  // (while it's still running, using whatever key already got it in
+  // there) — a migrated disk skips cloud-init entirely on relaunch (see
+  // the plan's Migration section), so without this, nothing the target
+  // host's own anvil shell/exec/transfer could use would ever be
+  // authorized in a VM migrated from elsewhere.
+  rpc GuestKey(MigrateGuestKeyRequest) returns (MigrateGuestKeyReply);
 }
 
 message MigrateKeyRequest {}
@@ -561,7 +592,19 @@ message MigrateKeyReply {
   string public_key = 1;
 }
 
+message MigrateGuestKeyRequest {
+  string to = 1; // same resolution as MigrateRequest.to
+}
+
+message MigrateGuestKeyReply {
+  string public_key = 1;
+}
+
 message MigrateRequest {
+  // name is looked up as a single instance first, a whole intent second
+  // (the two are separate namespaces, nothing stops both existing under
+  // the same name — a plain instance is just the more common, more
+  // specific case, so it wins the lookup).
   string name = 1;
   string to = 2; // a known host's alias (HostService), or a literal "user@host[:port]"
 
@@ -570,14 +613,54 @@ message MigrateRequest {
   // last step and leaves the source instance running/stopped as-is.
   bool copy = 3;
 
-  string dest_name = 4; // optional rename on the target; defaults to the source's own name
+  string dest_name = 4; // single-instance migration only; rejected if name resolves to an intent
   bool dry_run = 5;     // validate connectivity/preconditions and report the plan, transfer nothing
+
+  // best_effort only applies when name resolves to an intent (rejected
+  // for a single instance): migrate every member independently instead
+  // of aborting the whole group and rolling back the target on the
+  // first member that fails. Whatever succeeds gets deleted from the
+  // source same as always; whatever fails is left alone, reported in
+  // IntentDone.members either way.
+  bool best_effort = 6;
 }
 
 message MigrateProgress {
   oneof event {
     string status = 1;
     string error = 2;
-    string done = 3; // the new instance's ID on the target, final event on success
+    string done = 3; // single-instance migration: the new instance's ID on the target, final event on success
+
+    // member_done reports one intent member's own result, only ever
+    // sent during an intent migration — one per member, all sent
+    // together right after the whole group has been attempted (plain
+    // status events already cover progress along the way), immediately
+    // followed by the terminal intent_done summary below.
+    MigrateMemberResult member_done = 4;
+
+    // intent_done is an intent migration's final event, on success or
+    // on a handled rollback alike (a genuine RPC error — can't resolve
+    // the target, can't stop the members — still ends the stream with
+    // MigrateProgress_Error instead, same as a single instance).
+    IntentMigrateDone intent_done = 5;
   }
+}
+
+// MigrateMemberResult is one intent member's own migration outcome.
+message MigrateMemberResult {
+  string role = 1;
+  string new_id = 2; // set when this member migrated successfully
+  string error = 3;  // set when it didn't
+}
+
+// IntentMigrateDone is a whole-intent migration's final summary.
+message IntentMigrateDone {
+  string intent_name = 1;
+  repeated MigrateMemberResult members = 2;
+
+  // rolled_back is true if this was an all-or-nothing migration
+  // (best_effort false) that hit a member failure: whatever had already
+  // landed on the target was deleted there, and every source member was
+  // left untouched, exactly as if the migration had never started.
+  bool rolled_back = 3;
 }

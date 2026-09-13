@@ -233,13 +233,22 @@ func specsToPB(specs []*instance.Spec) []*anvilv1.Instance {
 }
 
 func launchParamsFromPB(req *anvilv1.LaunchRequest) instance.LaunchParams {
-	return instance.LaunchParams{
-		Name:       req.GetName(),
-		Kind:       kindFromPB(req.GetKind()),
-		VM:         vmSpecFromPB(req.GetVm()),
-		Container:  containerSpecFromPB(req.GetContainer()),
-		NoStart:    req.GetNoStart(),
-		IntentName: req.GetIntentName(),
-		Role:       req.GetRole(),
+	params := instance.LaunchParams{
+		Name:           req.GetName(),
+		Kind:           kindFromPB(req.GetKind()),
+		VM:             vmSpecFromPB(req.GetVm()),
+		Container:      containerSpecFromPB(req.GetContainer()),
+		NoStart:        req.GetNoStart(),
+		IntentName:     req.GetIntentName(),
+		Role:           req.GetRole(),
+		PinnedStaticIP: req.GetPinnedStaticIp(),
 	}
+	if req.GetPinnedSubnet() != "" {
+		params.PinnedNetwork = &instance.PinnedNetwork{
+			Subnet:        req.GetPinnedSubnet(),
+			Gateway:       req.GetPinnedGateway(),
+			DockerIPRange: req.GetPinnedDockerIpRange(),
+		}
+	}
+	return params
 }

@@ -1,73 +1,30 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
+	"github.com/anvil-project/anvil/internal/sshkey"
 	"github.com/anvil-project/anvil/pkg/client"
 )
 
-// defaultAnvilKeyPath is anvil's own managed SSH keypair (private key path;
-// the public half is the same path + ".pub"). This is deliberately separate
-// from any personal ~/.ssh key the user has for other purposes — the same
-// idea behind Vagrant's well-known shared "insecure" keypair and
-// Multipass's own managed key: this key isn't protecting anything beyond
-// "don't let an unrelated local process into the VM" (SLIRP host-forwarding
-// is only ever reachable from this same host to begin with), so a
-// passphrase would only add friction with no real security benefit, and
-// tying VM access to a user's actual personal identity key is more coupling
-// than this needs.
-func defaultAnvilKeyPath() (string, error) {
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		return "", fmt.Errorf("finding a config directory: %w", err)
-	}
-	return filepath.Join(configDir, "anvil", "ssh", "id_ed25519"), nil
-}
-
-// ensureDefaultAnvilKey returns the private key path, generating a fresh
-// passphrase-less ed25519 keypair there via `ssh-keygen` (already a
-// dependency alongside `ssh`/`scp`) the first time it's needed.
-func ensureDefaultAnvilKey() (string, error) {
-	path, err := defaultAnvilKeyPath()
-	if err != nil {
-		return "", err
-	}
-	if _, err := os.Stat(path); err == nil {
-		return path, nil
-	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("checking for anvil's SSH key: %w", err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return "", fmt.Errorf("creating anvil's SSH key dir: %w", err)
-	}
-	keygenBin, err := exec.LookPath("ssh-keygen")
-	if err != nil {
-		return "", fmt.Errorf("ssh-keygen: not found on PATH (needed to generate anvil's default SSH key)")
-	}
-	cmd := exec.Command(keygenBin, "-t", "ed25519", "-N", "", "-C", "anvil", "-f", path)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("generating anvil's SSH key: %w: %s", err, out)
-	}
-	return path, nil
-}
-
 // resolveIdentity returns explicit if the user passed --identity/-i,
-// otherwise anvil's own managed key (generating it on first use) — so
-// `shell`/`exec`/`transfer` work by default without depending on ssh's own
-// $HOME-based identity lookup (which is what broke under sudo before this
-// existed: root's $HOME, not the invoking user's).
+// otherwise anvil's own managed key (generating it on first use, see
+// internal/sshkey) — so `shell`/`exec`/`transfer` work by default without
+// depending on ssh's own $HOME-based identity lookup (which is what broke
+// under sudo before this existed: root's $HOME, not the invoking user's).
 func resolveIdentity(explicit string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
 	}
-	return ensureDefaultAnvilKey()
+	return sshkey.EnsureDefault()
 }
 
 // resolveInstance looks up name via the daemon's Info RPC — shared by
@@ -219,4 +176,32 @@ func runSSH(target sshTarget, identity string, command []string) error {
 	cmd := exec.Command(sshBin, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
+}
+
+// runSSHWithStdin is runSSH for a non-interactive, scripted use (unlike
+// `anvil shell`/`exec`, which hand the real terminal to the session):
+// stdin comes from an in-memory reader instead of the terminal, and
+// stderr is captured for a clean wrapped error instead of being dumped
+// straight to the user's terminal. Used by migrate.go's guest-key
+// injection.
+func runSSHWithStdin(target sshTarget, identity string, command []string, stdin io.Reader) error {
+	sshBin, err := exec.LookPath("ssh")
+	if err != nil {
+		return fmt.Errorf("ssh: not found on PATH")
+	}
+	args, err := commonSSHArgs(target, "-p", identity)
+	if err != nil {
+		return err
+	}
+	args = append(args, fmt.Sprintf("%s@%s", target.User, target.Host))
+	args = append(args, command...)
+
+	var stderr bytes.Buffer
+	cmd := exec.Command(sshBin, args...)
+	cmd.Stdin = stdin
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%w: %s", err, stderr.String())
+	}
+	return nil
 }

@@ -95,6 +95,29 @@ type LaunchParams struct {
 	// one obvious place to land before that routing decision is made.
 	IntentName string
 	Role       string
+
+	// PinnedNetwork/PinnedStaticIP are read by internal/intent.Manager
+	// (not by Manager.Launch itself, same as IntentName/Role above), and
+	// ignored unless IntentName is also set. Set only by `anvil
+	// migrate-import` relaunching one member of a migrated intent, to
+	// pin the target's newly-created intent to the exact subnet/gateway
+	// — and, for a VM, the exact static address — the source intent
+	// already had, instead of letting intent.Manager auto-allocate a
+	// fresh one. See internal/migrate.Manager.migrateIntent's doc
+	// comment for why this matters: a migrated VM's disk skips
+	// cloud-init entirely on relaunch, so its already-baked-in static
+	// network config (and whatever peer /etc/hosts entries it already
+	// has) has no chance to catch up to a brand new subnet on its own.
+	PinnedNetwork  *PinnedNetwork
+	PinnedStaticIP string
+}
+
+// PinnedNetwork is an intent's exact subnet/gateway/docker-IP-range, see
+// LaunchParams.PinnedNetwork.
+type PinnedNetwork struct {
+	Subnet        string
+	Gateway       string
+	DockerIPRange string
 }
 
 // LaunchEvent is one step of Launch's progress callback. Exactly one of

@@ -20,7 +20,11 @@ import (
 // spec content), relaunches it via a normal Launch call against this
 // host's own local anvild, and prints a final MIGRATE_OK/MIGRATE_FAIL
 // line the source daemon parses to know whether it succeeded — every
-// other line is just forwarded progress, safe to ignore.
+// other line is just forwarded progress, safe to ignore. Also the
+// per-member relaunch step of a whole-intent migration (M7): the payload
+// just carries an IntentName/Role too in that case, which flows straight
+// into the LaunchRequest below, so it joins the same-named intent here
+// exactly like a normal `anvil launch --intent` would.
 func newMigrateImportCommand(flags *globalFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:    "migrate-import",
@@ -87,7 +91,17 @@ func newMigrateImportCommand(flags *globalFlags) *cobra.Command {
 // launchRequestFromPayload translates pl into the LaunchRequest that
 // relaunches it on this host.
 func launchRequestFromPayload(pl payload.Payload) (*anvilv1.LaunchRequest, error) {
-	req := &anvilv1.LaunchRequest{Name: pl.Name}
+	req := &anvilv1.LaunchRequest{
+		Name:           pl.Name,
+		IntentName:     pl.IntentName,
+		Role:           pl.Role,
+		PinnedStaticIp: pl.StaticIP,
+	}
+	if pl.IntentNetwork != nil {
+		req.PinnedSubnet = pl.IntentNetwork.Subnet
+		req.PinnedGateway = pl.IntentNetwork.Gateway
+		req.PinnedDockerIpRange = pl.IntentNetwork.DockerIPRange
+	}
 
 	switch pl.Kind {
 	case "vm":

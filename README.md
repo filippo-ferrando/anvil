@@ -207,6 +207,18 @@ easier:**
   post-change (`stat: permission denied`), the error now includes real, copy-pasteable
   `setfacl` commands for the whole path instead of leaving you to guess. `anvil
   create-dir` runs those same commands for you instead of leaving them to copy-paste
+- **a second, separate consequence of the same non-root change, also caught on a real
+  `anvil launch` into an intent**: tap device creation failed with a plain "operation
+  not permitted" that had nothing to do with `CAP_NET_ADMIN`. Adding `DeviceAllow=
+  /dev/kvm rw` to the unit silently switches systemd's device cgroup policy from
+  "allow everything" to "deny everything except what's listed," so `/dev/net/tun` was
+  blocked underneath the capability check. Fixed with a matching `DeviceAllow=
+  /dev/net/tun rw`
+- **`anvil migrate`'s disk upload used to look hung**: `scp`'s own progress meter only
+  prints to a real terminal, so redirecting its output to capture error messages meant
+  a multi-hundred-MB/GB qcow2 transfer gave zero feedback until it finished or failed.
+  Fixed with a heartbeat line (elapsed time, file size) every 5 seconds while the
+  transfer runs, not real byte progress but enough to show it's alive
 - `anvil migrate-key`: prints anvild's own migration SSH public key (generating one on
   the spot if it doesn't exist yet, not just relying on `anvild.install` having already
   done it, since a manually-run `anvild` for local dev/testing never goes through that
@@ -226,13 +238,65 @@ easier:**
   `sh -n anvild.install` both pass and everything was reviewed carefully, but an actual
   chroot build needs to happen on your end
 
+**Working (M7), same "zero real two-machine testing yet" caveat as M5 above:**
+- `anvil migrate <name|intent> --to ...`: `name` now resolves to a whole intent, not
+  just a single instance (tried as an instance first, an intent second). Each member
+  transfers through the exact same per-instance path M5 already built, just carrying
+  the intent's own name and that member's role along, so the target's own `anvil
+  launch --intent` machinery (M4) is what actually recreates the group there, network
+  and all, no separate "rebuild the network" logic needed on the migration side
+- default mode is all-or-nothing: the first member that fails to migrate rolls back
+  whatever already landed on the target (a new hidden `anvil migrate-rollback`
+  command, same stdin-JSON pattern as `migrate-import`) and leaves every source
+  member untouched; `--best-effort` keeps whatever succeeds instead and reports
+  exactly which member landed and which didn't
+- **a real gap caught mid-implementation**: a migrated VM's disk skips cloud-init
+  entirely on relaunch, so the *destination* host's own default SSH key never gets
+  into the guest, only whichever key the source originally launched it with. Fixed
+  client-side (the daemon has no guest-access identity of its own to inject with
+  either way): `anvil migrate` now fetches the target's default key over the daemon's
+  existing host-to-host channel and SSHes it directly into each still-running source
+  VM before migrating, appending it to `~/.ssh/authorized_keys`
+- **a second real gap, same root cause**: migrating each intent member independently
+  would land it on whatever fresh subnet the target happens to auto-allocate,
+  breaking the already-baked-in static network config and `/etc/hosts` entries a
+  migrated VM can no longer refresh. Fixed by pinning the target's newly-created
+  intent to the source's *exact* subnet/gateway and each VM's *exact* static address
+  instead of auto-allocating, so nothing about the network actually changes and
+  nothing inside any guest needs to be rewritten. Containers don't need this (their
+  networking is re-established fresh at every launch anyway); one known, accepted
+  gap: a member left behind by `--best-effort` still has its migrated peers' old,
+  now-stale addresses baked into its own `/etc/hosts`, not actively fixed
+
+**Working (M8, TUI), written with no way to run a terminal UI in this sandbox at
+all: no real TTY, and no network access to fetch its two dependencies:**
+- `anvil tui`: a `tview`-based terminal UI, `internal/tui`, built on the exact same
+  `pkg/client` the CLI uses, no daemon-side logic added. Nav list (Instances, Cloud
+  Init, Mirrors, Migration) plus a status line (local OS user, socket, a cheap
+  connected/unreachable check)
+- instances table (name/kind/state/image, start/stop/delete/info/shell/refresh
+  bindings), a launch form (env/volumes/ports are one comma-separated field each, a
+  deliberate v1 simplification, not a dynamic row list), a cloud-init list+editor
+  view, a mirrors table, and a migration view (known hosts plus a form plus a
+  streaming progress log), all backed by the same RPCs the CLI already calls
+- shell/SSH handoff: pressing `s` on an instance suspends the TUI
+  (`tview.Application.Suspend`), runs a real `ssh` subprocess with the terminal
+  handed over, and resumes automatically when it exits
+- pulled anvil's own default guest-access SSH key management out of
+  `internal/cli/commands` into a new small package, `internal/sshkey`, so the launch
+  form and the CLI's own `anvil launch` share one implementation instead of two
+- **can't be verified here at all**: no real terminal to run a TUI against even if
+  the dependencies were fetchable, and no network access to fetch
+  `github.com/rivo/tview`/`github.com/gdamore/tcell/v2` either, so `go.mod` doesn't
+  pin them (a guessed version tag could easily just not exist); run `make tui-deps`
+  once you have network access, then `anvil tui` for a real walkthrough. Built
+  against tview's long-stable core widget API, reviewed carefully, gofmt-clean, but
+  genuinely never run
+
 **Not built yet:**
 - Podman (the second container backend, deliberately deferred, see above; its own
   `registries.conf.d`-based mirror mechanism, and its own network story, are tied to it
   landing too)
-- migrating a whole intent as one unit (M7, moved down from M6 so packaging could move
-  up); single-instance migration is done (see above)
-- the TUI (M8, moved down from M7 for the same reason)
 
 M2, M3, and M4 (including the name-resolution and `--publish`-for-VMs work) have all now
 been build tested and confirmed working by filippo on his own real hardware, not just

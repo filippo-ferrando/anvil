@@ -798,7 +798,10 @@ Rough order, each milestone should leave you with something you can actually run
       `intent.Manager.Remove`, logged but not fatal to the delete itself if that fails
 - [x] **confirmed for real**: filippo has run all of M4 on his own machine, netlink
       dependency included. The shared network, tap-attach, static VM addressing, and the
-      three real bugs above all held up outside this sandbox, not just in review.
+      three real bugs above all held up outside this sandbox, not just in review. That
+      confirmation predates M6's non-root daemon, though: M6 introduced a real
+      regression here (tap creation cgroup-denied, see M6's `DeviceAllow=/dev/net/tun`
+      note), now fixed.
 - [x] **name resolution**: container members now also get a Docker network alias equal
       to their role (peers resolve `web`, not `anvil-web`, via Docker's own embedded DNS,
       which already worked, this just fixes the name). VM members get `/etc/hosts`
@@ -905,6 +908,26 @@ for the details behind each item below.
       twice, once by cobra itself (`Error: ...`) and once by `cmd/anvil/main.go`
       (`anvil: ...`), since the root command had `SilenceErrors: false`. Set to `true`;
       `main.go` was already the single source of truth for printing a returned error
+- [x] **a real, second consequence of the non-root daemon, caught on filippo's own first
+      `anvil launch` into an intent post-change**: tap device creation failed with a
+      plain `operation not permitted`, nothing to do with `CAP_NET_ADMIN` at all. Adding
+      `DeviceAllow=/dev/kvm rw` to the unit silently flipped systemd's
+      `DevicePolicy=auto` from "allow every device" to "deny everything except what's
+      explicitly listed" (any `DeviceAllow=` entry does this, see
+      systemd.resource-control(5)), so `/dev/net/tun` was cgroup-denied underneath the
+      capability check, which never even got reached. Fixed by adding
+      `DeviceAllow=/dev/net/tun rw` alongside the kvm one. Also fixed a now-stale doc
+      comment on `internal/vm/network.CreateTap` that still said "anvild already runs
+      as root," left over from before this milestone
+- [x] **`anvil migrate`'s disk upload used to look hung**: `scpUpload` shells out to a
+      real `scp`, capturing its stderr into a buffer so a real error message survives,
+      but `scp`'s own progress meter only ever prints to a real terminal (checks
+      stderr's isatty), so a multi-hundred-MB/GB qcow2 transfer produced zero output
+      for however long it took. Fixed by running the transfer in the background and
+      having `scpUpload` itself push a heartbeat line through the existing `progress`
+      callback every 5 seconds (elapsed time, plus the file's size up front for scale),
+      not real byte-level progress, `scp`'s own meter isn't there to parse in a non-tty,
+      but enough to show it's still alive instead of looking stuck
 - [ ] a real `makepkg`/`namcap`/`extra-x86_64-build` run: this sandbox has the `makepkg`
       binary present but no actual Arch build environment (`/etc/makepkg.conf` and
       `/etc/pacman.conf` don't exist here) and no `devtools` for a chroot build either,
@@ -1013,18 +1036,188 @@ being owned by the unprivileged "anvil" user, you likely can't even read directl
 without `sudo cat` anyway).
 
 ### M7: migration, intents
-- [ ] migrate a whole intent as one unit
-- [ ] abort and roll back the target if any member fails
-- [ ] `--best-effort` mode that keeps whatever succeeded
+- [x] migrate a whole intent as one unit: `anvil migrate <name|intent> --to ...`
+      resolves `name` as a single instance first, a whole intent second (same as
+      before, just extended: neither namespace is new). No new network-recreation
+      logic needed on the migration side at all: each member is transferred through
+      the exact same `migrateSpec` a single-instance migration already used, just
+      carrying the intent's own name and that member's role along in the payload,
+      since `anvil migrate-import`'s existing Launch call already knows what to do with an
+      intent name (that's M4's `intent.Manager.Launch`, joining/creating the
+      same-named intent on the target and standing up its shared network there, on
+      whichever member arrives first). One real interface change this needed:
+      `Instances.Info` (used to decide "is this name an instance") errors out
+      instead of returning an empty slice when nothing matches, and the dispatcher
+      was initially written to bail out on that error, which silently broke the
+      "fall back to an intent lookup" path entirely; fixed by ignoring that
+      particular error and treating it as the signal to try the intent lookup
+- [x] abort and roll back the target if any member fails: default mode is
+      all-or-nothing: the first member that fails to migrate stops the loop there,
+      whatever already landed on the target gets deleted via a new hidden command,
+      `anvil migrate-rollback` (reads a JSON array of names from stdin, same
+      argument-free pattern as `migrate-import`, force-deletes them through the
+      target's own local anvild), and every source member is left exactly as
+      stopping it left it, never deleted, since a source member only ever gets deleted
+      after its own migration is independently confirmed successful, so "roll back"
+      here just means "don't touch the source," there's nothing to undo there
+- [x] `--best-effort` mode that keeps whatever succeeded: it skips the abort/rollback
+      above, keeps migrating every member regardless of earlier failures, deletes
+      only the ones that actually succeeded from the source, and reports exactly
+      which is which. Rejected outright for a single instance (`--best-effort` only
+      makes sense for a group)
+- [x] proto additions: `MigrateRequest.best_effort`; `MigrateProgress` gained two new
+      oneof cases, `member_done` (one `MigrateMemberResult` per intent member) and
+      `intent_done` (the final `IntentMigrateDone` summary: intent name, every
+      member's result, whether it was rolled back), both sent together right after
+      the whole group has been attempted, not literally as each member finishes
+      (`Manager.migrateIntent` only streams plain status lines mid-flight, not
+      structured per-member events)
+- [x] **a real gap caught mid-implementation, not in the original plan**: a migrated
+      VM's disk skips cloud-init entirely on relaunch (see the Migration section
+      above), which means the *destination* host's own default anvil SSH key (the
+      one its own `anvil launch` would normally bake in, see
+      `resolveSSHKeys`/`ensureDefaultAnvilKey`) never gets into the guest at all,
+      only whichever key the *source* host originally launched it with is in there.
+      Without a fix, the destination's own `anvil shell`/`exec`/`transfer` would have
+      no way into a VM migrated from elsewhere. Fixed, and deliberately fixed
+      client-side, not in the daemon: `anvild` itself has no guest-access identity of
+      its own at all (`VMSpec.SSHPublicKeys` is purely client-supplied, see
+      `internal/daemon/convert.go`), so the daemon can't inject anything into a guest
+      even if it wanted to; only the CLI, running as whatever OS user launched (or is
+      migrating) the VM, has that. New flow, all in `internal/cli/commands/migrate.go`,
+      before the streaming `Migrate` RPC is even called (skipped entirely on
+      `--dry-run`):
+      1. Resolve `name` to its VM(s) the same way the daemon does (single instance,
+         or every VM member of an intent (a container is simply skipped, no
+         SSH/cloud-init concept applies).
+      2. Ask the daemon for the destination's own default guest-access key via a new
+         RPC, `MigrateService.GuestKey`. The daemon SSHes to the target over the
+         *already-established* host-to-host channel (no new trust) and runs a new
+         hidden command there, `anvil migrate-guest-key`, which just prints (and
+         generates on first use) the invoking identity's own
+         `ensureDefaultAnvilKey()` public half, the exact key a normal `anvil
+         launch` run as that same identity on that host would already bake in.
+      3. SSH directly into each still-running source VM (client-side, using
+         whatever identity is already authorized there (the same connection
+         resolution `anvil shell`/`exec` already use) and append the fetched key to
+         `~/.ssh/authorized_keys`, idempotently (checked via `grep -qxF` first, so
+         migrating the same instance twice doesn't pile up duplicate lines). The key
+         travels over SSH stdin, never interpolated into the remote command line,
+         same reasoning as `migrate-import`/`migrate-rollback`'s own stdin-JSON
+         payloads.
+      A VM that's already stopped when `anvil migrate` runs gets a warning instead of
+      a hard failure (there's genuinely nothing to SSH into), everything else is a
+      hard error before any actual transfer starts: cheap to check upfront, and far
+      better than discovering it only after an expensive disk copy finishes.
+- [x] **a second real gap, also caught mid-implementation**: migrating a whole intent
+      one member at a time, each relaunching independently on the target, means each
+      one lands on whatever fresh subnet/address `intent.Manager.ensureNetwork`
+      happens to auto-allocate there, almost certainly *not* the same addresses the
+      source intent had. That's a real problem, not a cosmetic one: a migrated VM's
+      disk skips cloud-init entirely on relaunch (see above), so there's no way to
+      refresh its already-baked-in static network config or `/etc/hosts` entries to
+      match a new subnet after the fact. Rather than trying to actively rewrite
+      either of those inside every guest, the fix preserves the network exactly
+      instead, so nothing needs rewriting at all:
+      - `internal/migrate.Manager.migrateIntent` reads the source intent's own
+        `store.IntentNetwork` (subnet/gateway/docker IP range) once, and each VM
+        member's own recorded `store.IntentMember.IP`, and carries all of it in every
+        member's migration payload (`payload.IntentNetwork`, `payload.StaticIP`),
+        attached to every member regardless of kind, since whichever one's `anvil
+        migrate-import`/Launch call reaches the target *first* is the one that
+        actually creates the network there.
+      - New plumbing to carry this from the payload through to where the network
+        actually gets created: `LaunchRequest` gained four internal-only fields
+        (`pinned_subnet`/`pinned_gateway`/`pinned_docker_ip_range`/`pinned_static_ip`,
+        not meant to be set by a normal `anvil launch`), `instance.LaunchParams`
+        gained matching `PinnedNetwork`/`PinnedStaticIP` fields, and
+        `intent.Manager.ensureNetwork` now takes an optional pinned network that,
+        when given, creates the network with that *exact* subnet instead of the
+        usual `ipam.AllocateSubnet` hashed-attempt loop (no retry-with-a-different-
+        subnet fallback for a pinned network either: if the exact subnet collides
+        with something already on the target, that's a real migration failure to
+        surface, not something to silently paper over with a subnet the guest's
+        already-baked-in config knows nothing about). A VM member's static IP
+        assignment got the same treatment: reuse `PinnedStaticIP` when set, instead
+        of `ipam.VMAddress`'s normal next-in-sequence allocation.
+      - Container members deliberately don't get a pinned address: unlike a VM, a
+        container's networking is re-established fresh at every launch, nothing
+        baked into an image to preserve, so it's simply left to the target's own
+        engine to assign one as usual; only the subnet/gateway need to match, so a
+        VM member migrating alongside it lands in the same network.
+      - Net effect: since every VM member keeps the *exact* address it had on the
+        source, whatever `/etc/hosts` entries were already correct there (baked in
+        at each member's own original launch, per M4's existing "reflects membership
+        as of launch time, not retroactively updated" design) stay correct on the
+        target too, with nothing to actively rewrite inside any guest. This is
+        deliberately not solved by having the source SSH into each guest and rewrite
+        `/etc/hosts` after the fact; preserving the addresses makes that
+        unnecessary, and avoids re-introducing exactly the kind of live guest
+        mutation this whole design otherwise avoids.
+      - **Known, accepted limitation, not solved here**: a member left behind on the
+        source during a `--best-effort` partial migration still has the migrated
+        peers' *old* addresses baked into its own `/etc/hosts`, now pointing at a
+        bridge those peers are no longer attached to. Fixing that live would need
+        actively rewriting a running guest's `/etc/hosts`, the exact kind of thing
+        this design avoids elsewhere: flagged, not fixed.
 
 ### M8: TUI
-- [ ] `tview` app shell, nav list plus pages
-- [ ] instances table
-- [ ] launch form
-- [ ] cloud-init view (list panel plus editor panel)
-- [ ] mirrors view
-- [ ] migration view
-- [ ] shell/SSH handoff (suspend TUI, exec real session, resume TUI)
+- [x] `tview` app shell, nav list plus pages: `internal/tui` is `anvil tui`'s whole
+      implementation, one `*client.Client` connection shared by every view, exactly
+      the same RPCs the CLI already calls, no daemon-side logic added or duplicated.
+      Nav list (Instances, Cloud Init, Mirrors, Migration) switches a `tview.Pages`
+      stack; a status line shows the local OS username, the socket path, and a
+      one-shot "connected"/"daemon unreachable" check (a plain `List` RPC, cheap).
+      Overview isn't its own page, that status line is all it would show
+- [x] instances table: name/kind/state/image columns, key bindings (`l` launch,
+      `r` start/stop, `d` delete, `i` info, `s` shell, `R` refresh) mirroring the
+      CLI's own verbs one for one
+- [x] launch form: a `tview.Form` overlay (not a wizard, per the plan), fields for
+      both kinds plus each kind's own (image/CPUs/memory/disk/cloud-init-name for a
+      VM; env/volumes/ports for a container), intent name/role. **One deliberate v1
+      simplification**: env/volumes/ports are each a single comma-separated text
+      field (`K=V,K2=V2` / `host:guest[:ro],...` / `host:guest[/proto],...`, the
+      same per-item formats the CLI's own `--env`/`--volume`/`--publish` flags
+      already use), not a dynamic add/remove row list; a real per-row editor is a
+      nicer follow-up, not a blocker for a working form today
+- [x] cloud-init view: a `List` of saved configs (left) plus a `TextArea` editor
+      (right), New/Import/Rename/Delete (via a small shared `promptForm` modal
+      helper) and Ctrl+S to save, backed by the exact same `CloudInitService` CRUD
+      RPCs `anvil cloud-init *` already uses, so the CLI and the TUI always agree
+- [x] mirrors view: a table (name/kind/source/priority/enabled) with add (a form
+      covering both VM-manifest and container-registry mirrors)/enable-disable/
+      remove, backed by `MirrorService`
+- [x] migration view: a known-hosts list (add/remove/test) plus a form (name,
+      target, copy/best-effort/dry-run checkboxes) and a scrolling output panel
+      streaming `MigrateService.Migrate`'s progress, laid out as one screen with a
+      form and a running log, not literally the plan's "sequence of modals"
+      phrasing (simpler to keep legible in a table-and-form-heavy TUI, same
+      information flow as the CLI's own migrate flags either way)
+- [x] shell/SSH handoff: `s` on an instances-table row calls `tapp.Suspend(func() {
+      ... })`: the real terminal is free for the duration of a genuine `ssh`
+      subprocess (inherited stdio, same idea as `anvil shell`), then the TUI resumes
+      automatically when it exits. Deliberately a separate, small copy of the
+      connection-resolution logic `internal/cli/commands/ssh.go` already has (own
+      `internal/tui/shell.go`), not a shared one: this package only reuses
+      `pkg/client`, per the plan's TUI section, nothing from `internal/cli/commands`
+- [x] **`internal/sshkey`, pulled out of `internal/cli/commands` for this milestone**:
+      anvil's own default guest-access SSH keypair (generated once per invoking OS
+      user, injected into every VM at launch so `shell`/`exec`/`transfer` work with
+      zero flags) was only ever `internal/cli/commands`-internal before now. The
+      launch form needs it too (to inject the same default key a VM launched via
+      `anvil launch` would get), so it's now its own small package both import,
+      instead of the TUI growing a second copy of the same key-management logic to
+      drift out of sync with the CLI's, same reasoning as `internal/hostpath`'s
+      extraction earlier this session
+- [ ] **not build tested, and can't be in this sandbox**: no real TTY here, and no
+      network access to fetch `github.com/rivo/tview`/`github.com/gdamore/tcell/v2`
+      at all (see the Makefile's new `tui-deps` target, `go get ...@latest` since
+      this sandbox also can't verify a specific version tag actually exists to pin
+      one in `go.mod` honestly). Written against tview's long-stable core widget API
+      (`Application`/`Pages`/`List`/`Table`/`Form`/`Flex`/`TextView`/`TextArea`),
+      reviewed carefully, gofmt-clean, but genuinely unexercised; a real `anvil tui`
+      walkthrough is squarely what needs to happen on your own machine, exactly like
+      the plan's own verification note for this milestone always said it would
 
 ## Things we already know are unresolved
 

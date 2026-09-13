@@ -89,7 +89,18 @@ const maxSubnetAttempts = 5
 // yet, mutating it.Network in place on success. A no-op if there's no
 // Networker configured, or the intent already has a network (the normal
 // case for every member after the first).
-func (m *Manager) ensureNetwork(ctx context.Context, it *store.Intent) error {
+//
+// pinned, when non-nil (only ever set by `anvil migrate-import`
+// relaunching a migrated intent's member, see LaunchParams.PinnedNetwork's
+// doc comment), overrides the normal hashed-subnet auto-allocation below
+// with an exact subnet/gateway/docker-IP-range instead — no retry loop,
+// unlike the auto-allocated path, since there's no fallback subnet to
+// try that would still mean the same thing: if the target can't create a
+// network with this exact subnet (e.g. it collides with something else
+// already there), that's a real migration failure to report, not
+// something to silently paper over with a different subnet the source's
+// already-baked-in guest network config knows nothing about.
+func (m *Manager) ensureNetwork(ctx context.Context, it *store.Intent, pinned *instance.PinnedNetwork) error {
 	if m.Networker == nil || it.Network != nil {
 		return nil
 	}
@@ -100,6 +111,20 @@ func (m *Manager) ensureNetwork(ctx context.Context, it *store.Intent) error {
 	// including the trailing NUL) — see internal/vm/network.TapName for
 	// the same constraint on the VM side.
 	bridgeIface := "anvil" + it.ID[:10]
+
+	if pinned != nil {
+		if err := m.Networker.CreateNetwork(ctx, engineName, bridgeIface, pinned.Subnet, pinned.Gateway, pinned.DockerIPRange); err != nil {
+			return fmt.Errorf("intent: creating %q's pinned network: %w", it.Name, err)
+		}
+		it.Network = &store.IntentNetwork{
+			EngineNetworkName: engineName,
+			BridgeInterface:   bridgeIface,
+			Subnet:            pinned.Subnet,
+			Gateway:           pinned.Gateway,
+			DockerIPRange:     pinned.DockerIPRange,
+		}
+		return nil
+	}
 
 	var lastErr error
 	for attempt := 0; attempt < maxSubnetAttempts; attempt++ {
@@ -208,7 +233,7 @@ func (m *Manager) Launch(ctx context.Context, params instance.LaunchParams, prog
 		it = store.Intent{ID: ulid.Make().String(), Name: params.IntentName}
 	}
 
-	if err := m.ensureNetwork(ctx, &it); err != nil {
+	if err := m.ensureNetwork(ctx, &it, params.PinnedNetwork); err != nil {
 		progress(instance.LaunchEvent{Err: err})
 		return err
 	}
@@ -242,10 +267,20 @@ func (m *Manager) Launch(ctx context.Context, params instance.LaunchParams, prog
 			launchParams.Container.NetworkAlias = role
 			launchParams.Container.ExtraHosts = vmHostsFor(it.Members)
 		case launchParams.VM != nil:
-			ip, err := ipam.VMAddress(it.Network.Subnet, countVMMembers(it.Members))
-			if err != nil {
-				progress(instance.LaunchEvent{Err: err})
-				return err
+			// A migrated member (see LaunchParams.PinnedStaticIP's doc
+			// comment) reuses its own exact original address instead of
+			// getting the next one in sequence here — its guest's
+			// already-baked-in static network config has no way to
+			// learn a new one, since a migrated disk skips cloud-init
+			// entirely on relaunch.
+			ip := params.PinnedStaticIP
+			if ip == "" {
+				var ipErr error
+				ip, ipErr = ipam.VMAddress(it.Network.Subnet, countVMMembers(it.Members))
+				if ipErr != nil {
+					progress(instance.LaunchEvent{Err: ipErr})
+					return ipErr
+				}
 			}
 			launchParams.VM.NetworkMode = "bridge"
 			launchParams.VM.BridgeInterface = it.Network.BridgeInterface

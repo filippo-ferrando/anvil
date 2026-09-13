@@ -17,6 +17,41 @@ type Payload struct {
 	Kind      string // "vm" | "container"
 	VM        *VM
 	Container *Container
+
+	// IntentName/Role are both empty for a standalone migration. When
+	// set (migrating a whole intent, M7 — see
+	// internal/migrate.Manager.migrateIntent), migrate-import passes
+	// them straight through to the target's own Launch call, which
+	// joins (or creates) that same-named intent there exactly like a
+	// normal `anvil launch --intent` would.
+	IntentName string
+	Role       string
+
+	// IntentNetwork/StaticIP are both nil/empty for a standalone
+	// migration, or for an intent with no shared network at all. When
+	// set, migrate-import passes them through as the target Launch
+	// call's pinned_subnet/pinned_gateway/pinned_docker_ip_range/
+	// pinned_static_ip, so the target's newly-created intent reuses the
+	// source's exact network instead of auto-allocating a fresh one —
+	// see internal/migrate.Manager.migrateIntent's doc comment for why:
+	// a migrated VM's disk skips cloud-init entirely on relaunch, so its
+	// already-baked-in static network config (and whatever peer
+	// /etc/hosts entries it already has) can only keep working if
+	// nothing about the network actually changes underneath it.
+	// StaticIP (CIDR form, e.g. "10.55.201.4/24") is VM-only — a
+	// container's networking is re-established fresh at every launch
+	// anyway, nothing baked-in to preserve, so it's simply left to the
+	// target's own engine to assign as usual.
+	IntentNetwork *IntentNetwork
+	StaticIP      string
+}
+
+// IntentNetwork carries a migrated intent's exact network layout — see
+// Payload.IntentNetwork.
+type IntentNetwork struct {
+	Subnet        string
+	Gateway       string
+	DockerIPRange string
 }
 
 // VM mirrors the subset of instance.VMSpec a migrated relaunch needs.

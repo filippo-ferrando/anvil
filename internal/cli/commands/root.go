@@ -52,7 +52,10 @@ func NewRootCommand() *cobra.Command {
 		newHostCommand(flags),
 		newMigrateCommand(flags),
 		newMigrateImportCommand(flags),
+		newMigrateRollbackCommand(flags),
 		newMigrateKeyCommand(flags),
+		newMigrateGuestKeyCommand(flags),
+		newTuiCommand(flags),
 	)
 	return root
 }

@@ -22,21 +22,47 @@ func NewMigrateServer(mgr *migrate.Manager) *MigrateServer {
 
 func (s *MigrateServer) Migrate(req *anvilv1.MigrateRequest, stream anvilv1.MigrateService_MigrateServer) error {
 	params := migrate.Params{
-		Name:     req.GetName(),
-		To:       req.GetTo(),
-		Copy:     req.GetCopy(),
-		DestName: req.GetDestName(),
-		DryRun:   req.GetDryRun(),
+		Name:       req.GetName(),
+		To:         req.GetTo(),
+		Copy:       req.GetCopy(),
+		DestName:   req.GetDestName(),
+		DryRun:     req.GetDryRun(),
+		BestEffort: req.GetBestEffort(),
 	}
-	newID, err := s.Manager.Migrate(stream.Context(), params, func(status string) {
+	result, err := s.Manager.Migrate(stream.Context(), params, func(status string) {
 		_ = stream.Send(&anvilv1.MigrateProgress{Event: &anvilv1.MigrateProgress_Status{Status: status}})
 	})
 	if err != nil {
 		_ = stream.Send(&anvilv1.MigrateProgress{Event: &anvilv1.MigrateProgress_Error{Error: err.Error()}})
 		return err
 	}
-	if newID != "" {
-		_ = stream.Send(&anvilv1.MigrateProgress{Event: &anvilv1.MigrateProgress_Done{Done: newID}})
+
+	// An intent migration (result.IntentName set, see migrate.Result's
+	// doc comment) reports one member_done per member plus a final
+	// intent_done summary instead of the single-instance done event —
+	// all sent together here, right after Migrate returns (it doesn't
+	// stream them mid-flight itself, just plain status lines along the
+	// way), not literally as each member finishes.
+	if result.IntentName != "" {
+		members := make([]*anvilv1.MigrateMemberResult, 0, len(result.Members))
+		for _, mr := range result.Members {
+			pbResult := &anvilv1.MigrateMemberResult{Role: mr.Role, NewId: mr.NewID}
+			if mr.Err != nil {
+				pbResult.Error = mr.Err.Error()
+			}
+			members = append(members, pbResult)
+			_ = stream.Send(&anvilv1.MigrateProgress{Event: &anvilv1.MigrateProgress_MemberDone{MemberDone: pbResult}})
+		}
+		_ = stream.Send(&anvilv1.MigrateProgress{Event: &anvilv1.MigrateProgress_IntentDone{IntentDone: &anvilv1.IntentMigrateDone{
+			IntentName: result.IntentName,
+			Members:    members,
+			RolledBack: result.RolledBack,
+		}}})
+		return nil
+	}
+
+	if result.InstanceID != "" {
+		_ = stream.Send(&anvilv1.MigrateProgress{Event: &anvilv1.MigrateProgress_Done{Done: result.InstanceID}})
 	}
 	return nil
 }
@@ -47,4 +73,12 @@ func (s *MigrateServer) Key(ctx context.Context, req *anvilv1.MigrateKeyRequest)
 		return nil, err
 	}
 	return &anvilv1.MigrateKeyReply{PublicKey: key}, nil
+}
+
+func (s *MigrateServer) GuestKey(ctx context.Context, req *anvilv1.MigrateGuestKeyRequest) (*anvilv1.MigrateGuestKeyReply, error) {
+	key, err := s.Manager.GuestKey(ctx, req.GetTo())
+	if err != nil {
+		return nil, err
+	}
+	return &anvilv1.MigrateGuestKeyReply{PublicKey: key}, nil
 }

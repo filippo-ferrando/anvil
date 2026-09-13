@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
+	"github.com/anvil-project/anvil/internal/sshkey"
 )
 
 func newLaunchCommand(flags *globalFlags) *cobra.Command {
@@ -398,22 +399,18 @@ func readCloudInitFile(path string) (string, error) {
 }
 
 // resolveSSHKeys always includes anvil's own managed public key (generated
-// on first use if it doesn't exist yet, see ensureDefaultAnvilKey in
-// ssh.go) — this is what makes `anvil shell`/`exec`/`transfer` work by
-// default with zero flags, on any instance, without depending on whatever
-// personal keys a given user happens to have in ~/.ssh. --ssh-key values
-// (literal keys or paths to .pub files) are additive on top of that, for
-// anyone who also wants to authorize their own personal key.
+// on first use if it doesn't exist yet, see internal/sshkey) — this is
+// what makes `anvil shell`/`exec`/`transfer` work by default with zero
+// flags, on any instance, without depending on whatever personal keys a
+// given user happens to have in ~/.ssh. --ssh-key values (literal keys or
+// paths to .pub files) are additive on top of that, for anyone who also
+// wants to authorize their own personal key.
 func resolveSSHKeys(explicit []string) ([]string, error) {
-	anvilKeyPath, err := ensureDefaultAnvilKey()
+	anvilPub, err := sshkey.EnsureDefaultPublic()
 	if err != nil {
 		return nil, err
 	}
-	anvilPub, err := os.ReadFile(anvilKeyPath + ".pub")
-	if err != nil {
-		return nil, fmt.Errorf("reading anvil's default public key: %w", err)
-	}
-	keys := []string{strings.TrimSpace(string(anvilPub))}
+	keys := []string{anvilPub}
 
 	for _, k := range explicit {
 		resolved, err := resolveSSHKey(k)

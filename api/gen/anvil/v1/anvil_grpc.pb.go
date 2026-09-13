@@ -1588,16 +1588,17 @@ var HostService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	MigrateService_Migrate_FullMethodName = "/anvil.v1.MigrateService/Migrate"
-	MigrateService_Key_FullMethodName     = "/anvil.v1.MigrateService/Key"
+	MigrateService_Migrate_FullMethodName  = "/anvil.v1.MigrateService/Migrate"
+	MigrateService_Key_FullMethodName      = "/anvil.v1.MigrateService/Key"
+	MigrateService_GuestKey_FullMethodName = "/anvil.v1.MigrateService/GuestKey"
 )
 
 // MigrateServiceClient is the client API for MigrateService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// MigrateService moves a single instance (M5; a whole intent is M7, not
-// built yet) to a different anvil host. Per the plan: no daemon-to-daemon
+// MigrateService moves a single instance (M5) or a whole intent as one
+// group (M7) to a different anvil host. Per the plan: no daemon-to-daemon
 // gRPC trust — the source daemon SSHes into the target host and drives
 // the target's own local `anvil` CLI (specifically `anvil migrate-import`,
 // a plumbing-only command not meant to be run by hand), which talks to
@@ -1611,6 +1612,19 @@ type MigrateServiceClient interface {
 	// returned key into a target host's ~/.ssh/authorized_keys before
 	// migrating to it — `anvil host add` alone grants no trust by itself.
 	Key(ctx context.Context, in *MigrateKeyRequest, opts ...grpc.CallOption) (*MigrateKeyReply, error)
+	// GuestKey asks the host named by `to` (over the same SSH channel
+	// Migrate itself drives, not a new trust relationship) for its own
+	// default anvil guest-access public key — the one that host's own
+	// `anvil launch` already bakes into every VM it creates (see
+	// internal/cli/commands's resolveSSHKeys/ensureDefaultAnvilKey). The
+	// CLI's own `anvil migrate` calls this *before* migrating a VM and
+	// injects the returned key into that VM's guest directly over SSH
+	// (while it's still running, using whatever key already got it in
+	// there) — a migrated disk skips cloud-init entirely on relaunch (see
+	// the plan's Migration section), so without this, nothing the target
+	// host's own anvil shell/exec/transfer could use would ever be
+	// authorized in a VM migrated from elsewhere.
+	GuestKey(ctx context.Context, in *MigrateGuestKeyRequest, opts ...grpc.CallOption) (*MigrateGuestKeyReply, error)
 }
 
 type migrateServiceClient struct {
@@ -1650,12 +1664,22 @@ func (c *migrateServiceClient) Key(ctx context.Context, in *MigrateKeyRequest, o
 	return out, nil
 }
 
+func (c *migrateServiceClient) GuestKey(ctx context.Context, in *MigrateGuestKeyRequest, opts ...grpc.CallOption) (*MigrateGuestKeyReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MigrateGuestKeyReply)
+	err := c.cc.Invoke(ctx, MigrateService_GuestKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MigrateServiceServer is the server API for MigrateService service.
 // All implementations must embed UnimplementedMigrateServiceServer
 // for forward compatibility.
 //
-// MigrateService moves a single instance (M5; a whole intent is M7, not
-// built yet) to a different anvil host. Per the plan: no daemon-to-daemon
+// MigrateService moves a single instance (M5) or a whole intent as one
+// group (M7) to a different anvil host. Per the plan: no daemon-to-daemon
 // gRPC trust — the source daemon SSHes into the target host and drives
 // the target's own local `anvil` CLI (specifically `anvil migrate-import`,
 // a plumbing-only command not meant to be run by hand), which talks to
@@ -1669,6 +1693,19 @@ type MigrateServiceServer interface {
 	// returned key into a target host's ~/.ssh/authorized_keys before
 	// migrating to it — `anvil host add` alone grants no trust by itself.
 	Key(context.Context, *MigrateKeyRequest) (*MigrateKeyReply, error)
+	// GuestKey asks the host named by `to` (over the same SSH channel
+	// Migrate itself drives, not a new trust relationship) for its own
+	// default anvil guest-access public key — the one that host's own
+	// `anvil launch` already bakes into every VM it creates (see
+	// internal/cli/commands's resolveSSHKeys/ensureDefaultAnvilKey). The
+	// CLI's own `anvil migrate` calls this *before* migrating a VM and
+	// injects the returned key into that VM's guest directly over SSH
+	// (while it's still running, using whatever key already got it in
+	// there) — a migrated disk skips cloud-init entirely on relaunch (see
+	// the plan's Migration section), so without this, nothing the target
+	// host's own anvil shell/exec/transfer could use would ever be
+	// authorized in a VM migrated from elsewhere.
+	GuestKey(context.Context, *MigrateGuestKeyRequest) (*MigrateGuestKeyReply, error)
 	mustEmbedUnimplementedMigrateServiceServer()
 }
 
@@ -1684,6 +1721,9 @@ func (UnimplementedMigrateServiceServer) Migrate(*MigrateRequest, grpc.ServerStr
 }
 func (UnimplementedMigrateServiceServer) Key(context.Context, *MigrateKeyRequest) (*MigrateKeyReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Key not implemented")
+}
+func (UnimplementedMigrateServiceServer) GuestKey(context.Context, *MigrateGuestKeyRequest) (*MigrateGuestKeyReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GuestKey not implemented")
 }
 func (UnimplementedMigrateServiceServer) mustEmbedUnimplementedMigrateServiceServer() {}
 func (UnimplementedMigrateServiceServer) testEmbeddedByValue()                        {}
@@ -1735,6 +1775,24 @@ func _MigrateService_Key_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MigrateService_GuestKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MigrateGuestKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MigrateServiceServer).GuestKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MigrateService_GuestKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MigrateServiceServer).GuestKey(ctx, req.(*MigrateGuestKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MigrateService_ServiceDesc is the grpc.ServiceDesc for MigrateService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1745,6 +1803,10 @@ var MigrateService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Key",
 			Handler:    _MigrateService_Key_Handler,
+		},
+		{
+			MethodName: "GuestKey",
+			Handler:    _MigrateService_GuestKey_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

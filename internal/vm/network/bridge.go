@@ -26,8 +26,10 @@ import (
 
 // CreateTap creates a persistent tap device named tapName and attaches it
 // to the already-existing bridge bridgeName, bringing the tap up.
-// Requires CAP_NET_ADMIN — not a new privilege requirement, anvild already
-// runs as root for /dev/kvm access.
+// Requires CAP_NET_ADMIN in the calling process's effective set — anvild
+// runs as the unprivileged "anvil" user (see PLAN.md's M6 notes), granted
+// this specific capability as an ambient capability by
+// packaging/anvild.service, not by running as root.
 func CreateTap(tapName, bridgeName string) error {
 	bridge, err := netlink.LinkByName(bridgeName)
 	if err != nil {
