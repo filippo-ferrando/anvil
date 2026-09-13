@@ -1,5 +1,5 @@
-./anvil
-./anvild
+/anvil
+/anvild
 *.qcow2
 *.iso
- /data/distros/*.tmp
+/data/distros/*.tmp
