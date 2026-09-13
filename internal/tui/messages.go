@@ -25,6 +25,11 @@ type actionDoneMsg struct {
 	err  error
 }
 
+type intentsLoadedMsg struct {
+	intents []*anvilv1.Intent
+	err     error
+}
+
 type cachedImagesLoadedMsg struct {
 	images []*anvilv1.CachedImage
 	err    error
@@ -138,10 +143,34 @@ func stopInstance(c *client.Client, name string) tea.Cmd {
 	}
 }
 
-func deleteInstance(c *client.Client, name string) tea.Cmd {
+// deleteInstance mirrors `anvil delete [--purge]`: purge=false leaves the
+// instance recoverable (state DELETED, until a later purge); purge=true
+// removes it outright in the same call — DeleteRequest already has both
+// behaviors, so this needed no new RPC, just actually exposing the flag.
+func deleteInstance(c *client.Client, name string, purge bool) tea.Cmd {
 	return func() tea.Msg {
-		_, err := c.Delete(context.Background(), &anvilv1.DeleteRequest{Names: []string{name}})
-		return actionDoneMsg{verb: "deleted", err: err}
+		_, err := c.Delete(context.Background(), &anvilv1.DeleteRequest{Names: []string{name}, Purge: purge})
+		verb := "deleted"
+		if purge {
+			verb = "deleted permanently"
+		}
+		return actionDoneMsg{verb: verb, err: err}
+	}
+}
+
+func mountInstance(c *client.Client, name, hostPath, guestPath string, readOnly bool) tea.Cmd {
+	return func() tea.Msg {
+		_, err := c.Mount(context.Background(), &anvilv1.MountRequest{
+			Name: name, HostPath: hostPath, GuestPath: guestPath, ReadOnly: readOnly,
+		})
+		return actionDoneMsg{verb: "mounted", err: err}
+	}
+}
+
+func umountInstance(c *client.Client, name, guestPath string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := c.Umount(context.Background(), &anvilv1.UmountRequest{Name: name, GuestPath: guestPath})
+		return actionDoneMsg{verb: "unmounted", err: err}
 	}
 }
 

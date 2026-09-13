@@ -1326,3 +1326,35 @@ without `sudo cat` anyway).
   without silently breaking old manifests, but we haven't needed to bump it yet.
 - `anvil mount` sharing an arbitrary host directory into a VM now depends on the "anvil"
   system user actually having access to that directory (M6); not solved, just flagged.
+
+## Planned, not started: a remote catalog instead of an embedded one
+
+Two related asks, not implemented yet, just written down so they don't get lost:
+
+- **`data/distros/distribution-info.json` shouldn't be embedded in the binary.** Right
+  now the built-in catalog is baked in at compile time (`image.LoadEmbedded`, a Go
+  `embed` of the file in this repo), so the only way to add a new distro entry or bump a
+  version is to rebuild and repackage anvil itself. It should instead be fetched from
+  somewhere at runtime (with the currently-embedded copy kept only as an offline
+  fallback, not removed outright: a machine with no network access on first run still
+  needs some catalog to launch anything at all). Needs: a real place to fetch it from
+  (see below), a refresh/cache strategy (don't re-fetch on every single launch), and
+  the existing `schema_version` check already guards against a fetched manifest this
+  build doesn't understand.
+- **A real place for anvil to search for cloud images and cloud-init templates,
+  online** could live in this same repo (a `catalog/` directory or similar,
+  published via GitHub raw/releases rather than baked into the Go binary) rather than
+  standing up separate infrastructure. Two related pieces:
+  - the `distribution-info.json` catalog itself, moved here instead of embedded, so
+    updating it is a normal commit+push, not a new anvil release.
+  - a set of ready-made cloud-init configs for common self-hosted services (nginx,
+    postgres, and similar; real starter templates, not just the distro-boot configs
+    the embedded catalog already covers), fetchable the same way a VM mirror manifest
+    already is (`anvil mirror add --kind vm --manifest-url ...`), so this becomes
+    "one more mirror" conceptually rather than a whole new subsystem, and `anvil
+    cloud-init import`/the saved library already has somewhere to put what gets
+    fetched.
+  Not designed further than this yet: exact directory layout, whether templates get
+  their own manifest schema alongside `distribution-info.json`'s, and how discovery
+  surfaces in the CLI/TUI (an `anvil find --templates` alongside the existing
+  `anvil find`, most likely, given the catalog/mirror parallel above).

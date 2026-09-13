@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
@@ -120,6 +121,14 @@ func (s *ImageServer) Delete(ctx context.Context, req *anvilv1.ImageDeleteReques
 // inspected (already deleted, mid-transition, whatever) is silently
 // skipped rather than blocking the whole check — it's not this image's
 // problem.
+//
+// Compares via samePath, not a plain string equality: imagePath is
+// computed by joining config.PreparedImageDir() with a filename, while
+// backing is whatever qemu-img itself reports for the overlay's
+// -b argument — normally identical, but if any directory on that path
+// (StateDir, CacheDir, or something above them) is a symlink, the two
+// strings can refer to the same file without being byte-identical, which
+// a plain == would silently and permanently report as "not in use."
 func usersOf(imagePath string, specs []*instance.Spec) (names []string) {
 	for _, spec := range specs {
 		if spec.VM == nil || spec.VM.DiskPath == "" {
@@ -129,9 +138,25 @@ func usersOf(imagePath string, specs []*instance.Spec) (names []string) {
 		if err != nil || backing == "" {
 			continue
 		}
-		if backing == imagePath {
+		if samePath(backing, imagePath) {
 			names = append(names, spec.Name)
 		}
 	}
 	return names
+}
+
+// samePath reports whether a and b refer to the same file, resolving
+// symlinks first (falling back to filepath.Clean, and then plain string
+// equality, if either side can't be resolved — e.g. because a path was
+// never actually valid, which a plain comparison still catches).
+func samePath(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	if errA != nil || errB != nil {
+		return filepath.Clean(a) == filepath.Clean(b)
+	}
+	return ra == rb
 }

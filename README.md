@@ -56,7 +56,8 @@ This is early. Here's what's actually real right now, versus what's just designe
 - a saved cloud-init config library (`anvil cloud-init list/new/edit/show/rename/delete`),
   reference one at launch with `--cloud-init-name`
 - runtime VM image mirrors (`anvil mirror add/list/remove/enable/disable --kind vm`), on
-  top of the built-in catalog
+  top of the built-in catalog. See `docs/mirrors.md` for the manifest schema and
+  container-mirror examples too
 - reconciliation on daemon restart, a running VM no longer gets reported as stopped just
   because `anvild` restarted
 - `anvil launch --ssh-key ...` + `anvil shell <name>` / `anvil exec <name> -- <cmd>` /

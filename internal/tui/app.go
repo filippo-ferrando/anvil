@@ -36,6 +36,7 @@ import (
 	"fmt"
 	"os/user"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -43,11 +44,24 @@ import (
 	"github.com/anvil-project/anvil/pkg/client"
 )
 
+// statusVisible is how long a status line stays up before the recurring
+// tick (see tickMsg) clears it — it used to just sit there forever until
+// the next action overwrote it, which reads as stale rather than as
+// feedback for whatever just happened.
+const statusVisible = 4 * time.Second
+
+type tickMsg time.Time
+
+func tickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
+}
+
 type screen int
 
 const (
 	screenInstances screen = iota
 	screenImages
+	screenIntents
 	screenCloudInit
 	screenMirrors
 	screenMigration
@@ -55,11 +69,12 @@ const (
 )
 
 // screenOrder is the sidebar's own list, top to bottom.
-var screenOrder = []screen{screenInstances, screenImages, screenCloudInit, screenMirrors, screenMigration}
+var screenOrder = []screen{screenInstances, screenImages, screenIntents, screenCloudInit, screenMirrors, screenMigration}
 
 var screenLabels = map[screen]string{
 	screenInstances: "Instances",
 	screenImages:    "Images",
+	screenIntents:   "Intents",
 	screenCloudInit: "Cloud-Init",
 	screenMirrors:   "Mirrors",
 	screenMigration: "Migration",
@@ -84,11 +99,13 @@ type model struct {
 	width          int
 	height         int
 
-	status    string // one-line, transient: last action's result or error
-	statusBad bool
+	status      string // one-line, transient: last action's result or error
+	statusBad   bool
+	statusSetAt time.Time // for the recurring tick in Update to know when to clear it
 
 	instances instancesModel
 	images    imagesModel
+	intents   intentsModel
 	launch    launchModel
 	cloudInit cloudInitModel
 	mirrors   mirrorsModel
@@ -118,6 +135,7 @@ func Run(socketPath string) error {
 		sidebarFocused: true,
 		instances:      newInstancesModel(),
 		images:         newImagesModel(),
+		intents:        newIntentsModel(),
 		cloudInit:      newCloudInitModel(),
 		mirrors:        newMirrorsModel(),
 		migration:      newMigrationModel(),
@@ -129,11 +147,21 @@ func Run(socketPath string) error {
 }
 
 func (m model) Init() tea.Cmd {
-	return loadInstances(m.client) // the sidebar starts on Instances; load it without waiting for a keypress
+	// The sidebar starts on Instances; load it without waiting for a
+	// keypress. tickCmd starts the recurring clock that clears m.status
+	// a few seconds after it's set (see statusVisible) — one ongoing
+	// command instead of threading a per-call tea.Cmd through every one
+	// of setStatus's many call sites.
+	return tea.Batch(loadInstances(m.client), tickCmd())
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tickMsg:
+		if m.status != "" && time.Since(m.statusSetAt) > statusVisible {
+			m.status = ""
+		}
+		return m, tickCmd()
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		contentWidth := msg.Width - sidebarWidth - sidebarGutter
@@ -144,6 +172,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// panels in styleBox.
 		m.instances.list.SetSize(contentWidth-2, h)
 		m.images.setSize(contentWidth, h)
+		m.intents.list.SetSize(contentWidth-2, h)
 		m.cloudInit.setSize(contentWidth, h)
 		m.mirrors.list.SetSize(contentWidth-2, h)
 		m.migration.setSize(contentWidth, h)
@@ -170,6 +199,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateInstances(msg)
 	case screenImages:
 		return m.updateImages(msg)
+	case screenIntents:
+		return m.updateIntents(msg)
 	case screenLaunch:
 		return m.updateLaunch(msg)
 	case screenCloudInit:
@@ -225,6 +256,8 @@ func loadCmdForScreen(s screen, c *client.Client) tea.Cmd {
 		return loadInstances(c)
 	case screenImages:
 		return tea.Batch(loadCachedImages(c), loadCatalog(c))
+	case screenIntents:
+		return loadIntents(c)
 	case screenCloudInit:
 		return loadCloudInitList(c)
 	case screenMirrors:
@@ -266,6 +299,8 @@ func (m model) screenView() string {
 		return m.instances.View()
 	case screenImages:
 		return m.images.View()
+	case screenIntents:
+		return m.intents.View()
 	case screenCloudInit:
 		return m.cloudInit.View()
 	case screenMirrors:
@@ -315,5 +350,5 @@ func contentHeight(termHeight int) int {
 // inventing its own inline message, and cleared the next time something
 // else happens.
 func (m *model) setStatus(text string, bad bool) {
-	m.status, m.statusBad = text, bad
+	m.status, m.statusBad, m.statusSetAt = text, bad, time.Now()
 }

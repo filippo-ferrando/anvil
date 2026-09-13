@@ -42,7 +42,7 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case launchStreamMsg:
 		if msg.status != "" {
-			m.launch.progressLines = append(m.launch.progressLines, msg.status)
+			m.launch.progressLines = appendProgressLine(m.launch.progressLines, msg.status)
 		}
 		if msg.err != nil {
 			m.launch.launching = false

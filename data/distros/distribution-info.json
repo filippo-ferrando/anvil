@@ -65,7 +65,7 @@
       "url": "https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2",
       "sha256": "e3e688f97a71b265ce202905a504253f60f3680cf57d011a45411c43bedfa930",
       "min_disk_gib": 2,
-      "default_user": "root"
+      "default_user": "arch"
     },
     {
       "id": "fedora-44",

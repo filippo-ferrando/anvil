@@ -8,6 +8,35 @@ import (
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 )
 
+// progressKey groups status updates that should redraw in place instead
+// of each getting their own line: everything before the first ": ", or
+// the whole string if there isn't one. Ported from
+// internal/cli/commands/launch.go's own progressKey (same reasoning: a
+// real download/pull produces a status update every ~500ms, and one
+// line per tick makes it look like progress isn't a single ongoing
+// thing) — this package only reuses pkg/client, not
+// internal/cli/commands, per the plan's TUI section, so it's kept as a
+// small separate copy rather than an import.
+func progressKey(status string) string {
+	if idx := strings.Index(status, ": "); idx != -1 {
+		return status[:idx]
+	}
+	return status
+}
+
+// appendProgressLine appends status to lines, replacing the last line
+// instead of adding a new one when it shares the same progressKey — see
+// progressKey's doc comment. Used by both the launch and migration
+// screens' progress display, so a multi-hundred-tick download/pull/
+// upload shows as one updating line, not a wall of near-identical ones.
+func appendProgressLine(lines []string, status string) []string {
+	if len(lines) > 0 && progressKey(lines[len(lines)-1]) == progressKey(status) {
+		lines[len(lines)-1] = status
+		return lines
+	}
+	return append(lines, status)
+}
+
 // The launch form's env/volumes/ports fields are each one comma-separated
 // text field rather than a dynamic add/remove row list (a deliberate v1
 // simplification, a real per-row editor is a nicer follow-up), using the

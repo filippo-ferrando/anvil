@@ -93,9 +93,13 @@ func (s *MirrorServer) Add(ctx context.Context, req *anvilv1.MirrorAddRequest) (
 		if m.Registry == "" {
 			return nil, fmt.Errorf("mirror: a container mirror needs a registry")
 		}
-		// Applying this as a registries.conf.d drop-in is M3 work,
-		// alongside the Podman backend itself — for now the record is just
-		// stored, not yet acted on.
+		// Nothing more to do here at Add time: unlike a VM mirror's
+		// manifest, there's no remote fetch/validation to do up front.
+		// The record is just stored; it gets applied per-pull, by
+		// rewriting the image ref before create, see
+		// internal/container/docker.ResolveMirror (Podman's own
+		// registries.conf.d mechanism, once that backend lands, would
+		// apply mirrors a different way, at the daemon level instead).
 	default:
 		return nil, fmt.Errorf("mirror: kind must be \"vm\" or \"container\"")
 	}

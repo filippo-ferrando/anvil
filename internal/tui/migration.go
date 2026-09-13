@@ -96,7 +96,7 @@ func (m model) updateMigration(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case migrateStreamMsg:
 		if msg.line != "" {
-			m.migration.progressLines = append(m.migration.progressLines, msg.line)
+			m.migration.progressLines = appendProgressLine(m.migration.progressLines, msg.line)
 		}
 		if msg.err != nil {
 			m.migration.migrating = false
