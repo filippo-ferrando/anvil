@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/oklog/ulid/v2"
 
@@ -58,6 +59,14 @@ type Networker interface {
 	// best-effort). Removing an already-gone network must not be an
 	// error, matching CreateNetwork's own idempotency expectations.
 	RemoveNetwork(ctx context.Context, name string) error
+
+	// ContainerAddress returns containerID's assigned address on
+	// networkName — called right after a container member is created, so
+	// its IP can be recorded (store.IntentMember.IP) for a later-launched
+	// VM member's static hosts entries (see instance.VMSpec.ExtraHosts).
+	// Not meaningful for Podman/other engines the same way; VM addresses
+	// don't need this, they're assigned by anvil itself up front.
+	ContainerAddress(ctx context.Context, networkName, containerID string) (string, error)
 }
 
 type Manager struct {
@@ -121,6 +130,51 @@ func countVMMembers(members []store.IntentMember) int {
 	return n
 }
 
+// hostsFor builds a role -> IP map from every already-known member with a
+// recorded address, for a new VM member's ExtraHosts — a VM has no other
+// way to resolve any peer by name (unlike a container, which gets
+// Docker's embedded DNS for its container peers for free), so it needs an
+// entry for every kind of member, not just VMs.
+func hostsFor(members []store.IntentMember) map[string]string {
+	hosts := make(map[string]string, len(members))
+	for _, mem := range members {
+		if mem.IP != "" {
+			hosts[mem.Role] = mem.IP
+		}
+	}
+	if len(hosts) == 0 {
+		return nil
+	}
+	return hosts
+}
+
+// vmHostsFor is hostsFor, restricted to VM members — for a new container
+// member's ExtraHosts. A container already resolves other container peers
+// via Docker's own embedded DNS (see NetworkAlias), so only VM members
+// (invisible to Docker's DNS) need a static entry here.
+func vmHostsFor(members []store.IntentMember) map[string]string {
+	hosts := make(map[string]string, len(members))
+	for _, mem := range members {
+		if mem.Kind == instance.KindVM && mem.IP != "" {
+			hosts[mem.Role] = mem.IP
+		}
+	}
+	if len(hosts) == 0 {
+		return nil
+	}
+	return hosts
+}
+
+// stripCIDR returns just the address portion of a "10.55.201.4/24"-shaped
+// string, for recording in store.IntentMember.IP (which other members'
+// hosts entries reference directly, with no CIDR suffix).
+func stripCIDR(s string) string {
+	if idx := strings.Index(s, "/"); idx != -1 {
+		return s[:idx]
+	}
+	return s
+}
+
 // Launch provisions one intent member: params.IntentName is resolved to an
 // existing intent, or a new one is created on the fly if no intent by
 // that name exists yet (there's no separate "create an intent" step —
@@ -181,6 +235,12 @@ func (m *Manager) Launch(ctx context.Context, params instance.LaunchParams, prog
 		switch {
 		case launchParams.Container != nil:
 			launchParams.Container.NetworkMode = it.Network.EngineNetworkName
+			// NetworkAlias lets Docker's embedded DNS resolve this
+			// container by role for other container peers; ExtraHosts
+			// covers what that DNS can't (VM peers) — see hostsFor/
+			// vmHostsFor's doc comments for why the two aren't symmetric.
+			launchParams.Container.NetworkAlias = role
+			launchParams.Container.ExtraHosts = vmHostsFor(it.Members)
 		case launchParams.VM != nil:
 			ip, err := ipam.VMAddress(it.Network.Subnet, countVMMembers(it.Members))
 			if err != nil {
@@ -191,6 +251,9 @@ func (m *Manager) Launch(ctx context.Context, params instance.LaunchParams, prog
 			launchParams.VM.BridgeInterface = it.Network.BridgeInterface
 			launchParams.VM.StaticIP = ip
 			launchParams.VM.Gateway = it.Network.Gateway
+			// A VM has no DNS resolution mechanism of its own, so it needs
+			// a static entry for every already-known member, not just VMs.
+			launchParams.VM.ExtraHosts = hostsFor(it.Members)
 		}
 	}
 
@@ -212,7 +275,28 @@ func (m *Manager) Launch(ctx context.Context, params instance.LaunchParams, prog
 		return launchErr
 	}
 
-	it.Members = append(it.Members, store.IntentMember{InstanceID: launched.ID, Role: role, Kind: launched.Kind})
+	// Recorded so a member launched *after* this one can resolve it by
+	// name (see hostsFor/vmHostsFor above) — a VM's address was already
+	// decided before Launch ran; a container's is assigned by Docker
+	// itself, so it has to be read back now. A failure to read it back
+	// doesn't undo the (already successful) launch, it just means later
+	// members won't get a hosts entry for this one — logged, not fatal.
+	memberIP := ""
+	if it.Network != nil {
+		switch {
+		case launched.VM != nil:
+			memberIP = stripCIDR(launched.VM.StaticIP)
+		case launched.Container != nil:
+			ip, err := m.Networker.ContainerAddress(ctx, it.Network.EngineNetworkName, launched.Container.ContainerID)
+			if err != nil {
+				log.Printf("intent: reading %s's address on %q: %v", launched.Name, it.Network.EngineNetworkName, err)
+			} else {
+				memberIP = ip
+			}
+		}
+	}
+
+	it.Members = append(it.Members, store.IntentMember{InstanceID: launched.ID, Role: role, Kind: launched.Kind, IP: memberIP})
 	return m.Store.PutIntent(it)
 }
 

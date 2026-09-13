@@ -11,7 +11,9 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -92,6 +94,15 @@ func (b *Backend) Create(ctx context.Context, spec *instance.Spec, progress func
 	}
 	v := spec.VM
 
+	dir := config.InstanceDir(spec.ID)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return fmt.Errorf("vm: creating instance dir: %w", err)
+	}
+
+	if v.SourceDiskPath != "" {
+		return b.adoptMigratedDisk(spec, dir, progress)
+	}
+
 	catalog, err := b.effectiveCatalog()
 	if err != nil {
 		return err
@@ -101,11 +112,6 @@ func (b *Backend) Create(ctx context.Context, spec *instance.Spec, progress func
 		return err
 	}
 	v.DefaultUser = entry.DefaultUser
-
-	dir := config.InstanceDir(spec.ID)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("vm: creating instance dir: %w", err)
-	}
 
 	diskPath := filepath.Join(dir, "disk.qcow2")
 	if err := b.Vault.OverlayFor(entry, diskPath, v.DiskGiB, progress); err != nil {
@@ -117,6 +123,76 @@ func (b *Backend) Create(ctx context.Context, spec *instance.Spec, progress func
 		progress("building cloud-init seed")
 	}
 	return b.buildSeed(spec)
+}
+
+// adoptMigratedDisk is Create's path for an `anvil migrate`-driven launch
+// (see instance.VMSpec.SourceDiskPath's doc comment for why): the disk at
+// v.SourceDiskPath already came from a real, previously-booted instance
+// (flattened and shipped over by internal/migrate), so it becomes this
+// instance's own disk.qcow2 directly — no catalog lookup, no overlay, and
+// deliberately no cloud-init seed either, since the disk already has
+// everything from its original first boot baked in.
+func (b *Backend) adoptMigratedDisk(spec *instance.Spec, dir string, progress func(status string)) error {
+	v := spec.VM
+	if progress != nil {
+		progress("adopting migrated disk")
+	}
+
+	diskPath := filepath.Join(dir, "disk.qcow2")
+	if err := os.Rename(v.SourceDiskPath, diskPath); err != nil {
+		// os.Rename fails across filesystems (EXDEV) — very likely here,
+		// since the migrated disk typically lands in a staging path like
+		// /tmp that isn't guaranteed to share a filesystem with the
+		// instance dir. Fall back to a real copy in that case.
+		if err := copyFile(v.SourceDiskPath, diskPath); err != nil {
+			return fmt.Errorf("vm: adopting migrated disk: %w", err)
+		}
+		_ = os.Remove(v.SourceDiskPath)
+	}
+	v.DiskPath = diskPath
+	v.SourceDiskPath = "" // consumed — nothing left at the old path to reference
+	return nil
+}
+
+// copyFile is os.Rename's fallback for a cross-filesystem move: read the
+// whole source file and write it to dest, then the caller removes the
+// source. Only used for adopting a migrated VM disk (an infrequent,
+// already-slow-by-nature operation), not on any hot path.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("opening %s: %w", src, err)
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return fmt.Errorf("creating %s: %w", dst, err)
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return fmt.Errorf("copying %s to %s: %w", src, dst, err)
+	}
+	return out.Close()
+}
+
+// ExportDisk flattens spec's current disk (backing-file overlay and all)
+// into a standalone qcow2 file at destPath — the source side of `anvil
+// migrate`'s VM path (see internal/migrate.Manager). Must only be called
+// while spec's VM is stopped: qemu-img reading a disk a live QEMU process
+// is actively writing to would be unsafe.
+func (b *Backend) ExportDisk(ctx context.Context, spec *instance.Spec, destPath string) error {
+	if spec.VM == nil {
+		return fmt.Errorf("vm: ExportDisk called with a nil VMSpec")
+	}
+	if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
+		return fmt.Errorf("vm: creating export destination dir: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, "qemu-img", "convert", "-O", "qcow2", spec.VM.DiskPath, destPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("vm: exporting disk: %w: %s", err, out)
+	}
+	return nil
 }
 
 // buildSeed (re)builds spec's cloud-init seed ISO from its current
@@ -143,6 +219,10 @@ func (b *Backend) buildSeed(spec *instance.Spec) error {
 		return fmt.Errorf("vm: preparing cloud-init user-data: %w", err)
 	}
 	userData, err = mergeMounts(userData, v.Mounts)
+	if err != nil {
+		return fmt.Errorf("vm: preparing cloud-init user-data: %w", err)
+	}
+	userData, err = mergeExtraHosts(userData, v.ExtraHosts)
 	if err != nil {
 		return fmt.Errorf("vm: preparing cloud-init user-data: %w", err)
 	}
@@ -202,12 +282,23 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		v.SSHPort = 0
 	} else {
 		// SLIRP with an SSH host-forward, the default for a standalone
-		// instance (not part of any intent).
+		// instance (not part of any intent). Any --publish ports (see
+		// launch.go) get their own hostfwd entries the same way, e.g. for
+		// an nginx install running directly inside the guest.
 		sshPort, err := allocateFreePort()
 		if err != nil {
 			return fmt.Errorf("vm: allocating SSH forward port: %w", err)
 		}
 		cfg.SLIRPHostForwards = []qemu.HostForward{{HostPort: sshPort, GuestPort: 22, Protocol: "tcp"}}
+		for _, p := range v.Ports {
+			proto := p.Protocol
+			if proto == "" {
+				proto = "tcp"
+			}
+			cfg.SLIRPHostForwards = append(cfg.SLIRPHostForwards, qemu.HostForward{
+				HostPort: p.HostPort, GuestPort: p.GuestPort, Protocol: proto,
+			})
+		}
 		v.SSHPort = sshPort
 	}
 
@@ -609,6 +700,53 @@ func mergeMounts(existing string, mounts []instance.Mount) (string, error) {
 	}
 	doc["mounts"] = existingMounts
 	doc["bootcmd"] = append(newBootcmd, existingBootcmd...)
+
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return "", fmt.Errorf("re-encoding cloud-init user-data: %w", err)
+	}
+	return "#cloud-config\n" + string(out), nil
+}
+
+// mergeExtraHosts adds one /etc/hosts entry per host (see
+// instance.VMSpec.ExtraHosts — an intent's other already-known members,
+// role -> IP) via a bootcmd line, since cloud-init has no first-class
+// "static hosts" module in the minimal config surface this project
+// otherwise generates. Same parse/merge/re-serialize approach as
+// mergeSSHKeys/mergeMounts, for the same reason: string-concatenating
+// onto arbitrary existing YAML isn't safe. Each line is guarded with a
+// grep check so it's safe to run again on every boot (a Mount/Umount
+// bumps Generation, which forces a full module re-run, see buildSeed)
+// without duplicating entries. Sorted by name so the generated seed is
+// deterministic across regenerations, not dependent on Go's random map
+// iteration order.
+func mergeExtraHosts(existing string, hosts map[string]string) (string, error) {
+	if len(hosts) == 0 {
+		return existing, nil
+	}
+
+	body := strings.TrimPrefix(existing, "#cloud-config\n")
+	doc := map[string]any{}
+	if strings.TrimSpace(body) != "" {
+		if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
+			return "", fmt.Errorf("parsing existing cloud-init user-data: %w", err)
+		}
+	}
+	if doc == nil {
+		doc = map[string]any{}
+	}
+
+	existingBootcmd, _ := doc["bootcmd"].([]any)
+	names := make([]string, 0, len(hosts))
+	for name := range hosts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		line := fmt.Sprintf("%s %s", hosts[name], name)
+		existingBootcmd = append(existingBootcmd, fmt.Sprintf(`grep -qxF %q /etc/hosts || echo %q >> /etc/hosts`, line, line))
+	}
+	doc["bootcmd"] = existingBootcmd
 
 	out, err := yaml.Marshal(doc)
 	if err != nil {

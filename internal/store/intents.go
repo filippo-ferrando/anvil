@@ -23,6 +23,14 @@ type IntentMember struct {
 	InstanceID string
 	Role       string
 	Kind       instance.Kind
+
+	// IP is this member's address on the intent's shared network (a VM's
+	// static assignment, or a container's engine-assigned one, read back
+	// right after it's created) — used to build later members' static
+	// name resolution entries (VMSpec.ExtraHosts/ContainerSpec.ExtraHosts,
+	// see internal/intent.Manager.Launch). Empty if this intent has no
+	// network (no Networker configured).
+	IP string
 }
 
 // IntentNetwork is the shared bridge network created for one intent, on

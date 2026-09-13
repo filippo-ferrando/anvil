@@ -67,6 +67,13 @@ type VMSpec struct {
 	NetworkMode   string // "slirp" | "bridge"
 	SSHPublicKeys []string
 
+	// Ports to publish from the host into the guest, same idea (and same
+	// type) as ContainerSpec.Ports below — e.g. reaching an nginx install
+	// running directly inside the VM. Only meaningful in SLIRP mode: a
+	// bridged intent member already has its own directly-reachable
+	// address, see internal/vm.Backend.Start.
+	Ports []PortMapping
+
 	DiskPath    string
 	SeedISOPath string
 
@@ -105,6 +112,23 @@ type VMSpec struct {
 	BridgeInterface string // Linux interface name of the intent's shared bridge
 	StaticIP        string // CIDR, e.g. "10.55.201.4/24"
 	Gateway         string
+
+	// ExtraHosts is every other already-known intent member's role -> IP
+	// at the time this VM was launched (see internal/intent.Manager.Launch),
+	// injected into /etc/hosts via cloud-init since a VM has no other way
+	// to resolve a peer by name — unlike a container, it doesn't get
+	// Docker's embedded DNS. Not retroactively updated when a later member
+	// joins; this VM needs a restart to pick that up. Meaningless outside
+	// an intent.
+	ExtraHosts map[string]string
+
+	// SourceDiskPath, if set, makes Create adopt this already-prepared
+	// disk directly as the instance's own disk.qcow2 instead of resolving
+	// the image catalog and creating an overlay — see internal/migrate,
+	// the only real caller of this. No cloud-init seed gets built either
+	// in that case; the disk already has everything from its original
+	// first boot.
+	SourceDiskPath string
 }
 
 // Mount is one host directory shared into the guest over 9p.
@@ -141,6 +165,18 @@ type ContainerSpec struct {
 	// not by the launch request — every subsequent call against the
 	// engine's API is by this ID, not by anvil's own instance ID.
 	ContainerID string
+
+	// Populated by internal/intent.Manager for an intent member, not by
+	// the launch request. NetworkAlias is this container's own resolvable
+	// name on the network (its role) — Docker's embedded DNS resolves it
+	// automatically for other container peers, no ExtraHosts entry needed
+	// for those. ExtraHosts instead covers what Docker's DNS can't: other
+	// already-known intent members that are VMs (not Docker-managed,
+	// invisible to Docker's own DNS), role -> static IP, becomes a
+	// `--add-host`-equivalent at container-create time. Meaningless
+	// outside an intent.
+	NetworkAlias string
+	ExtraHosts   map[string]string
 }
 
 type VolumeMount struct {

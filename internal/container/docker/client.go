@@ -141,15 +141,31 @@ type hostConfig struct {
 	Binds        []string                 `json:"Binds,omitempty"`
 	PortBindings map[string][]portBinding `json:"PortBindings,omitempty"`
 	NetworkMode  string                   `json:"NetworkMode,omitempty"`
+	// ExtraHosts is Docker's own name for a static /etc/hosts entry
+	// (`docker run --add-host host:ip`), each formatted "host:ip" — this
+	// is how a container resolves an intent's VM members, which aren't
+	// Docker-managed and so aren't visible to Docker's embedded DNS. See
+	// NetworkAlias on endpointSettings for the reverse direction
+	// (container peers resolving this one).
+	ExtraHosts []string `json:"ExtraHosts,omitempty"`
+}
+
+type endpointSettings struct {
+	Aliases []string `json:"Aliases,omitempty"`
+}
+
+type networkingConfig struct {
+	EndpointsConfig map[string]endpointSettings `json:"EndpointsConfig,omitempty"`
 }
 
 type createContainerRequest struct {
-	Image        string              `json:"Image"`
-	Env          []string            `json:"Env,omitempty"`
-	Entrypoint   []string            `json:"Entrypoint,omitempty"`
-	Cmd          []string            `json:"Cmd,omitempty"`
-	ExposedPorts map[string]struct{} `json:"ExposedPorts,omitempty"`
-	HostConfig   hostConfig          `json:"HostConfig"`
+	Image            string              `json:"Image"`
+	Env              []string            `json:"Env,omitempty"`
+	Entrypoint       []string            `json:"Entrypoint,omitempty"`
+	Cmd              []string            `json:"Cmd,omitempty"`
+	ExposedPorts     map[string]struct{} `json:"ExposedPorts,omitempty"`
+	HostConfig       hostConfig          `json:"HostConfig"`
+	NetworkingConfig *networkingConfig   `json:"NetworkingConfig,omitempty"`
 }
 
 type createContainerResponse struct {
@@ -171,6 +187,15 @@ type CreateContainerParams struct {
 	Volumes     []VolumeMount
 	Ports       []PortMapping
 	NetworkMode string
+
+	// NetworkAlias, if set, is an additional network-scoped DNS name
+	// Docker's embedded DNS resolves to this container (on top of its own
+	// container name) — see internal/intent.Manager, which sets this to
+	// an intent member's role. ExtraHosts adds static "host:ip" entries
+	// (Docker's --add-host equivalent) for peers Docker's own DNS can't
+	// resolve (VM members).
+	NetworkAlias string
+	ExtraHosts   map[string]string
 }
 
 type VolumeMount struct {
@@ -340,6 +365,16 @@ func (c *Client) CreateContainer(ctx context.Context, p CreateContainerParams) (
 			req.HostConfig.PortBindings[key] = []portBinding{{HostPort: fmt.Sprintf("%d", port.HostPort)}}
 		}
 	}
+	for name, ip := range p.ExtraHosts {
+		req.HostConfig.ExtraHosts = append(req.HostConfig.ExtraHosts, name+":"+ip)
+	}
+	if p.NetworkAlias != "" && p.NetworkMode != "" {
+		req.NetworkingConfig = &networkingConfig{
+			EndpointsConfig: map[string]endpointSettings{
+				p.NetworkMode: {Aliases: []string{p.NetworkAlias}},
+			},
+		}
+	}
 
 	path := "/containers/create"
 	if p.Name != "" {
@@ -412,8 +447,15 @@ type ContainerState struct {
 	Running bool   `json:"Running"`
 }
 
+type networkSettings struct {
+	Networks map[string]struct {
+		IPAddress string `json:"IPAddress"`
+	} `json:"Networks"`
+}
+
 type inspectResponse struct {
-	State ContainerState `json:"State"`
+	State           ContainerState  `json:"State"`
+	NetworkSettings networkSettings `json:"NetworkSettings"`
 }
 
 // InspectState returns id's current state. Unlike the VM backend, there's
@@ -429,6 +471,27 @@ func (c *Client) InspectState(ctx context.Context, id string) (ContainerState, e
 		return ContainerState{}, fmt.Errorf("docker: inspecting container %s: %w", id, err)
 	}
 	return out.State, nil
+}
+
+// ContainerNetworkAddress returns id's assigned IP address on networkName
+// — used by internal/intent.Manager right after creating an intent
+// member container, so a later-launched VM member's ExtraHosts can
+// resolve it (see instance.VMSpec.ExtraHosts). Docker assigns this
+// address itself (via its own IPAM), it isn't something anvil picks.
+func (c *Client) ContainerNetworkAddress(ctx context.Context, id, networkName string) (string, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/containers/"+id+"/json", nil)
+	if err != nil {
+		return "", err
+	}
+	var out inspectResponse
+	if err := decodeJSON(resp, &out, http.StatusOK); err != nil {
+		return "", fmt.Errorf("docker: inspecting container %s: %w", id, err)
+	}
+	net, ok := out.NetworkSettings.Networks[networkName]
+	if !ok || net.IPAddress == "" {
+		return "", fmt.Errorf("docker: container %s has no address on network %s", id, networkName)
+	}
+	return net.IPAddress, nil
 }
 
 // Logs streams id's stdout+stderr to send, one demuxed chunk at a time —

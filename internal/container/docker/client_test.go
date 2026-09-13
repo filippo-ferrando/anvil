@@ -80,6 +80,89 @@ func TestCreateContainer(t *testing.T) {
 	}
 }
 
+func TestCreateContainerNetworkAliasAndExtraHosts(t *testing.T) {
+	var gotBody createContainerRequest
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(createContainerResponse{ID: "abc123"})
+	}))
+
+	_, err := c.CreateContainer(t.Context(), CreateContainerParams{
+		Image:        "nginx:latest",
+		NetworkMode:  "anvil-myapp",
+		NetworkAlias: "web",
+		ExtraHosts:   map[string]string{"db": "10.55.201.3"},
+	})
+	if err != nil {
+		t.Fatalf("CreateContainer: %v", err)
+	}
+	if len(gotBody.HostConfig.ExtraHosts) != 1 || gotBody.HostConfig.ExtraHosts[0] != "db:10.55.201.3" {
+		t.Errorf("expected ExtraHosts [db:10.55.201.3], got %v", gotBody.HostConfig.ExtraHosts)
+	}
+	if gotBody.NetworkingConfig == nil {
+		t.Fatal("expected a NetworkingConfig to be set")
+	}
+	ep, ok := gotBody.NetworkingConfig.EndpointsConfig["anvil-myapp"]
+	if !ok || len(ep.Aliases) != 1 || ep.Aliases[0] != "web" {
+		t.Errorf("expected network alias \"web\" on anvil-myapp, got %v", gotBody.NetworkingConfig.EndpointsConfig)
+	}
+}
+
+func TestCreateContainerNoNetworkAliasWithoutNetworkMode(t *testing.T) {
+	// NetworkAlias only makes sense scoped to a specific network — without
+	// NetworkMode set there's nothing to attach the alias to, so
+	// NetworkingConfig should stay nil rather than sending a
+	// meaningless/empty EndpointsConfig entry.
+	var gotBody createContainerRequest
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(createContainerResponse{ID: "abc123"})
+	}))
+
+	_, err := c.CreateContainer(t.Context(), CreateContainerParams{
+		Image:        "nginx:latest",
+		NetworkAlias: "web",
+	})
+	if err != nil {
+		t.Fatalf("CreateContainer: %v", err)
+	}
+	if gotBody.NetworkingConfig != nil {
+		t.Errorf("expected no NetworkingConfig without a NetworkMode, got %v", gotBody.NetworkingConfig)
+	}
+}
+
+func TestContainerNetworkAddress(t *testing.T) {
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"NetworkSettings": map[string]any{
+				"Networks": map[string]any{
+					"anvil-myapp": map[string]any{"IPAddress": "10.55.201.130"},
+				},
+			},
+		})
+	}))
+
+	ip, err := c.ContainerNetworkAddress(t.Context(), "abc123", "anvil-myapp")
+	if err != nil {
+		t.Fatalf("ContainerNetworkAddress: %v", err)
+	}
+	if ip != "10.55.201.130" {
+		t.Errorf("expected 10.55.201.130, got %s", ip)
+	}
+}
+
+func TestContainerNetworkAddressMissingNetwork(t *testing.T) {
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"NetworkSettings": map[string]any{"Networks": map[string]any{}}})
+	}))
+
+	if _, err := c.ContainerNetworkAddress(t.Context(), "abc123", "anvil-myapp"); err == nil {
+		t.Error("expected an error when the container has no address on that network")
+	}
+}
+
 func TestCreateContainerErrorPropagates(t *testing.T) {
 	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

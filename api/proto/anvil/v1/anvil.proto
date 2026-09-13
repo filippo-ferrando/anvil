@@ -48,11 +48,18 @@ message VMSpec {
   string network_mode = 8;    // "slirp" | "bridge"
   repeated string ssh_public_keys = 9;
 
-  // Daemon-populated, not client input: read-only outputs the client uses
-  // for `anvil shell`/`exec`/`transfer` to reach a running instance. Set by
-  // internal/vm.Backend.Create (default_user, from the image catalog) and
-  // .Start (ssh_port, a freshly allocated SLIRP host-forward port — it can
-  // change across a stop/start cycle, don't cache it client-side).
+  // ssh_port is daemon-populated, not client input: a read-only output the
+  // client uses for `anvil shell`/`exec`/`transfer` to reach a running
+  // instance, set by internal/vm.Backend.Start (a freshly allocated SLIRP
+  // host-forward port — it can change across a stop/start cycle, don't
+  // cache it client-side).
+  //
+  // default_user is normally daemon-populated too (from the image
+  // catalog, by internal/vm.Backend.Create) and any client-supplied value
+  // is overwritten in that case — except when source_disk_path is set
+  // (see below), where there's no catalog entry to read a default user
+  // from at all, so `anvil migrate`'s own re-launch on the target host is
+  // the one legitimate case that actually sets this as real input.
   int32 ssh_port = 10;
   string default_user = 11;
 
@@ -68,6 +75,37 @@ message VMSpec {
   string bridge_interface = 13; // Linux interface name of the intent's shared bridge
   string static_ip = 14;        // CIDR, e.g. "10.55.201.4/24"
   string gateway = 15;
+
+  // Ports to publish from the host into the guest, same idea (and same
+  // message type) as ContainerSpec.ports below — e.g. a plain nginx
+  // install running directly inside a cloud-init VM, reachable the same
+  // way `--publish` already works for containers. Only meaningful in
+  // SLIRP mode (network_mode unset/"slirp"): a bridged intent member
+  // already has its own directly-reachable address, there's nothing to
+  // forward.
+  repeated PortMapping ports = 16;
+
+  // Daemon-populated, not client input: set by internal/intent.Manager for
+  // an intent member. A VM has no DNS resolution mechanism of its own
+  // (unlike a container, which gets Docker's embedded DNS for free) — this
+  // is every other already-known intent member's role -> static IP at the
+  // time this VM was launched, injected into /etc/hosts via cloud-init
+  // (see internal/vm.Backend's buildSeed/mergeExtraHosts). A member added
+  // to the intent later isn't retroactively added here; this VM would
+  // need a restart to pick it up. Meaningless outside an intent.
+  map<string, string> extra_hosts = 17;
+
+  // source_disk_path is client input, but only meaningful for `anvil
+  // migrate`'s own internal re-launch of a migrated instance on the
+  // target host (see MigrateService below): when set, Create adopts this
+  // already-prepared disk as the instance's own disk.qcow2 directly,
+  // skipping catalog resolution and overlay creation entirely, and skips
+  // generating a cloud-init seed too — the disk already has everything
+  // from its original first boot baked in (users, SSH keys, packages),
+  // and re-running cloud-init against a new instance-id risks re-applying
+  // modules that aren't all idempotent. Not meant to be set by a normal
+  // `anvil launch`.
+  string source_disk_path = 18;
 }
 
 // Mount is one host directory shared into a VM's guest over 9p. Added and
@@ -101,6 +139,19 @@ message ContainerSpec {
   // set by the backend's Create. Every call after Create (start/stop/
   // inspect/logs) is by this ID, not by anvil's own instance ID.
   string container_id = 9;
+
+  // Daemon-populated, not client input: set by internal/intent.Manager for
+  // an intent member, same idea as VMSpec's bridge fields. network_alias
+  // is this container's own resolvable name on the intent's network (its
+  // role) — Docker's embedded DNS resolves it automatically for other
+  // container peers, no extra_hosts entry needed for those. extra_hosts
+  // covers what Docker's DNS can't: other intent members that are VMs
+  // (not Docker-managed, invisible to Docker's own DNS), keyed by role,
+  // valued by their static IP — becomes a `--add-host`-equivalent
+  // (HostConfig.ExtraHosts) at container-create time. Meaningless outside
+  // an intent.
+  string network_alias = 10;
+  map<string, string> extra_hosts = 11;
 }
 
 message VolumeMount {
@@ -434,4 +485,86 @@ message IntentDeleteRequest {
 
 message IntentDeleteReply {
   Intent intent = 1;
+}
+
+// HostService manages the known-hosts list migration targets are resolved
+// against (M5) — see MigrateService below. A host here is nothing more
+// than an SSH destination anvil already trusts you to have real access
+// to; adding one grants no trust by itself, it's just a saved shortcut so
+// `anvil migrate --to <alias>` doesn't need a literal user@host every
+// time. mDNS auto-discovery of peer anvil hosts (from the original plan)
+// is deferred, not built — this is the manual "known hosts" half only.
+service HostService {
+  rpc Add(HostAddRequest) returns (HostAddReply);
+  rpc List(HostListRequest) returns (HostListReply);
+  rpc Remove(HostRemoveRequest) returns (HostRemoveReply);
+  // Test checks that alias is actually reachable over SSH and that
+  // `anvil`/`anvild` are installed there — a real connectivity/sanity
+  // check, not just "is this alias saved."
+  rpc Test(HostTestRequest) returns (HostTestReply);
+}
+
+message Host {
+  string alias = 1;
+  string target = 2;   // "user@host[:port]"
+  string identity = 3; // optional path to a private key; empty uses ssh's own default identity resolution
+}
+
+message HostAddRequest {
+  Host host = 1;
+}
+
+message HostAddReply {}
+
+message HostListRequest {}
+
+message HostListReply {
+  repeated Host hosts = 1;
+}
+
+message HostRemoveRequest {
+  string alias = 1;
+}
+
+message HostRemoveReply {}
+
+message HostTestRequest {
+  string alias = 1;
+}
+
+message HostTestReply {
+  bool ok = 1;
+  string message = 2; // human-readable detail either way, e.g. the remote anvil version, or the SSH error
+}
+
+// MigrateService moves a single instance (M5; a whole intent is M6, not
+// built yet) to a different anvil host. Per the plan: no daemon-to-daemon
+// gRPC trust — the source daemon SSHes into the target host and drives
+// the target's own local `anvil` CLI (specifically `anvil migrate-import`,
+// a plumbing-only command not meant to be run by hand), which talks to
+// the target's own local anvild over its own unix socket. Whatever SSH
+// access already exists to the target is the only trust this needs.
+service MigrateService {
+  rpc Migrate(MigrateRequest) returns (stream MigrateProgress);
+}
+
+message MigrateRequest {
+  string name = 1;
+  string to = 2; // a known host's alias (HostService), or a literal "user@host[:port]"
+
+  // Default mode is destructive: copy, verify the target actually has
+  // it, then delete the source — never delete-first. copy skips that
+  // last step and leaves the source instance running/stopped as-is.
+  bool copy = 3;
+
+  string dest_name = 4; // optional rename on the target; defaults to the source's own name
+  bool dry_run = 5;     // validate connectivity/preconditions and report the plan, transfer nothing
+}
+
+message MigrateProgress {
+  oneof event {
+    string status = 1;
+    string error = 2;
+    string done = 3; // the new instance's ID on the target, final event on success
+  }
 }

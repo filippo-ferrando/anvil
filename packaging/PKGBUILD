@@ -1,0 +1,85 @@
+# Maintainer: filippo ferrando <fferrando@elemento.cloud>
+pkgbase=anvil
+pkgname=('anvil' 'anvild')
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Multipass-alike for cloud-init VMs and Docker/Podman containers"
+arch=('x86_64')
+url="" # TODO: fill in once there's a public URL for this repo
+license=('Apache-2.0')
+makedepends=('go' 'git')
+# There's no tagged release yet, so this pulls straight from the local
+# git repo this file lives in (one directory below packaging/) instead
+# of a downloaded tarball — the whole point of this package right now is
+# testing an in-progress build, not distributing a pinned version.
+#
+# IMPORTANT: git+file:// clones the repo's committed HEAD, not whatever
+# uncommitted changes happen to be sitting in the working tree. Commit
+# (even a throwaway WIP commit) before rebuilding, or your latest edits
+# won't show up in the package. This is deliberate, not an oversight: a
+# real isolated chroot build (`extra-x86_64-build`, see below) only ever
+# sees what source= declares, never the raw current directory — trying
+# to reach out to "wherever the working tree happens to be" is exactly
+# the kind of implicit dependency a clean chroot build is supposed to
+# catch, so this doesn't fight that, it works the same way for both a
+# plain `makepkg` and a real chroot build.
+source=("anvil::git+file://${startdir}/..")
+sha256sums=('SKIP') # local git source, not a fixed download with a checksum to pin
+
+# For a real, isolated build (recommended over bare makepkg, which builds
+# against whatever happens to already be installed on your machine):
+#   extra-x86_64-build
+# (from the `devtools` package) builds this in a clean chroot instead, so
+# makedepends/depends actually get verified rather than assumed.
+#
+# Generated Go code (api/gen/anvil/v1) is committed to the repo, so this
+# build needs only `go`, not `protoc` — see the Makefile's own `proto`
+# target for regenerating that when the .proto file actually changes.
+
+build() {
+  cd "$srcdir/anvil"
+  # go build needs network access the first time on a machine with an
+  # empty module cache (to fetch what go.sum pins) — normal Go behavior,
+  # not something this PKGBUILD can avoid, since generated stubs are
+  # committed but third-party dependencies aren't vendored.
+  CGO_ENABLED=0 go build -trimpath -mod=readonly -o "$srcdir/anvil-bin" ./cmd/anvil
+  go build -trimpath -mod=readonly -o "$srcdir/anvild-bin" ./cmd/anvild
+}
+
+package_anvil() {
+  pkgdesc="CLI for anvil, a Multipass-alike for cloud-init VMs and containers"
+  depends=('openssh') # anvil shell/exec/transfer/migrate shell out to the real ssh/scp binaries
+
+  install -Dm755 "$srcdir/anvil-bin" "$pkgdir/usr/bin/anvil"
+
+  # Shell completions: cobra ships a `completion` subcommand out of the
+  # box, no extra code needed on anvil's own side to generate these.
+  install -Dm644 <("$srcdir/anvil-bin" completion bash) "$pkgdir/usr/share/bash-completion/completions/anvil"
+  install -Dm644 <("$srcdir/anvil-bin" completion zsh) "$pkgdir/usr/share/zsh/site-functions/_anvil"
+  install -Dm644 <("$srcdir/anvil-bin" completion fish) "$pkgdir/usr/share/fish/vendor_completions.d/anvil.fish"
+
+  install -Dm644 "$srcdir/anvil/LICENSE.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE.md"
+}
+
+package_anvild() {
+  pkgdesc="Daemon for anvil - manages QEMU VMs and Docker/Podman containers"
+  # qemu-base (headless, not qemu-full/qemu-desktop) and xorriso are hard
+  # requirements: VMs are the core feature, not optional. Docker/Podman
+  # are genuinely optional, a host might only ever run VMs through anvil.
+  depends=('qemu-base' 'xorriso' 'openssh')
+  optdepends=(
+    'docker: run containers via Docker'
+    'podman: run containers via Podman (backend not implemented yet, see PLAN.md)'
+  )
+  # Creates the unprivileged "anvil" system user anvild.service actually
+  # runs as, generates its passwordless migration SSH key, and grants
+  # Docker group membership if Docker happens to be present — see
+  # anvild.install and PLAN.md's M6 notes for the full reasoning.
+  install=anvild.install
+
+  install -Dm755 "$srcdir/anvild-bin" "$pkgdir/usr/bin/anvild"
+  install -Dm644 "$startdir/anvild.service" "$pkgdir/usr/lib/systemd/system/anvild.service"
+  install -Dm644 "$startdir/anvil.sysusers" "$pkgdir/usr/lib/sysusers.d/anvil.conf"
+  install -Dm644 "$startdir/anvil.tmpfiles" "$pkgdir/usr/lib/tmpfiles.d/anvil.conf"
+  install -Dm644 "$srcdir/anvil/LICENSE.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE.md"
+}

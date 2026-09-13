@@ -26,6 +26,8 @@ type Client struct {
 	Mirror    anvilv1.MirrorServiceClient
 	Image     anvilv1.ImageServiceClient
 	Intent    anvilv1.IntentServiceClient
+	Host      anvilv1.HostServiceClient
+	Migrate   anvilv1.MigrateServiceClient
 }
 
 // Dial connects to anvild's gRPC API over its unix socket at socketPath.
@@ -46,6 +48,8 @@ func Dial(socketPath string) (*Client, error) {
 		Mirror:                anvilv1.NewMirrorServiceClient(conn),
 		Image:                 anvilv1.NewImageServiceClient(conn),
 		Intent:                anvilv1.NewIntentServiceClient(conn),
+		Host:                  anvilv1.NewHostServiceClient(conn),
+		Migrate:               anvilv1.NewMigrateServiceClient(conn),
 	}, nil
 }
 

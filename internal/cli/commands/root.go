@@ -44,6 +44,9 @@ func NewRootCommand() *cobra.Command {
 		newMountCommand(flags),
 		newUmountCommand(flags),
 		newIntentCommand(flags),
+		newHostCommand(flags),
+		newMigrateCommand(flags),
+		newMigrateImportCommand(flags),
 	)
 	return root
 }

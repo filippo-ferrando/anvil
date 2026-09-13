@@ -1,0 +1,48 @@
+[Unit]
+Description=anvil daemon (cloud-init VMs and Docker/Podman containers)
+After=network.target
+
+# Runs as the dedicated, unprivileged "anvil" system user (created by
+# anvil.sysusers), not root. Getting there from a plain unprivileged
+# process to everything anvild actually needs takes three separate
+# mechanisms, not one:
+#
+#  - /dev/kvm: the "kvm" supplementary group below, same as any other
+#    desktop QEMU/libvirt setup on Arch (udev owns /dev/kvm as
+#    root:kvm 0660) — DeviceAllow is the systemd-native cgroup-level
+#    version of the same intent, redundant with the group but cheap to
+#    also state explicitly.
+#  - tap/bridge creation for an intent's shared network
+#    (internal/vm/network, real netlink calls): CAP_NET_ADMIN, granted
+#    as an ambient capability so it survives across exec despite the
+#    process not being root.
+#  - the Docker socket: NOT listed here as a supplementary group,
+#    deliberately — "docker" is an optional dependency and might not be
+#    installed (or its group might not exist) when this unit is loaded,
+#    which would otherwise fail the whole service to start. Membership
+#    is instead granted persistently to the "anvil" user itself by
+#    anvild.install's post_install/post_upgrade hooks, conditionally, if
+#    and when Docker is actually present.
+#
+# What this does NOT solve: `anvil mount` sharing an arbitrary host
+# directory into a VM. QEMU's 9p backend does that file I/O as whatever
+# user anvild runs as, so unlike the old root-anvild design, the target
+# directory now actually needs to be readable (and, for a rw mount,
+# writable) by the "anvil" user — group permissions or an ACL on that
+# specific directory, not something this unit grants. See PLAN.md's M6
+# notes.
+[Service]
+Type=simple
+User=anvil
+Group=anvil
+SupplementaryGroups=kvm
+ExecStart=/usr/bin/anvild
+Restart=on-failure
+RestartSec=2
+
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+DeviceAllow=/dev/kvm rw
+
+[Install]
+WantedBy=multi-user.target

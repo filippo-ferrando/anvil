@@ -155,6 +155,85 @@ func TestMergeMountsPreservesExistingBootcmdAndMounts(t *testing.T) {
 	}
 }
 
+func TestMergeExtraHostsNoHosts(t *testing.T) {
+	out, err := mergeExtraHosts("#cloud-config\n{}\n", nil)
+	if err != nil {
+		t.Fatalf("mergeExtraHosts: %v", err)
+	}
+	if out != "#cloud-config\n{}\n" {
+		t.Errorf("expected mergeExtraHosts to pass through unchanged with no hosts, got %q", out)
+	}
+}
+
+func TestMergeExtraHostsAddsGuardedBootcmdLines(t *testing.T) {
+	hosts := map[string]string{"web": "10.55.201.2", "db": "10.55.201.3"}
+	out, err := mergeExtraHosts("#cloud-config\n{}\n", hosts)
+	if err != nil {
+		t.Fatalf("mergeExtraHosts: %v", err)
+	}
+
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(stripHeader(out)), &doc); err != nil {
+		t.Fatalf("output isn't valid YAML: %v\noutput was:\n%s", err, out)
+	}
+	bootcmd, ok := doc["bootcmd"].([]any)
+	if !ok || len(bootcmd) != 2 {
+		t.Fatalf("expected one bootcmd entry per host, got %#v", doc["bootcmd"])
+	}
+	joined := strings.Join(toStrings(t, bootcmd), "\n")
+	for _, want := range []string{"10.55.201.2 web", "10.55.201.3 db"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("expected a bootcmd line containing %q, got:\n%s", want, joined)
+		}
+		if !strings.Contains(joined, "grep -qxF") {
+			t.Errorf("expected an idempotency guard (grep -qxF) in the bootcmd lines, got:\n%s", joined)
+		}
+	}
+}
+
+func TestMergeExtraHostsIsDeterministic(t *testing.T) {
+	hosts := map[string]string{"web": "10.55.201.2", "db": "10.55.201.3", "cache": "10.55.201.4"}
+	first, err := mergeExtraHosts("#cloud-config\n{}\n", hosts)
+	if err != nil {
+		t.Fatalf("mergeExtraHosts: %v", err)
+	}
+	second, err := mergeExtraHosts("#cloud-config\n{}\n", hosts)
+	if err != nil {
+		t.Fatalf("mergeExtraHosts: %v", err)
+	}
+	if first != second {
+		t.Errorf("expected the same input map to always produce identical output (sorted by name), got:\n%s\nvs\n%s", first, second)
+	}
+}
+
+func TestMergeExtraHostsPreservesExistingBootcmd(t *testing.T) {
+	existing := "#cloud-config\nbootcmd:\n  - echo existing\n"
+	out, err := mergeExtraHosts(existing, map[string]string{"web": "10.55.201.2"})
+	if err != nil {
+		t.Fatalf("mergeExtraHosts: %v", err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(stripHeader(out)), &doc); err != nil {
+		t.Fatalf("output isn't valid YAML: %v\noutput was:\n%s", err, out)
+	}
+	if bootcmd := doc["bootcmd"].([]any); len(bootcmd) != 2 {
+		t.Errorf("expected the pre-existing bootcmd plus the new hosts entry, got %#v", bootcmd)
+	}
+}
+
+func toStrings(t *testing.T, items []any) []string {
+	t.Helper()
+	out := make([]string, len(items))
+	for i, item := range items {
+		s, ok := item.(string)
+		if !ok {
+			t.Fatalf("expected a string bootcmd entry, got %#v", item)
+		}
+		out[i] = s
+	}
+	return out
+}
+
 // assertValidCloudConfigWithKey parses out as YAML (after stripping the
 // non-YAML "#cloud-config" header line, same as cloud-init itself does)
 // and checks key is present in ssh_authorized_keys — this is the assertion

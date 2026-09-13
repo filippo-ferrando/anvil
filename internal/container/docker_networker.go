@@ -48,3 +48,11 @@ func (n *DockerNetworker) CreateNetwork(ctx context.Context, name, bridgeInterfa
 func (n *DockerNetworker) RemoveNetwork(ctx context.Context, name string) error {
 	return n.Client.RemoveNetwork(ctx, name)
 }
+
+// ContainerAddress returns containerID's assigned address on networkName
+// — called right after creating an intent's container member so
+// intent.Manager can record it in store.IntentMember.IP for later
+// members' ExtraHosts to reference.
+func (n *DockerNetworker) ContainerAddress(ctx context.Context, networkName, containerID string) (string, error) {
+	return n.Client.ContainerNetworkAddress(ctx, containerID, networkName)
+}

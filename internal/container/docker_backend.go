@@ -104,12 +104,14 @@ func (b *DockerBackend) Create(ctx context.Context, spec *instance.Spec, progres
 	}
 
 	params := docker.CreateContainerParams{
-		Name:        containerName(spec),
-		Image:       imageRef,
-		Env:         c.Env,
-		Entrypoint:  c.Entrypoint,
-		Cmd:         c.Cmd,
-		NetworkMode: c.NetworkMode,
+		Name:         containerName(spec),
+		Image:        imageRef,
+		Env:          c.Env,
+		Entrypoint:   c.Entrypoint,
+		Cmd:          c.Cmd,
+		NetworkMode:  c.NetworkMode,
+		NetworkAlias: c.NetworkAlias,
+		ExtraHosts:   c.ExtraHosts,
 	}
 	for _, v := range c.Volumes {
 		params.Volumes = append(params.Volumes, docker.VolumeMount{

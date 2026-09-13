@@ -30,6 +30,8 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 		entrypoint    string
 		intentName    string
 		role          string
+		fromDisk      string
+		defaultUser   string
 	)
 
 	cmd := &cobra.Command{
@@ -62,6 +64,20 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 			if role != "" && intentName == "" {
 				return fmt.Errorf("--role only makes sense with --intent")
 			}
+			if kind == anvilv1.Kind_KIND_VM && intentName != "" && len(publish) > 0 {
+				return fmt.Errorf("--publish doesn't apply to a VM joining --intent: it gets its own directly-reachable address on the shared network instead of a SLIRP-forwarded port")
+			}
+			if fromDisk != "" {
+				if kind != anvilv1.Kind_KIND_VM {
+					return fmt.Errorf("--from-disk only applies to --kind vm")
+				}
+				if cloudInitFile != "" || cloudInitName != "" {
+					return fmt.Errorf("--from-disk skips cloud-init entirely (the disk already has everything from its original first boot), --cloud-init/--cloud-init-name don't apply")
+				}
+			}
+			if defaultUser != "" && kind != anvilv1.Kind_KIND_VM {
+				return fmt.Errorf("--default-user only applies to --kind vm")
+			}
 
 			req := &anvilv1.LaunchRequest{
 				Name:       name,
@@ -88,6 +104,10 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 				if err != nil {
 					return err
 				}
+				ports, err := parsePublish(publish)
+				if err != nil {
+					return err
+				}
 				req.Vm = &anvilv1.VMSpec{
 					ImageRef:          imageRef,
 					Cpus:              cpus,
@@ -96,6 +116,9 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 					CloudInitUserData: cloudInitData,
 					CloudInitName:     cloudInitName,
 					SshPublicKeys:     resolvedKeys,
+					Ports:             ports,
+					SourceDiskPath:    fromDisk,
+					DefaultUser:       defaultUser,
 				}
 
 			case anvilv1.Kind_KIND_CONTAINER:
@@ -157,11 +180,13 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 	cmd.Flags().StringVar(&engineStr, "engine", "", `container engine: "docker" or "podman" (container only; defaults to docker, the only one implemented so far)`)
 	cmd.Flags().StringArrayVarP(&envVars, "env", "e", nil, "environment variable KEY=VALUE (container only, repeatable)")
 	cmd.Flags().StringArrayVarP(&volumes, "volume", "v", nil, "bind mount <host-path>:<container-path>[:ro] (container only, repeatable)")
-	cmd.Flags().StringArrayVarP(&publish, "publish", "p", nil, "publish <host-port>:<container-port>[/tcp|udp] (container only, repeatable)")
+	cmd.Flags().StringArrayVarP(&publish, "publish", "p", nil, "publish <host-port>:<guest-port>[/tcp|udp] (repeatable; a bridged --intent VM already has its own reachable address, so this only applies to a standalone VM or a container)")
 	cmd.Flags().StringVar(&entrypoint, "entrypoint", "", "override the image's entrypoint (container only)")
 	cmd.Flags().BoolVar(&noStart, "no-start", false, "create but don't start the instance")
 	cmd.Flags().StringVar(&intentName, "intent", "", "join this instance to an intent (created automatically if it doesn't exist yet), see `anvil intent`")
 	cmd.Flags().StringVar(&role, "role", "", "label this instance's role within --intent (defaults to its own name)")
+	cmd.Flags().StringVar(&fromDisk, "from-disk", "", "use this already-prepared qcow2 file as the VM's own disk directly, skipping the image catalog and cloud-init entirely (internal, used by `anvil migrate`)")
+	cmd.Flags().StringVar(&defaultUser, "default-user", "", "override the SSH login user normally read from the image catalog (VM only, mainly for internal use by `anvil migrate`)")
 	return cmd
 }
 
@@ -339,21 +364,21 @@ func parsePublish(pubs []string) ([]*anvilv1.PortMapping, error) {
 			spec = host
 			protocol = proto
 		}
-		hostStr, containerStr, ok := strings.Cut(spec, ":")
+		hostStr, guestStr, ok := strings.Cut(spec, ":")
 		if !ok {
-			return nil, fmt.Errorf(`--publish %q must be "<host-port>:<container-port>[/tcp|udp]"`, p)
+			return nil, fmt.Errorf(`--publish %q must be "<host-port>:<guest-port>[/tcp|udp]"`, p)
 		}
 		hostPort, err := strconv.Atoi(hostStr)
 		if err != nil {
 			return nil, fmt.Errorf("--publish %q: invalid host port: %w", p, err)
 		}
-		containerPort, err := strconv.Atoi(containerStr)
+		guestPort, err := strconv.Atoi(guestStr)
 		if err != nil {
-			return nil, fmt.Errorf("--publish %q: invalid container port: %w", p, err)
+			return nil, fmt.Errorf("--publish %q: invalid guest port: %w", p, err)
 		}
 		out = append(out, &anvilv1.PortMapping{
 			HostPort:  int32(hostPort),
-			GuestPort: int32(containerPort),
+			GuestPort: int32(guestPort),
 			Protocol:  protocol,
 		})
 	}

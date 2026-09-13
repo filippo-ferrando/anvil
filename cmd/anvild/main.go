@@ -22,6 +22,7 @@ import (
 	"github.com/anvil-project/anvil/internal/daemon"
 	"github.com/anvil-project/anvil/internal/instance"
 	"github.com/anvil-project/anvil/internal/intent"
+	"github.com/anvil-project/anvil/internal/migrate"
 	"github.com/anvil-project/anvil/internal/store"
 	"github.com/anvil-project/anvil/internal/vm"
 	"github.com/anvil-project/anvil/internal/vm/image"
@@ -37,7 +38,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	for _, dir := range []string{config.RunDir, config.StateDir, config.CacheDir, config.PreparedImageDir(), config.CloudInitDir()} {
+	for _, dir := range []string{config.RunDir, config.StateDir, config.CacheDir, config.PreparedImageDir(), config.CloudInitDir(), config.MigrateStagingDir()} {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return fmt.Errorf("creating %s: %w (run as root, or as the \"anvil\" system user once packaged)", dir, err)
 		}
@@ -84,6 +85,7 @@ func run() error {
 	}
 
 	intentMgr := intent.NewManager(db, mgr, dockerNetworker)
+	migrateMgr := migrate.NewManager(db, mgr, vmBackend)
 
 	socketPath := config.SocketPath()
 	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
@@ -106,6 +108,8 @@ func run() error {
 	anvilv1.RegisterMirrorServiceServer(grpcServer, daemon.NewMirrorServer(db))
 	anvilv1.RegisterImageServiceServer(grpcServer, daemon.NewImageServer(db, vault))
 	anvilv1.RegisterIntentServiceServer(grpcServer, daemon.NewIntentServer(intentMgr))
+	anvilv1.RegisterHostServiceServer(grpcServer, daemon.NewHostServer(db, migrateMgr))
+	anvilv1.RegisterMigrateServiceServer(grpcServer, daemon.NewMigrateServer(migrateMgr))
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- grpcServer.Serve(lis) }()

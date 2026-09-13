@@ -1348,3 +1348,362 @@ var IntentService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "anvil/v1/anvil.proto",
 }
+
+const (
+	HostService_Add_FullMethodName    = "/anvil.v1.HostService/Add"
+	HostService_List_FullMethodName   = "/anvil.v1.HostService/List"
+	HostService_Remove_FullMethodName = "/anvil.v1.HostService/Remove"
+	HostService_Test_FullMethodName   = "/anvil.v1.HostService/Test"
+)
+
+// HostServiceClient is the client API for HostService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// HostService manages the known-hosts list migration targets are resolved
+// against (M5) — see MigrateService below. A host here is nothing more
+// than an SSH destination anvil already trusts you to have real access
+// to; adding one grants no trust by itself, it's just a saved shortcut so
+// `anvil migrate --to <alias>` doesn't need a literal user@host every
+// time. mDNS auto-discovery of peer anvil hosts (from the original plan)
+// is deferred, not built — this is the manual "known hosts" half only.
+type HostServiceClient interface {
+	Add(ctx context.Context, in *HostAddRequest, opts ...grpc.CallOption) (*HostAddReply, error)
+	List(ctx context.Context, in *HostListRequest, opts ...grpc.CallOption) (*HostListReply, error)
+	Remove(ctx context.Context, in *HostRemoveRequest, opts ...grpc.CallOption) (*HostRemoveReply, error)
+	// Test checks that alias is actually reachable over SSH and that
+	// `anvil`/`anvild` are installed there — a real connectivity/sanity
+	// check, not just "is this alias saved."
+	Test(ctx context.Context, in *HostTestRequest, opts ...grpc.CallOption) (*HostTestReply, error)
+}
+
+type hostServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewHostServiceClient(cc grpc.ClientConnInterface) HostServiceClient {
+	return &hostServiceClient{cc}
+}
+
+func (c *hostServiceClient) Add(ctx context.Context, in *HostAddRequest, opts ...grpc.CallOption) (*HostAddReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HostAddReply)
+	err := c.cc.Invoke(ctx, HostService_Add_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) List(ctx context.Context, in *HostListRequest, opts ...grpc.CallOption) (*HostListReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HostListReply)
+	err := c.cc.Invoke(ctx, HostService_List_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) Remove(ctx context.Context, in *HostRemoveRequest, opts ...grpc.CallOption) (*HostRemoveReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HostRemoveReply)
+	err := c.cc.Invoke(ctx, HostService_Remove_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) Test(ctx context.Context, in *HostTestRequest, opts ...grpc.CallOption) (*HostTestReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HostTestReply)
+	err := c.cc.Invoke(ctx, HostService_Test_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// HostServiceServer is the server API for HostService service.
+// All implementations must embed UnimplementedHostServiceServer
+// for forward compatibility.
+//
+// HostService manages the known-hosts list migration targets are resolved
+// against (M5) — see MigrateService below. A host here is nothing more
+// than an SSH destination anvil already trusts you to have real access
+// to; adding one grants no trust by itself, it's just a saved shortcut so
+// `anvil migrate --to <alias>` doesn't need a literal user@host every
+// time. mDNS auto-discovery of peer anvil hosts (from the original plan)
+// is deferred, not built — this is the manual "known hosts" half only.
+type HostServiceServer interface {
+	Add(context.Context, *HostAddRequest) (*HostAddReply, error)
+	List(context.Context, *HostListRequest) (*HostListReply, error)
+	Remove(context.Context, *HostRemoveRequest) (*HostRemoveReply, error)
+	// Test checks that alias is actually reachable over SSH and that
+	// `anvil`/`anvild` are installed there — a real connectivity/sanity
+	// check, not just "is this alias saved."
+	Test(context.Context, *HostTestRequest) (*HostTestReply, error)
+	mustEmbedUnimplementedHostServiceServer()
+}
+
+// UnimplementedHostServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedHostServiceServer struct{}
+
+func (UnimplementedHostServiceServer) Add(context.Context, *HostAddRequest) (*HostAddReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Add not implemented")
+}
+func (UnimplementedHostServiceServer) List(context.Context, *HostListRequest) (*HostListReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method List not implemented")
+}
+func (UnimplementedHostServiceServer) Remove(context.Context, *HostRemoveRequest) (*HostRemoveReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Remove not implemented")
+}
+func (UnimplementedHostServiceServer) Test(context.Context, *HostTestRequest) (*HostTestReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Test not implemented")
+}
+func (UnimplementedHostServiceServer) mustEmbedUnimplementedHostServiceServer() {}
+func (UnimplementedHostServiceServer) testEmbeddedByValue()                     {}
+
+// UnsafeHostServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to HostServiceServer will
+// result in compilation errors.
+type UnsafeHostServiceServer interface {
+	mustEmbedUnimplementedHostServiceServer()
+}
+
+func RegisterHostServiceServer(s grpc.ServiceRegistrar, srv HostServiceServer) {
+	// If the following call pancis, it indicates UnimplementedHostServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&HostService_ServiceDesc, srv)
+}
+
+func _HostService_Add_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HostAddRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).Add(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_Add_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).Add(ctx, req.(*HostAddRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_List_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HostListRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).List(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_List_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).List(ctx, req.(*HostListRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_Remove_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HostRemoveRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).Remove(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_Remove_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).Remove(ctx, req.(*HostRemoveRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_Test_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HostTestRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).Test(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_Test_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).Test(ctx, req.(*HostTestRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// HostService_ServiceDesc is the grpc.ServiceDesc for HostService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var HostService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "anvil.v1.HostService",
+	HandlerType: (*HostServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Add",
+			Handler:    _HostService_Add_Handler,
+		},
+		{
+			MethodName: "List",
+			Handler:    _HostService_List_Handler,
+		},
+		{
+			MethodName: "Remove",
+			Handler:    _HostService_Remove_Handler,
+		},
+		{
+			MethodName: "Test",
+			Handler:    _HostService_Test_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "anvil/v1/anvil.proto",
+}
+
+const (
+	MigrateService_Migrate_FullMethodName = "/anvil.v1.MigrateService/Migrate"
+)
+
+// MigrateServiceClient is the client API for MigrateService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// MigrateService moves a single instance (M5; a whole intent is M6, not
+// built yet) to a different anvil host. Per the plan: no daemon-to-daemon
+// gRPC trust — the source daemon SSHes into the target host and drives
+// the target's own local `anvil` CLI (specifically `anvil migrate-import`,
+// a plumbing-only command not meant to be run by hand), which talks to
+// the target's own local anvild over its own unix socket. Whatever SSH
+// access already exists to the target is the only trust this needs.
+type MigrateServiceClient interface {
+	Migrate(ctx context.Context, in *MigrateRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[MigrateProgress], error)
+}
+
+type migrateServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewMigrateServiceClient(cc grpc.ClientConnInterface) MigrateServiceClient {
+	return &migrateServiceClient{cc}
+}
+
+func (c *migrateServiceClient) Migrate(ctx context.Context, in *MigrateRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[MigrateProgress], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &MigrateService_ServiceDesc.Streams[0], MigrateService_Migrate_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[MigrateRequest, MigrateProgress]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type MigrateService_MigrateClient = grpc.ServerStreamingClient[MigrateProgress]
+
+// MigrateServiceServer is the server API for MigrateService service.
+// All implementations must embed UnimplementedMigrateServiceServer
+// for forward compatibility.
+//
+// MigrateService moves a single instance (M5; a whole intent is M6, not
+// built yet) to a different anvil host. Per the plan: no daemon-to-daemon
+// gRPC trust — the source daemon SSHes into the target host and drives
+// the target's own local `anvil` CLI (specifically `anvil migrate-import`,
+// a plumbing-only command not meant to be run by hand), which talks to
+// the target's own local anvild over its own unix socket. Whatever SSH
+// access already exists to the target is the only trust this needs.
+type MigrateServiceServer interface {
+	Migrate(*MigrateRequest, grpc.ServerStreamingServer[MigrateProgress]) error
+	mustEmbedUnimplementedMigrateServiceServer()
+}
+
+// UnimplementedMigrateServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedMigrateServiceServer struct{}
+
+func (UnimplementedMigrateServiceServer) Migrate(*MigrateRequest, grpc.ServerStreamingServer[MigrateProgress]) error {
+	return status.Errorf(codes.Unimplemented, "method Migrate not implemented")
+}
+func (UnimplementedMigrateServiceServer) mustEmbedUnimplementedMigrateServiceServer() {}
+func (UnimplementedMigrateServiceServer) testEmbeddedByValue()                        {}
+
+// UnsafeMigrateServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to MigrateServiceServer will
+// result in compilation errors.
+type UnsafeMigrateServiceServer interface {
+	mustEmbedUnimplementedMigrateServiceServer()
+}
+
+func RegisterMigrateServiceServer(s grpc.ServiceRegistrar, srv MigrateServiceServer) {
+	// If the following call pancis, it indicates UnimplementedMigrateServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&MigrateService_ServiceDesc, srv)
+}
+
+func _MigrateService_Migrate_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(MigrateRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(MigrateServiceServer).Migrate(m, &grpc.GenericServerStream[MigrateRequest, MigrateProgress]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type MigrateService_MigrateServer = grpc.ServerStreamingServer[MigrateProgress]
+
+// MigrateService_ServiceDesc is the grpc.ServiceDesc for MigrateService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var MigrateService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "anvil.v1.MigrateService",
+	HandlerType: (*MigrateServiceServer)(nil),
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Migrate",
+			Handler:       _MigrateService_Migrate_Handler,
+			ServerStreams: true,
+		},
+	},
+	Metadata: "anvil/v1/anvil.proto",
+}

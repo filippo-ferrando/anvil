@@ -84,8 +84,13 @@ This is early. Here's what's actually real right now, versus what's just designe
   against a real QEMU build rather than assumed), it's not a transparent hot-plug. The
   QEMU/cloud-init side of this is tested for real; an actual guest mounting and using the
   share hasn't been, that needs a real downloaded image, which this dev sandbox can't do
+- `--publish host:guest[/tcp|udp]` on `anvil launch` now works for a standalone VM too,
+  not just containers: same flag, another SLIRP hostfwd entry, so something like nginx
+  running directly inside the guest is reachable from the host. Doesn't apply to a
+  bridged intent member (it already has its own reachable address), and `anvil launch`
+  rejects the combination outright rather than silently dropping the ports
 
-**Working (M3, Docker half), confirmed with a real launch on real hardware:**
+**Working (M3, Docker half), fully confirmed on filippo's own real Docker daemon:**
 - `anvil launch --kind container <image>` works end to end against Docker, with
   `--engine`, `--env`/`-e`, `--volume`/`-v`, `--publish`/`-p`, `--entrypoint`, and a
   trailing `-- cmd args` to override the image's own command. It now pulls a missing
@@ -101,10 +106,7 @@ This is early. Here's what's actually real right now, versus what's just designe
 - first real bug, found on a real Docker daemon: `anvil launch --kind container
   nginx:alpine` 404ed with "No such image", because `POST /containers/create` doesn't
   auto-pull a missing image the way the `docker` CLI does, it just 404s. Fixed by
-  checking for the image first and pulling it if missing, see `PLAN.md`'s M3 notes.
-  Everything else is tested for real against a mock unix-socket HTTP server (all
-  passing), since this sandbox itself has no root/rootless Docker tooling to run
-  `dockerd`
+  checking for the image first and pulling it if missing, see `PLAN.md`'s M3 notes
 - `anvil mirror add --kind container --registry <host> --mirror-of <upstream>` is now
   actually applied for Docker, not just stored: a matching image ref gets rewritten to
   pull through the mirror before create. This is a client-side rewrite, not a dockerd
@@ -115,7 +117,7 @@ This is early. Here's what's actually real right now, versus what's just designe
   against. `--engine podman` gives a clear "not implemented yet" error rather than
   silently doing nothing
 
-**Working (M4), the least-verified thing in this repo so far:**
+**Working (M4), fully confirmed on filippo's own machine, netlink dependency included:**
 - `anvil launch --kind vm|container ... --intent NAME --role ROLE` joins that instance to
   an intent, creating it automatically on first use, no separate "create the group first"
   step required
@@ -136,28 +138,89 @@ This is early. Here's what's actually real right now, versus what's just designe
 - `anvil intent delete` now removes the intent's Docker network too, not just the group
   record, best-effort: a member still attached to it (not purged, or a VM tap still on
   the bridge) will likely make Docker refuse, which is logged and not fatal to the delete
-- **why this is genuinely the shakiest thing here**: the netlink dependency couldn't be
-  fetched or exercised against a real bridge in this sandbox at all (no network to
-  `go get` it, no root, no bridge to test against), and none of Docker's
-  bridge-name option, the reserved-subnet split, real VM-to-container connectivity, or
-  cloud-init actually applying a static IP has touched a real machine. See `PLAN.md`'s
-  Intents section for the full breakdown of what's unverified before you trust this.
+- **members can resolve each other by name now, not just IP**: containers already got
+  this for free from Docker's own embedded DNS, but only under anvil's internal
+  `anvil-<name>` container name; they now also get a network alias equal to their plain
+  role, so `web` works, not just `anvil-web`. VMs get `/etc/hosts` entries for every peer
+  (any kind) via cloud-init, since they have no DNS mechanism of their own; containers
+  get `--add-host`-equivalent entries specifically for VM peers (container peers are
+  already covered by the alias). Same staleness caveat as the network itself: reflects
+  membership as of each member's own launch time, a later-added member isn't
+  retroactively added to earlier members' hosts without a restart
+
+**Working (M5), zero real two-machine testing yet, the least-verified thing here:**
+- `anvil host add/list/remove/test`: a saved `user@host[:port]` shortcut for
+  `anvil migrate --to`, adding one grants no trust by itself. `test` actually SSHes in
+  and checks anvil/anvild are on PATH, not just that the alias exists
+- `anvil migrate <name> --to <alias|user@host[:port]> [--copy] [--dest-name X]
+  [--dry-run]`: moves a single VM or container to a different anvil host over SSH, no
+  daemon-to-daemon trust needed, same idea as `anvil shell` shelling out to the real
+  `ssh`/`scp` binaries instead of a Go SSH library (no new dependency either). Default
+  mode is destructive but implemented as copy-verify-then-delete, never delete-first;
+  `--copy` skips the delete
+- a migrated VM's disk gets flattened (`qemu-img convert`) and shipped over, then
+  relaunched on the target skipping cloud-init entirely, since the disk already has
+  everything from its original first boot; a migrated container just gets recreated
+  from its spec on the target, which re-pulls the image itself (only works for a
+  registry-hosted image, not a local-only build, an accepted limitation)
+- mDNS auto-discovery of peer hosts (from the original plan) is deliberately deferred:
+  known hosts alone are enough for migration to work, and discovery grants no trust by
+  itself either way. See `PLAN.md`'s Migration section for the full reasoning
+- **why this needs real testing more than anything else in this repo**: this was written
+  and reviewed with no second machine to actually SSH to. No real `scp` transfer, no real
+  flattened-disk boot, no real run of the SSH stdout-parsing protocol `anvil migrate` and
+  `anvil migrate-import` depend on. Reviewed carefully, executed exactly zero times
+
+**Working (M6, packaging), moved up from dead last in the roadmap specifically so this
+could exist before intent migration or the TUI, to make testing on other machines
+easier:**
+- `packaging/PKGBUILD`: a split package, `anvil` (CLI) and `anvild` (daemon). Builds
+  straight from the working tree (no release tarball exists yet). Recommended build is
+  a clean chroot, `extra-x86_64-build` (from `devtools`), not bare `makepkg`, so
+  dependencies actually get verified instead of assumed
+- **`anvild` runs as a dedicated unprivileged "anvil" system user, not root**, per
+  filippo's explicit ask. Three separate mechanisms get it everything it needs without
+  being root: `SupplementaryGroups=kvm` for `/dev/kvm` (safe since `qemu-base` is a hard
+  dependency), `AmbientCapabilities=CAP_NET_ADMIN` for intent tap/bridge management, and
+  Docker group membership granted by the install script conditionally (not a static
+  group in the unit, since Docker might not be installed yet, which would otherwise fail
+  the whole service to start)
+- `anvild.install` (a real pacman post_install/post_upgrade hook) creates the "anvil"
+  user immediately, generates a **passwordless SSH key for `anvil migrate`** at
+  `/var/lib/anvil/.ssh/id_ed25519` (printed on screen so you can copy the public half to
+  a target host's `authorized_keys`), and adds "anvil" to the "docker" group if Docker
+  happens to already be installed
+- **a real, load-bearing consequence, not just a permissions checkbox**: `anvil mount`
+  sharing an arbitrary host directory into a VM now depends on the "anvil" user actually
+  having access to that directory (QEMU's 9p backend does that file I/O as whatever user
+  spawned it). Under the old root-anvild design this always worked regardless of
+  permissions; now it doesn't. Not solved here, just made real instead of staying an
+  aspiration nobody had checked yet
+- shell completions (bash/zsh/fish) generated at package time from cobra's own built-in
+  `completion` subcommand, no extra code needed
+- **not included**: man pages (`cobra/doc`'s generator needs
+  `github.com/cpuguy83/go-md2man/v2`, a new dependency that couldn't be fetched in this
+  sandbox, same limitation as every other new dependency this project has needed) and a
+  real `makepkg`/`namcap`/`extra-x86_64-build` run (this sandbox has the `makepkg`
+  binary but no actual Arch build environment, `/etc/makepkg.conf`/`/etc/pacman.conf`
+  don't exist here, and no `devtools` for a chroot build either). `bash -n PKGBUILD` and
+  `sh -n anvild.install` both pass and everything was reviewed carefully, but an actual
+  chroot build needs to happen on your end
 
 **Not built yet:**
 - Podman (the second container backend, deliberately deferred, see above; its own
   `registries.conf.d`-based mirror mechanism, and its own network story, are tied to it
   landing too)
-- migration
-- the TUI
-- Arch packaging
+- migrating a whole intent as one unit (M7, moved down from M6 so packaging could move
+  up); single-instance migration is done (see above)
+- the TUI (M8, moved down from M7 for the same reason)
 
-None of the M2 cloud-init/mirror work, the M3 container work, or the M4 intent/network
-work above has actually been build tested yet either. The `.proto` file has grown again
-since the last confirmed build (`CloudInitService`/`MirrorService` for M2,
-`ContainerSpec.engine`/`container_id` for M3, `LaunchRequest.intent_name`/`role` actually
-wired up, a new `IntentService`, and `VMSpec.bridge_interface`/`static_ip`/`gateway` for
-M4), so you'll need to run `make proto` again before `go build` picks any of it up. `go
-mod tidy` also needs to fetch the new netlink dependency for real this time.
+M2, M3, and M4 (including the name-resolution and `--publish`-for-VMs work) have all now
+been build tested and confirmed working by filippo on his own real hardware, not just
+reviewed in a sandbox. M5 (`anvil host`/`anvil migrate`) and M6 (packaging) above are
+brand new and haven't been build tested at all yet: `make proto` again (`HostService`,
+`MigrateService`, `VMSpec.source_disk_path`), then the usual `go build`, or, once M6
+is confirmed working, just `makepkg -si`.
 
 See `PLAN.md` for the full design and a milestone-by-milestone roadmap.
 
@@ -192,9 +255,12 @@ sudo ./anvild &
 ./anvil delete test1 --purge
 ```
 
-Right now `anvild` needs to run as root (it needs `/dev/kvm` and eventually raw network
-access for bridges). Once packaging lands, this'll be handled by a dedicated `anvil`
-system user and a systemd unit instead of you running it by hand.
+Running it this way (a plain `go build` + manual `sudo ./anvild`, not the package) is the
+quickest path for local dev iteration, and running as root here just sidesteps every
+permission question below for a quick manual test. The packaged version
+(`packaging/PKGBUILD`, see below) is the real target: `anvild.service` runs as a
+dedicated, unprivileged "anvil" system user instead, with narrowly-scoped
+KVM/CAP_NET_ADMIN/Docker access rather than root.
 
 ## A couple of honest warnings
 
@@ -228,12 +294,13 @@ internal/
   vm/            QEMU backend (process management, QMP, cloud-init, image catalog)
   container/     Docker backend (done) and Podman backend (deferred)
   intent/        intent membership, intent-aware launch, shared Docker bridge network per intent
-  migrate/       SSH-driven migration, not built yet
+  migrate/       SSH-driven single-instance migration (payload/ is the JSON wire shape)
   store/         bbolt-backed registry
   cli/commands/  cobra commands
   tui/           tview app, not built yet
 api/proto/       the gRPC API definition
 data/distros/    the built-in VM image catalog
+packaging/       PKGBUILD, anvild.service, sysusers/tmpfiles rules
 scripts/         one-off maintenance scripts (verify-catalog.sh)
 ```
 

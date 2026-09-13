@@ -57,7 +57,7 @@ func vmSpecFromPB(v *anvilv1.VMSpec) *instance.VMSpec {
 	if v == nil {
 		return nil
 	}
-	return &instance.VMSpec{
+	spec := &instance.VMSpec{
 		ImageRef:          v.GetImageRef(),
 		Arch:              v.GetArch(),
 		CPUs:              int(v.GetCpus()),
@@ -67,11 +67,23 @@ func vmSpecFromPB(v *anvilv1.VMSpec) *instance.VMSpec {
 		CloudInitName:     v.GetCloudInitName(),
 		NetworkMode:       v.GetNetworkMode(),
 		SSHPublicKeys:     v.GetSshPublicKeys(),
-		// SSHPort/DefaultUser/BridgeInterface/StaticIP/Gateway are all
-		// daemon-populated outputs, not client input — a LaunchRequest
-		// never carries them, so there's nothing to read here; see
-		// vmSpecToPB for where they're actually set.
+		// DefaultUser and SourceDiskPath are real client input only for
+		// `anvil migrate`'s own re-launch on the target host — a normal
+		// launch's Create always overwrites DefaultUser from the catalog
+		// entry regardless of what's read here, so accepting it
+		// unconditionally is harmless. SSHPort/BridgeInterface/StaticIP/
+		// Gateway stay daemon-only outputs, nothing to read for those.
+		DefaultUser:    v.GetDefaultUser(),
+		SourceDiskPath: v.GetSourceDiskPath(),
 	}
+	for _, p := range v.GetPorts() {
+		spec.Ports = append(spec.Ports, instance.PortMapping{
+			HostPort:  int(p.GetHostPort()),
+			GuestPort: int(p.GetGuestPort()),
+			Protocol:  p.GetProtocol(),
+		})
+	}
+	return spec
 }
 
 func vmSpecToPB(v *instance.VMSpec) *anvilv1.VMSpec {
@@ -93,6 +105,8 @@ func vmSpecToPB(v *instance.VMSpec) *anvilv1.VMSpec {
 		BridgeInterface:   v.BridgeInterface,
 		StaticIp:          v.StaticIP,
 		Gateway:           v.Gateway,
+		ExtraHosts:        v.ExtraHosts,
+		SourceDiskPath:    v.SourceDiskPath,
 	}
 	for _, m := range v.Mounts {
 		pb.Mounts = append(pb.Mounts, &anvilv1.Mount{
@@ -100,6 +114,13 @@ func vmSpecToPB(v *instance.VMSpec) *anvilv1.VMSpec {
 			GuestPath: m.GuestPath,
 			Tag:       m.Tag,
 			ReadOnly:  m.ReadOnly,
+		})
+	}
+	for _, p := range v.Ports {
+		pb.Ports = append(pb.Ports, &anvilv1.PortMapping{
+			HostPort:  int32(p.HostPort),
+			GuestPort: int32(p.GuestPort),
+			Protocol:  p.Protocol,
 		})
 	}
 	return pb
@@ -163,13 +184,15 @@ func containerSpecToPB(c *instance.ContainerSpec) *anvilv1.ContainerSpec {
 		return nil
 	}
 	spec := &anvilv1.ContainerSpec{
-		ImageRef:    c.ImageRef,
-		Env:         c.Env,
-		Entrypoint:  c.Entrypoint,
-		Cmd:         c.Cmd,
-		NetworkMode: c.NetworkMode,
-		Engine:      containerEngineToPB(c.Engine),
-		ContainerId: c.ContainerID,
+		ImageRef:     c.ImageRef,
+		Env:          c.Env,
+		Entrypoint:   c.Entrypoint,
+		Cmd:          c.Cmd,
+		NetworkMode:  c.NetworkMode,
+		Engine:       containerEngineToPB(c.Engine),
+		ContainerId:  c.ContainerID,
+		NetworkAlias: c.NetworkAlias,
+		ExtraHosts:   c.ExtraHosts,
 	}
 	for _, vol := range c.Volumes {
 		spec.Volumes = append(spec.Volumes, &anvilv1.VolumeMount{
