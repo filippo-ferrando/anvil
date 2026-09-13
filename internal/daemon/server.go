@@ -2,10 +2,12 @@ package daemon
 
 import (
 	"context"
+	"log"
 	"time"
 
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 	"github.com/anvil-project/anvil/internal/instance"
+	"github.com/anvil-project/anvil/internal/intent"
 )
 
 // Server implements anvilv1.InstanceServiceServer against an
@@ -15,15 +17,16 @@ import (
 type Server struct {
 	anvilv1.UnimplementedInstanceServiceServer
 	Manager *instance.Manager
+	Intents *intent.Manager
 }
 
-func NewServer(mgr *instance.Manager) *Server {
-	return &Server{Manager: mgr}
+func NewServer(mgr *instance.Manager, intents *intent.Manager) *Server {
+	return &Server{Manager: mgr, Intents: intents}
 }
 
 func (s *Server) Launch(req *anvilv1.LaunchRequest, stream anvilv1.InstanceService_LaunchServer) error {
 	params := launchParamsFromPB(req)
-	return s.Manager.Launch(stream.Context(), params, func(ev instance.LaunchEvent) {
+	send := func(ev instance.LaunchEvent) {
 		switch {
 		case ev.Err != nil:
 			_ = stream.Send(&anvilv1.LaunchProgress{Event: &anvilv1.LaunchProgress_Error{Error: ev.Err.Error()}})
@@ -32,7 +35,15 @@ func (s *Server) Launch(req *anvilv1.LaunchRequest, stream anvilv1.InstanceServi
 		case ev.Status != "":
 			_ = stream.Send(&anvilv1.LaunchProgress{Event: &anvilv1.LaunchProgress_Status{Status: ev.Status}})
 		}
-	})
+	}
+	// A launch with an intent_name joins (or creates) that intent instead
+	// of producing a standalone instance — see internal/intent.Manager's
+	// doc comment for why that routing decision lives here rather than
+	// inside instance.Manager.Launch itself.
+	if params.IntentName != "" {
+		return s.Intents.Launch(stream.Context(), params, send)
+	}
+	return s.Manager.Launch(stream.Context(), params, send)
 }
 
 func (s *Server) List(ctx context.Context, req *anvilv1.ListRequest) (*anvilv1.ListReply, error) {
@@ -70,9 +81,34 @@ func (s *Server) Stop(ctx context.Context, req *anvilv1.StopRequest) (*anvilv1.S
 }
 
 func (s *Server) Delete(ctx context.Context, req *anvilv1.DeleteRequest) (*anvilv1.DeleteReply, error) {
+	// Resolved before deleting, not after: once gone, an instance's own
+	// Labels (where its intent membership is tagged) aren't retrievable
+	// through the normal Info path any more.
+	specs, err := s.Manager.Info(req.GetNames())
+	if err != nil {
+		return nil, err
+	}
+
 	if err := s.Manager.Delete(ctx, req.GetNames(), req.GetPurge()); err != nil {
 		return nil, err
 	}
+
+	// `anvil delete` (as opposed to `anvil intent remove`/`delete`) doesn't
+	// go through internal/intent at all, so a deleted member would
+	// otherwise leave a stale entry behind in its intent's Members list
+	// forever, pointing at an instance ID that no longer exists — best-
+	// effort cleanup here, not fatal to Delete itself if it fails (the
+	// instance is already gone regardless).
+	for _, spec := range specs {
+		intentName := spec.Labels["intent"]
+		if intentName == "" {
+			continue
+		}
+		if _, err := s.Intents.Remove(intentName, spec.ID); err != nil {
+			log.Printf("daemon: removing deleted instance %s from intent %q: %v", spec.Name, intentName, err)
+		}
+	}
+
 	return &anvilv1.DeleteReply{}, nil
 }
 

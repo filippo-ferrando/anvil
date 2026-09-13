@@ -96,6 +96,15 @@ type VMSpec struct {
 	Mounts         []Mount
 	NextMountIndex int
 	Generation     int
+
+	// Populated by internal/intent.Manager, not by the launch request
+	// itself, when this VM is joining an intent (NetworkMode becomes
+	// "bridge" in that case) — see internal/vm/network and
+	// internal/vm.Backend.Start/buildSeed for how they're consumed.
+	// Meaningless when NetworkMode isn't "bridge".
+	BridgeInterface string // Linux interface name of the intent's shared bridge
+	StaticIP        string // CIDR, e.g. "10.55.201.4/24"
+	Gateway         string
 }
 
 // Mount is one host directory shared into the guest over 9p.
@@ -106,6 +115,17 @@ type Mount struct {
 	ReadOnly  bool
 }
 
+// ContainerEngine selects which container runtime a ContainerSpec runs on.
+// Docker landed first (M3), Podman second, per the plan; the eventual
+// default once both exist is meant to be Podman (the original spec), not
+// enforced by any code yet since only Docker exists so far.
+type ContainerEngine string
+
+const (
+	ContainerEngineDocker ContainerEngine = "docker"
+	ContainerEnginePodman ContainerEngine = "podman"
+)
+
 type ContainerSpec struct {
 	ImageRef    string
 	Env         map[string]string
@@ -114,6 +134,13 @@ type ContainerSpec struct {
 	Volumes     []VolumeMount
 	Ports       []PortMapping
 	NetworkMode string
+	Engine      ContainerEngine
+
+	// ContainerID is the underlying engine's own ID for this container,
+	// populated by the backend's Create (see internal/container/docker),
+	// not by the launch request — every subsequent call against the
+	// engine's API is by this ID, not by anvil's own instance ID.
+	ContainerID string
 }
 
 type VolumeMount struct {

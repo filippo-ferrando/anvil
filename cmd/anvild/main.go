@@ -17,8 +17,11 @@ import (
 
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 	"github.com/anvil-project/anvil/internal/config"
+	"github.com/anvil-project/anvil/internal/container"
+	"github.com/anvil-project/anvil/internal/container/docker"
 	"github.com/anvil-project/anvil/internal/daemon"
 	"github.com/anvil-project/anvil/internal/instance"
+	"github.com/anvil-project/anvil/internal/intent"
 	"github.com/anvil-project/anvil/internal/store"
 	"github.com/anvil-project/anvil/internal/vm"
 	"github.com/anvil-project/anvil/internal/vm/image"
@@ -53,15 +56,34 @@ func run() error {
 	vault := image.NewVault(config.PreparedImageDir())
 	vmBackend := vm.NewBackend(catalog, vault, db)
 
+	// The docker.Client is just an HTTP client wrapper — constructing it
+	// doesn't connect to anything, so this doesn't fail (and doesn't need
+	// to be conditional on Docker actually being installed/running) even
+	// on a host with no Docker at all; that only surfaces as a normal
+	// per-request error the first time someone actually tries
+	// `anvil launch --kind container`. Podman is deferred (filippo doesn't
+	// have it on this machine to test against), hence container.Backend.Podman
+	// staying nil. db satisfies container.Source (just ListMirrors), used to
+	// resolve `--kind container` mirrors at pull time.
+	dockerBackend := container.NewDockerBackend(docker.DefaultSocket, db)
+	containerBackend := container.NewBackend(dockerBackend)
+
+	// A second docker.Client instance, not the one inside dockerBackend —
+	// harmless, it's just an HTTP client wrapper with no connection state
+	// of its own, and this keeps DockerNetworker's construction
+	// independent of DockerBackend's.
+	dockerNetworker := container.NewDockerNetworker(docker.NewClient(docker.DefaultSocket))
+
 	mgr := instance.NewManager(db, map[instance.Kind]instance.Backend{
-		instance.KindVM: vmBackend,
-		// instance.KindContainer is wired in M3: Docker first
-		// (internal/container/docker), then Podman (internal/container/podman).
+		instance.KindVM:        vmBackend,
+		instance.KindContainer: containerBackend,
 	})
 
 	if err := mgr.Reconcile(ctx); err != nil {
 		return fmt.Errorf("reconciling instance state at startup: %w", err)
 	}
+
+	intentMgr := intent.NewManager(db, mgr, dockerNetworker)
 
 	socketPath := config.SocketPath()
 	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
@@ -79,10 +101,11 @@ func run() error {
 	_ = os.Chmod(socketPath, 0o660)
 
 	grpcServer := grpc.NewServer()
-	anvilv1.RegisterInstanceServiceServer(grpcServer, daemon.NewServer(mgr))
+	anvilv1.RegisterInstanceServiceServer(grpcServer, daemon.NewServer(mgr, intentMgr))
 	anvilv1.RegisterCloudInitServiceServer(grpcServer, daemon.NewCloudInitServer(db))
 	anvilv1.RegisterMirrorServiceServer(grpcServer, daemon.NewMirrorServer(db))
 	anvilv1.RegisterImageServiceServer(grpcServer, daemon.NewImageServer(db, vault))
+	anvilv1.RegisterIntentServiceServer(grpcServer, daemon.NewIntentServer(intentMgr))
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- grpcServer.Serve(lis) }()

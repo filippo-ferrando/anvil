@@ -34,7 +34,7 @@ func TestOverlayForUsesExistingPreparedImage(t *testing.T) {
 	}
 
 	overlayPath := filepath.Join(dir, "instance", "disk.qcow2")
-	if err := v.OverlayFor(entry, overlayPath, 1); err != nil {
+	if err := v.OverlayFor(entry, overlayPath, 1, nil); err != nil {
 		t.Fatalf("OverlayFor: %v", err)
 	}
 
@@ -65,7 +65,7 @@ func TestOverlayForRejectsShrinkingBelowBaseImageSize(t *testing.T) {
 		t.Fatalf("creating fake base image: %v: %s", err, out)
 	}
 
-	err := v.OverlayFor(entry, filepath.Join(dir, "instance", "disk.qcow2"), 1)
+	err := v.OverlayFor(entry, filepath.Join(dir, "instance", "disk.qcow2"), 1, nil)
 	if err == nil {
 		t.Error("expected an error when the requested disk is smaller than the base image's own virtual size")
 	}
@@ -98,7 +98,7 @@ func TestOverlayForDefaultSizeInheritsBaseImageSize(t *testing.T) {
 	}
 
 	overlayPath := filepath.Join(dir, "instance", "disk.qcow2")
-	if err := v.OverlayFor(entry, overlayPath, 0); err != nil {
+	if err := v.OverlayFor(entry, overlayPath, 0, nil); err != nil {
 		t.Fatalf("OverlayFor with default (0) disk size: %v", err)
 	}
 
@@ -195,7 +195,7 @@ func TestBackingFile(t *testing.T) {
 	}
 
 	overlayPath := filepath.Join(dir, "instance", "disk.qcow2")
-	if err := v.OverlayFor(entry, overlayPath, 0); err != nil {
+	if err := v.OverlayFor(entry, overlayPath, 0, nil); err != nil {
 		t.Fatalf("OverlayFor: %v", err)
 	}
 

@@ -37,22 +37,23 @@ func (v *Vault) preparedPath(entry DistroEntry) string {
 
 // Ensure downloads entry's base image into the vault if not already
 // present (see Downloader.Fetch for the idempotency/dedup rules) and
-// returns its local path.
-func (v *Vault) Ensure(entry DistroEntry) (string, error) {
+// returns its local path. progress is forwarded to Downloader.Fetch, see
+// its doc comment.
+func (v *Vault) Ensure(entry DistroEntry, progress func(status string)) (string, error) {
 	dest := v.preparedPath(entry)
-	if err := v.Downloader.Fetch(entry, dest); err != nil {
+	if err := v.Downloader.Fetch(entry, dest, progress); err != nil {
 		return "", err
 	}
 	return dest, nil
 }
 
 // OverlayFor creates a new QCOW2 overlay at overlayPath backed by entry's
-// prepared image (downloading it first if needed). diskGiB of 0 means
-// "just use the base image's own size, whatever that is". Requires
-// `qemu-img` on PATH (part of the qemu-base package already depended on
-// for qemu-system-x86_64 itself).
-func (v *Vault) OverlayFor(entry DistroEntry, overlayPath string, diskGiB int64) error {
-	base, err := v.Ensure(entry)
+// prepared image (downloading it first if needed, see progress). diskGiB
+// of 0 means "just use the base image's own size, whatever that is".
+// Requires `qemu-img` on PATH (part of the qemu-base package already
+// depended on for qemu-system-x86_64 itself).
+func (v *Vault) OverlayFor(entry DistroEntry, overlayPath string, diskGiB int64, progress func(status string)) error {
+	base, err := v.Ensure(entry, progress)
 	if err != nil {
 		return err
 	}
@@ -82,6 +83,9 @@ func (v *Vault) OverlayFor(entry DistroEntry, overlayPath string, diskGiB int64)
 		return fmt.Errorf("image: creating instance dir: %w", err)
 	}
 
+	if progress != nil {
+		progress("creating disk overlay")
+	}
 	createCmd := exec.Command("qemu-img", "create",
 		"-f", "qcow2",
 		"-F", "qcow2",

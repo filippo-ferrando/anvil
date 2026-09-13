@@ -59,6 +59,15 @@ message VMSpec {
   // Host directories shared into the guest via 9p (see anvil.v1.Mount).
   // Managed by `anvil mount`/`anvil umount`, not settable at launch time.
   repeated Mount mounts = 12;
+
+  // Daemon-populated, not client input: set by internal/intent.Manager
+  // before a launch that joins an intent (network_mode becomes "bridge"
+  // in that case), consumed by internal/vm.Backend to attach a tap device
+  // instead of using SLIRP, and by cloud-init's generated network-config.
+  // Meaningless when network_mode isn't "bridge".
+  string bridge_interface = 13; // Linux interface name of the intent's shared bridge
+  string static_ip = 14;        // CIDR, e.g. "10.55.201.4/24"
+  string gateway = 15;
 }
 
 // Mount is one host directory shared into a VM's guest over 9p. Added and
@@ -72,6 +81,12 @@ message Mount {
   bool read_only = 4;
 }
 
+enum ContainerEngine {
+  CONTAINER_ENGINE_UNSPECIFIED = 0;
+  CONTAINER_ENGINE_DOCKER = 1;
+  CONTAINER_ENGINE_PODMAN = 2;
+}
+
 message ContainerSpec {
   string image_ref = 1;
   map<string, string> env = 2;
@@ -80,6 +95,12 @@ message ContainerSpec {
   repeated VolumeMount volumes = 5;
   repeated PortMapping ports = 6;
   string network_mode = 7;
+  ContainerEngine engine = 8;
+
+  // Daemon-populated, not client input: the engine's own container ID,
+  // set by the backend's Create. Every call after Create (start/stop/
+  // inspect/logs) is by this ID, not by anvil's own instance ID.
+  string container_id = 9;
 }
 
 message VolumeMount {
@@ -110,8 +131,15 @@ message LaunchRequest {
   Kind kind = 2;
   VMSpec vm = 3;
   ContainerSpec container = 4;
+
+  // Both optional. When intent_name is set, this launch joins that intent
+  // as a member (creating the intent first if it doesn't exist yet)
+  // instead of just producing a standalone instance — see IntentService
+  // below. role labels the member (defaults to the instance's own name if
+  // left blank) and has no effect unless intent_name is also set.
   string intent_name = 5;
   string role = 6;
+
   bool no_start = 7;
 }
 
@@ -335,3 +363,75 @@ message UmountRequest {
 }
 
 message UmountReply {}
+
+// IntentService manages named groups of VM/container instances (M4).
+// There's no Create/Add RPC here on purpose: a member is created exactly
+// the same way a standalone instance is, through
+// InstanceService.Launch(intent_name, role) — see LaunchRequest above.
+// This service is just for reading and managing the group afterward. The
+// shared per-intent network described in the plan isn't implemented yet;
+// right now an intent is membership bookkeeping only.
+service IntentService {
+  rpc List(IntentListRequest) returns (IntentListReply);
+  rpc Info(IntentInfoRequest) returns (IntentInfoReply);
+  rpc Remove(IntentRemoveRequest) returns (IntentRemoveReply);
+  rpc Delete(IntentDeleteRequest) returns (IntentDeleteReply);
+}
+
+message IntentMember {
+  string instance_id = 1;
+  string role = 2;
+  Kind kind = 3;
+}
+
+message Intent {
+  string id = 1;
+  string name = 2;
+  repeated IntentMember members = 3;
+  IntentNetwork network = 4; // unset until the first member is launched
+}
+
+// IntentNetwork is the shared bridge network created for one intent (see
+// PLAN.md's Intents section) — daemon-populated, not client input.
+message IntentNetwork {
+  string engine_network_name = 1; // Docker/Podman network name
+  string bridge_interface = 2;    // underlying Linux bridge interface name
+  string subnet = 3;              // CIDR, e.g. "10.55.201.0/24"
+  string gateway = 4;
+  string docker_ip_range = 5; // CIDR sub-range reserved for the engine's own IPAM
+}
+
+message IntentListRequest {}
+
+message IntentListReply {
+  repeated Intent intents = 1;
+}
+
+message IntentInfoRequest {
+  string name = 1;
+}
+
+message IntentInfoReply {
+  Intent intent = 1;
+}
+
+// Remove ungroups member (matched by instance ID or role) from the
+// intent without deleting the underlying instance — for that, delete the
+// instance normally via InstanceService.Delete.
+message IntentRemoveRequest {
+  string name = 1;
+  string member = 2;
+}
+
+message IntentRemoveReply {
+  Intent intent = 1;
+}
+
+message IntentDeleteRequest {
+  string name = 1;
+  bool purge_members = 2; // also delete every member instance, not just the group record
+}
+
+message IntentDeleteReply {
+  Intent intent = 1;
+}

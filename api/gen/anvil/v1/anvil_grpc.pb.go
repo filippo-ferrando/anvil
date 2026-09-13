@@ -27,6 +27,8 @@ const (
 	InstanceService_Delete_FullMethodName = "/anvil.v1.InstanceService/Delete"
 	InstanceService_Purge_FullMethodName  = "/anvil.v1.InstanceService/Purge"
 	InstanceService_Logs_FullMethodName   = "/anvil.v1.InstanceService/Logs"
+	InstanceService_Mount_FullMethodName  = "/anvil.v1.InstanceService/Mount"
+	InstanceService_Umount_FullMethodName = "/anvil.v1.InstanceService/Umount"
 )
 
 // InstanceServiceClient is the client API for InstanceService service.
@@ -45,6 +47,8 @@ type InstanceServiceClient interface {
 	Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteReply, error)
 	Purge(ctx context.Context, in *PurgeRequest, opts ...grpc.CallOption) (*PurgeReply, error)
 	Logs(ctx context.Context, in *LogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogChunk], error)
+	Mount(ctx context.Context, in *MountRequest, opts ...grpc.CallOption) (*MountReply, error)
+	Umount(ctx context.Context, in *UmountRequest, opts ...grpc.CallOption) (*UmountReply, error)
 }
 
 type instanceServiceClient struct {
@@ -153,6 +157,26 @@ func (c *instanceServiceClient) Logs(ctx context.Context, in *LogsRequest, opts 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type InstanceService_LogsClient = grpc.ServerStreamingClient[LogChunk]
 
+func (c *instanceServiceClient) Mount(ctx context.Context, in *MountRequest, opts ...grpc.CallOption) (*MountReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MountReply)
+	err := c.cc.Invoke(ctx, InstanceService_Mount_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *instanceServiceClient) Umount(ctx context.Context, in *UmountRequest, opts ...grpc.CallOption) (*UmountReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UmountReply)
+	err := c.cc.Invoke(ctx, InstanceService_Umount_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // InstanceServiceServer is the server API for InstanceService service.
 // All implementations must embed UnimplementedInstanceServiceServer
 // for forward compatibility.
@@ -169,6 +193,8 @@ type InstanceServiceServer interface {
 	Delete(context.Context, *DeleteRequest) (*DeleteReply, error)
 	Purge(context.Context, *PurgeRequest) (*PurgeReply, error)
 	Logs(*LogsRequest, grpc.ServerStreamingServer[LogChunk]) error
+	Mount(context.Context, *MountRequest) (*MountReply, error)
+	Umount(context.Context, *UmountRequest) (*UmountReply, error)
 	mustEmbedUnimplementedInstanceServiceServer()
 }
 
@@ -202,6 +228,12 @@ func (UnimplementedInstanceServiceServer) Purge(context.Context, *PurgeRequest) 
 }
 func (UnimplementedInstanceServiceServer) Logs(*LogsRequest, grpc.ServerStreamingServer[LogChunk]) error {
 	return status.Errorf(codes.Unimplemented, "method Logs not implemented")
+}
+func (UnimplementedInstanceServiceServer) Mount(context.Context, *MountRequest) (*MountReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Mount not implemented")
+}
+func (UnimplementedInstanceServiceServer) Umount(context.Context, *UmountRequest) (*UmountReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Umount not implemented")
 }
 func (UnimplementedInstanceServiceServer) mustEmbedUnimplementedInstanceServiceServer() {}
 func (UnimplementedInstanceServiceServer) testEmbeddedByValue()                         {}
@@ -354,6 +386,42 @@ func _InstanceService_Logs_Handler(srv interface{}, stream grpc.ServerStream) er
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type InstanceService_LogsServer = grpc.ServerStreamingServer[LogChunk]
 
+func _InstanceService_Mount_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MountRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InstanceServiceServer).Mount(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InstanceService_Mount_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InstanceServiceServer).Mount(ctx, req.(*MountRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InstanceService_Umount_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UmountRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InstanceServiceServer).Umount(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InstanceService_Umount_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InstanceServiceServer).Umount(ctx, req.(*UmountRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // InstanceService_ServiceDesc is the grpc.ServiceDesc for InstanceService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -384,6 +452,14 @@ var InstanceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Purge",
 			Handler:    _InstanceService_Purge_Handler,
+		},
+		{
+			MethodName: "Mount",
+			Handler:    _InstanceService_Mount_Handler,
+		},
+		{
+			MethodName: "Umount",
+			Handler:    _InstanceService_Umount_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
@@ -1035,6 +1111,238 @@ var ImageService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Delete",
 			Handler:    _ImageService_Delete_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "anvil/v1/anvil.proto",
+}
+
+const (
+	IntentService_List_FullMethodName   = "/anvil.v1.IntentService/List"
+	IntentService_Info_FullMethodName   = "/anvil.v1.IntentService/Info"
+	IntentService_Remove_FullMethodName = "/anvil.v1.IntentService/Remove"
+	IntentService_Delete_FullMethodName = "/anvil.v1.IntentService/Delete"
+)
+
+// IntentServiceClient is the client API for IntentService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// IntentService manages named groups of VM/container instances (M4).
+// There's no Create/Add RPC here on purpose: a member is created exactly
+// the same way a standalone instance is, through
+// InstanceService.Launch(intent_name, role) — see LaunchRequest above.
+// This service is just for reading and managing the group afterward. The
+// shared per-intent network described in the plan isn't implemented yet;
+// right now an intent is membership bookkeeping only.
+type IntentServiceClient interface {
+	List(ctx context.Context, in *IntentListRequest, opts ...grpc.CallOption) (*IntentListReply, error)
+	Info(ctx context.Context, in *IntentInfoRequest, opts ...grpc.CallOption) (*IntentInfoReply, error)
+	Remove(ctx context.Context, in *IntentRemoveRequest, opts ...grpc.CallOption) (*IntentRemoveReply, error)
+	Delete(ctx context.Context, in *IntentDeleteRequest, opts ...grpc.CallOption) (*IntentDeleteReply, error)
+}
+
+type intentServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewIntentServiceClient(cc grpc.ClientConnInterface) IntentServiceClient {
+	return &intentServiceClient{cc}
+}
+
+func (c *intentServiceClient) List(ctx context.Context, in *IntentListRequest, opts ...grpc.CallOption) (*IntentListReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(IntentListReply)
+	err := c.cc.Invoke(ctx, IntentService_List_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *intentServiceClient) Info(ctx context.Context, in *IntentInfoRequest, opts ...grpc.CallOption) (*IntentInfoReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(IntentInfoReply)
+	err := c.cc.Invoke(ctx, IntentService_Info_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *intentServiceClient) Remove(ctx context.Context, in *IntentRemoveRequest, opts ...grpc.CallOption) (*IntentRemoveReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(IntentRemoveReply)
+	err := c.cc.Invoke(ctx, IntentService_Remove_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *intentServiceClient) Delete(ctx context.Context, in *IntentDeleteRequest, opts ...grpc.CallOption) (*IntentDeleteReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(IntentDeleteReply)
+	err := c.cc.Invoke(ctx, IntentService_Delete_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// IntentServiceServer is the server API for IntentService service.
+// All implementations must embed UnimplementedIntentServiceServer
+// for forward compatibility.
+//
+// IntentService manages named groups of VM/container instances (M4).
+// There's no Create/Add RPC here on purpose: a member is created exactly
+// the same way a standalone instance is, through
+// InstanceService.Launch(intent_name, role) — see LaunchRequest above.
+// This service is just for reading and managing the group afterward. The
+// shared per-intent network described in the plan isn't implemented yet;
+// right now an intent is membership bookkeeping only.
+type IntentServiceServer interface {
+	List(context.Context, *IntentListRequest) (*IntentListReply, error)
+	Info(context.Context, *IntentInfoRequest) (*IntentInfoReply, error)
+	Remove(context.Context, *IntentRemoveRequest) (*IntentRemoveReply, error)
+	Delete(context.Context, *IntentDeleteRequest) (*IntentDeleteReply, error)
+	mustEmbedUnimplementedIntentServiceServer()
+}
+
+// UnimplementedIntentServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedIntentServiceServer struct{}
+
+func (UnimplementedIntentServiceServer) List(context.Context, *IntentListRequest) (*IntentListReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method List not implemented")
+}
+func (UnimplementedIntentServiceServer) Info(context.Context, *IntentInfoRequest) (*IntentInfoReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Info not implemented")
+}
+func (UnimplementedIntentServiceServer) Remove(context.Context, *IntentRemoveRequest) (*IntentRemoveReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Remove not implemented")
+}
+func (UnimplementedIntentServiceServer) Delete(context.Context, *IntentDeleteRequest) (*IntentDeleteReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
+}
+func (UnimplementedIntentServiceServer) mustEmbedUnimplementedIntentServiceServer() {}
+func (UnimplementedIntentServiceServer) testEmbeddedByValue()                       {}
+
+// UnsafeIntentServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to IntentServiceServer will
+// result in compilation errors.
+type UnsafeIntentServiceServer interface {
+	mustEmbedUnimplementedIntentServiceServer()
+}
+
+func RegisterIntentServiceServer(s grpc.ServiceRegistrar, srv IntentServiceServer) {
+	// If the following call pancis, it indicates UnimplementedIntentServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&IntentService_ServiceDesc, srv)
+}
+
+func _IntentService_List_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(IntentListRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IntentServiceServer).List(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IntentService_List_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IntentServiceServer).List(ctx, req.(*IntentListRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IntentService_Info_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(IntentInfoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IntentServiceServer).Info(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IntentService_Info_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IntentServiceServer).Info(ctx, req.(*IntentInfoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IntentService_Remove_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(IntentRemoveRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IntentServiceServer).Remove(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IntentService_Remove_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IntentServiceServer).Remove(ctx, req.(*IntentRemoveRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IntentService_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(IntentDeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IntentServiceServer).Delete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IntentService_Delete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IntentServiceServer).Delete(ctx, req.(*IntentDeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// IntentService_ServiceDesc is the grpc.ServiceDesc for IntentService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var IntentService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "anvil.v1.IntentService",
+	HandlerType: (*IntentServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "List",
+			Handler:    _IntentService_List_Handler,
+		},
+		{
+			MethodName: "Info",
+			Handler:    _IntentService_Info_Handler,
+		},
+		{
+			MethodName: "Remove",
+			Handler:    _IntentService_Remove_Handler,
+		},
+		{
+			MethodName: "Delete",
+			Handler:    _IntentService_Delete_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

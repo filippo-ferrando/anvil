@@ -43,6 +43,7 @@ func NewRootCommand() *cobra.Command {
 		newImageCommand(flags),
 		newMountCommand(flags),
 		newUmountCommand(flags),
+		newIntentCommand(flags),
 	)
 	return root
 }

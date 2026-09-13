@@ -23,6 +23,7 @@ import (
 	"github.com/anvil-project/anvil/internal/store"
 	"github.com/anvil-project/anvil/internal/vm/cloudinit"
 	"github.com/anvil-project/anvil/internal/vm/image"
+	"github.com/anvil-project/anvil/internal/vm/network"
 	"github.com/anvil-project/anvil/internal/vm/qemu"
 )
 
@@ -85,7 +86,7 @@ func (b *Backend) effectiveCatalog() (*image.Catalog, error) {
 	return b.Catalog.WithMirrors(manifests)
 }
 
-func (b *Backend) Create(ctx context.Context, spec *instance.Spec) error {
+func (b *Backend) Create(ctx context.Context, spec *instance.Spec, progress func(status string)) error {
 	if spec.VM == nil {
 		return fmt.Errorf("vm: Create called with a nil VMSpec")
 	}
@@ -107,11 +108,14 @@ func (b *Backend) Create(ctx context.Context, spec *instance.Spec) error {
 	}
 
 	diskPath := filepath.Join(dir, "disk.qcow2")
-	if err := b.Vault.OverlayFor(entry, diskPath, v.DiskGiB); err != nil {
+	if err := b.Vault.OverlayFor(entry, diskPath, v.DiskGiB, progress); err != nil {
 		return fmt.Errorf("vm: preparing disk: %w", err)
 	}
 	v.DiskPath = diskPath
 
+	if progress != nil {
+		progress("building cloud-init seed")
+	}
 	return b.buildSeed(spec)
 }
 
@@ -152,7 +156,8 @@ func (b *Backend) buildSeed(spec *instance.Spec) error {
 	metaData := fmt.Sprintf("instance-id: %s-gen%d\nlocal-hostname: %s\n", spec.ID, v.Generation, spec.Name)
 
 	seedPath := filepath.Join(dir, "seed.iso")
-	if err := b.Seed.Build(cloudinit.Seed{UserData: userData, MetaData: metaData}, seedPath); err != nil {
+	seed := cloudinit.Seed{UserData: userData, MetaData: metaData, NetworkConfig: bridgeNetworkConfig(v)}
+	if err := b.Seed.Build(seed, seedPath); err != nil {
 		return fmt.Errorf("vm: building cloud-init seed: %w", err)
 	}
 	v.SeedISOPath = seedPath
@@ -183,15 +188,28 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		SerialLogPath: filepath.Join(dir, "console.log"),
 		KVM:           kvmAvailable(),
 	}
-	// SLIRP with an SSH host-forward by default — bridged networking
-	// (v.NetworkMode == "bridge", for intent members) is not implemented
-	// yet; see internal/vm/network in the plan for that follow-up.
-	sshPort, err := allocateFreePort()
-	if err != nil {
-		return fmt.Errorf("vm: allocating SSH forward port: %w", err)
+	if v.NetworkMode == "bridge" {
+		// An intent member: attach a tap device to the intent's shared
+		// bridge instead of SLIRP. There's no host-forwarded SSH port in
+		// this mode — the guest has its own address on the bridge
+		// (v.StaticIP), reachable directly; see internal/cli/commands/ssh.go's
+		// resolveSSHTarget for how the CLI picks between the two modes.
+		tapName := network.TapName(spec.ID)
+		if err := network.CreateTap(tapName, v.BridgeInterface); err != nil {
+			return fmt.Errorf("vm: attaching to bridge %s: %w", v.BridgeInterface, err)
+		}
+		cfg.BridgeTapDevice = tapName
+		v.SSHPort = 0
+	} else {
+		// SLIRP with an SSH host-forward, the default for a standalone
+		// instance (not part of any intent).
+		sshPort, err := allocateFreePort()
+		if err != nil {
+			return fmt.Errorf("vm: allocating SSH forward port: %w", err)
+		}
+		cfg.SLIRPHostForwards = []qemu.HostForward{{HostPort: sshPort, GuestPort: 22, Protocol: "tcp"}}
+		v.SSHPort = sshPort
 	}
-	cfg.SLIRPHostForwards = []qemu.HostForward{{HostPort: sshPort, GuestPort: 22, Protocol: "tcp"}}
-	v.SSHPort = sshPort
 
 	for _, m := range v.Mounts {
 		cfg.Mounts = append(cfg.Mounts, qemu.Mount{HostPath: m.HostPath, Tag: m.Tag, ReadOnly: m.ReadOnly})
@@ -199,10 +217,16 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 
 	proc, err := qemu.Spawn(ctx, cfg, filepath.Join(dir, "qemu.log"))
 	if err != nil {
+		if cfg.BridgeTapDevice != "" {
+			_ = network.DeleteTap(cfg.BridgeTapDevice) // don't leak the tap device we just created
+		}
 		return fmt.Errorf("vm: spawning qemu: %w", err)
 	}
 	if err := proc.AttachQMP(ctx); err != nil {
 		_ = proc.Stop(ctx, 0)
+		if cfg.BridgeTapDevice != "" {
+			_ = network.DeleteTap(cfg.BridgeTapDevice)
+		}
 		return fmt.Errorf("vm: attaching QMP: %w", err)
 	}
 	if err := saveRuntimeState(dir, runtimeState{Pid: proc.Pid(), QMPSocket: cfg.QMPSocket, StartedAt: time.Now()}); err != nil {
@@ -241,6 +265,13 @@ func (b *Backend) Stop(ctx context.Context, spec *instance.Spec, force bool, tim
 		return fmt.Errorf("vm: stopping instance %s: %w", spec.ID, err)
 	}
 	_ = proc.Close()
+	if spec.VM != nil && spec.VM.NetworkMode == "bridge" {
+		// Best-effort: a tap device left behind is a leak worth avoiding,
+		// but not worth failing Stop over.
+		if err := network.DeleteTap(network.TapName(spec.ID)); err != nil {
+			log.Printf("vm: failed to delete tap device for %s: %v", spec.ID, err)
+		}
+	}
 	removeRuntimeState(dir)
 
 	b.mu.Lock()
@@ -584,6 +615,33 @@ func mergeMounts(existing string, mounts []instance.Mount) (string, error) {
 		return "", fmt.Errorf("re-encoding cloud-init user-data: %w", err)
 	}
 	return "#cloud-config\n" + string(out), nil
+}
+
+// bridgeNetworkConfig returns a cloud-init NoCloud network-config (v2,
+// netplan-shaped) that statically assigns v.StaticIP/v.Gateway, or "" when
+// v isn't joining an intent's bridged network (v.NetworkMode != "bridge",
+// the default) — SLIRP's own built-in DHCP needs no guest-side
+// configuration at all, so there's nothing to generate in that case.
+//
+// Matches on "en*" rather than a fixed device name like "eth0": a virtio
+// NIC under QEMU's q35 machine type typically gets a systemd predictable
+// name like "enp0s3" on a modern cloud image, not "eth0", and there's
+// only ever one NIC to match here anyway. Not verified against a real
+// guest boot yet — see PLAN.md's M4 notes.
+func bridgeNetworkConfig(v *instance.VMSpec) string {
+	if v.NetworkMode != "bridge" || v.StaticIP == "" {
+		return ""
+	}
+	return fmt.Sprintf(`network:
+  version: 2
+  ethernets:
+    anvil0:
+      match:
+        name: "en*"
+      dhcp4: false
+      addresses: [%s]
+      gateway4: %s
+`, v.StaticIP, v.Gateway)
 }
 
 func kvmAvailable() bool {

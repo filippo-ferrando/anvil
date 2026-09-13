@@ -1,0 +1,382 @@
+package docker
+
+import (
+	"encoding/binary"
+	"encoding/json"
+	"net"
+	"net/http"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// newTestServer starts srv listening on a unix socket in t.TempDir() and
+// returns a Client pointed at it — this exercises the real HTTP/JSON wire
+// path (request construction, status handling, response decoding) against
+// a server that mimics Docker's documented API shape, not a real dockerd
+// (unavailable in this sandbox: no root, no rootless docker tooling,
+// checked), but a meaningful test of this package's own logic regardless.
+func newTestServer(t *testing.T, handler http.Handler) *Client {
+	t.Helper()
+	socket := filepath.Join(t.TempDir(), "docker.sock")
+	l, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatalf("listening on unix socket: %v", err)
+	}
+	srv := &http.Server{Handler: handler}
+	go srv.Serve(l)
+	t.Cleanup(func() { srv.Close() })
+	return NewClient(socket)
+}
+
+func TestCreateContainer(t *testing.T) {
+	var gotPath string
+	var gotBody createContainerRequest
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path + "?" + r.URL.RawQuery
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(createContainerResponse{ID: "abc123"})
+	}))
+
+	id, err := c.CreateContainer(t.Context(), CreateContainerParams{
+		Name:  "test1",
+		Image: "nginx:latest",
+		Env:   map[string]string{"FOO": "bar"},
+		Volumes: []VolumeMount{
+			{HostPath: "/host", ContainerPath: "/container", ReadOnly: true},
+		},
+		Ports: []PortMapping{
+			{HostPort: 8080, GuestPort: 80, Protocol: "tcp"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateContainer: %v", err)
+	}
+	if id != "abc123" {
+		t.Errorf("expected id abc123, got %s", id)
+	}
+	if !strings.HasPrefix(gotPath, "/"+apiVersion+"/containers/create") {
+		t.Errorf("unexpected request path: %s", gotPath)
+	}
+	if !strings.Contains(gotPath, "name=test1") {
+		t.Errorf("expected name query param, got path %s", gotPath)
+	}
+	if gotBody.Image != "nginx:latest" {
+		t.Errorf("expected image nginx:latest, got %s", gotBody.Image)
+	}
+	if len(gotBody.Env) != 1 || gotBody.Env[0] != "FOO=bar" {
+		t.Errorf("expected Env [FOO=bar], got %v", gotBody.Env)
+	}
+	if len(gotBody.HostConfig.Binds) != 1 || gotBody.HostConfig.Binds[0] != "/host:/container:ro" {
+		t.Errorf("expected a ro bind, got %v", gotBody.HostConfig.Binds)
+	}
+	if _, ok := gotBody.ExposedPorts["80/tcp"]; !ok {
+		t.Errorf("expected ExposedPorts to contain 80/tcp, got %v", gotBody.ExposedPorts)
+	}
+	bindings := gotBody.HostConfig.PortBindings["80/tcp"]
+	if len(bindings) != 1 || bindings[0].HostPort != "8080" {
+		t.Errorf("expected port binding 8080, got %v", bindings)
+	}
+}
+
+func TestCreateContainerErrorPropagates(t *testing.T) {
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(dockerError{Message: "no such image"})
+	}))
+
+	_, err := c.CreateContainer(t.Context(), CreateContainerParams{Image: "does-not-exist"})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "no such image") {
+		t.Errorf("expected the Docker error message to surface, got: %v", err)
+	}
+}
+
+func TestStartStopRemoveContainer(t *testing.T) {
+	var calls []string
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery)
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/start"):
+			w.WriteHeader(http.StatusNoContent)
+		case strings.HasSuffix(r.URL.Path, "/stop"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+
+	if err := c.StartContainer(t.Context(), "abc123"); err != nil {
+		t.Errorf("StartContainer: %v", err)
+	}
+	if err := c.StopContainer(t.Context(), "abc123", 15); err != nil {
+		t.Errorf("StopContainer: %v", err)
+	}
+	if err := c.RemoveContainer(t.Context(), "abc123", true); err != nil {
+		t.Errorf("RemoveContainer: %v", err)
+	}
+
+	joined := strings.Join(calls, "\n")
+	if !strings.Contains(joined, "/containers/abc123/start") {
+		t.Errorf("expected a start call, got: %s", joined)
+	}
+	if !strings.Contains(joined, "/containers/abc123/stop?t=15") {
+		t.Errorf("expected stop with t=15, got: %s", joined)
+	}
+	if !strings.Contains(joined, "DELETE /"+apiVersion+"/containers/abc123?force=true") {
+		t.Errorf("expected a forced delete, got: %s", joined)
+	}
+}
+
+func TestRemoveContainerAlreadyGoneIsNotAnError(t *testing.T) {
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	if err := c.RemoveContainer(t.Context(), "gone", false); err != nil {
+		t.Errorf("expected removing an already-gone container to succeed, got: %v", err)
+	}
+}
+
+func TestInspectState(t *testing.T) {
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(inspectResponse{State: ContainerState{Status: "running", Running: true}})
+	}))
+	state, err := c.InspectState(t.Context(), "abc123")
+	if err != nil {
+		t.Fatalf("InspectState: %v", err)
+	}
+	if !state.Running || state.Status != "running" {
+		t.Errorf("unexpected state: %+v", state)
+	}
+}
+
+func TestLogsDemux(t *testing.T) {
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeFrame(w, 1, "hello stdout\n")
+		writeFrame(w, 2, "hello stderr\n")
+	}))
+
+	var chunks []string
+	err := c.Logs(t.Context(), "abc123", false, 0, func(b []byte) error {
+		chunks = append(chunks, string(b))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Logs: %v", err)
+	}
+	if len(chunks) != 2 || chunks[0] != "hello stdout\n" || chunks[1] != "hello stderr\n" {
+		t.Errorf("expected two demuxed chunks, got %v", chunks)
+	}
+}
+
+func TestSplitImageRef(t *testing.T) {
+	cases := []struct {
+		ref, wantRepo, wantTag string
+	}{
+		{"nginx", "nginx", "latest"},
+		{"nginx:alpine", "nginx", "alpine"},
+		{"nginx:latest", "nginx", "latest"},
+		{"library/nginx", "library/nginx", "latest"},
+		{"library/nginx:alpine", "library/nginx", "alpine"},
+		{"myregistry:5000/nginx", "myregistry:5000/nginx", "latest"},
+		{"myregistry:5000/nginx:alpine", "myregistry:5000/nginx", "alpine"},
+		{"nginx@sha256:abc123", "nginx", "sha256:abc123"},
+	}
+	for _, tc := range cases {
+		repo, tag := splitImageRef(tc.ref)
+		if repo != tc.wantRepo || tag != tc.wantTag {
+			t.Errorf("splitImageRef(%q) = (%q, %q), want (%q, %q)", tc.ref, repo, tag, tc.wantRepo, tc.wantTag)
+		}
+	}
+}
+
+func TestImageExists(t *testing.T) {
+	var gotPath string
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if strings.Contains(r.URL.Path, "present") {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]string{"Id": "sha256:abc"})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+
+	exists, err := c.ImageExists(t.Context(), "present:latest")
+	if err != nil {
+		t.Fatalf("ImageExists: %v", err)
+	}
+	if !exists {
+		t.Error("expected present:latest to exist")
+	}
+	if !strings.Contains(gotPath, "/images/present:latest/json") {
+		t.Errorf("unexpected request path: %s", gotPath)
+	}
+
+	exists, err = c.ImageExists(t.Context(), "missing:latest")
+	if err != nil {
+		t.Fatalf("ImageExists: %v", err)
+	}
+	if exists {
+		t.Error("expected missing:latest to not exist")
+	}
+}
+
+func TestPullImageStreamsProgressAndSucceeds(t *testing.T) {
+	var gotPath string
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path + "?" + r.URL.RawQuery
+		w.WriteHeader(http.StatusOK)
+		enc := json.NewEncoder(w)
+		_ = enc.Encode(map[string]string{"status": "Pulling from library/nginx"})
+		_ = enc.Encode(map[string]string{"status": "Download complete"})
+	}))
+
+	var statuses []string
+	err := c.PullImage(t.Context(), "nginx:alpine", func(s string) { statuses = append(statuses, s) })
+	if err != nil {
+		t.Fatalf("PullImage: %v", err)
+	}
+	if len(statuses) != 2 {
+		t.Errorf("expected 2 progress lines, got %v", statuses)
+	}
+	if !strings.Contains(gotPath, "/images/create?fromImage=nginx&tag=alpine") {
+		t.Errorf("unexpected request path: %s", gotPath)
+	}
+}
+
+func TestPullImageCollapsesRepeatedLayerStatusButKeepsTransitions(t *testing.T) {
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		enc := json.NewEncoder(w)
+		// Same layer ("abc123"), same "Downloading" status, five times in a
+		// row with just the progress bar moving — this is the exact spam a
+		// real pull produces that pullProgressInterval is meant to collapse,
+		// not the "did it move at all" question (each call here is instant,
+		// well under the interval, so only the two status *transitions*
+		// should make it through, not all 7 lines).
+		_ = enc.Encode(map[string]string{"id": "abc123", "status": "Pulling fs layer"})
+		for i := 0; i < 5; i++ {
+			_ = enc.Encode(map[string]string{"id": "abc123", "status": "Downloading", "progress": "[=>] 1MB/5MB"})
+		}
+		_ = enc.Encode(map[string]string{"id": "abc123", "status": "Pull complete"})
+	}))
+
+	var statuses []string
+	if err := c.PullImage(t.Context(), "nginx:alpine", func(s string) { statuses = append(statuses, s) }); err != nil {
+		t.Fatalf("PullImage: %v", err)
+	}
+	if len(statuses) != 3 {
+		t.Fatalf("expected 3 forwarded lines (2 transitions + first Downloading), got %d: %v", len(statuses), statuses)
+	}
+	if statuses[0] != "abc123: Pulling fs layer" {
+		t.Errorf("unexpected first line: %q", statuses[0])
+	}
+	if !strings.HasPrefix(statuses[1], "abc123: Downloading") {
+		t.Errorf("unexpected second line: %q", statuses[1])
+	}
+	if statuses[2] != "abc123: Pull complete" {
+		t.Errorf("unexpected third line: %q", statuses[2])
+	}
+}
+
+func TestPullImagePropagatesDaemonError(t *testing.T) {
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "no such image or tag"})
+	}))
+
+	err := c.PullImage(t.Context(), "does-not-exist:latest", nil)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "no such image or tag") {
+		t.Errorf("expected the daemon's error message to surface, got: %v", err)
+	}
+}
+
+func TestCreateNetwork(t *testing.T) {
+	var gotPath string
+	var gotBody createNetworkRequest
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(createNetworkResponse{ID: "net123"})
+	}))
+
+	id, err := c.CreateNetwork(t.Context(), NetworkCreateParams{
+		Name:            "anvil-myapp",
+		BridgeInterface: "anvil0abc123",
+		Subnet:          "10.55.201.0/24",
+		Gateway:         "10.55.201.1",
+		IPRange:         "10.55.201.128/25",
+	})
+	if err != nil {
+		t.Fatalf("CreateNetwork: %v", err)
+	}
+	if id != "net123" {
+		t.Errorf("expected id net123, got %s", id)
+	}
+	if !strings.HasSuffix(gotPath, "/networks/create") {
+		t.Errorf("unexpected request path: %s", gotPath)
+	}
+	if gotBody.Driver != "bridge" {
+		t.Errorf("expected bridge driver, got %s", gotBody.Driver)
+	}
+	if gotBody.Options["com.docker.network.bridge.name"] != "anvil0abc123" {
+		t.Errorf("expected explicit bridge name option, got %v", gotBody.Options)
+	}
+	if len(gotBody.IPAM.Config) != 1 || gotBody.IPAM.Config[0].Subnet != "10.55.201.0/24" {
+		t.Errorf("expected subnet in IPAM config, got %v", gotBody.IPAM)
+	}
+}
+
+func TestNetworkExists(t *testing.T) {
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "present") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+
+	exists, err := c.NetworkExists(t.Context(), "present")
+	if err != nil {
+		t.Fatalf("NetworkExists: %v", err)
+	}
+	if !exists {
+		t.Error("expected present to exist")
+	}
+
+	exists, err = c.NetworkExists(t.Context(), "missing")
+	if err != nil {
+		t.Fatalf("NetworkExists: %v", err)
+	}
+	if exists {
+		t.Error("expected missing to not exist")
+	}
+}
+
+func TestRemoveNetworkAlreadyGoneIsNotAnError(t *testing.T) {
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	if err := c.RemoveNetwork(t.Context(), "gone"); err != nil {
+		t.Errorf("expected removing an already-gone network to succeed, got: %v", err)
+	}
+}
+
+func writeFrame(w http.ResponseWriter, streamType byte, payload string) {
+	header := make([]byte, 8)
+	header[0] = streamType
+	binary.BigEndian.PutUint32(header[4:8], uint32(len(payload)))
+	w.Write(header)
+	w.Write([]byte(payload))
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+}

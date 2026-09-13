@@ -67,9 +67,10 @@ func vmSpecFromPB(v *anvilv1.VMSpec) *instance.VMSpec {
 		CloudInitName:     v.GetCloudInitName(),
 		NetworkMode:       v.GetNetworkMode(),
 		SSHPublicKeys:     v.GetSshPublicKeys(),
-		// SSHPort/DefaultUser are daemon-populated outputs, not client
-		// input — a LaunchRequest never carries them, so there's nothing
-		// to read here; see vmSpecToPB for where they're actually set.
+		// SSHPort/DefaultUser/BridgeInterface/StaticIP/Gateway are all
+		// daemon-populated outputs, not client input — a LaunchRequest
+		// never carries them, so there's nothing to read here; see
+		// vmSpecToPB for where they're actually set.
 	}
 }
 
@@ -89,6 +90,9 @@ func vmSpecToPB(v *instance.VMSpec) *anvilv1.VMSpec {
 		SshPublicKeys:     v.SSHPublicKeys,
 		SshPort:           int32(v.SSHPort),
 		DefaultUser:       v.DefaultUser,
+		BridgeInterface:   v.BridgeInterface,
+		StaticIp:          v.StaticIP,
+		Gateway:           v.Gateway,
 	}
 	for _, m := range v.Mounts {
 		pb.Mounts = append(pb.Mounts, &anvilv1.Mount{
@@ -101,6 +105,28 @@ func vmSpecToPB(v *instance.VMSpec) *anvilv1.VMSpec {
 	return pb
 }
 
+func containerEngineFromPB(e anvilv1.ContainerEngine) instance.ContainerEngine {
+	switch e {
+	case anvilv1.ContainerEngine_CONTAINER_ENGINE_DOCKER:
+		return instance.ContainerEngineDocker
+	case anvilv1.ContainerEngine_CONTAINER_ENGINE_PODMAN:
+		return instance.ContainerEnginePodman
+	default:
+		return ""
+	}
+}
+
+func containerEngineToPB(e instance.ContainerEngine) anvilv1.ContainerEngine {
+	switch e {
+	case instance.ContainerEngineDocker:
+		return anvilv1.ContainerEngine_CONTAINER_ENGINE_DOCKER
+	case instance.ContainerEnginePodman:
+		return anvilv1.ContainerEngine_CONTAINER_ENGINE_PODMAN
+	default:
+		return anvilv1.ContainerEngine_CONTAINER_ENGINE_UNSPECIFIED
+	}
+}
+
 func containerSpecFromPB(c *anvilv1.ContainerSpec) *instance.ContainerSpec {
 	if c == nil {
 		return nil
@@ -111,6 +137,9 @@ func containerSpecFromPB(c *anvilv1.ContainerSpec) *instance.ContainerSpec {
 		Entrypoint:  c.GetEntrypoint(),
 		Cmd:         c.GetCmd(),
 		NetworkMode: c.GetNetworkMode(),
+		Engine:      containerEngineFromPB(c.GetEngine()),
+		// ContainerID is daemon-populated, not client input — see
+		// containerSpecToPB for where it's actually set.
 	}
 	for _, vol := range c.GetVolumes() {
 		spec.Volumes = append(spec.Volumes, instance.VolumeMount{
@@ -139,6 +168,8 @@ func containerSpecToPB(c *instance.ContainerSpec) *anvilv1.ContainerSpec {
 		Entrypoint:  c.Entrypoint,
 		Cmd:         c.Cmd,
 		NetworkMode: c.NetworkMode,
+		Engine:      containerEngineToPB(c.Engine),
+		ContainerId: c.ContainerID,
 	}
 	for _, vol := range c.Volumes {
 		spec.Volumes = append(spec.Volumes, &anvilv1.VolumeMount{
@@ -180,10 +211,12 @@ func specsToPB(specs []*instance.Spec) []*anvilv1.Instance {
 
 func launchParamsFromPB(req *anvilv1.LaunchRequest) instance.LaunchParams {
 	return instance.LaunchParams{
-		Name:      req.GetName(),
-		Kind:      kindFromPB(req.GetKind()),
-		VM:        vmSpecFromPB(req.GetVm()),
-		Container: containerSpecFromPB(req.GetContainer()),
-		NoStart:   req.GetNoStart(),
+		Name:       req.GetName(),
+		Kind:       kindFromPB(req.GetKind()),
+		VM:         vmSpecFromPB(req.GetVm()),
+		Container:  containerSpecFromPB(req.GetContainer()),
+		NoStart:    req.GetNoStart(),
+		IntentName: req.GetIntentName(),
+		Role:       req.GetRole(),
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 	"github.com/anvil-project/anvil/pkg/client"
@@ -69,37 +70,42 @@ func resolveIdentity(explicit string) (string, error) {
 	return ensureDefaultAnvilKey()
 }
 
+// resolveInstance looks up name via the daemon's Info RPC — shared by
+// shell/exec/transfer to first figure out whether they're dealing with a
+// VM (SSH, see resolveSSHTarget/runSSH below) or a container (docker/podman
+// exec, see runContainerExec in container_exec.go).
+func resolveInstance(ctx context.Context, c *client.Client, name string) (*anvilv1.Instance, error) {
+	reply, err := c.Info(ctx, &anvilv1.InfoRequest{Names: []string{name}})
+	if err != nil {
+		return nil, err
+	}
+	instances := reply.GetInstances()
+	if len(instances) == 0 {
+		return nil, fmt.Errorf("no such instance %q", name)
+	}
+	return instances[0], nil
+}
+
 // sshTarget is what's needed to reach a running VM over SSH.
 type sshTarget struct {
 	InstanceID string
-	Host       string // always "localhost" for now — SLIRP host-forwarding; bridged/intent networking will need a real guest IP here once that lands
+	Host       string // "localhost" for a standalone (SLIRP) VM, or the guest's own address for an intent member on a bridged network
 	Port       int
 	User       string
 }
 
-// resolveSSHTarget looks up name's connection info from the daemon
-// (populated by internal/vm.Backend at Create/Start time — see the
-// VMSpec.ssh_port/default_user proto fields).
-func resolveSSHTarget(ctx context.Context, c *client.Client, name, userOverride string) (sshTarget, error) {
-	reply, err := c.Info(ctx, &anvilv1.InfoRequest{Names: []string{name}})
-	if err != nil {
-		return sshTarget{}, err
-	}
-	instances := reply.GetInstances()
-	if len(instances) == 0 {
-		return sshTarget{}, fmt.Errorf("no such instance %q", name)
-	}
-	inst := instances[0]
-
+// resolveSSHTarget builds a VM's connection info from an already-resolved
+// instance (see resolveInstance) — populated by internal/vm.Backend at
+// Create/Start time (VMSpec.ssh_port/default_user for a standalone VM,
+// VMSpec.static_ip for a bridged intent member, see internal/vm.Backend.Start).
+func resolveSSHTarget(inst *anvilv1.Instance, userOverride string) (sshTarget, error) {
+	name := inst.GetName()
 	vmSpec := inst.GetVm()
 	if vmSpec == nil {
-		return sshTarget{}, fmt.Errorf("%q isn't a VM (container shell/exec/transfer isn't implemented yet, see milestone 3)", name)
+		return sshTarget{}, fmt.Errorf("%q isn't a VM", name)
 	}
 	if inst.GetState() != anvilv1.State_STATE_RUNNING {
 		return sshTarget{}, fmt.Errorf("%q isn't running (state: %s)", name, stateLabel(inst.GetState()))
-	}
-	if vmSpec.GetSshPort() == 0 {
-		return sshTarget{}, fmt.Errorf("%q has no known SSH port yet", name)
 	}
 
 	user := userOverride
@@ -110,6 +116,23 @@ func resolveSSHTarget(ctx context.Context, c *client.Client, name, userOverride 
 		user = "root"
 	}
 
+	// A bridged intent member has its own address on the shared network
+	// instead of a SLIRP host-forwarded port — see
+	// internal/vm.Backend.Start and bridgeNetworkConfig.
+	if vmSpec.GetNetworkMode() == "bridge" {
+		if vmSpec.GetStaticIp() == "" {
+			return sshTarget{}, fmt.Errorf("%q has no known bridge address yet", name)
+		}
+		ip, _, ok := strings.Cut(vmSpec.GetStaticIp(), "/")
+		if !ok {
+			ip = vmSpec.GetStaticIp()
+		}
+		return sshTarget{InstanceID: inst.GetId(), Host: ip, Port: 22, User: user}, nil
+	}
+
+	if vmSpec.GetSshPort() == 0 {
+		return sshTarget{}, fmt.Errorf("%q has no known SSH port yet", name)
+	}
 	return sshTarget{
 		InstanceID: inst.GetId(),
 		Host:       "localhost",

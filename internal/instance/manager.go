@@ -79,6 +79,22 @@ type LaunchParams struct {
 	VM        *VMSpec
 	Container *ContainerSpec
 	NoStart   bool
+
+	// Labels are stored on the new instance verbatim — this package has no
+	// opinion on what any key means. internal/intent uses this to tag
+	// intent membership (Labels["intent"]/Labels["role"]) without
+	// internal/instance needing to import internal/store to know what an
+	// Intent is (that would cycle back: store already imports instance).
+	Labels map[string]string
+
+	// IntentName/Role are read by internal/daemon (not by Manager.Launch
+	// itself) to decide whether a launch should route through
+	// internal/intent.Manager.Launch instead of straight through here —
+	// see that package's doc comment. Manager.Launch ignores both fields;
+	// they exist on this struct only so LaunchRequest's wire fields have
+	// one obvious place to land before that routing decision is made.
+	IntentName string
+	Role       string
 }
 
 // LaunchEvent is one step of Launch's progress callback. Exactly one of
@@ -102,19 +118,24 @@ func (m *Manager) Launch(ctx context.Context, params LaunchParams, progress func
 		return err
 	}
 
+	labels := make(map[string]string, len(params.Labels))
+	for k, v := range params.Labels {
+		labels[k] = v
+	}
+
 	spec := &Spec{
 		ID:        ulid.Make().String(),
 		Name:      params.Name,
 		Kind:      params.Kind,
 		State:     StateStarting,
 		CreatedAt: time.Now(),
-		Labels:    map[string]string{},
+		Labels:    labels,
 		VM:        params.VM,
 		Container: params.Container,
 	}
 
 	progress(LaunchEvent{Status: "provisioning"})
-	if err := b.Create(ctx, spec); err != nil {
+	if err := b.Create(ctx, spec, func(status string) { progress(LaunchEvent{Status: status}) }); err != nil {
 		progress(LaunchEvent{Err: err})
 		return err
 	}
@@ -161,6 +182,14 @@ func (m *Manager) resolve(names []string) ([]*Spec, error) {
 
 func (m *Manager) Info(names []string) ([]*Spec, error) {
 	return m.resolve(names)
+}
+
+// GetByID looks up a single instance by its ID rather than its name — used
+// by internal/intent.Manager, which stores members by instance ID (an
+// intent member's role/name can collide across intents in a way IDs
+// can't).
+func (m *Manager) GetByID(id string) (*Spec, error) {
+	return m.registry.GetByID(id)
 }
 
 // Logs streams name's log output — a VM's boot/console output, or (once M3

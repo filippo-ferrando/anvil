@@ -19,6 +19,17 @@ func kindLabel(k anvilv1.Kind) string {
 	}
 }
 
+func engineLabel(e anvilv1.ContainerEngine) string {
+	switch e {
+	case anvilv1.ContainerEngine_CONTAINER_ENGINE_DOCKER:
+		return "docker"
+	case anvilv1.ContainerEngine_CONTAINER_ENGINE_PODMAN:
+		return "podman"
+	default:
+		return "docker" // unset defaults to docker server-side too, see container.Backend.engineFor
+	}
+}
+
 func stateLabel(s anvilv1.State) string {
 	switch s {
 	case anvilv1.State_STATE_STOPPED:
@@ -59,15 +70,17 @@ func humanBytes(n int64) string {
 // have richer table (color, sorting) is a TUI/M7 concern, not the CLI's.
 func printInstanceTable(w io.Writer, instances []*anvilv1.Instance) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tKIND\tSTATE\tIMAGE")
+	fmt.Fprintln(tw, "NAME\tKIND\tENGINE\tSTATE\tIMAGE")
 	for _, inst := range instances {
 		image := ""
+		engine := "-"
 		if inst.GetVm() != nil {
 			image = inst.GetVm().GetImageRef()
-		} else if inst.GetContainer() != nil {
-			image = inst.GetContainer().GetImageRef()
+		} else if c := inst.GetContainer(); c != nil {
+			image = c.GetImageRef()
+			engine = engineLabel(c.GetEngine())
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", inst.GetName(), kindLabel(inst.GetKind()), stateLabel(inst.GetState()), image)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", inst.GetName(), kindLabel(inst.GetKind()), engine, stateLabel(inst.GetState()), image)
 	}
 	tw.Flush()
 }

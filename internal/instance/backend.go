@@ -23,7 +23,15 @@ type Backend interface {
 	// LaunchRequest.NoStart can provision without starting. Implementations
 	// may populate additional fields on spec (e.g. VMSpec.DiskPath) that
 	// the caller is expected to persist afterward.
-	Create(ctx context.Context, spec *Spec) error
+	//
+	// progress, if non-nil, is called with human-readable status updates
+	// for whatever part of Create might take a while (downloading a base
+	// image, pulling a container image) — surfaced up through
+	// Manager.Launch's own progress callback and, from there, over
+	// LaunchProgress to the CLI, specifically so a slow-but-healthy
+	// provision doesn't look indistinguishable from a stuck one. A backend
+	// with nothing slow to report is free to ignore it.
+	Create(ctx context.Context, spec *Spec, progress func(status string)) error
 
 	Start(ctx context.Context, spec *Spec) error
 

@@ -25,6 +25,7 @@ type Client struct {
 	CloudInit anvilv1.CloudInitServiceClient
 	Mirror    anvilv1.MirrorServiceClient
 	Image     anvilv1.ImageServiceClient
+	Intent    anvilv1.IntentServiceClient
 }
 
 // Dial connects to anvild's gRPC API over its unix socket at socketPath.
@@ -44,6 +45,7 @@ func Dial(socketPath string) (*Client, error) {
 		CloudInit:             anvilv1.NewCloudInitServiceClient(conn),
 		Mirror:                anvilv1.NewMirrorServiceClient(conn),
 		Image:                 anvilv1.NewImageServiceClient(conn),
+		Intent:                anvilv1.NewIntentServiceClient(conn),
 	}, nil
 }
 

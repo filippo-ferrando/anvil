@@ -13,7 +13,7 @@ func newTransferCommand(flags *globalFlags) *cobra.Command {
 	var user, identity string
 	cmd := &cobra.Command{
 		Use:   "transfer <source> <destination>",
-		Short: "Copy a file to or from a VM (exactly one side must be <name>:<path>)",
+		Short: "Copy a file to or from a VM (scp) or container (exactly one side must be <name>:<path>)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			srcName, srcPath, srcIsRemote := splitInstanceRef(args[0])
@@ -28,17 +28,28 @@ func newTransferCommand(flags *globalFlags) *cobra.Command {
 				remoteName = dstName
 			}
 
-			key, err := resolveIdentity(identity)
-			if err != nil {
-				return err
-			}
-
 			c, err := dial(flags)
 			if err != nil {
 				return err
 			}
-			target, err := resolveSSHTarget(cmd.Context(), c, remoteName, user)
+			inst, err := resolveInstance(cmd.Context(), c, remoteName)
 			c.Close()
+			if err != nil {
+				return err
+			}
+
+			if inst.GetContainer() != nil {
+				if srcIsRemote {
+					return runContainerCopy(inst, dstPath, srcPath, false)
+				}
+				return runContainerCopy(inst, srcPath, dstPath, true)
+			}
+
+			key, err := resolveIdentity(identity)
+			if err != nil {
+				return err
+			}
+			target, err := resolveSSHTarget(inst, user)
 			if err != nil {
 				return err
 			}
@@ -63,8 +74,8 @@ func newTransferCommand(flags *globalFlags) *cobra.Command {
 			return scpCmd.Run()
 		},
 	}
-	cmd.Flags().StringVar(&user, "user", "", "SSH user for the remote side (defaults to the image's default user)")
-	cmd.Flags().StringVarP(&identity, "identity", "i", "", "path to a private key to use, instead of anvil's own managed key")
+	cmd.Flags().StringVar(&user, "user", "", "SSH user for the remote side (VM only, defaults to the image's default user)")
+	cmd.Flags().StringVarP(&identity, "identity", "i", "", "path to a private key to use, instead of anvil's own managed key (VM only)")
 	return cmd
 }
 

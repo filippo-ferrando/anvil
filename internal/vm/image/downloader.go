@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // downloadDedup collapses concurrent requests for the same destination
@@ -70,13 +71,18 @@ func NewDownloader() *Downloader {
 
 // Fetch downloads entry's image to destPath if it isn't already present
 // with a matching checksum. Concurrent Fetch calls for the same destPath
-// are deduplicated to a single download.
-func (d *Downloader) Fetch(entry DistroEntry, destPath string) error {
+// are deduplicated to a single download. progress, if non-nil, is called
+// with human-readable status updates (this can take a while on a slow
+// mirror, and a caller like the CLI wants to show *something* moving
+// rather than sit silent for however long that takes — see
+// internal/instance.Backend.Create's progress parameter, which this
+// ultimately feeds).
+func (d *Downloader) Fetch(entry DistroEntry, destPath string, progress func(status string)) error {
 	return d.dedup.do(destPath, func() error {
 		if ok, _ := verifyExisting(destPath, entry.SHA256); ok {
 			return nil
 		}
-		return d.download(entry, destPath)
+		return d.download(entry, destPath, progress)
 	})
 }
 
@@ -103,7 +109,7 @@ func verifyExisting(path, wantSHA256 string) (bool, error) {
 	return hex.EncodeToString(h.Sum(nil)) == wantSHA256, nil
 }
 
-func (d *Downloader) download(entry DistroEntry, destPath string) error {
+func (d *Downloader) download(entry DistroEntry, destPath string, progress func(status string)) error {
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
 		return fmt.Errorf("image: creating cache dir: %w", err)
 	}
@@ -115,6 +121,9 @@ func (d *Downloader) download(entry DistroEntry, destPath string) error {
 	}
 	defer os.Remove(tmpPath) // no-op once the rename below succeeds
 
+	if progress != nil {
+		progress(fmt.Sprintf("downloading %s image from %s", entry.ID, entry.URL))
+	}
 	resp, err := d.HTTPClient.Get(entry.URL)
 	if err != nil {
 		out.Close()
@@ -127,12 +136,19 @@ func (d *Downloader) download(entry DistroEntry, destPath string) error {
 	}
 
 	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(out, h), resp.Body); err != nil {
+	body := io.Reader(resp.Body)
+	if progress != nil {
+		body = &progressReader{r: resp.Body, total: resp.ContentLength, label: "downloading " + entry.ID, progress: progress}
+	}
+	if _, err := io.Copy(io.MultiWriter(out, h), body); err != nil {
 		out.Close()
 		return fmt.Errorf("image: downloading %s: %w", entry.URL, err)
 	}
 	if err := out.Close(); err != nil {
 		return fmt.Errorf("image: closing %s: %w", tmpPath, err)
+	}
+	if progress != nil {
+		progress(fmt.Sprintf("verifying checksum for %s", entry.ID))
 	}
 
 	if entry.SHA256 != "" {
@@ -146,4 +162,54 @@ func (d *Downloader) download(entry DistroEntry, destPath string) error {
 		return fmt.Errorf("image: finalizing download: %w", err)
 	}
 	return nil
+}
+
+// progressReader wraps a download body, reporting byte progress through to
+// progress at most every progressInterval — a plain "downloading" message
+// with no updates for a large image is exactly what left filippo unable to
+// tell a slow download apart from a stuck one; this is the fix; unbounded
+// per-Read reporting would be the opposite problem (a flood of near-
+// identical lines).
+type progressReader struct {
+	r        io.Reader
+	total    int64 // 0 if the server didn't send Content-Length
+	read     int64
+	lastSent time.Time
+	label    string
+	progress func(status string)
+}
+
+const progressInterval = 500 * time.Millisecond
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	p.read += int64(n)
+	if time.Since(p.lastSent) >= progressInterval || err == io.EOF {
+		p.progress(p.status())
+		p.lastSent = time.Now()
+	}
+	return n, err
+}
+
+func (p *progressReader) status() string {
+	if p.total > 0 {
+		pct := float64(p.read) / float64(p.total) * 100
+		return fmt.Sprintf("%s: %.0f%% (%s / %s)", p.label, pct, humanBytes(p.read), humanBytes(p.total))
+	}
+	return fmt.Sprintf("%s: %s", p.label, humanBytes(p.read))
+}
+
+// humanBytes renders a byte count like "512.0 MiB" — just for progress
+// messages, not worth a dependency over.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for v := n / unit; v >= unit; v /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }

@@ -66,6 +66,12 @@ This is early. Here's what's actually real right now, versus what's just designe
   breaking SSH identity resolution, see `PLAN.md`'s M2 notes for both), now fixed
 - `anvil logs <name> [-f]` reads the guest's boot/cloud-init console output, which is also
   literally how the YAML bug above got diagnosed
+- `anvil launch` shows real progress while it runs instead of going quiet: download
+  percentage for a VM base image, per-layer pull status for a container image, both
+  throttled so it's not a wall of spam, but never silent for more than half a second, so
+  a slow launch doesn't look like a stuck one. On a real terminal these updates redraw
+  in place (carriage return) instead of scrolling the screen with hundreds of near-
+  identical lines, found and fixed on filippo's own first real image download
 - anvil manages its own SSH keypair (generated once, no passphrase, same idea as Vagrant's
   shared key or Multipass's own managed key) and injects it into every VM by default, so
   `shell`/`exec`/`transfer` work with zero flags, no dependence on whatever personal key you
@@ -79,17 +85,79 @@ This is early. Here's what's actually real right now, versus what's just designe
   QEMU/cloud-init side of this is tested for real; an actual guest mounting and using the
   share hasn't been, that needs a real downloaded image, which this dev sandbox can't do
 
+**Working (M3, Docker half), confirmed with a real launch on real hardware:**
+- `anvil launch --kind container <image>` works end to end against Docker, with
+  `--engine`, `--env`/`-e`, `--volume`/`-v`, `--publish`/`-p`, `--entrypoint`, and a
+  trailing `-- cmd args` to override the image's own command. It now pulls a missing
+  image automatically before creating the container, matching `docker run`'s own
+  behavior, that wasn't true on the first real launch, see below
+- `anvil shell`/`anvil exec`/`anvil transfer` all work against container instances too
+  now, via `docker exec`/`docker cp` shelled out to the real binary, not just VMs over SSH
+- `anvil list`/`anvil info` show engine, container ID, published ports, and volumes for
+  container instances
+- talks to Docker's real HTTP API over `/var/run/docker.sock` through a small hand-rolled
+  client, not the official Docker SDK (same call as QMP for VMs: didn't want a dependency
+  whose exact current API we couldn't verify without network access here)
+- first real bug, found on a real Docker daemon: `anvil launch --kind container
+  nginx:alpine` 404ed with "No such image", because `POST /containers/create` doesn't
+  auto-pull a missing image the way the `docker` CLI does, it just 404s. Fixed by
+  checking for the image first and pulling it if missing, see `PLAN.md`'s M3 notes.
+  Everything else is tested for real against a mock unix-socket HTTP server (all
+  passing), since this sandbox itself has no root/rootless Docker tooling to run
+  `dockerd`
+- `anvil mirror add --kind container --registry <host> --mirror-of <upstream>` is now
+  actually applied for Docker, not just stored: a matching image ref gets rewritten to
+  pull through the mirror before create. This is a client-side rewrite, not a dockerd
+  `daemon.json` edit, since Docker's own mirror setting only covers Docker Hub, see
+  `PLAN.md` for why and for the `--insecure` caveat (stored, but Docker itself still
+  needs its own `insecure-registries` config for that to actually work, unlike Podman)
+- Podman is deferred, not built: filippo doesn't have it on this machine to test
+  against. `--engine podman` gives a clear "not implemented yet" error rather than
+  silently doing nothing
+
+**Working (M4), the least-verified thing in this repo so far:**
+- `anvil launch --kind vm|container ... --intent NAME --role ROLE` joins that instance to
+  an intent, creating it automatically on first use, no separate "create the group first"
+  step required
+- `anvil intent create <name> --vm role:image --container role:image` and
+  `anvil intent add <name> --vm role:image` are shorthand for the above (just a few
+  streaming `Launch` calls in a row); `anvil intent list/info/remove/delete` manage the
+  group itself, `delete --purge-members` also tears down every member instance
+- `anvil info` shows an instance's intent and role when it's a member of one
+- `anvil delete <name>` on a member instance directly (not through any `intent` command)
+  now correctly drops it from its intent's member list too, instead of leaving a stale
+  entry behind pointing at a deleted instance ID (caught by filippo before it shipped)
+- **the shared network is now actually built**: each intent gets its own Docker bridge
+  network, created on first use. Container members join it the normal Docker way; VM
+  members get a tap device attached to its bridge (new `github.com/vishvananda/netlink`
+  dependency) plus a static IP and a generated cloud-init network-config instead of
+  SLIRP. `anvil shell`/`exec`/`transfer` connect to a bridged VM's real address directly.
+  Podman is deferred, so this is Docker-only for now.
+- `anvil intent delete` now removes the intent's Docker network too, not just the group
+  record, best-effort: a member still attached to it (not purged, or a VM tap still on
+  the bridge) will likely make Docker refuse, which is logged and not fatal to the delete
+- **why this is genuinely the shakiest thing here**: the netlink dependency couldn't be
+  fetched or exercised against a real bridge in this sandbox at all (no network to
+  `go get` it, no root, no bridge to test against), and none of Docker's
+  bridge-name option, the reserved-subnet split, real VM-to-container connectivity, or
+  cloud-init actually applying a static IP has touched a real machine. See `PLAN.md`'s
+  Intents section for the full breakdown of what's unverified before you trust this.
+
 **Not built yet:**
-- containers (`--kind container` gives you a clear "not implemented" error for now, and
-  `--kind container` mirrors are stored but not applied anywhere yet either)
-- intents
+- Podman (the second container backend, deliberately deferred, see above; its own
+  `registries.conf.d`-based mirror mechanism, and its own network story, are tied to it
+  landing too)
 - migration
 - the TUI
 - Arch packaging
 
-None of the M2 cloud-init/mirror work above has actually been build tested yet either,
-the `.proto` file grew two new services (`CloudInitService`, `MirrorService`) so you'll
-need to run `make proto` again before `go build` picks it up.
+None of the M2 cloud-init/mirror work, the M3 container work, or the M4 intent/network
+work above has actually been build tested yet either. The `.proto` file has grown again
+since the last confirmed build (`CloudInitService`/`MirrorService` for M2,
+`ContainerSpec.engine`/`container_id` for M3, `LaunchRequest.intent_name`/`role` actually
+wired up, a new `IntentService`, and `VMSpec.bridge_interface`/`static_ip`/`gateway` for
+M4), so you'll need to run `make proto` again before `go build` picks any of it up. `go
+mod tidy` also needs to fetch the new netlink dependency for real this time.
 
 See `PLAN.md` for the full design and a milestone-by-milestone roadmap.
 
@@ -158,8 +226,8 @@ internal/
   daemon/        gRPC service implementation, converts wire types to domain types
   instance/      domain model, the Manager, and the Backend/Registry interfaces
   vm/            QEMU backend (process management, QMP, cloud-init, image catalog)
-  container/     Docker and Podman backends, not built yet (Docker first)
-  intent/        intent groups, not built yet
+  container/     Docker backend (done) and Podman backend (deferred)
+  intent/        intent membership, intent-aware launch, shared Docker bridge network per intent
   migrate/       SSH-driven migration, not built yet
   store/         bbolt-backed registry
   cli/commands/  cobra commands
