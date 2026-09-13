@@ -1,0 +1,337 @@
+syntax = "proto3";
+
+package anvil.v1;
+
+option go_package = "github.com/anvil-project/anvil/api/gen/anvil/v1;anvilv1";
+
+// InstanceService manages the lifecycle of VM and container instances.
+// This is the M1 slice: VM-only fields are populated today, container
+// fields exist so the wire schema doesn't need a breaking change in M3.
+service InstanceService {
+  rpc Launch(LaunchRequest) returns (stream LaunchProgress);
+  rpc List(ListRequest) returns (ListReply);
+  rpc Info(InfoRequest) returns (InfoReply);
+  rpc Start(StartRequest) returns (StartReply);
+  rpc Stop(StopRequest) returns (StopReply);
+  rpc Delete(DeleteRequest) returns (DeleteReply);
+  rpc Purge(PurgeRequest) returns (PurgeReply);
+  rpc Logs(LogsRequest) returns (stream LogChunk);
+  rpc Mount(MountRequest) returns (MountReply);
+  rpc Umount(UmountRequest) returns (UmountReply);
+}
+
+enum Kind {
+  KIND_UNSPECIFIED = 0;
+  KIND_VM = 1;
+  KIND_CONTAINER = 2;
+}
+
+enum State {
+  STATE_UNSPECIFIED = 0;
+  STATE_STOPPED = 1;
+  STATE_STARTING = 2;
+  STATE_RUNNING = 3;
+  STATE_STOPPING = 4;
+  STATE_DELETING = 5;
+  STATE_DELETED = 6;
+  STATE_ERROR = 7;
+}
+
+message VMSpec {
+  string image_ref = 1;
+  string arch = 2;
+  int32 cpus = 3;
+  int64 memory_mib = 4;
+  int64 disk_gib = 5;
+  string cloud_init_user_data = 6;
+  string cloud_init_name = 7; // reference into the saved cloud-init library; mutually exclusive with inline data
+  string network_mode = 8;    // "slirp" | "bridge"
+  repeated string ssh_public_keys = 9;
+
+  // Daemon-populated, not client input: read-only outputs the client uses
+  // for `anvil shell`/`exec`/`transfer` to reach a running instance. Set by
+  // internal/vm.Backend.Create (default_user, from the image catalog) and
+  // .Start (ssh_port, a freshly allocated SLIRP host-forward port — it can
+  // change across a stop/start cycle, don't cache it client-side).
+  int32 ssh_port = 10;
+  string default_user = 11;
+
+  // Host directories shared into the guest via 9p (see anvil.v1.Mount).
+  // Managed by `anvil mount`/`anvil umount`, not settable at launch time.
+  repeated Mount mounts = 12;
+}
+
+// Mount is one host directory shared into a VM's guest over 9p. Added and
+// removed one at a time via InstanceService.Mount/Umount (see those RPCs
+// below) — there's no `--mount` flag on Launch, this is deliberately a
+// post-creation operation.
+message Mount {
+  string host_path = 1;
+  string guest_path = 2;
+  string tag = 3; // internal 9p mount_tag, assigned automatically, not user-facing
+  bool read_only = 4;
+}
+
+message ContainerSpec {
+  string image_ref = 1;
+  map<string, string> env = 2;
+  repeated string entrypoint = 3;
+  repeated string cmd = 4;
+  repeated VolumeMount volumes = 5;
+  repeated PortMapping ports = 6;
+  string network_mode = 7;
+}
+
+message VolumeMount {
+  string host_path = 1;
+  string container_path = 2;
+  bool read_only = 3;
+}
+
+message PortMapping {
+  int32 host_port = 1;
+  int32 guest_port = 2;
+  string protocol = 3; // "tcp" | "udp"
+}
+
+message Instance {
+  string id = 1;
+  string name = 2;
+  Kind kind = 3;
+  State state = 4;
+  int64 created_at_unix = 5;
+  map<string, string> labels = 6;
+  VMSpec vm = 7;
+  ContainerSpec container = 8;
+}
+
+message LaunchRequest {
+  string name = 1;
+  Kind kind = 2;
+  VMSpec vm = 3;
+  ContainerSpec container = 4;
+  string intent_name = 5;
+  string role = 6;
+  bool no_start = 7;
+}
+
+message LaunchProgress {
+  oneof event {
+    string status = 1;   // human-readable phase, e.g. "downloading image", "booting"
+    int32 percent = 2;   // 0-100 for the current phase, when known
+    Instance instance = 3; // final event on success
+    string error = 4;
+  }
+}
+
+message ListRequest {
+  Kind kind_filter = 1; // KIND_UNSPECIFIED means "all"
+}
+
+message ListReply {
+  repeated Instance instances = 1;
+}
+
+message InfoRequest {
+  repeated string names = 1;
+}
+
+message InfoReply {
+  repeated Instance instances = 1;
+}
+
+message StartRequest {
+  repeated string names = 1;
+}
+
+message StartReply {}
+
+message StopRequest {
+  repeated string names = 1;
+  bool force = 2;
+  int64 timeout_seconds = 3;
+}
+
+message StopReply {}
+
+message DeleteRequest {
+  repeated string names = 1;
+  bool purge = 2;
+}
+
+message DeleteReply {}
+
+message PurgeRequest {
+  repeated string names = 1; // empty means purge everything pending
+}
+
+message PurgeReply {}
+
+message LogsRequest {
+  string name = 1;
+  bool follow = 2;      // keep streaming as new output arrives, like `tail -f`
+  int32 tail_lines = 3; // 0 means "from the beginning"
+}
+
+// For a VM this is boot/console output (what cloud-init prints while it
+// runs), not application logs from inside the guest — see the plan's "VM
+// vs container" CLI notes. Once M3 lands, a container's Logs instead
+// streams its actual stdout/stderr.
+message LogChunk {
+  bytes data = 1;
+}
+
+// CloudInitService manages the saved cloud-init user-data library (M2).
+// A VM's LaunchRequest can reference a saved config by name
+// (VMSpec.cloud_init_name) instead of shipping the content inline.
+service CloudInitService {
+  rpc List(CloudInitListRequest) returns (CloudInitListReply);
+  rpc Get(CloudInitGetRequest) returns (CloudInitGetReply);
+  rpc Save(CloudInitSaveRequest) returns (CloudInitSaveReply); // creates or updates
+  rpc Rename(CloudInitRenameRequest) returns (CloudInitRenameReply);
+  rpc Delete(CloudInitDeleteRequest) returns (CloudInitDeleteReply);
+}
+
+message CloudInitConfigInfo {
+  string name = 1;
+  int64 modified_at_unix = 2;
+}
+
+message CloudInitListRequest {}
+
+message CloudInitListReply {
+  repeated CloudInitConfigInfo configs = 1;
+}
+
+message CloudInitGetRequest {
+  string name = 1;
+}
+
+message CloudInitGetReply {
+  string name = 1;
+  string content = 2;
+  int64 modified_at_unix = 3;
+}
+
+message CloudInitSaveRequest {
+  string name = 1;
+  string content = 2;
+}
+
+message CloudInitSaveReply {}
+
+message CloudInitRenameRequest {
+  string old_name = 1;
+  string new_name = 2;
+}
+
+message CloudInitRenameReply {}
+
+message CloudInitDeleteRequest {
+  string name = 1;
+}
+
+message CloudInitDeleteReply {}
+
+// MirrorService manages runtime-added image mirrors (M2 for VM manifest
+// mirrors, M3 for container registry mirrors). The built-in catalog
+// (data/distros/distribution-info.json) always applies; mirrors add to or
+// override it by priority.
+service MirrorService {
+  rpc Add(MirrorAddRequest) returns (MirrorAddReply);
+  rpc List(MirrorListRequest) returns (MirrorListReply);
+  rpc Remove(MirrorRemoveRequest) returns (MirrorRemoveReply);
+  rpc SetEnabled(MirrorSetEnabledRequest) returns (MirrorSetEnabledReply);
+}
+
+enum MirrorKind {
+  MIRROR_KIND_UNSPECIFIED = 0;
+  MIRROR_KIND_VM = 1;
+  MIRROR_KIND_CONTAINER = 2;
+}
+
+message Mirror {
+  string name = 1;
+  MirrorKind kind = 2;
+  string manifest_url = 3; // VM mirrors: a distribution-info.json-shaped manifest
+  string registry = 4;     // container mirrors: host[:port]
+  string mirror_of = 5;    // container mirrors: upstream registry this mirrors, optional
+  bool insecure = 6;       // container mirrors: skip TLS verification
+  int32 priority = 7;      // higher wins on a name/version/arch collision
+  bool enabled = 8;
+}
+
+message MirrorAddRequest {
+  Mirror mirror = 1;
+}
+
+message MirrorAddReply {}
+
+message MirrorListRequest {
+  MirrorKind kind_filter = 1; // MIRROR_KIND_UNSPECIFIED means "all"
+}
+
+message MirrorListReply {
+  repeated Mirror mirrors = 1;
+}
+
+message MirrorRemoveRequest {
+  string name = 1;
+}
+
+message MirrorRemoveReply {}
+
+message MirrorSetEnabledRequest {
+  string name = 1;
+  bool enabled = 2;
+}
+
+message MirrorSetEnabledReply {}
+
+// ImageService manages the on-disk cache of downloaded VM base images
+// (internal/vm/image.Vault's "prepared" tier) — this is about the shared
+// base images instances are cloned from, not a per-instance disk. There's
+// no container-image equivalent here: once M3 lands, container images are
+// Docker's/Podman's own cache to manage, anvil doesn't duplicate that.
+service ImageService {
+  rpc List(ImageListRequest) returns (ImageListReply);
+  rpc Delete(ImageDeleteRequest) returns (ImageDeleteReply);
+}
+
+message CachedImage {
+  string id = 1;
+  string arch = 2;
+  string path = 3;
+  int64 size_bytes = 4;
+  int32 ref_count = 5; // number of current instances whose disk is backed by this image
+}
+
+message ImageListRequest {}
+
+message ImageListReply {
+  repeated CachedImage images = 1;
+}
+
+message ImageDeleteRequest {
+  string id = 1;
+  string arch = 2;   // optional; only needed if id is ambiguous across architectures
+  bool force = 3;    // delete even if ref_count > 0 — will break those instances' disks
+}
+
+message ImageDeleteReply {}
+
+message MountRequest {
+  string name = 1;
+  string host_path = 2;
+  string guest_path = 3;
+  bool read_only = 4;
+}
+
+message MountReply {}
+
+message UmountRequest {
+  string name = 1;
+  string guest_path = 2;
+}
+
+message UmountReply {}

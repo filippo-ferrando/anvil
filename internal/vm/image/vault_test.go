@@ -1,0 +1,209 @@
+package image
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+)
+
+func TestOverlayForUsesExistingPreparedImage(t *testing.T) {
+	if _, err := exec.LookPath("qemu-img"); err != nil {
+		t.Skip("qemu-img not installed, skipping")
+	}
+
+	dir := t.TempDir()
+	v := NewVault(filepath.Join(dir, "prepared"))
+
+	entry := DistroEntry{
+		ID:         "fake-distro",
+		Arch:       "x86_64",
+		URL:        "https://example.invalid/should-not-be-fetched.qcow2",
+		MinDiskGiB: 1,
+	}
+
+	// Pre-place a "prepared" base image at the exact path Ensure/Fetch
+	// would otherwise try to download to, so this test exercises the
+	// overlay-creation mechanics without requiring network access.
+	if err := os.MkdirAll(filepath.Dir(v.preparedPath(entry)), 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	createBase := exec.Command("qemu-img", "create", "-f", "qcow2", v.preparedPath(entry), "64M")
+	if out, err := createBase.CombinedOutput(); err != nil {
+		t.Fatalf("creating fake base image: %v: %s", err, out)
+	}
+
+	overlayPath := filepath.Join(dir, "instance", "disk.qcow2")
+	if err := v.OverlayFor(entry, overlayPath, 1); err != nil {
+		t.Fatalf("OverlayFor: %v", err)
+	}
+
+	info, err := os.Stat(overlayPath)
+	if err != nil {
+		t.Fatalf("expected overlay to exist: %v", err)
+	}
+	if info.Size() == 0 {
+		t.Error("expected non-empty overlay file")
+	}
+}
+
+func TestOverlayForRejectsShrinkingBelowBaseImageSize(t *testing.T) {
+	if _, err := exec.LookPath("qemu-img"); err != nil {
+		t.Skip("qemu-img not installed, skipping")
+	}
+
+	dir := t.TempDir()
+	v := NewVault(filepath.Join(dir, "prepared"))
+	entry := DistroEntry{ID: "fake", Arch: "x86_64", URL: "https://example.invalid/x.qcow2"}
+
+	if err := os.MkdirAll(filepath.Dir(v.preparedPath(entry)), 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Base bigger than the disk size we're about to request.
+	createBase := exec.Command("qemu-img", "create", "-f", "qcow2", v.preparedPath(entry), "2G")
+	if out, err := createBase.CombinedOutput(); err != nil {
+		t.Fatalf("creating fake base image: %v: %s", err, out)
+	}
+
+	err := v.OverlayFor(entry, filepath.Join(dir, "instance", "disk.qcow2"), 1)
+	if err == nil {
+		t.Error("expected an error when the requested disk is smaller than the base image's own virtual size")
+	}
+}
+
+// TestOverlayForDefaultSizeInheritsBaseImageSize is a regression test for a
+// real bug: a launch with no --disk flag defaulted to the catalog's
+// MinDiskGiB (3 for ubuntu-24.04), but the actual downloaded base image
+// was already bigger than that, so "resizing" to 3GiB was really an
+// (unsupported) shrink and qemu-img refused it outright. diskGiB=0 must
+// mean "inherit whatever the base image already is", full stop, not "use
+// a catalog value that can go stale the moment a distro's cloud image
+// grows release over release".
+func TestOverlayForDefaultSizeInheritsBaseImageSize(t *testing.T) {
+	if _, err := exec.LookPath("qemu-img"); err != nil {
+		t.Skip("qemu-img not installed, skipping")
+	}
+
+	dir := t.TempDir()
+	v := NewVault(filepath.Join(dir, "prepared"))
+	entry := DistroEntry{ID: "fake", Arch: "x86_64", URL: "https://example.invalid/x.qcow2", MinDiskGiB: 3}
+
+	if err := os.MkdirAll(filepath.Dir(v.preparedPath(entry)), 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Bigger than entry.MinDiskGiB on purpose, matching the real scenario.
+	createBase := exec.Command("qemu-img", "create", "-f", "qcow2", v.preparedPath(entry), "5G")
+	if out, err := createBase.CombinedOutput(); err != nil {
+		t.Fatalf("creating fake base image: %v: %s", err, out)
+	}
+
+	overlayPath := filepath.Join(dir, "instance", "disk.qcow2")
+	if err := v.OverlayFor(entry, overlayPath, 0); err != nil {
+		t.Fatalf("OverlayFor with default (0) disk size: %v", err)
+	}
+
+	size, err := qemuImgVirtualSize(overlayPath)
+	if err != nil {
+		t.Fatalf("qemuImgVirtualSize: %v", err)
+	}
+	if want := int64(5) * bytesPerGiB; size != want {
+		t.Errorf("expected the overlay to inherit the base image's 5GiB virtual size, got %d bytes (want %d)", size, want)
+	}
+}
+
+func TestVaultList(t *testing.T) {
+	if _, err := exec.LookPath("qemu-img"); err != nil {
+		t.Skip("qemu-img not installed, skipping")
+	}
+
+	dir := t.TempDir()
+	v := NewVault(dir)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	entry := DistroEntry{ID: "ubuntu-24.04", Arch: "x86_64", URL: "https://example.invalid/x.qcow2"}
+	create := exec.Command("qemu-img", "create", "-f", "qcow2", v.preparedPath(entry), "16M")
+	if out, err := create.CombinedOutput(); err != nil {
+		t.Fatalf("creating fake base image: %v: %s", err, out)
+	}
+	// A stray non-qcow2 file in the same dir shouldn't show up in List.
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("hi"), 0o640); err != nil {
+		t.Fatalf("writing stray file: %v", err)
+	}
+
+	images, err := v.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(images) != 1 {
+		t.Fatalf("expected exactly one cached image, got %d: %+v", len(images), images)
+	}
+	if images[0].ID != "ubuntu-24.04" || images[0].Arch != "x86_64" {
+		t.Errorf("expected id=ubuntu-24.04 arch=x86_64, got id=%s arch=%s", images[0].ID, images[0].Arch)
+	}
+	if images[0].SizeBytes == 0 {
+		t.Error("expected a non-zero size")
+	}
+}
+
+func TestVaultDelete(t *testing.T) {
+	if _, err := exec.LookPath("qemu-img"); err != nil {
+		t.Skip("qemu-img not installed, skipping")
+	}
+
+	dir := t.TempDir()
+	v := NewVault(dir)
+	entry := DistroEntry{ID: "fake", Arch: "x86_64", URL: "https://example.invalid/x.qcow2"}
+	path := v.preparedPath(entry)
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	create := exec.Command("qemu-img", "create", "-f", "qcow2", path, "16M")
+	if out, err := create.CombinedOutput(); err != nil {
+		t.Fatalf("creating fake base image: %v: %s", err, out)
+	}
+
+	if err := v.Delete(path); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("expected the file to be gone, stat err: %v", err)
+	}
+
+	// Deleting an already-gone file is not an error.
+	if err := v.Delete(path); err != nil {
+		t.Errorf("Delete on an already-removed file should be a no-op, got: %v", err)
+	}
+}
+
+func TestBackingFile(t *testing.T) {
+	if _, err := exec.LookPath("qemu-img"); err != nil {
+		t.Skip("qemu-img not installed, skipping")
+	}
+
+	dir := t.TempDir()
+	v := NewVault(filepath.Join(dir, "prepared"))
+	entry := DistroEntry{ID: "fake", Arch: "x86_64", URL: "https://example.invalid/x.qcow2"}
+
+	if err := os.MkdirAll(filepath.Dir(v.preparedPath(entry)), 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	createBase := exec.Command("qemu-img", "create", "-f", "qcow2", v.preparedPath(entry), "16M")
+	if out, err := createBase.CombinedOutput(); err != nil {
+		t.Fatalf("creating fake base image: %v: %s", err, out)
+	}
+
+	overlayPath := filepath.Join(dir, "instance", "disk.qcow2")
+	if err := v.OverlayFor(entry, overlayPath, 0); err != nil {
+		t.Fatalf("OverlayFor: %v", err)
+	}
+
+	backing, err := BackingFile(overlayPath)
+	if err != nil {
+		t.Fatalf("BackingFile: %v", err)
+	}
+	if backing != v.preparedPath(entry) {
+		t.Errorf("expected backing file %q, got %q", v.preparedPath(entry), backing)
+	}
+}
