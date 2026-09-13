@@ -269,29 +269,40 @@ easier:**
   now-stale addresses baked into its own `/etc/hosts`, not actively fixed
 
 **Working (M8, TUI), written with no way to run a terminal UI in this sandbox at
-all: no real TTY, and no network access to fetch its two dependencies:**
-- `anvil tui`: a `tview`-based terminal UI, `internal/tui`, built on the exact same
-  `pkg/client` the CLI uses, no daemon-side logic added. Nav list (Instances, Cloud
-  Init, Mirrors, Migration) plus a status line (local OS user, socket, a cheap
-  connected/unreachable check)
-- instances table (name/kind/state/image, start/stop/delete/info/shell/refresh
-  bindings), a launch form (env/volumes/ports are one comma-separated field each, a
-  deliberate v1 simplification, not a dynamic row list), a cloud-init list+editor
-  view, a mirrors table, and a migration view (known hosts plus a form plus a
-  streaming progress log), all backed by the same RPCs the CLI already calls
-- shell/SSH handoff: pressing `s` on an instance suspends the TUI
-  (`tview.Application.Suspend`), runs a real `ssh` subprocess with the terminal
-  handed over, and resumes automatically when it exits
+all: no real TTY, and no network access to fetch its dependencies:**
+- `anvil tui`, `internal/tui`, built on the exact same `pkg/client` the CLI uses, no
+  daemon-side logic added. **Rewritten on Bubble Tea after a real run of the first
+  pass (`rivo/tview`) came back with broken-looking text boxes and confusing
+  navigation.** tview's imperative widget-tree model puts all the correctness on
+  you wiring it up right; Bubble Tea's Elm architecture (one `Model`, one
+  `Update`/`View` entry point) is a much smaller surface to get wrong, and it's
+  what most terminal UIs people call "modern" today are actually built on
+- a hand-rolled main menu (Instances, Cloud-Init, Mirrors, Migration), an instances
+  list (start/stop/delete/shell/refresh bindings), a launch form, a cloud-init
+  list+editor split, a mirrors list, and a migration view (known hosts plus a form
+  plus a streaming progress log), all backed by the same RPCs the CLI already
+  calls. A shared `simpleForm` component (Tab between fields, Enter/Ctrl+S to
+  submit) backs every form instead of five ad hoc ones
+- shell/SSH handoff via `tea.ExecProcess`, Bubble Tea's own supported way to
+  suspend the program, hand the real terminal to an `ssh` subprocess, and resume
+  automatically when it exits
+- two real bugs caught while writing this, before either shipped: the shared
+  form's Enter key originally submitted the whole form on *any* toggle field, not
+  just the last one, which would have badly misfired the migration form's
+  Copy/Best-effort/Dry-run toggles; and `bubbles/list`'s default filtering (`/`)
+  would have silently eaten every screen's single-letter shortcuts as filter text,
+  since each screen checks its own shortcuts before forwarding to the list, so
+  filtering is simply disabled on these small lists instead
 - pulled anvil's own default guest-access SSH key management out of
   `internal/cli/commands` into a new small package, `internal/sshkey`, so the launch
   form and the CLI's own `anvil launch` share one implementation instead of two
 - **can't be verified here at all**: no real terminal to run a TUI against even if
   the dependencies were fetchable, and no network access to fetch
-  `github.com/rivo/tview`/`github.com/gdamore/tcell/v2` either, so `go.mod` doesn't
-  pin them (a guessed version tag could easily just not exist); run `make tui-deps`
-  once you have network access, then `anvil tui` for a real walkthrough. Built
-  against tview's long-stable core widget API, reviewed carefully, gofmt-clean, but
-  genuinely never run
+  `github.com/charmbracelet/bubbletea`/`bubbles`/`lipgloss` either, so `go.mod`
+  doesn't pin them (a guessed version tag could easily just not exist); run
+  `make tui-deps` once you have network access, then `anvil tui` for a real
+  walkthrough. Built against Bubble Tea's core API, reviewed carefully,
+  gofmt-clean, but genuinely never run
 
 **Not built yet:**
 - Podman (the second container backend, deliberately deferred, see above; its own

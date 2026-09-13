@@ -1162,62 +1162,90 @@ without `sudo cat` anyway).
         this design avoids elsewhere: flagged, not fixed.
 
 ### M8: TUI
-- [x] `tview` app shell, nav list plus pages: `internal/tui` is `anvil tui`'s whole
-      implementation, one `*client.Client` connection shared by every view, exactly
-      the same RPCs the CLI already calls, no daemon-side logic added or duplicated.
-      Nav list (Instances, Cloud Init, Mirrors, Migration) switches a `tview.Pages`
-      stack; a status line shows the local OS username, the socket path, and a
-      one-shot "connected"/"daemon unreachable" check (a plain `List` RPC, cheap).
-      Overview isn't its own page, that status line is all it would show
-- [x] instances table: name/kind/state/image columns, key bindings (`l` launch,
-      `r` start/stop, `d` delete, `i` info, `s` shell, `R` refresh) mirroring the
-      CLI's own verbs one for one
-- [x] launch form: a `tview.Form` overlay (not a wizard, per the plan), fields for
-      both kinds plus each kind's own (image/CPUs/memory/disk/cloud-init-name for a
-      VM; env/volumes/ports for a container), intent name/role. **One deliberate v1
-      simplification**: env/volumes/ports are each a single comma-separated text
-      field (`K=V,K2=V2` / `host:guest[:ro],...` / `host:guest[/proto],...`, the
-      same per-item formats the CLI's own `--env`/`--volume`/`--publish` flags
-      already use), not a dynamic add/remove row list; a real per-row editor is a
-      nicer follow-up, not a blocker for a working form today
-- [x] cloud-init view: a `List` of saved configs (left) plus a `TextArea` editor
-      (right), New/Import/Rename/Delete (via a small shared `promptForm` modal
-      helper) and Ctrl+S to save, backed by the exact same `CloudInitService` CRUD
-      RPCs `anvil cloud-init *` already uses, so the CLI and the TUI always agree
-- [x] mirrors view: a table (name/kind/source/priority/enabled) with add (a form
-      covering both VM-manifest and container-registry mirrors)/enable-disable/
-      remove, backed by `MirrorService`
-- [x] migration view: a known-hosts list (add/remove/test) plus a form (name,
-      target, copy/best-effort/dry-run checkboxes) and a scrolling output panel
-      streaming `MigrateService.Migrate`'s progress, laid out as one screen with a
-      form and a running log, not literally the plan's "sequence of modals"
-      phrasing (simpler to keep legible in a table-and-form-heavy TUI, same
-      information flow as the CLI's own migrate flags either way)
-- [x] shell/SSH handoff: `s` on an instances-table row calls `tapp.Suspend(func() {
-      ... })`: the real terminal is free for the duration of a genuine `ssh`
-      subprocess (inherited stdio, same idea as `anvil shell`), then the TUI resumes
-      automatically when it exits. Deliberately a separate, small copy of the
-      connection-resolution logic `internal/cli/commands/ssh.go` already has (own
-      `internal/tui/shell.go`), not a shared one: this package only reuses
-      `pkg/client`, per the plan's TUI section, nothing from `internal/cli/commands`
-- [x] **`internal/sshkey`, pulled out of `internal/cli/commands` for this milestone**:
-      anvil's own default guest-access SSH keypair (generated once per invoking OS
-      user, injected into every VM at launch so `shell`/`exec`/`transfer` work with
-      zero flags) was only ever `internal/cli/commands`-internal before now. The
-      launch form needs it too (to inject the same default key a VM launched via
-      `anvil launch` would get), so it's now its own small package both import,
-      instead of the TUI growing a second copy of the same key-management logic to
-      drift out of sync with the CLI's, same reasoning as `internal/hostpath`'s
-      extraction earlier this session
+- [x] **rewritten on Bubble Tea after a real run of the first pass (`rivo/tview`)
+      showed broken-looking text boxes and confusing navigation.** tview's model is
+      a tree of imperative widgets you wire up and mutate by hand; get the wiring
+      slightly wrong (as the first pass evidently did, untested against a real
+      terminal) and it just looks broken, with no framework-level structure forcing
+      it back into a consistent shape. Bubble Tea's Elm architecture (one `Model`,
+      a single `Update(msg) (Model, Cmd)` entry point, a single `View() string`) is
+      a much smaller surface to get wrong, and it's what most of the terminal UIs
+      people actually call "modern" today are built on (`gh`, `soft-serve`, and
+      most of the rest of the Charm ecosystem's own showcase). Same package,
+      `internal/tui`, same `anvil tui` command, same `pkg/client`-only dependency:
+      this is a framework swap, not a scope change
+- [x] app shell: `internal/tui/app.go`'s `model` holds one screen enum
+      (menu/instances/launch/cloud-init/mirrors/migration) and one sub-model per
+      screen; `Update`/`View` just dispatch to whichever is active. A hand-rolled
+      main menu (arrow keys, enter, `q`) replaces the nav-list-plus-pages shell,
+      simpler than a widget tree for five items, and the header/status line
+      (OS username, socket, a one-shot daemon-reachability check) is common to
+      every screen regardless
+- [x] instances screen: a `bubbles/list.Model` (title/kind • state • image, one
+      instance per row) with `n` launch, `s` start/stop, `d` delete (confirm
+      overlay), `x` shell, `r` refresh, same verbs as before, same RPCs the CLI
+      already calls
+- [x] launch form: `internal/tui/form.go`'s `simpleForm`, a small shared component
+      (Tab/Shift+Tab between fields, Space to toggle a checkbox-shaped field, Enter
+      on the last field or Ctrl+S to submit, Esc to cancel) used by the launch
+      form, mirror-add, host-add, and the cloud-init new/import/rename prompts,
+      one implementation instead of five ad hoc ones. **Same deliberate v1
+      simplification as before**: env/volumes/ports are each one comma-separated
+      text field, not a dynamic add/remove row list
+- [x] cloud-init screen: a `bubbles/list.Model` (configs) beside a
+      `bubbles/textarea.Model` (editor), `n`/`m`/`r`/`d` for new/import/rename/
+      delete (via `simpleForm` prompts), `e` to focus the editor, Ctrl+S to save,
+      same `CloudInitService` CRUD RPCs
+- [x] mirrors screen: a `bubbles/list.Model` of mirrors, `a` add (a `simpleForm`
+      covering both VM-manifest and container-registry shapes, Ctrl+K swaps
+      which), `e` enable/disable, `x` remove
+- [x] migration screen: a known-hosts `bubbles/list.Model` beside a `simpleForm`
+      (name, target, Copy/Best-effort/Dry-run toggles), Tab switches focus between
+      them, submitting streams `MigrateService.Migrate`'s progress as plain lines
+      below
+- [x] shell/SSH handoff: `tea.ExecProcess`, Bubble Tea's own supported mechanism
+      for exactly this (suspend the program, hand the real terminal to an external
+      `*exec.Cmd`, resume automatically when it exits and report the result back
+      as a message), simpler than tview's manual `Suspend`/resume pairing since
+      the framework itself owns restoring the terminal afterward
+- [x] every streaming RPC (`Launch`, `Migrate`) is consumed via the standard Bubble
+      Tea pattern for a server-streaming call: a `tea.Cmd` receives one message off
+      the stream and returns it; the message's own handler in `Update` re-issues
+      "receive the next one" as its returned `tea.Cmd`, chaining through to the
+      terminal event without ever blocking the UI loop
+- [x] **a real bug caught while writing this, before it ever shipped**: the shared
+      `simpleForm`'s Enter handling originally submitted the whole form immediately
+      on *any* toggle field, not just the last one; harmless for the launch form
+      (its toggles don't exist), but would have badly misfired the migration form,
+      where Copy/Best-effort/Dry-run sit in the middle before Migrate. Fixed: Enter
+      only submits on the actual last field, regardless of its kind; a toggle
+      field just advances like any other
+- [x] **a real UX bug caught while writing this**: `bubbles/list.Model` has
+      filtering (`/`) enabled by default, which consumes every typed character
+      (including the single-letter shortcuts above) as filter text, but each
+      screen's own key handling intercepts `n`/`s`/`d`/etc. *before* forwarding
+      anything to the list, so filtering would have silently never worked, eating
+      keystrokes meant for the list instead. Fixed by disabling filtering on these
+      (small, rarely-huge) lists entirely, rather than threading a filter-state
+      check through every screen's key handling
+- [x] **`internal/sshkey`, pulled out of `internal/cli/commands` for this
+      milestone**: anvil's own default guest-access SSH keypair (generated once
+      per invoking OS user, injected into every VM at launch so `shell`/`exec`/
+      `transfer` work with zero flags) was only ever `internal/cli/commands`-
+      internal before now. The launch form needs it too, so it's now its own small
+      package both import, instead of the TUI growing a second copy to drift out
+      of sync with the CLI's, same reasoning as `internal/hostpath`'s extraction
+      earlier this session
 - [ ] **not build tested, and can't be in this sandbox**: no real TTY here, and no
-      network access to fetch `github.com/rivo/tview`/`github.com/gdamore/tcell/v2`
-      at all (see the Makefile's new `tui-deps` target, `go get ...@latest` since
-      this sandbox also can't verify a specific version tag actually exists to pin
-      one in `go.mod` honestly). Written against tview's long-stable core widget API
-      (`Application`/`Pages`/`List`/`Table`/`Form`/`Flex`/`TextView`/`TextArea`),
-      reviewed carefully, gofmt-clean, but genuinely unexercised; a real `anvil tui`
-      walkthrough is squarely what needs to happen on your own machine, exactly like
-      the plan's own verification note for this milestone always said it would
+      network access to fetch `github.com/charmbracelet/bubbletea`/`bubbles`/
+      `lipgloss` at all (see the Makefile's `tui-deps` target, `go get ...@latest`
+      since this sandbox also can't verify a specific version tag actually exists
+      to pin one in `go.mod` honestly). Written against Bubble Tea's core API
+      (`Model`/`Update`/`View`, `bubbles`' list/textinput/textarea,
+      `tea.ExecProcess`), reviewed carefully, gofmt-clean, but genuinely
+      unexercised; a real `anvil tui` walkthrough is squarely what needs to happen
+      on your own machine, exactly like the plan's own verification note for this
+      milestone always said it would
 
 ## Things we already know are unresolved
 

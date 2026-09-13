@@ -1,257 +1,269 @@
 package tui
 
 import (
-	"context"
-	"fmt"
 	"os"
 
-	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
-
-	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
+	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textarea"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
-// cloudInitView is the M8 checklist's cloud-init view: a list of saved
-// configs (left) and a text editor (right), matching the plan's
-// description of the pattern worth keeping from Hyperpass (not its
-// code) — New/Import/Rename/Delete/Save, backed by the same
-// CloudInitService CRUD RPCs `anvil cloud-init *` already uses, so the
-// CLI and the TUI always agree on the same library.
-type cloudInitView struct {
-	app    *App
-	root   *tview.Flex
-	list   *tview.List
-	editor *tview.TextArea
-	hint   *tview.TextView
+type cloudInitItem struct{ name string }
 
-	names   []string
-	current string
-	dirty   bool
+func (i cloudInitItem) FilterValue() string { return i.name }
+func (i cloudInitItem) Title() string       { return i.name }
+func (i cloudInitItem) Description() string { return "" }
+
+// cloudInitPrompt identifies which small overlay form (if any) is
+// currently up over the list+editor split — new/import/rename each
+// reuse the same simpleForm, just with different fields and a different
+// completion action.
+type cloudInitPrompt int
+
+const (
+	cloudInitPromptNone cloudInitPrompt = iota
+	cloudInitPromptNew
+	cloudInitPromptImport
+	cloudInitPromptRename
+	cloudInitPromptDelete
+)
+
+type cloudInitModel struct {
+	list     list.Model
+	editor   textarea.Model
+	current  string
+	dirty    bool
+	editing  bool // focus is in the editor, not the list
+	prompt   cloudInitPrompt
+	promptFm simpleForm
 }
 
-func newCloudInitView(a *App) *cloudInitView {
-	v := &cloudInitView{app: a}
+func newCloudInitModel() cloudInitModel {
+	l := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	l.SetFilteringEnabled(false) // small lists; also avoids single-letter shortcuts (n/s/d/...) colliding with filter typing
+	l.Title = "Configs"
+	l.SetShowHelp(false)
+	ta := textarea.New()
+	ta.Placeholder = "select or create a config to edit its cloud-init YAML…"
+	return cloudInitModel{list: l, editor: ta}
+}
 
-	v.list = tview.NewList().ShowSecondaryText(false)
-	v.list.SetBorder(true).SetTitle(" Configs — n:new  m:import  r:rename  d:delete ")
-	v.list.SetSelectedFunc(func(i int, name, _ string, _ rune) { v.load(name) })
-	v.list.SetInputCapture(v.handleListKey)
+func (m *cloudInitModel) setSize(width, height int) {
+	listWidth := width / 3
+	if listWidth < 20 {
+		listWidth = 20
+	}
+	m.list.SetSize(listWidth, height)
+	m.editor.SetWidth(width - listWidth - 4)
+	m.editor.SetHeight(height - 2)
+}
 
-	v.editor = tview.NewTextArea()
-	v.editor.SetBorder(true).SetTitle(" Editor — Ctrl+S: save ")
-	v.editor.SetChangedFunc(func() { v.dirty = true; v.updateEditorTitle() })
-	v.editor.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyCtrlS {
-			v.save()
-			return nil
+func (m model) updateCloudInit(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case cloudInitListLoadedMsg:
+		if msg.err != nil {
+			m.setStatus("listing cloud-init configs: "+msg.err.Error(), true)
+			return m, nil
 		}
-		return event
-	})
+		items := make([]list.Item, len(msg.configs))
+		for i, c := range msg.configs {
+			items[i] = cloudInitItem{name: c.GetName()}
+		}
+		m.cloudInit.list.SetItems(items)
+		return m, nil
 
-	v.hint = tview.NewTextView().SetDynamicColors(true)
+	case cloudInitContentLoadedMsg:
+		if msg.err != nil {
+			m.setStatus("loading "+msg.name+": "+msg.err.Error(), true)
+			return m, nil
+		}
+		m.cloudInit.current = msg.name
+		m.cloudInit.dirty = false
+		m.cloudInit.editor.SetValue(msg.content)
+		return m, nil
 
-	v.root = tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(
-			tview.NewFlex().
-				AddItem(v.list, 28, 0, true).
-				AddItem(v.editor, 0, 1, false),
-			0, 1, true,
-		).
-		AddItem(v.hint, 1, 0, false)
+	case cloudInitSavedMsg:
+		if msg.err != nil {
+			m.setStatus("saving "+msg.name+": "+msg.err.Error(), true)
+			return m, nil
+		}
+		m.cloudInit.current = msg.name
+		m.cloudInit.dirty = false
+		m.setStatus("saved "+msg.name, false)
+		return m, loadCloudInitList(m.client)
 
-	v.refresh()
-	return v
+	case actionDoneMsg:
+		if msg.err != nil {
+			m.setStatus(msg.verb+": "+msg.err.Error(), true)
+			return m, nil
+		}
+		m.cloudInit.current = ""
+		m.cloudInit.editor.SetValue("")
+		m.setStatus("config "+msg.verb, false)
+		return m, loadCloudInitList(m.client)
+
+	case tea.KeyMsg:
+		return m.updateCloudInitKey(msg)
+	}
+	return m, nil
 }
 
-func (v *cloudInitView) refresh() {
-	go func() {
-		reply, err := v.app.client.CloudInit.List(context.Background(), &anvilv1.CloudInitListRequest{})
-		v.app.tapp.QueueUpdateDraw(func() {
-			if err != nil {
-				v.app.showError("Listing cloud-init configs", err.Error())
-				return
+func (m model) updateCloudInitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	ci := &m.cloudInit
+
+	if ci.prompt != cloudInitPromptNone {
+		return m.updateCloudInitPrompt(msg)
+	}
+
+	if ci.editing {
+		switch msg.String() {
+		case "esc":
+			ci.editing = false
+			return m, nil
+		case "ctrl+s":
+			if ci.current == "" {
+				m.setStatus("select or create a config first", true)
+				return m, nil
 			}
-			v.render(reply.GetConfigs())
+			return m, saveCloudInit(m.client, ci.current, ci.editor.Value())
+		}
+		var cmd tea.Cmd
+		ci.editor, cmd = ci.editor.Update(msg)
+		ci.dirty = true
+		return m, cmd
+	}
+
+	switch msg.String() {
+	case "esc", "q":
+		m.screen = screenMenu
+		return m, nil
+	case "n":
+		ci.prompt = cloudInitPromptNew
+		ci.promptFm = newSimpleForm("New config", []formField{textField("Name", "", "")})
+		return m, nil
+	case "m":
+		ci.prompt = cloudInitPromptImport
+		ci.promptFm = newSimpleForm("Import config", []formField{
+			textField("Name", "", ""),
+			textField("Local file path", "", ""),
 		})
-	}()
-}
-
-func (v *cloudInitView) render(configs []*anvilv1.CloudInitConfigInfo) {
-	v.list.Clear()
-	v.names = v.names[:0]
-	for _, c := range configs {
-		v.names = append(v.names, c.GetName())
-		v.list.AddItem(c.GetName(), "", 0, nil)
+		return m, nil
+	case "r":
+		if ci.current == "" {
+			return m, nil
+		}
+		ci.prompt = cloudInitPromptRename
+		ci.promptFm = newSimpleForm("Rename "+ci.current, []formField{textField("New name", "", "")})
+		return m, nil
+	case "d":
+		if ci.current == "" {
+			return m, nil
+		}
+		ci.prompt = cloudInitPromptDelete
+		return m, nil
+	case "enter", "tab":
+		if item, ok := ci.list.SelectedItem().(cloudInitItem); ok {
+			return m, loadCloudInitContent(m.client, item.name)
+		}
+		return m, nil
+	case "e":
+		if ci.current != "" {
+			ci.editing = true
+		}
+		return m, nil
 	}
-	if len(configs) == 0 {
-		v.hint.SetText("[grey]no saved cloud-init configs yet — press n to create one[-]")
+
+	var cmd tea.Cmd
+	ci.list, cmd = ci.list.Update(msg)
+	return m, cmd
+}
+
+func (m model) updateCloudInitPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	ci := &m.cloudInit
+
+	if ci.prompt == cloudInitPromptDelete {
+		switch msg.String() {
+		case "y", "enter":
+			name := ci.current
+			ci.prompt = cloudInitPromptNone
+			return m, deleteCloudInit(m.client, name)
+		default:
+			ci.prompt = cloudInitPromptNone
+			return m, nil
+		}
 	}
-}
 
-func (v *cloudInitView) load(name string) {
-	go func() {
-		reply, err := v.app.client.CloudInit.Get(context.Background(), &anvilv1.CloudInitGetRequest{Name: name})
-		v.app.tapp.QueueUpdateDraw(func() {
-			if err != nil {
-				v.app.showError("Loading "+name, err.Error())
-				return
-			}
-			v.current = name
-			v.dirty = false
-			v.editor.SetText(reply.GetContent(), false)
-			v.updateEditorTitle()
-		})
-	}()
-}
-
-func (v *cloudInitView) updateEditorTitle() {
-	title := " Editor — Ctrl+S: save "
-	if v.current != "" {
-		title = fmt.Sprintf(" Editor: %s%s — Ctrl+S: save ", v.current, dirtyMark(v.dirty))
+	var submitted, cancelled bool
+	ci.promptFm, submitted, cancelled = ci.promptFm.update(msg)
+	if cancelled {
+		ci.prompt = cloudInitPromptNone
+		return m, nil
 	}
-	v.editor.SetTitle(title)
-}
-
-func dirtyMark(dirty bool) string {
-	if dirty {
-		return " *"
+	if !submitted {
+		return m, nil
 	}
-	return ""
-}
 
-func (v *cloudInitView) save() {
-	if v.current == "" {
-		v.hint.SetText("[yellow]select or create a config first[-]")
-		return
-	}
-	name, content := v.current, v.editor.GetText()
-	go func() {
-		_, err := v.app.client.CloudInit.Save(context.Background(), &anvilv1.CloudInitSaveRequest{Name: name, Content: content})
-		v.app.tapp.QueueUpdateDraw(func() {
-			if err != nil {
-				v.app.showError("Saving "+name, err.Error())
-				return
-			}
-			v.dirty = false
-			v.updateEditorTitle()
-			v.hint.SetText("[green]saved[-]")
-		})
-	}()
-}
-
-func (v *cloudInitView) handleListKey(event *tcell.EventKey) *tcell.EventKey {
-	switch event.Rune() {
-	case 'n':
-		v.promptNew()
-		return nil
-	case 'm':
-		v.promptImport()
-		return nil
-	case 'r':
-		v.promptRename()
-		return nil
-	case 'd':
-		v.promptDelete()
-		return nil
-	}
-	return event
-}
-
-func (v *cloudInitView) promptNew() {
-	promptForm(v.app, "New cloud-init config", []promptField{{Label: "Name"}}, func(values map[string]string) {
-		name := values["Name"]
+	switch ci.prompt {
+	case cloudInitPromptNew:
+		name := ci.promptFm.Value("Name")
+		ci.prompt = cloudInitPromptNone
 		if name == "" {
-			return
+			return m, nil
 		}
-		go func() {
-			_, err := v.app.client.CloudInit.Save(context.Background(), &anvilv1.CloudInitSaveRequest{Name: name, Content: "#cloud-config\n"})
-			v.app.tapp.QueueUpdateDraw(func() {
-				if err != nil {
-					v.app.showError("Creating "+name, err.Error())
-					return
-				}
-				v.refresh()
-				v.load(name)
-			})
-		}()
-	})
-}
+		return m, saveCloudInit(m.client, name, "#cloud-config\n")
 
-func (v *cloudInitView) promptImport() {
-	promptForm(v.app, "Import cloud-init config", []promptField{{Label: "Name"}, {Label: "Local file path"}}, func(values map[string]string) {
-		name, path := values["Name"], values["Local file path"]
+	case cloudInitPromptImport:
+		name, path := ci.promptFm.Value("Name"), ci.promptFm.Value("Local file path")
+		ci.prompt = cloudInitPromptNone
 		if name == "" || path == "" {
-			return
+			return m, nil
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			v.app.showError("Reading "+path, err.Error())
-			return
+			m.setStatus("reading "+path+": "+err.Error(), true)
+			return m, nil
 		}
-		go func() {
-			_, err := v.app.client.CloudInit.Save(context.Background(), &anvilv1.CloudInitSaveRequest{Name: name, Content: string(data)})
-			v.app.tapp.QueueUpdateDraw(func() {
-				if err != nil {
-					v.app.showError("Importing "+name, err.Error())
-					return
-				}
-				v.refresh()
-				v.load(name)
-			})
-		}()
-	})
-}
+		return m, saveCloudInit(m.client, name, string(data))
 
-func (v *cloudInitView) promptRename() {
-	if v.current == "" {
-		return
-	}
-	old := v.current
-	promptForm(v.app, "Rename "+old, []promptField{{Label: "New name"}}, func(values map[string]string) {
-		newName := values["New name"]
+	case cloudInitPromptRename:
+		newName := ci.promptFm.Value("New name")
+		oldName := ci.current
+		ci.prompt = cloudInitPromptNone
 		if newName == "" {
-			return
+			return m, nil
 		}
-		go func() {
-			_, err := v.app.client.CloudInit.Rename(context.Background(), &anvilv1.CloudInitRenameRequest{OldName: old, NewName: newName})
-			v.app.tapp.QueueUpdateDraw(func() {
-				if err != nil {
-					v.app.showError("Renaming "+old, err.Error())
-					return
-				}
-				v.current = newName
-				v.refresh()
-			})
-		}()
-	})
+		return m, renameCloudInit(m.client, oldName, newName)
+	}
+	return m, nil
 }
 
-func (v *cloudInitView) promptDelete() {
-	if v.current == "" {
-		return
+func (m cloudInitModel) View() string {
+	if m.prompt == cloudInitPromptDelete {
+		return styleWarn.Render("Delete cloud-init config "+m.current+"?") + "\n\n" +
+			helpBar("y", "confirm", "any other key", "cancel")
 	}
-	name := v.current
-	modal := tview.NewModal().
-		SetText(fmt.Sprintf("Delete cloud-init config %q?", name)).
-		AddButtons([]string{"Cancel", "Delete"}).
-		SetDoneFunc(func(_ int, label string) {
-			v.app.pages.RemovePage("confirm-ci-delete")
-			if label != "Delete" {
-				return
-			}
-			go func() {
-				_, err := v.app.client.CloudInit.Delete(context.Background(), &anvilv1.CloudInitDeleteRequest{Name: name})
-				v.app.tapp.QueueUpdateDraw(func() {
-					if err != nil {
-						v.app.showError("Deleting "+name, err.Error())
-						return
-					}
-					v.current = ""
-					v.editor.SetText("", false)
-					v.updateEditorTitle()
-					v.refresh()
-				})
-			}()
-		})
-	v.app.pages.AddPage("confirm-ci-delete", modal, true, true)
+	if m.prompt != cloudInitPromptNone {
+		return m.promptFm.View()
+	}
+
+	editorTitle := "Editor"
+	if m.current != "" {
+		editorTitle = "Editor: " + m.current
+		if m.dirty {
+			editorTitle += " *"
+		}
+	}
+	editorBox := styleBox
+	listBox := styleBox
+	if m.editing {
+		editorBox = styleBoxFocused
+	} else {
+		listBox = styleBoxFocused
+	}
+
+	left := listBox.Render(m.list.View())
+	right := editorBox.Render(styleFieldLabel.Render(editorTitle) + "\n" + m.editor.View())
+
+	help := helpBar("n", "new", "m", "import", "r", "rename", "d", "delete", "e", "edit", "ctrl+s", "save", "esc", "back")
+	return left + "  " + right + "\n" + help
 }

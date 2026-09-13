@@ -16,16 +16,21 @@ proto:
 		--proto_path=api/proto \
 		api/proto/anvil/v1/anvil.proto
 
-# Fetches internal/tui's two dependencies (M8: rivo/tview, its own
-# gdamore/tcell/v2 backend). Deliberately not pinned in go.mod already —
-# this sandbox has no network access to resolve or verify real version
-# tags exist, so guessing exact numbers risked committing a go.mod that
-# just doesn't resolve. Run this once, on a machine with network access,
-# before `go build ./cmd/anvil/...` will succeed (it now imports
-# internal/tui).
+# Fetches internal/tui's dependencies: charmbracelet/bubbletea (the Elm-
+# architecture runtime), charmbracelet/bubbles (list/textinput/textarea
+# widgets), charmbracelet/lipgloss (styling). Originally rivo/tview, swapped
+# out after a real run showed tview's manual widget wiring producing broken
+# text boxes and confusing navigation. Deliberately not pinned in go.mod
+# already — this sandbox has no network access to resolve or verify real
+# version tags exist, so guessing exact numbers risked committing a go.mod
+# that just doesn't resolve. Run this once, on a machine with network
+# access, before `go build ./cmd/anvil/...` will succeed (it now imports
+# internal/tui). `go mod tidy` also drops the now-unused tview/tcell
+# entries left over from the earlier attempt.
 tui-deps:
-	go get github.com/rivo/tview@latest
-	go get github.com/gdamore/tcell/v2@latest
+	go get github.com/charmbracelet/bubbletea@latest
+	go get github.com/charmbracelet/bubbles@latest
+	go get github.com/charmbracelet/lipgloss@latest
 	go mod tidy
 
 build:

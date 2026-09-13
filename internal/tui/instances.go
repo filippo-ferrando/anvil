@@ -1,189 +1,146 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 
-	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
+	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
 
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 )
 
-// instancesView is the M8 checklist's "instances table": every instance
-// (VM or container), sortable-by-eye columns, bindings for the same
-// lifecycle actions the CLI already exposes — no logic of its own beyond
-// translating a keypress into the same RPC `anvil start`/`stop`/`delete`/
-// `info` already call.
-type instancesView struct {
-	app       *App
-	root      *tview.Flex
-	table     *tview.Table
-	instances []*anvilv1.Instance // index-aligned with table rows, offset by the header row
-}
+type instanceItem struct{ inst *anvilv1.Instance }
 
-func newInstancesView(a *App) *instancesView {
-	v := &instancesView{app: a}
-	v.table = tview.NewTable().SetSelectable(true, false).SetFixed(1, 0)
-	v.table.SetBorder(true).SetTitle(" Instances — l:launch  r:start/stop  d:delete  i:info  s:shell  R:refresh ")
-	v.table.SetInputCapture(v.handleKey)
-	v.root = tview.NewFlex().SetDirection(tview.FlexRow).AddItem(v.table, 0, 1, true)
-	v.refresh()
-	return v
-}
-
-func (v *instancesView) refresh() {
-	go func() {
-		reply, err := v.app.client.List(context.Background(), &anvilv1.ListRequest{})
-		v.app.tapp.QueueUpdateDraw(func() {
-			if err != nil {
-				v.app.showError("Listing instances", err.Error())
-				return
-			}
-			v.render(reply.GetInstances())
-		})
-	}()
-}
-
-func (v *instancesView) render(instances []*anvilv1.Instance) {
-	v.instances = instances
-	v.table.Clear()
-
-	for col, h := range []string{"NAME", "KIND", "STATE", "IMAGE"} {
-		v.table.SetCell(0, col, tview.NewTableCell(h).
-			SetSelectable(false).
-			SetTextColor(tcell.ColorYellow).
-			SetAttributes(tcell.AttrBold))
+func (i instanceItem) FilterValue() string { return i.inst.GetName() }
+func (i instanceItem) Title() string       { return i.inst.GetName() }
+func (i instanceItem) Description() string {
+	kind, image := "vm", i.inst.GetVm().GetImageRef()
+	if i.inst.GetKind() == anvilv1.Kind_KIND_CONTAINER {
+		kind, image = "container", i.inst.GetContainer().GetImageRef()
 	}
+	return fmt.Sprintf("%s  •  %s  •  %s", kind, stateLabel(i.inst.GetState()), image)
+}
 
-	if len(instances) == 0 {
-		v.table.SetCell(1, 0, tview.NewTableCell("(no instances — press l to launch one)").SetSelectable(false))
-		return
-	}
+type instancesModel struct {
+	list          list.Model
+	confirmDelete *anvilv1.Instance // non-nil while the delete confirmation overlay is up
+	loading       bool
+}
 
-	for row, inst := range instances {
-		kind, image := "vm", inst.GetVm().GetImageRef()
-		if inst.GetKind() == anvilv1.Kind_KIND_CONTAINER {
-			kind, image = "container", inst.GetContainer().GetImageRef()
+func newInstancesModel() instancesModel {
+	l := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	l.SetFilteringEnabled(false) // small lists; also avoids single-letter shortcuts (n/s/d/...) colliding with filter typing
+	l.Title = "Instances"
+	l.SetShowHelp(false) // one consistent helpBar instead of list's own
+	return instancesModel{list: l, loading: true}
+}
+
+func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case instancesLoadedMsg:
+		m.instances.loading = false
+		if msg.err != nil {
+			m.setStatus("listing instances: "+msg.err.Error(), true)
+			return m, nil
 		}
-		v.table.SetCell(row+1, 0, tview.NewTableCell(inst.GetName()))
-		v.table.SetCell(row+1, 1, tview.NewTableCell(kind))
-		v.table.SetCell(row+1, 2, tview.NewTableCell(stateLabel(inst.GetState())))
-		v.table.SetCell(row+1, 3, tview.NewTableCell(image))
-	}
-}
-
-// selected returns the instance backing the currently-highlighted row, or
-// nil if there's nothing selected yet (an empty list, or the header row).
-func (v *instancesView) selected() *anvilv1.Instance {
-	row, _ := v.table.GetSelection()
-	idx := row - 1
-	if idx < 0 || idx >= len(v.instances) {
-		return nil
-	}
-	return v.instances[idx]
-}
-
-func (v *instancesView) handleKey(event *tcell.EventKey) *tcell.EventKey {
-	switch event.Rune() {
-	case 'l':
-		showLaunchForm(v.app, v.refresh)
-		return nil
-	case 'R':
-		v.refresh()
-		return nil
-	case 'i':
-		if inst := v.selected(); inst != nil {
-			v.showInfo(inst)
+		items := make([]list.Item, len(msg.instances))
+		for i, inst := range msg.instances {
+			items[i] = instanceItem{inst: inst}
 		}
-		return nil
-	case 'r':
-		if inst := v.selected(); inst != nil {
-			v.toggleRun(inst)
-		}
-		return nil
-	case 'd':
-		if inst := v.selected(); inst != nil {
-			v.confirmDelete(inst)
-		}
-		return nil
-	case 's':
-		if inst := v.selected(); inst != nil {
-			v.shellInto(inst)
-		}
-		return nil
-	}
-	return event
-}
+		m.instances.list.SetItems(items)
+		return m, nil
 
-func (v *instancesView) showInfo(inst *anvilv1.Instance) {
-	text := fmt.Sprintf("Name:  %s\nID:    %s\nKind:  %s\nState: %s",
-		inst.GetName(), inst.GetId(), kindLabel(inst.GetKind()), stateLabel(inst.GetState()))
-	if vm := inst.GetVm(); vm != nil {
-		text += fmt.Sprintf("\nImage: %s\nCPUs:  %d\nMemory: %d MiB", vm.GetImageRef(), vm.GetCpus(), vm.GetMemoryMib())
-	}
-	if c := inst.GetContainer(); c != nil {
-		text += fmt.Sprintf("\nImage: %s", c.GetImageRef())
-	}
-	modal := tview.NewModal().SetText(text).AddButtons([]string{"OK"}).
-		SetDoneFunc(func(int, string) { v.app.pages.RemovePage("info") })
-	v.app.pages.AddPage("info", modal, true, true)
-}
-
-func (v *instancesView) toggleRun(inst *anvilv1.Instance) {
-	go func() {
-		var err error
-		if inst.GetState() == anvilv1.State_STATE_RUNNING {
-			_, err = v.app.client.Stop(context.Background(), &anvilv1.StopRequest{Names: []string{inst.GetName()}})
+	case actionDoneMsg:
+		if msg.err != nil {
+			m.setStatus(msg.verb+": "+msg.err.Error(), true)
 		} else {
-			_, err = v.app.client.Start(context.Background(), &anvilv1.StartRequest{Names: []string{inst.GetName()}})
+			m.setStatus("instance "+msg.verb, false)
 		}
-		v.app.tapp.QueueUpdateDraw(func() {
-			if err != nil {
-				v.app.showError("Start/stop", err.Error())
-				return
-			}
-			v.refresh()
-		})
-	}()
-}
+		return m, loadInstances(m.client)
 
-func (v *instancesView) confirmDelete(inst *anvilv1.Instance) {
-	modal := tview.NewModal().
-		SetText(fmt.Sprintf("Delete %q? (recoverable via `anvil purge` until then)", inst.GetName())).
-		AddButtons([]string{"Cancel", "Delete"}).
-		SetDoneFunc(func(_ int, label string) {
-			v.app.pages.RemovePage("confirm-delete")
-			if label != "Delete" {
-				return
-			}
-			go func() {
-				_, err := v.app.client.Delete(context.Background(), &anvilv1.DeleteRequest{Names: []string{inst.GetName()}})
-				v.app.tapp.QueueUpdateDraw(func() {
-					if err != nil {
-						v.app.showError("Delete", err.Error())
-						return
-					}
-					v.refresh()
-				})
-			}()
-		})
-	v.app.pages.AddPage("confirm-delete", modal, true, true)
-}
+	case shellDoneMsg:
+		if msg.err != nil {
+			m.setStatus("shell: "+msg.err.Error(), true)
+		}
+		return m, nil
 
-// shellInto hands the real terminal to a live SSH session into inst,
-// suspending the TUI for the duration — see shell.go.
-func (v *instancesView) shellInto(inst *anvilv1.Instance) {
-	if inst.GetVm() == nil {
-		v.app.showError("Shell", "only a VM has an SSH shell — a container's shell isn't wired up in the TUI yet, use `anvil exec` from a real terminal")
-		return
+	case tea.KeyMsg:
+		return m.updateInstancesKey(msg)
 	}
-	v.app.tapp.Suspend(func() {
-		if err := shellIntoVM(inst); err != nil {
-			fmt.Printf("\nanvil: %v\npress enter to return to the TUI…", err)
-			fmt.Scanln()
+	return m, nil
+}
+
+func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// The delete confirmation overlay eats every key until answered.
+	if m.instances.confirmDelete != nil {
+		switch msg.String() {
+		case "y", "enter":
+			name := m.instances.confirmDelete.GetName()
+			m.instances.confirmDelete = nil
+			return m, deleteInstance(m.client, name)
+		default:
+			m.instances.confirmDelete = nil
+			return m, nil
 		}
-	})
+	}
+
+	switch msg.String() {
+	case "esc", "q":
+		m.screen = screenMenu
+		return m, nil
+	case "n":
+		m.screen = screenLaunch
+		m.launch = newLaunchModel()
+		return m, nil
+	case "r":
+		m.instances.loading = true
+		return m, loadInstances(m.client)
+	case "s":
+		if inst := m.selectedInstance(); inst != nil {
+			if inst.GetState() == anvilv1.State_STATE_RUNNING {
+				return m, stopInstance(m.client, inst.GetName())
+			}
+			return m, startInstance(m.client, inst.GetName())
+		}
+		return m, nil
+	case "d":
+		if inst := m.selectedInstance(); inst != nil {
+			m.instances.confirmDelete = inst
+		}
+		return m, nil
+	case "x":
+		if inst := m.selectedInstance(); inst != nil {
+			return m.shellInto(inst)
+		}
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.instances.list, cmd = m.instances.list.Update(msg)
+	return m, cmd
+}
+
+func (m model) selectedInstance() *anvilv1.Instance {
+	item, ok := m.instances.list.SelectedItem().(instanceItem)
+	if !ok {
+		return nil
+	}
+	return item.inst
+}
+
+func (m instancesModel) View() string {
+	if m.confirmDelete != nil {
+		return styleWarn.Render(fmt.Sprintf("Delete %q? (recoverable via `anvil purge` until then)", m.confirmDelete.GetName())) +
+			"\n\n" + helpBar("y", "confirm", "any other key", "cancel")
+	}
+	body := m.list.View()
+	if m.loading {
+		body = styleSubtitle.Render("loading…")
+	}
+	return body + "\n" + helpBar(
+		"n", "launch", "s", "start/stop", "d", "delete",
+		"x", "shell", "r", "refresh", "esc", "back",
+	)
 }
 
 func stateLabel(s anvilv1.State) string {
@@ -205,11 +162,4 @@ func stateLabel(s anvilv1.State) string {
 	default:
 		return "unknown"
 	}
-}
-
-func kindLabel(k anvilv1.Kind) string {
-	if k == anvilv1.Kind_KIND_CONTAINER {
-		return "container"
-	}
-	return "vm"
 }
