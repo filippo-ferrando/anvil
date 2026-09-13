@@ -1589,13 +1589,14 @@ var HostService_ServiceDesc = grpc.ServiceDesc{
 
 const (
 	MigrateService_Migrate_FullMethodName = "/anvil.v1.MigrateService/Migrate"
+	MigrateService_Key_FullMethodName     = "/anvil.v1.MigrateService/Key"
 )
 
 // MigrateServiceClient is the client API for MigrateService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// MigrateService moves a single instance (M5; a whole intent is M6, not
+// MigrateService moves a single instance (M5; a whole intent is M7, not
 // built yet) to a different anvil host. Per the plan: no daemon-to-daemon
 // gRPC trust — the source daemon SSHes into the target host and drives
 // the target's own local `anvil` CLI (specifically `anvil migrate-import`,
@@ -1604,6 +1605,12 @@ const (
 // access already exists to the target is the only trust this needs.
 type MigrateServiceClient interface {
 	Migrate(ctx context.Context, in *MigrateRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[MigrateProgress], error)
+	// Key returns anvild's own public key for its outbound migration SSH
+	// connections (see internal/migrate.Manager.EnsurePublicKey), generating
+	// a fresh passwordless keypair first if one doesn't exist yet. Copy the
+	// returned key into a target host's ~/.ssh/authorized_keys before
+	// migrating to it — `anvil host add` alone grants no trust by itself.
+	Key(ctx context.Context, in *MigrateKeyRequest, opts ...grpc.CallOption) (*MigrateKeyReply, error)
 }
 
 type migrateServiceClient struct {
@@ -1633,11 +1640,21 @@ func (c *migrateServiceClient) Migrate(ctx context.Context, in *MigrateRequest, 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type MigrateService_MigrateClient = grpc.ServerStreamingClient[MigrateProgress]
 
+func (c *migrateServiceClient) Key(ctx context.Context, in *MigrateKeyRequest, opts ...grpc.CallOption) (*MigrateKeyReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MigrateKeyReply)
+	err := c.cc.Invoke(ctx, MigrateService_Key_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MigrateServiceServer is the server API for MigrateService service.
 // All implementations must embed UnimplementedMigrateServiceServer
 // for forward compatibility.
 //
-// MigrateService moves a single instance (M5; a whole intent is M6, not
+// MigrateService moves a single instance (M5; a whole intent is M7, not
 // built yet) to a different anvil host. Per the plan: no daemon-to-daemon
 // gRPC trust — the source daemon SSHes into the target host and drives
 // the target's own local `anvil` CLI (specifically `anvil migrate-import`,
@@ -1646,6 +1663,12 @@ type MigrateService_MigrateClient = grpc.ServerStreamingClient[MigrateProgress]
 // access already exists to the target is the only trust this needs.
 type MigrateServiceServer interface {
 	Migrate(*MigrateRequest, grpc.ServerStreamingServer[MigrateProgress]) error
+	// Key returns anvild's own public key for its outbound migration SSH
+	// connections (see internal/migrate.Manager.EnsurePublicKey), generating
+	// a fresh passwordless keypair first if one doesn't exist yet. Copy the
+	// returned key into a target host's ~/.ssh/authorized_keys before
+	// migrating to it — `anvil host add` alone grants no trust by itself.
+	Key(context.Context, *MigrateKeyRequest) (*MigrateKeyReply, error)
 	mustEmbedUnimplementedMigrateServiceServer()
 }
 
@@ -1658,6 +1681,9 @@ type UnimplementedMigrateServiceServer struct{}
 
 func (UnimplementedMigrateServiceServer) Migrate(*MigrateRequest, grpc.ServerStreamingServer[MigrateProgress]) error {
 	return status.Errorf(codes.Unimplemented, "method Migrate not implemented")
+}
+func (UnimplementedMigrateServiceServer) Key(context.Context, *MigrateKeyRequest) (*MigrateKeyReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Key not implemented")
 }
 func (UnimplementedMigrateServiceServer) mustEmbedUnimplementedMigrateServiceServer() {}
 func (UnimplementedMigrateServiceServer) testEmbeddedByValue()                        {}
@@ -1691,13 +1717,36 @@ func _MigrateService_Migrate_Handler(srv interface{}, stream grpc.ServerStream) 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type MigrateService_MigrateServer = grpc.ServerStreamingServer[MigrateProgress]
 
+func _MigrateService_Key_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MigrateKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MigrateServiceServer).Key(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MigrateService_Key_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MigrateServiceServer).Key(ctx, req.(*MigrateKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MigrateService_ServiceDesc is the grpc.ServiceDesc for MigrateService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var MigrateService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "anvil.v1.MigrateService",
 	HandlerType: (*MigrateServiceServer)(nil),
-	Methods:     []grpc.MethodDesc{},
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Key",
+			Handler:    _MigrateService_Key_Handler,
+		},
+	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "Migrate",
