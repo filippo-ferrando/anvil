@@ -21,6 +21,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/anvil-project/anvil/internal/config"
+	"github.com/anvil-project/anvil/internal/hostpath"
 	"github.com/anvil-project/anvil/internal/instance"
 	"github.com/anvil-project/anvil/internal/store"
 	"github.com/anvil-project/anvil/internal/vm/cloudinit"
@@ -527,6 +528,9 @@ func (b *Backend) Mount(ctx context.Context, spec *instance.Spec, hostPath, gues
 		}
 	}
 	if info, err := os.Stat(hostPath); err != nil {
+		if os.IsPermission(err) {
+			return fmt.Errorf("vm: host path %s: %w%s", hostPath, err, hostpath.Hint(hostPath))
+		}
 		return fmt.Errorf("vm: host path %s: %w", hostPath, err)
 	} else if !info.IsDir() {
 		return fmt.Errorf("vm: host path %s is not a directory", hostPath)

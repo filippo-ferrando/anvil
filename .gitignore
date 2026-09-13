@@ -3,3 +3,6 @@
 *.qcow2
 *.iso
 /data/distros/*.tmp
+/packaging/*.log
+/packaging/*.zst
+/packaging/anvil/

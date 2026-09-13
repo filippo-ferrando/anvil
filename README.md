@@ -84,6 +84,9 @@ This is early. Here's what's actually real right now, versus what's just designe
   against a real QEMU build rather than assumed), it's not a transparent hot-plug. The
   QEMU/cloud-init side of this is tested for real; an actual guest mounting and using the
   share hasn't been, that needs a real downloaded image, which this dev sandbox can't do
+- `anvil create-dir <path>` makes a host directory and grants anvild's own unprivileged
+  "anvil" user access to it in one step, so you don't have to copy-paste the `setfacl`
+  commands from a mount's permission error by hand before every mount of a fresh directory
 - `--publish host:guest[/tcp|udp]` on `anvil launch` now works for a standalone VM too,
   not just containers: same flag, another SLIRP hostfwd entry, so something like nginx
   running directly inside the guest is reachable from the host. Doesn't apply to a
@@ -175,9 +178,14 @@ This is early. Here's what's actually real right now, versus what's just designe
 could exist before intent migration or the TUI, to make testing on other machines
 easier:**
 - `packaging/PKGBUILD`: a split package, `anvil` (CLI) and `anvild` (daemon). Builds
-  straight from the working tree (no release tarball exists yet). Recommended build is
-  a clean chroot, `extra-x86_64-build` (from `devtools`), not bare `makepkg`, so
-  dependencies actually get verified instead of assumed
+  from a `git+file://` clone of this same local repo (its last **commit**, not
+  uncommitted changes, see the PKGBUILD's own comment on that) rather than a downloaded
+  release tarball, since there isn't one yet. Recommended build is a clean chroot,
+  `extra-x86_64-build` (from `devtools`), not bare `makepkg`, so dependencies actually
+  get verified instead of assumed, which is also what caught the very first real bug
+  here: an earlier version just did `cd "$startdir/.."`, which only worked for bare
+  `makepkg` on the host filesystem, since a real chroot build only ever copies the
+  invocation directory in, never its parent
 - **`anvild` runs as a dedicated unprivileged "anvil" system user, not root**, per
   filippo's explicit ask. Three separate mechanisms get it everything it needs without
   being root: `SupplementaryGroups=kvm` for `/dev/kvm` (safe since `qemu-base` is a hard
@@ -195,9 +203,20 @@ easier:**
   having access to that directory (QEMU's 9p backend does that file I/O as whatever user
   spawned it). Under the old root-anvild design this always worked regardless of
   permissions; now it doesn't. Not solved here, just made real instead of staying an
-  aspiration nobody had checked yet
+  aspiration nobody had checked yet, caught on filippo's own first real mount attempt
+  post-change (`stat: permission denied`), the error now includes real, copy-pasteable
+  `setfacl` commands for the whole path instead of leaving you to guess. `anvil
+  create-dir` runs those same commands for you instead of leaving them to copy-paste
+- `anvil migrate-key`: prints anvild's own migration SSH public key (generating one on
+  the spot if it doesn't exist yet, not just relying on `anvild.install` having already
+  done it, since a manually-run `anvild` for local dev/testing never goes through that
+  install script at all), no more `sudo cat`-ing a file owned by the unprivileged
+  "anvil" user by hand
 - shell completions (bash/zsh/fish) generated at package time from cobra's own built-in
   `completion` subcommand, no extra code needed
+- also fixed along the way: every CLI error used to print twice (cobra's own `Error:
+  ...` plus `main.go`'s `anvil: ...`): cobra's `SilenceErrors` wasn't actually silencing
+  anything
 - **not included**: man pages (`cobra/doc`'s generator needs
   `github.com/cpuguy83/go-md2man/v2`, a new dependency that couldn't be fetched in this
   sandbox, same limitation as every other new dependency this project has needed) and a

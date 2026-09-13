@@ -885,6 +885,26 @@ for the details behind each item below.
       fetched in this sandbox (same limitation as every other new dependency this
       project has added, see `github.com/vishvananda/netlink` in M4); add it and wire
       up a small `gendoc`-style generator once there's network access to do that for real
+- [x] real bug, caught the first time filippo actually ran `extra-x86_64-build`:
+      `source=()` was empty and `build()` just did `cd "$startdir/.."`, which only ever
+      worked for bare `makepkg` running directly on the host filesystem. A real isolated
+      chroot build only copies the invocation directory (`packaging/`) into the chroot,
+      never its parent, so the whole Go module tree (go.mod, cmd/, internal/, ...) simply
+      wasn't there, `go build` failed with "go.mod file not found". Fixed by declaring
+      `source=("anvil::git+file://${startdir}/..")`: makepkg's own source-fetch
+      machinery clones the parent repo (its last commit, not uncommitted changes, see the
+      PKGBUILD's own comment on that) into `$srcdir/anvil` before chroot isolation even
+      starts, which both bare `makepkg` and a real chroot build handle identically
+- [x] `anvil mount`'s permission-denied error now includes real, copy-pasteable
+      `setfacl` commands (see the mount-permission note above)
+- [x] `anvil create-dir <path>`: makes a host directory and runs those same `setfacl`
+      grants itself, instead of leaving them to copy-paste (see the note below)
+- [x] `anvil migrate-key`: prints anvild's own migration SSH public key, generating one
+      on the spot if it doesn't exist yet (see the migration-key note below)
+- [x] fixed a real, unrelated CLI bug noticed along the way: every error was printed
+      twice, once by cobra itself (`Error: ...`) and once by `cmd/anvil/main.go`
+      (`anvil: ...`), since the root command had `SilenceErrors: false`. Set to `true`;
+      `main.go` was already the single source of truth for printing a returned error
 - [ ] a real `makepkg`/`namcap`/`extra-x86_64-build` run: this sandbox has the `makepkg`
       binary present but no actual Arch build environment (`/etc/makepkg.conf` and
       `/etc/pacman.conf` don't exist here) and no `devtools` for a chroot build either,
@@ -924,7 +944,37 @@ unlike the old root-anvild design, a mount into `/home/someone/private-project` 
 fail unless that directory is actually readable (and, for a non-read-only mount,
 writable) by "anvil": group permissions or an ACL, not automatic anymore. This is a
 real, load-bearing behavior change from the security improvement, not a hypothetical
-one, and it's not solved here.
+one, and it's not solved here (there's no code fix that makes an unprivileged user able
+to read arbitrary other users' files, that's the whole point of the permission model).
+
+Caught in the wild the very first time filippo tried a real mount post-change: a plain
+`stat: permission denied`, no indication of why or what to do about it. Fixed in
+`internal/vm.Backend.Mount`: a permission-denied stat now gets a hint appended, real
+`setfacl` commands for every ancestor directory in the path (traverse only) plus the
+target itself (full rwx, and a default ACL so new files created inside later inherit it
+too), since `stat(2)` failing with `EACCES` specifically means some ancestor lacks search
+permission, not the target itself, this covers the whole chain rather than guessing
+which directory is the actual blocker.
+
+That ancestor-walking logic now lives in its own package, `internal/hostpath`, pure
+stdlib (`os/user`, `os/exec`, `path/filepath`), pulled out of `internal/vm` on purpose so
+the CLI can call it directly without dragging in `internal/vm`'s whole dependency tree.
+Two entry points share it: `hostpath.Hint` just builds the message text (what
+`Backend.Mount` appends to its error), `hostpath.Grant` actually runs the commands. That
+second one is what powers the new `anvil create-dir <path>` command: `mkdir -p` plus the
+same grants, so filippo doesn't have to copy-paste `setfacl` lines by hand before every
+mount of a fresh directory. `create-dir` runs entirely client-side, no daemon RPC
+involved, since `mkdir`/`setfacl` are ordinary filesystem operations the invoking user
+can already do without anvild's help. `hostpath.Grant` no-ops (not an error) when the
+"anvil" system user doesn't exist on the machine at all, which is the normal shape of the
+manual `sudo ./anvild` dev workflow that predates packaging. Real tests, and unlike the
+rest of `internal/vm` this package has zero non-stdlib imports, so it's actually run in
+this sandbox, not just hand-traced: `TestHintCoversEveryAncestor`,
+`TestHintTrailingSlash`, `TestAncestorsExcludesRootAndTarget`,
+`TestGrantSkipsWhenAnvilUserMissing` (the last one overrides the package's user-lookup
+var rather than trusting this machine to actually lack an "anvil" user, since it turns
+out this particular dev machine has one already from earlier packaging tests), all four
+pass.
 
 **A real open question this raises for the Podman backend (still deferred, not built)**:
 the original design assumed "anvild already needs to run privileged for KVM access, so
@@ -947,6 +997,20 @@ default. `internal/migrate/ssh.go` passes this explicitly via `-i` rather than r
 on ssh's own default `$HOME`-based identity resolution, the exact same fix already
 applied once for a near-identical bug on the CLI side (`internal/cli/commands/ssh.go`,
 M2's `sudo`/root `$HOME` bug), not something worth risking twice.
+
+Generation isn't purely `anvild.install`'s job, though: `internal/migrate.Manager` also
+lazily generates the same key itself (`EnsurePublicKey`, called at the start of both
+`Migrate` and `CheckHost`) if it doesn't already exist, mirroring
+`ensureDefaultAnvilKey` on the CLI side exactly. This matters because this project has a
+whole documented workflow for running `anvild` manually during dev/testing (`sudo
+./anvild`, see the README) that never goes through `anvild.install` at all: without
+this, `anvil migrate` would just fail confusingly the first time in that setup, instead
+of working the same way regardless of how `anvild` got started. `anvil migrate-key`
+(new CLI command, plain `MigrateService.Key` RPC) prints whatever key this resolves to,
+generating one on the spot if needed, so there's a real command for "give me the key to
+paste into a target's `authorized_keys`" instead of finding it manually on disk (which,
+being owned by the unprivileged "anvil" user, you likely can't even read directly
+without `sudo cat` anyway).
 
 ### M7: migration, intents
 - [ ] migrate a whole intent as one unit

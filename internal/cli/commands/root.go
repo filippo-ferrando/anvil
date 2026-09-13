@@ -19,10 +19,14 @@ type globalFlags struct {
 func NewRootCommand() *cobra.Command {
 	flags := &globalFlags{}
 	root := &cobra.Command{
-		Use:           "anvil",
-		Short:         "Manage cloud-init VMs and Docker/Podman containers",
-		SilenceUsage:  true,
-		SilenceErrors: false,
+		Use:          "anvil",
+		Short:        "Manage cloud-init VMs and Docker/Podman containers",
+		SilenceUsage: true,
+		// cmd/anvil/main.go already prints whatever error Execute()
+		// returns (prefixed "anvil:"), so cobra printing its own "Error:
+		// ..." line first would just be the same message twice — that's
+		// exactly what was happening before this was set to true.
+		SilenceErrors: true,
 	}
 	root.PersistentFlags().StringVar(&flags.socket, "socket", config.SocketPath(), "anvild unix socket path")
 
@@ -43,10 +47,12 @@ func NewRootCommand() *cobra.Command {
 		newImageCommand(flags),
 		newMountCommand(flags),
 		newUmountCommand(flags),
+		newCreateDirCommand(flags),
 		newIntentCommand(flags),
 		newHostCommand(flags),
 		newMigrateCommand(flags),
 		newMigrateImportCommand(flags),
+		newMigrateKeyCommand(flags),
 	)
 	return root
 }

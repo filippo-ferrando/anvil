@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"context"
+
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 	"github.com/anvil-project/anvil/internal/migrate"
 )
@@ -37,4 +39,12 @@ func (s *MigrateServer) Migrate(req *anvilv1.MigrateRequest, stream anvilv1.Migr
 		_ = stream.Send(&anvilv1.MigrateProgress{Event: &anvilv1.MigrateProgress_Done{Done: newID}})
 	}
 	return nil
+}
+
+func (s *MigrateServer) Key(ctx context.Context, req *anvilv1.MigrateKeyRequest) (*anvilv1.MigrateKeyReply, error) {
+	key, err := s.Manager.EnsurePublicKey()
+	if err != nil {
+		return nil, err
+	}
+	return &anvilv1.MigrateKeyReply{PublicKey: key}, nil
 }

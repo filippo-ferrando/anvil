@@ -537,7 +537,7 @@ message HostTestReply {
   string message = 2; // human-readable detail either way, e.g. the remote anvil version, or the SSH error
 }
 
-// MigrateService moves a single instance (M5; a whole intent is M6, not
+// MigrateService moves a single instance (M5; a whole intent is M7, not
 // built yet) to a different anvil host. Per the plan: no daemon-to-daemon
 // gRPC trust — the source daemon SSHes into the target host and drives
 // the target's own local `anvil` CLI (specifically `anvil migrate-import`,
@@ -546,6 +546,19 @@ message HostTestReply {
 // access already exists to the target is the only trust this needs.
 service MigrateService {
   rpc Migrate(MigrateRequest) returns (stream MigrateProgress);
+
+  // Key returns anvild's own public key for its outbound migration SSH
+  // connections (see internal/migrate.Manager.EnsurePublicKey), generating
+  // a fresh passwordless keypair first if one doesn't exist yet. Copy the
+  // returned key into a target host's ~/.ssh/authorized_keys before
+  // migrating to it — `anvil host add` alone grants no trust by itself.
+  rpc Key(MigrateKeyRequest) returns (MigrateKeyReply);
+}
+
+message MigrateKeyRequest {}
+
+message MigrateKeyReply {
+  string public_key = 1;
 }
 
 message MigrateRequest {
