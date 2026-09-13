@@ -268,41 +268,53 @@ easier:**
   gap: a member left behind by `--best-effort` still has its migrated peers' old,
   now-stale addresses baked into its own `/etc/hosts`, not actively fixed
 
-**Working (M8, TUI), written with no way to run a terminal UI in this sandbox at
-all: no real TTY, and no network access to fetch its dependencies:**
+**Working (M8, TUI):**
 - `anvil tui`, `internal/tui`, built on the exact same `pkg/client` the CLI uses, no
   daemon-side logic added. **Rewritten on Bubble Tea after a real run of the first
   pass (`rivo/tview`) came back with broken-looking text boxes and confusing
   navigation.** tview's imperative widget-tree model puts all the correctness on
   you wiring it up right; Bubble Tea's Elm architecture (one `Model`, one
-  `Update`/`View` entry point) is a much smaller surface to get wrong, and it's
-  what most terminal UIs people call "modern" today are actually built on
-- a hand-rolled main menu (Instances, Cloud-Init, Mirrors, Migration), an instances
-  list (start/stop/delete/shell/refresh bindings), a launch form, a cloud-init
-  list+editor split, a mirrors list, and a migration view (known hosts plus a form
-  plus a streaming progress log), all backed by the same RPCs the CLI already
-  calls. A shared `simpleForm` component (Tab between fields, Enter/Ctrl+S to
-  submit) backs every form instead of five ad hoc ones
+  `Update`/`View` entry point) is a much smaller surface to get wrong
+- layout is a persistent left sidebar (Instances/Images/Cloud-Init/Mirrors/
+  Migration) with the active page centered after it, matching Hyperpass's own
+  shape, not a full-screen menu you navigate away from and back to. `up`/`down`
+  on the sidebar switches (and reloads) the page next to it; `enter`/`right`
+  moves focus into it; `esc` hands focus back to the sidebar. `anvil launch` is
+  the one exception, a full-width takeover (no sidebar), reached from Instances
+- **an actual pty-backed test this round, not just review**: filippo built the
+  real package (`make tui-deps` resolved real dependency versions this sandbox
+  can't) and ran `anvil tui` for real, which is what surfaced the bugs below.
+  This sandbox still can't build, but drove the already-installed binary
+  headless through a small Python `pty` harness to confirm and root-cause them
+  precisely instead of guessing; it could only test the pre-fix binary, though,
+  the fixes themselves need a real rebuild-and-test cycle to confirm
+- **found this way**: Cloud-Init's and Migration's side-by-side panels used plain
+  string concatenation instead of `lipgloss.JoinHorizontal`, which doesn't lay
+  out multi-line blocks side by side at all, and exactly the two screens reported
+  broken were the only two with that layout. Also found: `bubbles/list.Model`
+  doesn't pad itself to fill its given height the way `textarea.Model` does, so
+  an empty/short list rendered far shorter than the panel next to it, fixed by
+  pinning both panels to an explicit height. Also found: the launch form's
+  Name/Image/CPUs/Memory fields were scrolling off the top of the terminal
+  before anyone could see them: eleven fields, each in its own bordered box,
+  produced more lines than a normal terminal has rows. Fixed with a compact,
+  scrollable form component shared by every form in the app
+- **a real feature gap, flagged directly ("miss the option to list the available
+  cloud images")**: nothing exposed the catalog of distro images that can
+  actually be downloaded and launched, only the already-downloaded cache. Fixed
+  with a new `ImageService.Catalog` RPC, a new CLI command `anvil find [term]`
+  (in the original plan, never actually built until now), and a new Images
+  screen showing cached images and the catalog side by side
 - shell/SSH handoff via `tea.ExecProcess`, Bubble Tea's own supported way to
   suspend the program, hand the real terminal to an `ssh` subprocess, and resume
   automatically when it exits
-- two real bugs caught while writing this, before either shipped: the shared
-  form's Enter key originally submitted the whole form on *any* toggle field, not
-  just the last one, which would have badly misfired the migration form's
-  Copy/Best-effort/Dry-run toggles; and `bubbles/list`'s default filtering (`/`)
-  would have silently eaten every screen's single-letter shortcuts as filter text,
-  since each screen checks its own shortcuts before forwarding to the list, so
-  filtering is simply disabled on these small lists instead
 - pulled anvil's own default guest-access SSH key management out of
   `internal/cli/commands` into a new small package, `internal/sshkey`, so the launch
   form and the CLI's own `anvil launch` share one implementation instead of two
-- **can't be verified here at all**: no real terminal to run a TUI against even if
-  the dependencies were fetchable, and no network access to fetch
-  `github.com/charmbracelet/bubbletea`/`bubbles`/`lipgloss` either, so `go.mod`
-  doesn't pin them (a guessed version tag could easily just not exist); run
-  `make tui-deps` once you have network access, then `anvil tui` for a real
-  walkthrough. Built against Bubble Tea's core API, reviewed carefully,
-  gofmt-clean, but genuinely never run
+- **still can't build here**: no network access to fetch
+  `github.com/charmbracelet/bubbletea`/`bubbles`/`lipgloss`, so `go.mod` doesn't
+  pin them from this sandbox; `make tui-deps` (plus `make proto` again, for the
+  new Catalog RPC) on your end, then `anvil tui` for the next real walkthrough
 
 **Not built yet:**
 - Podman (the second container backend, deliberately deferred, see above; its own

@@ -14,11 +14,20 @@ import (
 // Enter or a dedicated submit key to confirm, Esc to cancel. One
 // implementation instead of six ad hoc ones is what keeps every form in
 // this app behaving the same way.
+//
+// Rendering is deliberately compact (no per-field bordered box, a hint
+// line only under the focused field) and, when maxHeight is set,
+// windowed to whatever's around the focused field — a form with enough
+// fields (the launch form has eleven) otherwise produces more lines than
+// a normal terminal has rows, and the earliest fields (Name, Image)
+// scroll off the top before anyone can see them. Caught on a real run,
+// not designed in up front.
 type simpleForm struct {
-	title  string
-	fields []formField
-	focus  int
-	errMsg string
+	title     string
+	fields    []formField
+	focus     int
+	errMsg    string
+	maxHeight int // 0 means unconstrained; set via SetHeight
 }
 
 type fieldKind int
@@ -60,10 +69,12 @@ func newSimpleForm(title string, fields []formField) simpleForm {
 	return f
 }
 
-// formResult is what a screen reads back after the user submits — a
-// simple label -> text map for text fields, checked separately via
-// Bool() for toggles, so a screen doesn't need to know simpleForm's
-// internals.
+// SetHeight constrains View() to at most h lines of field content (title/
+// help footer are added on top of that), windowed around whichever field
+// is currently focused. 0 (the zero value) means unconstrained.
+func (f *simpleForm) SetHeight(h int) { f.maxHeight = h }
+
+// Value/Bool are what a screen reads back after the user submits.
 func (f simpleForm) Value(label string) string {
 	for _, field := range f.fields {
 		if field.Label == label {
@@ -147,14 +158,21 @@ func (f *simpleForm) focusCurrent() {
 }
 
 func (f simpleForm) View() string {
-	var b strings.Builder
-	b.WriteString(styleTitle.Render(f.title) + "\n\n")
+	var lines []string
+	lines = append(lines, styleTitle.Render(f.title), "")
+	focusLine := 0
+
 	for i, field := range f.fields {
+		focused := i == f.focus
 		labelStyle := styleFieldLabel
-		if i == f.focus {
+		bar := "  "
+		if focused {
 			labelStyle = labelStyle.Foreground(colorAccent).Bold(true)
+			bar = lipgloss.NewStyle().Foreground(colorAccent).Render("┃ ")
+			focusLine = len(lines)
 		}
-		b.WriteString(labelStyle.Render(field.Label) + "\n")
+		lines = append(lines, labelStyle.Render(field.Label))
+
 		switch field.Kind {
 		case fieldToggle:
 			mark := "[ ]"
@@ -162,25 +180,56 @@ func (f simpleForm) View() string {
 				mark = "[x]"
 			}
 			style := lipgloss.NewStyle()
-			if i == f.focus {
+			if focused {
 				style = style.Foreground(colorAccent).Bold(true)
 			}
-			b.WriteString(style.Render(mark+" "+field.Hint) + "\n\n")
+			lines = append(lines, bar+style.Render(mark+" "+field.Hint))
 		default:
-			box := styleBox
-			if i == f.focus {
-				box = styleBoxFocused
+			lines = append(lines, bar+field.input.View())
+			if focused && field.Hint != "" {
+				lines = append(lines, "  "+styleSubtitle.Render(field.Hint))
 			}
-			b.WriteString(box.Render(field.input.View()) + "\n")
-			if field.Hint != "" {
-				b.WriteString(styleSubtitle.Render(field.Hint) + "\n")
-			}
-			b.WriteString("\n")
 		}
 	}
+
 	if f.errMsg != "" {
-		b.WriteString(styleError.Render(f.errMsg) + "\n\n")
+		lines = append(lines, "", styleError.Render(f.errMsg))
 	}
-	b.WriteString(helpBar("tab", "next field", "enter", "submit", "esc", "cancel"))
-	return b.String()
+
+	content := lines
+	if f.maxHeight > 0 && len(lines) > f.maxHeight {
+		content = windowLines(lines, focusLine, f.maxHeight)
+	}
+
+	return strings.Join(content, "\n") + "\n\n" + helpBar("tab", "next field", "enter", "submit", "esc", "cancel")
+}
+
+// windowLines returns at most maxHeight consecutive lines from lines,
+// centered on focusLine so the field the user is actually editing is
+// always visible, with a one-line indicator when content is cut off
+// above or below.
+func windowLines(lines []string, focusLine, maxHeight int) []string {
+	if maxHeight < 1 {
+		maxHeight = 1
+	}
+	start := focusLine - maxHeight/2
+	if start < 0 {
+		start = 0
+	}
+	end := start + maxHeight
+	if end > len(lines) {
+		end = len(lines)
+		start = end - maxHeight
+		if start < 0 {
+			start = 0
+		}
+	}
+	windowed := append([]string(nil), lines[start:end]...)
+	if start > 0 && len(windowed) > 0 {
+		windowed[0] = styleSubtitle.Render("↑ more above")
+	}
+	if end < len(lines) && len(windowed) > 0 {
+		windowed[len(windowed)-1] = styleSubtitle.Render("↓ more below")
+	}
+	return windowed
 }

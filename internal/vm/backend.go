@@ -66,12 +66,15 @@ func NewBackend(catalog *image.Catalog, vault *image.Vault, source Source) *Back
 	}
 }
 
-// effectiveCatalog merges the base catalog with every enabled VM mirror
+// EffectiveCatalog merges the base catalog with every enabled VM mirror
 // currently in the registry. Mirror manifests are read from the store
 // (cached at `anvil mirror add` time), not re-fetched over the network on
 // every launch — see internal/store/mirrors.go and the plan's "Image
-// mirrors" section.
-func (b *Backend) effectiveCatalog() (*image.Catalog, error) {
+// mirrors" section. Exported so internal/daemon.ImageServer's Catalog RPC
+// (`anvil find`, and the TUI's Images screen) can list exactly what a
+// launch would actually resolve against, not a separate copy of this
+// merge logic.
+func (b *Backend) EffectiveCatalog() (*image.Catalog, error) {
 	mirrors, err := b.Source.ListMirrors(store.MirrorKindVM)
 	if err != nil {
 		return nil, fmt.Errorf("vm: listing mirrors: %w", err)
@@ -89,6 +92,17 @@ func (b *Backend) effectiveCatalog() (*image.Catalog, error) {
 	return b.Catalog.WithMirrors(manifests)
 }
 
+// ListCatalog returns every distro entry EffectiveCatalog currently
+// resolves against — what `anvil launch --kind vm <id>` would actually
+// pick from.
+func (b *Backend) ListCatalog() ([]image.DistroEntry, error) {
+	catalog, err := b.EffectiveCatalog()
+	if err != nil {
+		return nil, err
+	}
+	return catalog.List(), nil
+}
+
 func (b *Backend) Create(ctx context.Context, spec *instance.Spec, progress func(status string)) error {
 	if spec.VM == nil {
 		return fmt.Errorf("vm: Create called with a nil VMSpec")
@@ -104,7 +118,7 @@ func (b *Backend) Create(ctx context.Context, spec *instance.Spec, progress func
 		return b.adoptMigratedDisk(spec, dir, progress)
 	}
 
-	catalog, err := b.effectiveCatalog()
+	catalog, err := b.EffectiveCatalog()
 	if err != nil {
 		return err
 	}

@@ -87,6 +87,24 @@ func parseVolumesField(s string) ([]*anvilv1.VolumeMount, error) {
 	return out, nil
 }
 
+// humanBytesTUI renders n as a short, human-readable size (KiB/MiB/...)
+// for the Images screen — same idea as internal/cli/commands' own
+// humanBytes, kept as a separate small copy since this package doesn't
+// import internal/cli/commands (see the plan's TUI section: only
+// pkg/client is shared).
+func humanBytesTUI(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
 func parsePortsField(s string) ([]*anvilv1.PortMapping, error) {
 	var out []*anvilv1.PortMapping
 	for _, p := range splitCommaList(s) {

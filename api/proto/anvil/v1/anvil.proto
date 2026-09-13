@@ -392,6 +392,14 @@ message MirrorSetEnabledReply {}
 service ImageService {
   rpc List(ImageListRequest) returns (ImageListReply);
   rpc Delete(ImageDeleteRequest) returns (ImageDeleteReply);
+
+  // Catalog lists the source distro images `anvil launch --kind vm
+  // <id>` resolves against — the built-in multi-distro catalog merged
+  // with every enabled VM mirror (internal/vm.Backend.EffectiveCatalog),
+  // the same merge a real launch uses, not a separate listing. This is
+  // the catalog of what *can* be downloaded and launched; ImageService's
+  // List above is the different, already-downloaded cache tier.
+  rpc Catalog(CatalogRequest) returns (CatalogReply);
 }
 
 message CachedImage {
@@ -406,6 +414,23 @@ message ImageListRequest {}
 
 message ImageListReply {
   repeated CachedImage images = 1;
+}
+
+// CatalogEntry is one fetchable distro image (internal/vm/image.DistroEntry).
+message CatalogEntry {
+  string id = 1;      // e.g. "ubuntu-24.04" — what `anvil launch --kind vm <id>` takes
+  string name = 2;    // e.g. "Ubuntu 24.04 LTS"
+  string distro = 3;
+  string version = 4;
+  string arch = 5;
+  int64 min_disk_gib = 6;
+  string default_user = 7;
+}
+
+message CatalogRequest {}
+
+message CatalogReply {
+  repeated CatalogEntry entries = 1;
 }
 
 message ImageDeleteRequest {

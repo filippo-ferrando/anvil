@@ -8,24 +8,49 @@ import (
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 	"github.com/anvil-project/anvil/internal/instance"
 	"github.com/anvil-project/anvil/internal/store"
+	"github.com/anvil-project/anvil/internal/vm"
 	"github.com/anvil-project/anvil/internal/vm/image"
 )
 
-// ImageServer implements anvilv1.ImageServiceServer, managing the on-disk
-// cache of downloaded VM base images (internal/vm/image.Vault's "prepared"
-// tier). Before deleting one, it checks every current VM instance's disk
-// (via image.BackingFile) so it never silently deletes an image a running
-// instance's overlay still depends on — that would corrupt that
-// instance's disk, since a qcow2 overlay needs its backing file to stay
-// put.
+// ImageServer implements anvilv1.ImageServiceServer: the on-disk cache of
+// downloaded VM base images (internal/vm/image.Vault's "prepared" tier,
+// List/Delete) plus the source catalog of what can be downloaded and
+// launched in the first place (Catalog, via *vm.Backend so it's exactly
+// the same built-in-plus-mirrors merge a real launch resolves against,
+// not a separate copy of that logic). Before deleting a cached image, it
+// checks every current VM instance's disk (via image.BackingFile) so it
+// never silently deletes an image a running instance's overlay still
+// depends on — that would corrupt that instance's disk, since a qcow2
+// overlay needs its backing file to stay put.
 type ImageServer struct {
 	anvilv1.UnimplementedImageServiceServer
-	Store *store.Store
-	Vault *image.Vault
+	Store   *store.Store
+	Vault   *image.Vault
+	Backend *vm.Backend
 }
 
-func NewImageServer(s *store.Store, v *image.Vault) *ImageServer {
-	return &ImageServer{Store: s, Vault: v}
+func NewImageServer(s *store.Store, v *image.Vault, backend *vm.Backend) *ImageServer {
+	return &ImageServer{Store: s, Vault: v, Backend: backend}
+}
+
+func (s *ImageServer) Catalog(ctx context.Context, req *anvilv1.CatalogRequest) (*anvilv1.CatalogReply, error) {
+	entries, err := s.Backend.ListCatalog()
+	if err != nil {
+		return nil, err
+	}
+	reply := &anvilv1.CatalogReply{}
+	for _, e := range entries {
+		reply.Entries = append(reply.Entries, &anvilv1.CatalogEntry{
+			Id:          e.ID,
+			Name:        e.Name,
+			Distro:      e.Distro,
+			Version:     e.Version,
+			Arch:        e.Arch,
+			MinDiskGib:  e.MinDiskGiB,
+			DefaultUser: e.DefaultUser,
+		})
+	}
+	return reply, nil
 }
 
 func (s *ImageServer) List(ctx context.Context, req *anvilv1.ImageListRequest) (*anvilv1.ImageListReply, error) {

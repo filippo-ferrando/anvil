@@ -127,12 +127,13 @@ func (m model) updateMirrorsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "esc", "q":
-		m.screen = screenMenu
+		m.sidebarFocused = true
 		return m, nil
 	case "a":
 		mm.adding = true
 		mm.addKind = "vm"
 		mm.addForm = newMirrorAddForm()
+		mm.addForm.SetHeight(contentHeight(m.height) - 2)
 		return m, nil
 	case "r":
 		return m, loadMirrors(m.client)

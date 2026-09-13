@@ -6,6 +6,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type cloudInitItem struct{ name string }
@@ -29,13 +30,14 @@ const (
 )
 
 type cloudInitModel struct {
-	list     list.Model
-	editor   textarea.Model
-	current  string
-	dirty    bool
-	editing  bool // focus is in the editor, not the list
-	prompt   cloudInitPrompt
-	promptFm simpleForm
+	list        list.Model
+	editor      textarea.Model
+	current     string
+	dirty       bool
+	editing     bool // focus is in the editor, not the list
+	prompt      cloudInitPrompt
+	promptFm    simpleForm
+	panelHeight int // both side-by-side panels are pinned to this, see View()
 }
 
 func newCloudInitModel() cloudInitModel {
@@ -48,14 +50,49 @@ func newCloudInitModel() cloudInitModel {
 	return cloudInitModel{list: l, editor: ta}
 }
 
+// boxOverhead is how much wider styleBox's rounded border plus its
+// horizontal padding makes a rendered block than the content given to
+// it (border left+right, 2, plus Padding(0,1)'s left+right, 2) — each
+// side-by-side panel needs its own content width shrunk by this before
+// handing it to list.SetSize/textarea.SetWidth, or the two boxes'
+// combined on-screen width overflows the terminal. boxHeightOverhead is
+// the same idea for height: just the border's top+bottom rows, since
+// Padding(0,1) has zero vertical padding.
+const (
+	boxOverhead       = 4
+	boxHeightOverhead = 2
+)
+
 func (m *cloudInitModel) setSize(width, height int) {
-	listWidth := width / 3
-	if listWidth < 20 {
-		listWidth = 20
+	const gutter = 2 // the spacer lipgloss.JoinHorizontal puts between the two boxes
+	inner := width - 2*boxOverhead - gutter
+	if inner < 20 {
+		inner = 20
 	}
-	m.list.SetSize(listWidth, height)
-	m.editor.SetWidth(width - listWidth - 4)
-	m.editor.SetHeight(height - 2)
+	listWidth := inner / 3
+	if listWidth < 16 {
+		listWidth = 16
+	}
+	editorWidth := inner - listWidth
+	if editorWidth < 12 {
+		editorWidth = 12
+	}
+
+	// Both panels are pinned to this same content height in View()
+	// (via an explicit lipgloss .Height(), not just SetSize/SetHeight)
+	// regardless of how few items the list has or how little text is in
+	// the editor — bubbles' list.Model doesn't pad itself to fill its
+	// given height the way textarea.Model does, so without this the two
+	// side-by-side boxes end up wildly different heights. Caught on a
+	// real run, not designed in up front.
+	m.panelHeight = height - boxHeightOverhead - 1 // -1: the "Editor: name" title line inside the right box
+	if m.panelHeight < 3 {
+		m.panelHeight = 3
+	}
+
+	m.list.SetSize(listWidth, m.panelHeight+1) // +1: the list has no separate title line to budget for
+	m.editor.SetWidth(editorWidth)
+	m.editor.SetHeight(m.panelHeight)
 }
 
 func (m model) updateCloudInit(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -135,7 +172,7 @@ func (m model) updateCloudInitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "esc", "q":
-		m.screen = screenMenu
+		m.sidebarFocused = true
 		return m, nil
 	case "n":
 		ci.prompt = cloudInitPromptNew
@@ -261,9 +298,16 @@ func (m cloudInitModel) View() string {
 		listBox = styleBoxFocused
 	}
 
-	left := listBox.Render(m.list.View())
+	// The right box is a title line plus the editor, which textarea
+	// already fills to exactly m.panelHeight lines — total
+	// m.panelHeight+1. The left box's list doesn't pad itself to fill
+	// its given height the way textarea does, so it's pinned explicitly
+	// to that same total via lipgloss, or the two boxes end up wildly
+	// different heights. Caught on a real run, not designed in up front.
+	totalHeight := m.panelHeight + 1
+	left := listBox.Render(lipgloss.NewStyle().Height(totalHeight).Render(m.list.View()))
 	right := editorBox.Render(styleFieldLabel.Render(editorTitle) + "\n" + m.editor.View())
 
 	help := helpBar("n", "new", "m", "import", "r", "rename", "d", "delete", "e", "edit", "ctrl+s", "save", "esc", "back")
-	return left + "  " + right + "\n" + help
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right) + "\n" + help
 }

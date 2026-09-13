@@ -86,11 +86,12 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "esc", "q":
-		m.screen = screenMenu
+		m.sidebarFocused = true
 		return m, nil
 	case "n":
 		m.screen = screenLaunch
 		m.launch = newLaunchModel()
+		m.launch.form.SetHeight(contentHeight(m.height) - 2)
 		return m, nil
 	case "r":
 		m.instances.loading = true

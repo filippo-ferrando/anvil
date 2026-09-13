@@ -45,6 +45,7 @@ func NewRootCommand() *cobra.Command {
 		newTransferCommand(flags),
 		newLogsCommand(flags),
 		newImageCommand(flags),
+		newFindCommand(flags),
 		newMountCommand(flags),
 		newUmountCommand(flags),
 		newCreateDirCommand(flags),

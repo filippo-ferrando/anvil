@@ -1236,16 +1236,74 @@ without `sudo cat` anyway).
       package both import, instead of the TUI growing a second copy to drift out
       of sync with the CLI's, same reasoning as `internal/hostpath`'s extraction
       earlier this session
-- [ ] **not build tested, and can't be in this sandbox**: no real TTY here, and no
-      network access to fetch `github.com/charmbracelet/bubbletea`/`bubbles`/
-      `lipgloss` at all (see the Makefile's `tui-deps` target, `go get ...@latest`
-      since this sandbox also can't verify a specific version tag actually exists
-      to pin one in `go.mod` honestly). Written against Bubble Tea's core API
-      (`Model`/`Update`/`View`, `bubbles`' list/textinput/textarea,
-      `tea.ExecProcess`), reviewed carefully, gofmt-clean, but genuinely
-      unexercised; a real `anvil tui` walkthrough is squarely what needs to happen
-      on your own machine, exactly like the plan's own verification note for this
-      milestone always said it would
+- [x] **actually build tested this round, not just reviewed**: filippo built the
+      real package on his own machine (`make tui-deps` resolved real
+      `bubbletea`/`bubbles`/`lipgloss` versions this sandbox never could) and ran
+      `anvil tui` for real, which is exactly what caught the bugs documented below.
+      This sandbox still can't build (no network access to fetch the same three
+      dependencies) but found a way to test anyway: a `pty`-backed Python harness
+      (`os.openpty` plus feeding keystrokes to the already-installed `/usr/bin/anvil`
+      binary from filippo's last build) let this session drive the real TUI headless
+      and capture its actual rendered frames, which is how the layout bugs below got
+      confirmed and root-caused precisely instead of guessed at. It could only
+      exercise the binary as it existed *before* this round's fixes, though; the
+      fixes themselves are reviewed and gofmt-clean but not re-verified the same
+      way, since rebuilding still needs real network access this sandbox doesn't
+      have. A real rebuild-and-test cycle on your end is still what actually confirms them.
+- [x] **real bug, confirmed with the pty harness**: the Cloud-Init and Migration
+      screens' side-by-side panels were built with plain string concatenation
+      (`left + "  " + right`) instead of `lipgloss.JoinHorizontal`, which doesn't
+      lay out multi-line blocks side by side at all, it just appends one block's
+      text after the other's. Exactly the two screens reported broken were the only
+      two using a side-by-side layout at all. Fixed everywhere this pattern was used.
+- [x] **a second, related real bug**: even with `JoinHorizontal` fixed, the two
+      panels ended up wildly different heights: `bubbles/list.Model` doesn't pad
+      its own output to fill the height passed to `SetSize` the way `textarea.Model`
+      does, so an empty or short list rendered as a much shorter box than the
+      taller panel next to it. Fixed by pinning both panels to an explicit height via
+      `lipgloss.NewStyle().Height(n).Render(...)` before adding the border, in both
+      Cloud-Init and Migration.
+- [x] **a third real bug, also pty-confirmed**: the launch form's `Name`/`Image`/
+      `CPUs`/`Memory` fields were themselves in the captured frame, at the very top,
+      just already scrolled off the terminal's visible area: eleven fields, each
+      wrapped in its own bordered box (three lines minimum per field just for the
+      border), produced more total lines than a normal terminal has rows, and the
+      earliest-printed lines (the title and first fields) get pushed out as the
+      terminal's own scrolling keeps up with everything printed below. Fixed with
+      two changes to the shared `simpleForm`: compact rendering (no per-field box,
+      a colored `┃` bar instead of a border to show focus, a hint line only under
+      the focused field, not every field) and a `SetHeight`-driven scroll window
+      that keeps whichever field is focused visible, with "↑ more above"/"↓ more
+      below" indicators when the form doesn't fit. Wired in wherever a form is
+      constructed (the launch form, mirror-add, host-add), sized from the model's
+      own last-known terminal height.
+- [x] **layout, requested explicitly**: rebuilt around a persistent left sidebar
+      with the active page centered after it (Hyperpass's own shape), replacing
+      the earlier full-screen menu you navigated away from and back to. The
+      sidebar (`Instances`/`Images`/`Cloud-Init`/`Mirrors`/`Migration`) is always
+      visible; `up`/`down` on it instantly switches (and reloads) whichever page is
+      showing next to it, `enter`/`right` moves keyboard focus into that page,
+      `esc` hands focus back to the sidebar rather than to a separate destination
+      (there isn't one anymore). `anvil launch` (reached via Instances' `n`) is the
+      one exception, a full-width takeover with no sidebar, matching how a modal
+      form is usually presented rather than being its own nav destination.
+- [x] **feature gap, flagged explicitly ("TUI and CLI miss the option to list the
+      available cloud images")**: `ImageService` only ever covered the downloaded/
+      cached tier (`internal/vm/image.Vault`); nothing exposed the *catalog* of
+      distro images that can actually be downloaded and launched, not in the CLI,
+      not in the TUI, even though `internal/vm.Backend` already had the merge logic
+      (built-in catalog plus enabled mirrors) via its own (renamed, now exported)
+      `EffectiveCatalog`. Fixed at every layer: a new `ImageService.Catalog` RPC
+      (backed by `Backend.ListCatalog`, the exact same merge a real launch
+      resolves against, not a separate copy), a new CLI command, `anvil find
+      [term]` (was in the original plan's CLI surface, never actually built until
+      now), and the TUI's new Images screen shows cached images and the catalog
+      side by side.
+- [x] Images screen (new, M8 was missing it from the original checklist too): cached
+      images (`ImageService.List`/`Delete`) next to the catalog
+      (`ImageService.Catalog`), `tab` to switch which panel has focus, `x` to
+      delete a cached image (confirm overlay, cached only; a catalog entry isn't
+      anything to delete), `r` to refresh both.
 
 ## Things we already know are unresolved
 

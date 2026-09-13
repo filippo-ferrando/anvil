@@ -966,8 +966,9 @@ var MirrorService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ImageService_List_FullMethodName   = "/anvil.v1.ImageService/List"
-	ImageService_Delete_FullMethodName = "/anvil.v1.ImageService/Delete"
+	ImageService_List_FullMethodName    = "/anvil.v1.ImageService/List"
+	ImageService_Delete_FullMethodName  = "/anvil.v1.ImageService/Delete"
+	ImageService_Catalog_FullMethodName = "/anvil.v1.ImageService/Catalog"
 )
 
 // ImageServiceClient is the client API for ImageService service.
@@ -982,6 +983,13 @@ const (
 type ImageServiceClient interface {
 	List(ctx context.Context, in *ImageListRequest, opts ...grpc.CallOption) (*ImageListReply, error)
 	Delete(ctx context.Context, in *ImageDeleteRequest, opts ...grpc.CallOption) (*ImageDeleteReply, error)
+	// Catalog lists the source distro images `anvil launch --kind vm
+	// <id>` resolves against — the built-in multi-distro catalog merged
+	// with every enabled VM mirror (internal/vm.Backend.EffectiveCatalog),
+	// the same merge a real launch uses, not a separate listing. This is
+	// the catalog of what *can* be downloaded and launched; ImageService's
+	// List above is the different, already-downloaded cache tier.
+	Catalog(ctx context.Context, in *CatalogRequest, opts ...grpc.CallOption) (*CatalogReply, error)
 }
 
 type imageServiceClient struct {
@@ -1012,6 +1020,16 @@ func (c *imageServiceClient) Delete(ctx context.Context, in *ImageDeleteRequest,
 	return out, nil
 }
 
+func (c *imageServiceClient) Catalog(ctx context.Context, in *CatalogRequest, opts ...grpc.CallOption) (*CatalogReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CatalogReply)
+	err := c.cc.Invoke(ctx, ImageService_Catalog_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ImageServiceServer is the server API for ImageService service.
 // All implementations must embed UnimplementedImageServiceServer
 // for forward compatibility.
@@ -1024,6 +1042,13 @@ func (c *imageServiceClient) Delete(ctx context.Context, in *ImageDeleteRequest,
 type ImageServiceServer interface {
 	List(context.Context, *ImageListRequest) (*ImageListReply, error)
 	Delete(context.Context, *ImageDeleteRequest) (*ImageDeleteReply, error)
+	// Catalog lists the source distro images `anvil launch --kind vm
+	// <id>` resolves against — the built-in multi-distro catalog merged
+	// with every enabled VM mirror (internal/vm.Backend.EffectiveCatalog),
+	// the same merge a real launch uses, not a separate listing. This is
+	// the catalog of what *can* be downloaded and launched; ImageService's
+	// List above is the different, already-downloaded cache tier.
+	Catalog(context.Context, *CatalogRequest) (*CatalogReply, error)
 	mustEmbedUnimplementedImageServiceServer()
 }
 
@@ -1039,6 +1064,9 @@ func (UnimplementedImageServiceServer) List(context.Context, *ImageListRequest) 
 }
 func (UnimplementedImageServiceServer) Delete(context.Context, *ImageDeleteRequest) (*ImageDeleteReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
+}
+func (UnimplementedImageServiceServer) Catalog(context.Context, *CatalogRequest) (*CatalogReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Catalog not implemented")
 }
 func (UnimplementedImageServiceServer) mustEmbedUnimplementedImageServiceServer() {}
 func (UnimplementedImageServiceServer) testEmbeddedByValue()                      {}
@@ -1097,6 +1125,24 @@ func _ImageService_Delete_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ImageService_Catalog_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CatalogRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ImageServiceServer).Catalog(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ImageService_Catalog_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ImageServiceServer).Catalog(ctx, req.(*CatalogRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ImageService_ServiceDesc is the grpc.ServiceDesc for ImageService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1111,6 +1157,10 @@ var ImageService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Delete",
 			Handler:    _ImageService_Delete_Handler,
+		},
+		{
+			MethodName: "Catalog",
+			Handler:    _ImageService_Catalog_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

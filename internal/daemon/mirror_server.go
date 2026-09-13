@@ -83,7 +83,7 @@ func (s *MirrorServer) Add(ctx context.Context, req *anvilv1.MirrorAddRequest) (
 			return nil, fmt.Errorf("mirror: a vm mirror needs a manifest_url")
 		}
 		// Fetched and validated once here, not re-fetched on every launch —
-		// see internal/vm.Backend.effectiveCatalog.
+		// see internal/vm.Backend.EffectiveCatalog.
 		raw, err := image.FetchManifest(m.ManifestURL)
 		if err != nil {
 			return nil, err

@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 	"github.com/anvil-project/anvil/pkg/client"
@@ -28,6 +29,8 @@ type migrationModel struct {
 	migrateForm   simpleForm
 	migrating     bool
 	progressLines []string
+
+	panelHeight int // the hosts list is pinned to this, see View() and cloudinit.go's setSize
 }
 
 func newMigrationModel() migrationModel {
@@ -49,7 +52,14 @@ func newMigrateForm() simpleForm {
 }
 
 func (m *migrationModel) setSize(width, height int) {
-	m.hosts.SetSize(width/3, height)
+	// boxOverhead (see cloudinit.go) accounts for styleBox's own border
+	// plus padding, so the hosts box and the form box next to it don't
+	// combine to overflow the terminal's actual width.
+	m.panelHeight = height - boxHeightOverhead
+	if m.panelHeight < 3 {
+		m.panelHeight = 3
+	}
+	m.hosts.SetSize(width/3, m.panelHeight)
 }
 
 func (m model) updateMigration(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -173,7 +183,7 @@ func (m model) updateMigrationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "esc", "q":
-		m.screen = screenMenu
+		m.sidebarFocused = true
 		return m, nil
 	case "tab":
 		mg.focusForm = true
@@ -185,6 +195,7 @@ func (m model) updateMigrationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			textField("user@host[:port]", "", ""),
 			textField("Identity path (optional)", "", ""),
 		})
+		mg.addForm.SetHeight(contentHeight(m.height) - 2)
 		return m, nil
 	case "x":
 		if h := m.selectedHost(); h != nil {
@@ -238,11 +249,16 @@ func (m migrationModel) View() string {
 	} else {
 		hostsBox = styleBoxFocused
 	}
-	left := hostsBox.Render(m.hosts.View())
+	// Pinned explicitly, same reasoning as cloudinit.go's left panel:
+	// bubbles' list.Model doesn't pad itself to fill its given height
+	// the way a form's text naturally varies, so an empty/short hosts
+	// list would otherwise render as a much shorter box than the form
+	// next to it.
+	left := hostsBox.Render(lipgloss.NewStyle().Height(m.panelHeight).Render(m.hosts.View()))
 	right := formBox.Render(m.migrateForm.View())
 
 	help := helpBar("tab", "switch focus", "a", "add host", "x", "remove", "t", "test", "esc", "back")
-	return left + "  " + right + "\n" + help
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right) + "\n" + help
 }
 
 func startMigrateStream(c *client.Client, req *anvilv1.MigrateRequest) tea.Cmd {
