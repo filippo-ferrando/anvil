@@ -15,7 +15,15 @@ After=network.target
 #  - tap/bridge creation for an intent's shared network
 #    (internal/vm/network, real netlink calls): CAP_NET_ADMIN, granted
 #    as an ambient capability so it survives across exec despite the
-#    process not being root.
+#    process not being root — plus DeviceAllow=/dev/net/tun below, a
+#    second, separate enforcement layer that CAP_NET_ADMIN alone doesn't
+#    cover. Any DeviceAllow= entry flips DevicePolicy=auto's default
+#    from "allow everything" to "deny everything except what's listed"
+#    (see systemd.resource-control(5)), so once /dev/kvm was added here,
+#    /dev/net/tun access was silently cgroup-denied even with the right
+#    capability — caught on a real `anvil launch` into an intent, tap
+#    creation failed with a plain "operation not permitted" that had
+#    nothing to do with CAP_NET_ADMIN at all.
 #  - the Docker socket: NOT listed here as a supplementary group,
 #    deliberately — "docker" is an optional dependency and might not be
 #    installed (or its group might not exist) when this unit is loaded,
@@ -43,6 +51,7 @@ RestartSec=2
 AmbientCapabilities=CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_ADMIN
 DeviceAllow=/dev/kvm rw
+DeviceAllow=/dev/net/tun rw
 
 [Install]
 WantedBy=multi-user.target
