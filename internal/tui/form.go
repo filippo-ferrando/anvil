@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -9,13 +10,24 @@ import (
 )
 
 // simpleForm is a shared form component: Tab/Shift+Tab between fields,
-// Enter or a submit key to confirm, Esc to cancel.
+// Enter or a submit key to confirm, Esc to cancel. A text field can also
+// list Suggestions, which Tab cycles through bash-style instead of moving
+// focus (see completeCurrent).
 type simpleForm struct {
 	title     string
 	fields    []formField
 	focus     int
 	errMsg    string
 	maxHeight int // 0 means unconstrained; set via SetHeight
+
+	// Tab-completion cycling state: tabField is the field index currently
+	// mid-cycle (-1 when not completing), tabPrefix is what the user had
+	// actually typed before the first Tab press, and tabIdx is which match
+	// is currently showing — both needed so a second Tab advances to the
+	// *next* match instead of re-filtering against the already-completed text.
+	tabField  int
+	tabPrefix string
+	tabIdx    int
 }
 
 type fieldKind int
@@ -30,8 +42,9 @@ type formField struct {
 	Hint  string // small muted line under the field, e.g. the expected format
 	Kind  fieldKind
 
-	input textinput.Model // fieldText
-	on    bool            // fieldToggle
+	input       textinput.Model // fieldText
+	on          bool            // fieldToggle
+	Suggestions []string        // candidate values Tab can cycle through; nil disables it
 }
 
 // textField and toggleField construct a formField of each kind.
@@ -48,7 +61,7 @@ func toggleField(label, hint string, on bool) formField {
 }
 
 func newSimpleForm(title string, fields []formField) simpleForm {
-	f := simpleForm{title: title, fields: fields}
+	f := simpleForm{title: title, fields: fields, tabField: -1}
 	if len(f.fields) > 0 && f.fields[0].Kind == fieldText {
 		f.fields[0].input.Focus()
 	}
@@ -85,10 +98,21 @@ func (f simpleForm) update(msg tea.Msg) (simpleForm, bool, bool) {
 		return f, false, false
 	}
 
+	// Any key other than Tab itself ends a completion cycle — the next Tab
+	// (if any) starts a fresh one from whatever's in the field then.
+	if keyMsg.String() != "tab" {
+		f.tabField = -1
+	}
+
 	switch keyMsg.String() {
 	case "esc":
 		return f, false, true
-	case "tab", "down":
+	case "tab":
+		if f.completeCurrent() {
+			return f, false, false
+		}
+		fallthrough
+	case "down":
 		f.blurCurrent()
 		f.focus = (f.focus + 1) % len(f.fields)
 		f.focusCurrent()
@@ -122,6 +146,70 @@ func (f simpleForm) update(msg tea.Msg) (simpleForm, bool, bool) {
 		_ = cmd // the form doesn't need to relay textinput's blink cmd
 	}
 	return f, false, false
+}
+
+// completeCurrent tab-cycles the focused field's text through its
+// Suggestions that contain what the user actually typed (case-insensitive),
+// bash-menu-complete style: each further Tab press (without any other key
+// in between) advances to the next match instead of re-filtering. Returns
+// false when there's nothing to complete, so the caller falls back to Tab's
+// usual job of moving to the next field.
+func (f *simpleForm) completeCurrent() bool {
+	field := &f.fields[f.focus]
+	if field.Kind != fieldText || len(field.Suggestions) == 0 {
+		return false
+	}
+
+	prefix := field.input.Value()
+	continuing := f.tabField == f.focus
+	if continuing {
+		prefix = f.tabPrefix
+	}
+	matches := filterSuggestions(field.Suggestions, prefix)
+	if len(matches) == 0 {
+		return false
+	}
+
+	idx := 0
+	if continuing {
+		idx = (f.tabIdx + 1) % len(matches)
+	}
+	field.input.SetValue(matches[idx])
+	field.input.CursorEnd()
+	f.tabField, f.tabPrefix, f.tabIdx = f.focus, prefix, idx
+	return true
+}
+
+// filterSuggestions returns options containing query, case-insensitively —
+// an empty query matches everything, so Tab on a blank field cycles through
+// the full candidate list to let the user browse it.
+func filterSuggestions(options []string, query string) []string {
+	q := strings.ToLower(strings.TrimSpace(query))
+	var out []string
+	for _, s := range options {
+		if q == "" || strings.Contains(strings.ToLower(s), q) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// suggestionHint renders the focused field's matching Suggestions as a
+// short "→ a, b, c  (tab to cycle)" line, so the feature is discoverable
+// without having to already know it exists.
+func suggestionHint(field formField) string {
+	matches := filterSuggestions(field.Suggestions, field.input.Value())
+	if len(matches) == 0 {
+		return ""
+	}
+	shown := matches
+	suffix := "  (tab to cycle)"
+	const maxShown = 5
+	if len(shown) > maxShown {
+		suffix = fmt.Sprintf("  +%d more (tab to cycle)", len(shown)-maxShown)
+		shown = shown[:maxShown]
+	}
+	return "→ " + strings.Join(shown, ", ") + suffix
 }
 
 func (f *simpleForm) blurCurrent() {
@@ -168,6 +256,11 @@ func (f simpleForm) View() string {
 			if focused && field.Hint != "" {
 				lines = append(lines, "  "+styleSubtitle.Render(field.Hint))
 			}
+			if focused {
+				if hint := suggestionHint(field); hint != "" {
+					lines = append(lines, "  "+styleSubtitle.Render(hint))
+				}
+			}
 		}
 	}
 
@@ -180,7 +273,7 @@ func (f simpleForm) View() string {
 		content = windowLines(lines, focusLine, f.maxHeight)
 	}
 
-	return strings.Join(content, "\n") + "\n\n" + helpBar("tab", "next field", "enter", "submit", "esc", "cancel")
+	return strings.Join(content, "\n") + "\n\n" + helpBar("tab", "next field / complete", "enter", "submit", "esc", "cancel")
 }
 
 // windowLines returns at most maxHeight consecutive lines centered on focusLine.

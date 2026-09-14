@@ -226,8 +226,17 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "n":
 		m.screen = screenLaunch
 		m.launch = newLaunchModel()
-		m.launch.form.SetHeight(contentHeight(m.height) - 2)
-		return m, nil
+		m.launch.setSize(m.width, contentHeight(m.height))
+		// Fetch autocomplete candidates fresh every time — fast local
+		// daemon calls, and each fills in one field's Suggestions
+		// independently of the others as it lands (see updateLaunch).
+		return m, tea.Batch(
+			loadIntents(m.client),
+			loadCloudInitList(m.client),
+			loadCatalog(m.client),
+			loadCachedImages(m.client),
+			loadContainerImages(m.client),
+		)
 	case "l":
 		if inst := m.selectedInstance(); inst != nil {
 			m.screen = screenLogs

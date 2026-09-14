@@ -33,6 +33,29 @@ type launchModel struct {
 	cloudInitEditor     textarea.Model
 	cloudInitOverride   string
 	cloudInitOverrideOK bool
+
+	// suggest holds Tab-completion candidates gathered from the other
+	// screens' data, (re)fetched fresh each time Launch is entered.
+	suggest launchSuggestions
+}
+
+// launchSuggestions holds autocomplete candidates for the launch form.
+type launchSuggestions struct {
+	vmImages        []string // catalog ids ∪ already-cached ids
+	containerImages []string // repo:tag refs of already-pulled images
+	intents         []string // existing intent names
+	cloudInits      []string // saved cloud-init library entries
+	roles           []string // roles already in use across every intent's members
+}
+
+// imagesFor returns the Image-field candidates relevant to kind — a VM's
+// image ref and a container's image ref come from entirely different
+// namespaces (a vault catalog id vs. a Docker repo:tag).
+func (s launchSuggestions) imagesFor(kind string) []string {
+	if kind == "container" {
+		return s.containerImages
+	}
+	return s.vmImages
 }
 
 func newLaunchModel() launchModel {
@@ -43,6 +66,17 @@ func newLaunchModel() launchModel {
 		form:            newSimpleForm(launchTitle("vm"), launchFields("vm", nil)),
 		cloudInitEditor: ta,
 	}
+}
+
+// setSize sizes both the form and the cloud-init editor. It must be called
+// not just on a real terminal resize but every time a fresh launchModel
+// replaces the old one (entering the Launch screen via "n") — a brand new
+// textarea.Model starts at a zero-sized viewport.New(0,0) and stays that
+// way, looking tiny, until something calls SetWidth/SetHeight on it.
+func (m *launchModel) setSize(width, height int) {
+	m.form.SetHeight(height - 2)
+	m.cloudInitEditor.SetWidth(width - 4)
+	m.cloudInitEditor.SetHeight(height - 2)
 }
 
 // launchTitle is the form's title bar, mentioning ctrl+e only for a VM —
@@ -94,6 +128,60 @@ func launchFields(kind string, values map[string]string) []formField {
 	return fields
 }
 
+// applySuggestions pushes m.suggest's current candidate lists into the
+// already-built fields in place, without reconstructing them — a
+// reconstruction (as launchFields would do) would cost the user's
+// in-progress typing and focus every time another load reply lands.
+func (m *launchModel) applySuggestions() {
+	m.setFieldSuggestions("Image", m.suggest.imagesFor(m.kind))
+	m.setFieldSuggestions("Intent name (optional)", m.suggest.intents)
+	m.setFieldSuggestions(cloudInitNameField, m.suggest.cloudInits)
+	m.setFieldSuggestions("Role (optional, needs intent)", m.suggest.roles)
+}
+
+func (m *launchModel) setFieldSuggestions(label string, options []string) {
+	for i := range m.form.fields {
+		if m.form.fields[i].Label == label {
+			m.form.fields[i].Suggestions = options
+		}
+	}
+}
+
+// collectRoles gathers the distinct, non-empty roles already used across
+// every intent's members, so a new instance joining a fleet can reuse an
+// existing role name (e.g. always "web") instead of typing a near-duplicate.
+func collectRoles(intents []*anvilv1.Intent) []string {
+	seen := make(map[string]bool)
+	var roles []string
+	for _, it := range intents {
+		for _, mem := range it.GetMembers() {
+			if r := mem.GetRole(); r != "" && !seen[r] {
+				seen[r] = true
+				roles = append(roles, r)
+			}
+		}
+	}
+	return roles
+}
+
+// mergeUnique appends add's not-already-present entries to existing —
+// vmImages is filled by two independent loads (catalog + cached) that can
+// land in either order, so neither may clobber what the other already set.
+func mergeUnique(existing, add []string) []string {
+	seen := make(map[string]bool, len(existing))
+	out := append([]string(nil), existing...)
+	for _, s := range existing {
+		seen[s] = true
+	}
+	for _, s := range add {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // formValues snapshots every field's current text value, keyed by label,
 // for launchFields to carry over across a kind switch.
 func formValues(f simpleForm) map[string]string {
@@ -142,6 +230,60 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.launch.cloudInitEditor.Focus()
 		return m, nil
 
+	// The four loads fired when Launch was entered — each fills in one
+	// slice of autocomplete candidates as its RPC comes back, independently.
+	case intentsLoadedMsg:
+		if msg.err == nil {
+			names := make([]string, 0, len(msg.intents))
+			for _, it := range msg.intents {
+				names = append(names, it.GetName())
+			}
+			m.launch.suggest.intents = names
+			m.launch.suggest.roles = collectRoles(msg.intents)
+			m.launch.applySuggestions()
+		}
+		return m, nil
+	case cloudInitListLoadedMsg:
+		if msg.err == nil {
+			names := make([]string, 0, len(msg.configs))
+			for _, c := range msg.configs {
+				names = append(names, c.GetName())
+			}
+			m.launch.suggest.cloudInits = names
+			m.launch.applySuggestions()
+		}
+		return m, nil
+	case catalogLoadedMsg:
+		if msg.err == nil {
+			ids := make([]string, 0, len(msg.entries))
+			for _, e := range msg.entries {
+				ids = append(ids, e.GetId())
+			}
+			m.launch.suggest.vmImages = mergeUnique(m.launch.suggest.vmImages, ids)
+			m.launch.applySuggestions()
+		}
+		return m, nil
+	case cachedImagesLoadedMsg:
+		if msg.err == nil {
+			ids := make([]string, 0, len(msg.images))
+			for _, im := range msg.images {
+				ids = append(ids, im.GetId())
+			}
+			m.launch.suggest.vmImages = mergeUnique(m.launch.suggest.vmImages, ids)
+			m.launch.applySuggestions()
+		}
+		return m, nil
+	case containerImagesLoadedMsg:
+		if msg.err == nil {
+			var refs []string
+			for _, im := range msg.images {
+				refs = append(refs, im.GetRepoTags()...)
+			}
+			m.launch.suggest.containerImages = refs
+			m.launch.applySuggestions()
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		if m.launch.launching {
 			return m, nil // one thing at a time — ignore input mid-launch
@@ -160,6 +302,8 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.launch.form.title = launchTitle(m.launch.kind)
 			m.launch.form.fields = launchFields(m.launch.kind, values)
+			m.launch.form.tabField = -1 // stale index into the fields slice we just replaced
+			m.launch.applySuggestions() // the new fields start with no Suggestions of their own
 			if m.launch.form.focus >= len(m.launch.form.fields) {
 				m.launch.form.focus = 0
 			}
