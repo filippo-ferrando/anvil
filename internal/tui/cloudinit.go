@@ -15,10 +15,7 @@ func (i cloudInitItem) FilterValue() string { return i.name }
 func (i cloudInitItem) Title() string       { return i.name }
 func (i cloudInitItem) Description() string { return "" }
 
-// cloudInitPrompt identifies which small overlay form (if any) is
-// currently up over the list+editor split — new/import/rename each
-// reuse the same simpleForm, just with different fields and a different
-// completion action.
+// cloudInitPrompt identifies which overlay form, if any, is showing over the list+editor split.
 type cloudInitPrompt int
 
 const (
@@ -38,7 +35,7 @@ type cloudInitModel struct {
 	editing     bool // focus is in the editor, not the list
 	prompt      cloudInitPrompt
 	promptFm    simpleForm
-	panelHeight int // both side-by-side panels are pinned to this, see View()
+	panelHeight int // shared height for both side-by-side panels
 
 	importingRepo bool // showing the ImportRepo streaming progress instead of the list+editor split
 	importLines   []string
@@ -46,7 +43,7 @@ type cloudInitModel struct {
 
 func newCloudInitModel() cloudInitModel {
 	l := list.New(nil, list.NewDefaultDelegate(), 0, 0)
-	l.SetFilteringEnabled(false) // small lists; also avoids single-letter shortcuts (n/s/d/...) colliding with filter typing
+	l.SetFilteringEnabled(false) // avoids single-letter shortcuts colliding with filter typing
 	l.Title = "Configs"
 	l.SetShowHelp(false)
 	ta := textarea.New()
@@ -54,21 +51,15 @@ func newCloudInitModel() cloudInitModel {
 	return cloudInitModel{list: l, editor: ta}
 }
 
-// boxOverhead is how much wider styleBox's rounded border plus its
-// horizontal padding makes a rendered block than the content given to
-// it (border left+right, 2, plus Padding(0,1)'s left+right, 2) — each
-// side-by-side panel needs its own content width shrunk by this before
-// handing it to list.SetSize/textarea.SetWidth, or the two boxes'
-// combined on-screen width overflows the terminal. boxHeightOverhead is
-// the same idea for height: just the border's top+bottom rows, since
-// Padding(0,1) has zero vertical padding.
+// boxOverhead and boxHeightOverhead are the extra width/height styleBox's
+// border and padding add beyond a panel's content.
 const (
 	boxOverhead       = 4
 	boxHeightOverhead = 2
 )
 
 func (m *cloudInitModel) setSize(width, height int) {
-	const gutter = 2 // the spacer lipgloss.JoinHorizontal puts between the two boxes
+	const gutter = 2 // spacer between the two boxes
 	inner := width - 2*boxOverhead - gutter
 	if inner < 20 {
 		inner = 20
@@ -82,19 +73,13 @@ func (m *cloudInitModel) setSize(width, height int) {
 		editorWidth = 12
 	}
 
-	// Both panels are pinned to this same content height in View()
-	// (via an explicit lipgloss .Height(), not just SetSize/SetHeight)
-	// regardless of how few items the list has or how little text is in
-	// the editor — bubbles' list.Model doesn't pad itself to fill its
-	// given height the way textarea.Model does, so without this the two
-	// side-by-side boxes end up wildly different heights. Caught on a
-	// real run, not designed in up front.
-	m.panelHeight = height - boxHeightOverhead - 1 // -1: the "Editor: name" title line inside the right box
+	// Both panels are pinned to this same content height.
+	m.panelHeight = height - boxHeightOverhead - 1 // -1: the "Editor: name" title line
 	if m.panelHeight < 3 {
 		m.panelHeight = 3
 	}
 
-	m.list.SetSize(listWidth, m.panelHeight+1) // +1: the list has no separate title line to budget for
+	m.list.SetSize(listWidth, m.panelHeight+1) // +1: list has no separate title line
 	m.editor.SetWidth(editorWidth)
 	m.editor.SetHeight(m.panelHeight)
 }
@@ -177,10 +162,7 @@ func (m model) updateCloudInitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	ci := &m.cloudInit
 
 	if ci.importingRepo {
-		// Esc (or any key) only dismisses the progress view — an import
-		// still in flight keeps running and applying its results either
-		// way, see the cloudInitImportStreamMsg handler above; this just
-		// stops watching it.
+		// Any key only dismisses the progress view; the import keeps running.
 		ci.importingRepo = false
 		return m, nil
 	}
@@ -362,12 +344,7 @@ func (m cloudInitModel) View() string {
 		listBox = styleBoxFocused
 	}
 
-	// The right box is a title line plus the editor, which textarea
-	// already fills to exactly m.panelHeight lines — total
-	// m.panelHeight+1. The left box's list doesn't pad itself to fill
-	// its given height the way textarea does, so it's pinned explicitly
-	// to that same total via lipgloss, or the two boxes end up wildly
-	// different heights. Caught on a real run, not designed in up front.
+	// Pin the list box to the same total height as the editor box.
 	totalHeight := m.panelHeight + 1
 	left := listBox.Render(lipgloss.NewStyle().Height(totalHeight).Render(m.list.View()))
 	right := editorBox.Render(styleFieldLabel.Render(editorTitle) + "\n" + m.editor.View())

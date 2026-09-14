@@ -10,8 +10,7 @@ import (
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 )
 
-// printExtraHosts shows a Host: line per entry, sorted by name for a
-// stable, readable order rather than Go's random map iteration.
+// printExtraHosts prints a "Host:" line per entry, sorted by name.
 func printExtraHosts(w io.Writer, hosts map[string]string) {
 	names := make([]string, 0, len(hosts))
 	for name := range hosts {

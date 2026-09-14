@@ -6,6 +6,8 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 	"github.com/anvil-project/anvil/pkg/client"
@@ -17,8 +19,8 @@ func newIntentCommand(flags *globalFlags) *cobra.Command {
 		Short: "Manage intents: named groups of VM/container instances",
 		Long: "Manage intents: named groups of VM/container instances. A member is " +
 			"provisioned exactly the way a standalone `anvil launch` would be, just tagged " +
-			"with the intent's name and a role. There's no shared network between members " +
-			"yet, see PLAN.md.",
+			"with the intent's name and a role. Every member shares one network and can " +
+			"resolve every other member by name.",
 	}
 	cmd.AddCommand(
 		newIntentCreateCommand(flags),
@@ -39,12 +41,8 @@ type memberFlag struct {
 	image string
 }
 
-// parseMemberFlags turns --vm/--container repeated flag values (each
-// "role:image", split on the first colon only since an image reference can
-// itself contain one, e.g. "cache:redis:7") into an ordered member list.
-// vmSpecs are processed before containerSpecs; order within each flag is
-// preserved, order across the two isn't meaningful (each member is an
-// independent Launch call).
+// parseMemberFlags turns --vm/--container repeated flag values (each "role:image",
+// split on the first colon) into an ordered member list, VMs before containers.
 func parseMemberFlags(vmSpecs, containerSpecs []string) ([]memberFlag, error) {
 	var out []memberFlag
 	for _, spec := range vmSpecs {
@@ -86,8 +84,13 @@ func newIntentCreateCommand(flags *globalFlags) *cobra.Command {
 			}
 			defer c.Close()
 
-			if _, err := c.Intent.Info(cmd.Context(), &anvilv1.IntentInfoRequest{Name: name}); err == nil {
+			_, err = c.Intent.Info(cmd.Context(), &anvilv1.IntentInfoRequest{Name: name})
+			switch {
+			case err == nil:
 				return fmt.Errorf("intent %q already exists, use `anvil intent add` to grow it", name)
+			case status.Code(err) == codes.NotFound:
+			default:
+				return fmt.Errorf("intent: checking whether %q already exists: %w", name, err)
 			}
 			for _, m := range members {
 				if err := launchMember(cmd, c, name, m); err != nil {
@@ -125,7 +128,10 @@ func newIntentAddCommand(flags *globalFlags) *cobra.Command {
 			defer c.Close()
 
 			if _, err := c.Intent.Info(cmd.Context(), &anvilv1.IntentInfoRequest{Name: name}); err != nil {
-				return fmt.Errorf("no such intent %q, use `anvil intent create` first", name)
+				if status.Code(err) == codes.NotFound {
+					return fmt.Errorf("no such intent %q, use `anvil intent create` first", name)
+				}
+				return fmt.Errorf("intent: looking up %q: %w", name, err)
 			}
 			for _, m := range members {
 				if err := launchMember(cmd, c, name, m); err != nil {
@@ -140,11 +146,7 @@ func newIntentAddCommand(flags *globalFlags) *cobra.Command {
 	return cmd
 }
 
-// launchMember runs one member through the normal streaming Launch RPC,
-// tagged with intentName/role — the same path `anvil launch --intent
-// <name> --role <role>` takes. Resource flags (cpus, env, volumes, ...)
-// aren't exposed here; use `anvil launch --intent/--role` directly for a
-// member that needs more than "just an image".
+// launchMember runs one member through the streaming Launch RPC, tagged with intentName/role.
 func launchMember(cmd *cobra.Command, c *client.Client, intentName string, m memberFlag) error {
 	req := &anvilv1.LaunchRequest{
 		Name:       intentName + "-" + m.role,

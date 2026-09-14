@@ -11,20 +11,8 @@ import (
 	"github.com/anvil-project/anvil/internal/migrate/payload"
 )
 
-// newMigrateImportCommand is `anvil migrate-import`: plumbing, not meant
-// to be run by hand. This is the "target's own local anvil CLI" the
-// plan's Migration section describes the source daemon driving over SSH
-// (see internal/migrate.Manager.Migrate) — it reads a payload.Payload as
-// JSON from stdin (never as command-line arguments: a fixed,
-// argument-free remote command sidesteps needing to shell-quote arbitrary
-// spec content), relaunches it via a normal Launch call against this
-// host's own local anvild, and prints a final MIGRATE_OK/MIGRATE_FAIL
-// line the source daemon parses to know whether it succeeded — every
-// other line is just forwarded progress, safe to ignore. Also the
-// per-member relaunch step of a whole-intent migration (M7): the payload
-// just carries an IntentName/Role too in that case, which flows straight
-// into the LaunchRequest below, so it joins the same-named intent here
-// exactly like a normal `anvil launch --intent` would.
+// newMigrateImportCommand reads a payload.Payload as JSON from stdin,
+// relaunches it, and prints a final MIGRATE_OK/MIGRATE_FAIL line.
 func newMigrateImportCommand(flags *globalFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:    "migrate-import",

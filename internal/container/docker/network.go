@@ -4,21 +4,16 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 )
 
-// NetworkCreateParams describes a bridge network to create for one
-// intent's shared network (see internal/intent). bridgeInterface is
-// requested explicitly via the driver's own bridge.name option instead of
-// letting Docker pick its own (undocumented, version-dependent) default
-// name — this is what lets internal/vm/network attach a VM's tap device
-// to a known, stable interface name rather than guessing at Docker's
-// internal naming convention.
+// NetworkCreateParams describes a bridge network to create.
 type NetworkCreateParams struct {
 	Name            string
 	BridgeInterface string
 	Subnet          string // CIDR, e.g. "10.55.201.0/24"
 	Gateway         string // e.g. "10.55.201.1"
-	IPRange         string // CIDR sub-range Docker's own IPAM may assign from, e.g. "10.55.201.128/25" — reserves the rest for anvil's own static VM assignments, see internal/intent
+	IPRange         string // CIDR sub-range for Docker's IPAM to assign from, e.g. "10.55.201.128/25"
 }
 
 type networkIPAMConfig struct {
@@ -42,11 +37,7 @@ type createNetworkResponse struct {
 	ID string `json:"Id"`
 }
 
-// CreateNetwork creates a new bridge network, returning its engine-
-// assigned ID. Docker rejects a duplicate name (see NetworkExists — check
-// first) and a subnet that collides with another network on the host
-// (the caller should be prepared to retry with a different subnet, see
-// internal/intent's subnet allocation).
+// CreateNetwork creates a new bridge network, returning its engine-assigned ID.
 func (c *Client) CreateNetwork(ctx context.Context, p NetworkCreateParams) (string, error) {
 	req := createNetworkRequest{
 		Name:   p.Name,
@@ -73,7 +64,7 @@ func (c *Client) CreateNetwork(ctx context.Context, p NetworkCreateParams) (stri
 
 // NetworkExists reports whether a network named name already exists.
 func (c *Client) NetworkExists(ctx context.Context, name string) (bool, error) {
-	resp, err := c.do(ctx, http.MethodGet, "/networks/"+name, nil)
+	resp, err := c.do(ctx, http.MethodGet, "/networks/"+url.PathEscape(name), nil)
 	if err != nil {
 		return false, err
 	}
@@ -88,10 +79,9 @@ func (c *Client) NetworkExists(ctx context.Context, name string) (bool, error) {
 	}
 }
 
-// RemoveNetwork deletes a network. An already-gone network is not an
-// error, matching RemoveContainer's idempotency.
+// RemoveNetwork deletes a network. An already-gone network is not an error.
 func (c *Client) RemoveNetwork(ctx context.Context, name string) error {
-	resp, err := c.do(ctx, http.MethodDelete, "/networks/"+name, nil)
+	resp, err := c.do(ctx, http.MethodDelete, "/networks/"+url.PathEscape(name), nil)
 	if err != nil {
 		return err
 	}

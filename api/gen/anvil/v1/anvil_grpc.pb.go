@@ -29,6 +29,7 @@ const (
 	InstanceService_Logs_FullMethodName   = "/anvil.v1.InstanceService/Logs"
 	InstanceService_Mount_FullMethodName  = "/anvil.v1.InstanceService/Mount"
 	InstanceService_Umount_FullMethodName = "/anvil.v1.InstanceService/Umount"
+	InstanceService_Stats_FullMethodName  = "/anvil.v1.InstanceService/Stats"
 )
 
 // InstanceServiceClient is the client API for InstanceService service.
@@ -36,8 +37,6 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // InstanceService manages the lifecycle of VM and container instances.
-// This is the M1 slice: VM-only fields are populated today, container
-// fields exist so the wire schema doesn't need a breaking change in M3.
 type InstanceServiceClient interface {
 	Launch(ctx context.Context, in *LaunchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LaunchProgress], error)
 	List(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListReply, error)
@@ -49,6 +48,8 @@ type InstanceServiceClient interface {
 	Logs(ctx context.Context, in *LogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogChunk], error)
 	Mount(ctx context.Context, in *MountRequest, opts ...grpc.CallOption) (*MountReply, error)
 	Umount(ctx context.Context, in *UmountRequest, opts ...grpc.CallOption) (*UmountReply, error)
+	// Stats returns a live resource-usage snapshot for a running instance.
+	Stats(ctx context.Context, in *StatsRequest, opts ...grpc.CallOption) (*StatsReply, error)
 }
 
 type instanceServiceClient struct {
@@ -177,13 +178,21 @@ func (c *instanceServiceClient) Umount(ctx context.Context, in *UmountRequest, o
 	return out, nil
 }
 
+func (c *instanceServiceClient) Stats(ctx context.Context, in *StatsRequest, opts ...grpc.CallOption) (*StatsReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StatsReply)
+	err := c.cc.Invoke(ctx, InstanceService_Stats_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // InstanceServiceServer is the server API for InstanceService service.
 // All implementations must embed UnimplementedInstanceServiceServer
 // for forward compatibility.
 //
 // InstanceService manages the lifecycle of VM and container instances.
-// This is the M1 slice: VM-only fields are populated today, container
-// fields exist so the wire schema doesn't need a breaking change in M3.
 type InstanceServiceServer interface {
 	Launch(*LaunchRequest, grpc.ServerStreamingServer[LaunchProgress]) error
 	List(context.Context, *ListRequest) (*ListReply, error)
@@ -195,6 +204,8 @@ type InstanceServiceServer interface {
 	Logs(*LogsRequest, grpc.ServerStreamingServer[LogChunk]) error
 	Mount(context.Context, *MountRequest) (*MountReply, error)
 	Umount(context.Context, *UmountRequest) (*UmountReply, error)
+	// Stats returns a live resource-usage snapshot for a running instance.
+	Stats(context.Context, *StatsRequest) (*StatsReply, error)
 	mustEmbedUnimplementedInstanceServiceServer()
 }
 
@@ -234,6 +245,9 @@ func (UnimplementedInstanceServiceServer) Mount(context.Context, *MountRequest) 
 }
 func (UnimplementedInstanceServiceServer) Umount(context.Context, *UmountRequest) (*UmountReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Umount not implemented")
+}
+func (UnimplementedInstanceServiceServer) Stats(context.Context, *StatsRequest) (*StatsReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Stats not implemented")
 }
 func (UnimplementedInstanceServiceServer) mustEmbedUnimplementedInstanceServiceServer() {}
 func (UnimplementedInstanceServiceServer) testEmbeddedByValue()                         {}
@@ -422,6 +436,24 @@ func _InstanceService_Umount_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InstanceService_Stats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StatsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InstanceServiceServer).Stats(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InstanceService_Stats_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InstanceServiceServer).Stats(ctx, req.(*StatsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // InstanceService_ServiceDesc is the grpc.ServiceDesc for InstanceService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -461,6 +493,10 @@ var InstanceService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "Umount",
 			Handler:    _InstanceService_Umount_Handler,
 		},
+		{
+			MethodName: "Stats",
+			Handler:    _InstanceService_Stats_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -490,23 +526,15 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// CloudInitService manages the saved cloud-init user-data library (M2).
-// A VM's LaunchRequest can reference a saved config by name
-// (VMSpec.cloud_init_name) instead of shipping the content inline.
+// CloudInitService manages the saved cloud-init user-data library.
 type CloudInitServiceClient interface {
 	List(ctx context.Context, in *CloudInitListRequest, opts ...grpc.CallOption) (*CloudInitListReply, error)
 	Get(ctx context.Context, in *CloudInitGetRequest, opts ...grpc.CallOption) (*CloudInitGetReply, error)
 	Save(ctx context.Context, in *CloudInitSaveRequest, opts ...grpc.CallOption) (*CloudInitSaveReply, error)
 	Rename(ctx context.Context, in *CloudInitRenameRequest, opts ...grpc.CallOption) (*CloudInitRenameReply, error)
 	Delete(ctx context.Context, in *CloudInitDeleteRequest, opts ...grpc.CallOption) (*CloudInitDeleteReply, error)
-	// ImportRepo fetches a template-repo manifest (see docs/mirrors.md's
-	// "cloud-init template repos" section for the manifest shape and how
-	// to host one) and saves each listed template into the same saved
-	// library `anvil cloud-init *` already manages — same idea as a VM
-	// mirror's manifest, just for cloud-init templates instead of distro
-	// images, and fetched here (daemon-side) for the same reason: one
-	// implementation instead of a second copy in the CLI and another in
-	// the TUI.
+	// ImportRepo fetches a template-repo manifest and saves every listed
+	// template into the library. See docs/mirrors.md for the manifest shape.
 	ImportRepo(ctx context.Context, in *CloudInitImportRepoRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CloudInitImportRepoProgress], error)
 }
 
@@ -591,23 +619,15 @@ type CloudInitService_ImportRepoClient = grpc.ServerStreamingClient[CloudInitImp
 // All implementations must embed UnimplementedCloudInitServiceServer
 // for forward compatibility.
 //
-// CloudInitService manages the saved cloud-init user-data library (M2).
-// A VM's LaunchRequest can reference a saved config by name
-// (VMSpec.cloud_init_name) instead of shipping the content inline.
+// CloudInitService manages the saved cloud-init user-data library.
 type CloudInitServiceServer interface {
 	List(context.Context, *CloudInitListRequest) (*CloudInitListReply, error)
 	Get(context.Context, *CloudInitGetRequest) (*CloudInitGetReply, error)
 	Save(context.Context, *CloudInitSaveRequest) (*CloudInitSaveReply, error)
 	Rename(context.Context, *CloudInitRenameRequest) (*CloudInitRenameReply, error)
 	Delete(context.Context, *CloudInitDeleteRequest) (*CloudInitDeleteReply, error)
-	// ImportRepo fetches a template-repo manifest (see docs/mirrors.md's
-	// "cloud-init template repos" section for the manifest shape and how
-	// to host one) and saves each listed template into the same saved
-	// library `anvil cloud-init *` already manages — same idea as a VM
-	// mirror's manifest, just for cloud-init templates instead of distro
-	// images, and fetched here (daemon-side) for the same reason: one
-	// implementation instead of a second copy in the CLI and another in
-	// the TUI.
+	// ImportRepo fetches a template-repo manifest and saves every listed
+	// template into the library. See docs/mirrors.md for the manifest shape.
 	ImportRepo(*CloudInitImportRepoRequest, grpc.ServerStreamingServer[CloudInitImportRepoProgress]) error
 	mustEmbedUnimplementedCloudInitServiceServer()
 }
@@ -808,10 +828,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// MirrorService manages runtime-added image mirrors (M2 for VM manifest
-// mirrors, M3 for container registry mirrors). The built-in catalog
-// (data/distros/distribution-info.json) always applies; mirrors add to or
-// override it by priority.
+// MirrorService manages runtime-added VM image and container registry mirrors.
 type MirrorServiceClient interface {
 	Add(ctx context.Context, in *MirrorAddRequest, opts ...grpc.CallOption) (*MirrorAddReply, error)
 	List(ctx context.Context, in *MirrorListRequest, opts ...grpc.CallOption) (*MirrorListReply, error)
@@ -871,10 +888,7 @@ func (c *mirrorServiceClient) SetEnabled(ctx context.Context, in *MirrorSetEnabl
 // All implementations must embed UnimplementedMirrorServiceServer
 // for forward compatibility.
 //
-// MirrorService manages runtime-added image mirrors (M2 for VM manifest
-// mirrors, M3 for container registry mirrors). The built-in catalog
-// (data/distros/distribution-info.json) always applies; mirrors add to or
-// override it by priority.
+// MirrorService manages runtime-added VM image and container registry mirrors.
 type MirrorServiceServer interface {
 	Add(context.Context, *MirrorAddRequest) (*MirrorAddReply, error)
 	List(context.Context, *MirrorListRequest) (*MirrorListReply, error)
@@ -1033,20 +1047,11 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// ImageService manages the on-disk cache of downloaded VM base images
-// (internal/vm/image.Vault's "prepared" tier) — this is about the shared
-// base images instances are cloned from, not a per-instance disk. There's
-// no container-image equivalent here: once M3 lands, container images are
-// Docker's/Podman's own cache to manage, anvil doesn't duplicate that.
+// ImageService manages the on-disk cache of downloaded VM base images.
 type ImageServiceClient interface {
 	List(ctx context.Context, in *ImageListRequest, opts ...grpc.CallOption) (*ImageListReply, error)
 	Delete(ctx context.Context, in *ImageDeleteRequest, opts ...grpc.CallOption) (*ImageDeleteReply, error)
-	// Catalog lists the source distro images `anvil launch --kind vm
-	// <id>` resolves against — the built-in multi-distro catalog merged
-	// with every enabled VM mirror (internal/vm.Backend.EffectiveCatalog),
-	// the same merge a real launch uses, not a separate listing. This is
-	// the catalog of what *can* be downloaded and launched; ImageService's
-	// List above is the different, already-downloaded cache tier.
+	// Catalog lists every distro image `anvil launch --kind vm <id>` can resolve against.
 	Catalog(ctx context.Context, in *CatalogRequest, opts ...grpc.CallOption) (*CatalogReply, error)
 }
 
@@ -1092,20 +1097,11 @@ func (c *imageServiceClient) Catalog(ctx context.Context, in *CatalogRequest, op
 // All implementations must embed UnimplementedImageServiceServer
 // for forward compatibility.
 //
-// ImageService manages the on-disk cache of downloaded VM base images
-// (internal/vm/image.Vault's "prepared" tier) — this is about the shared
-// base images instances are cloned from, not a per-instance disk. There's
-// no container-image equivalent here: once M3 lands, container images are
-// Docker's/Podman's own cache to manage, anvil doesn't duplicate that.
+// ImageService manages the on-disk cache of downloaded VM base images.
 type ImageServiceServer interface {
 	List(context.Context, *ImageListRequest) (*ImageListReply, error)
 	Delete(context.Context, *ImageDeleteRequest) (*ImageDeleteReply, error)
-	// Catalog lists the source distro images `anvil launch --kind vm
-	// <id>` resolves against — the built-in multi-distro catalog merged
-	// with every enabled VM mirror (internal/vm.Backend.EffectiveCatalog),
-	// the same merge a real launch uses, not a separate listing. This is
-	// the catalog of what *can* be downloaded and launched; ImageService's
-	// List above is the different, already-downloaded cache tier.
+	// Catalog lists every distro image `anvil launch --kind vm <id>` can resolve against.
 	Catalog(context.Context, *CatalogRequest) (*CatalogReply, error)
 	mustEmbedUnimplementedImageServiceServer()
 }
@@ -1236,13 +1232,9 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// IntentService manages named groups of VM/container instances (M4).
-// There's no Create/Add RPC here on purpose: a member is created exactly
-// the same way a standalone instance is, through
-// InstanceService.Launch(intent_name, role) — see LaunchRequest above.
-// This service is just for reading and managing the group afterward. The
-// shared per-intent network described in the plan isn't implemented yet;
-// right now an intent is membership bookkeeping only.
+// IntentService manages named groups of VM/container instances. Members are
+// created via InstanceService.Launch(intent_name, role); this service just
+// reads and manages the group afterward.
 type IntentServiceClient interface {
 	List(ctx context.Context, in *IntentListRequest, opts ...grpc.CallOption) (*IntentListReply, error)
 	Info(ctx context.Context, in *IntentInfoRequest, opts ...grpc.CallOption) (*IntentInfoReply, error)
@@ -1302,13 +1294,9 @@ func (c *intentServiceClient) Delete(ctx context.Context, in *IntentDeleteReques
 // All implementations must embed UnimplementedIntentServiceServer
 // for forward compatibility.
 //
-// IntentService manages named groups of VM/container instances (M4).
-// There's no Create/Add RPC here on purpose: a member is created exactly
-// the same way a standalone instance is, through
-// InstanceService.Launch(intent_name, role) — see LaunchRequest above.
-// This service is just for reading and managing the group afterward. The
-// shared per-intent network described in the plan isn't implemented yet;
-// right now an intent is membership bookkeeping only.
+// IntentService manages named groups of VM/container instances. Members are
+// created via InstanceService.Launch(intent_name, role); this service just
+// reads and manages the group afterward.
 type IntentServiceServer interface {
 	List(context.Context, *IntentListRequest) (*IntentListReply, error)
 	Info(context.Context, *IntentInfoRequest) (*IntentInfoReply, error)
@@ -1469,19 +1457,11 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // HostService manages the known-hosts list migration targets are resolved
-// against (M5) — see MigrateService below. A host here is nothing more
-// than an SSH destination anvil already trusts you to have real access
-// to; adding one grants no trust by itself, it's just a saved shortcut so
-// `anvil migrate --to <alias>` doesn't need a literal user@host every
-// time. mDNS auto-discovery of peer anvil hosts (from the original plan)
-// is deferred, not built — this is the manual "known hosts" half only.
+// against. Adding a host grants no trust by itself, it's just a saved shortcut.
 type HostServiceClient interface {
 	Add(ctx context.Context, in *HostAddRequest, opts ...grpc.CallOption) (*HostAddReply, error)
 	List(ctx context.Context, in *HostListRequest, opts ...grpc.CallOption) (*HostListReply, error)
 	Remove(ctx context.Context, in *HostRemoveRequest, opts ...grpc.CallOption) (*HostRemoveReply, error)
-	// Test checks that alias is actually reachable over SSH and that
-	// `anvil`/`anvild` are installed there — a real connectivity/sanity
-	// check, not just "is this alias saved."
 	Test(ctx context.Context, in *HostTestRequest, opts ...grpc.CallOption) (*HostTestReply, error)
 }
 
@@ -1538,19 +1518,11 @@ func (c *hostServiceClient) Test(ctx context.Context, in *HostTestRequest, opts 
 // for forward compatibility.
 //
 // HostService manages the known-hosts list migration targets are resolved
-// against (M5) — see MigrateService below. A host here is nothing more
-// than an SSH destination anvil already trusts you to have real access
-// to; adding one grants no trust by itself, it's just a saved shortcut so
-// `anvil migrate --to <alias>` doesn't need a literal user@host every
-// time. mDNS auto-discovery of peer anvil hosts (from the original plan)
-// is deferred, not built — this is the manual "known hosts" half only.
+// against. Adding a host grants no trust by itself, it's just a saved shortcut.
 type HostServiceServer interface {
 	Add(context.Context, *HostAddRequest) (*HostAddReply, error)
 	List(context.Context, *HostListRequest) (*HostListReply, error)
 	Remove(context.Context, *HostRemoveRequest) (*HostRemoveReply, error)
-	// Test checks that alias is actually reachable over SSH and that
-	// `anvil`/`anvild` are installed there — a real connectivity/sanity
-	// check, not just "is this alias saved."
 	Test(context.Context, *HostTestRequest) (*HostTestReply, error)
 	mustEmbedUnimplementedHostServiceServer()
 }
@@ -1705,33 +1677,14 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// MigrateService moves a single instance (M5) or a whole intent as one
-// group (M7) to a different anvil host. Per the plan: no daemon-to-daemon
-// gRPC trust — the source daemon SSHes into the target host and drives
-// the target's own local `anvil` CLI (specifically `anvil migrate-import`,
-// a plumbing-only command not meant to be run by hand), which talks to
-// the target's own local anvild over its own unix socket. Whatever SSH
-// access already exists to the target is the only trust this needs.
+// MigrateService moves a single instance or a whole intent to a different
+// anvil host over SSH, with no daemon-to-daemon gRPC trust required.
 type MigrateServiceClient interface {
 	Migrate(ctx context.Context, in *MigrateRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[MigrateProgress], error)
-	// Key returns anvild's own public key for its outbound migration SSH
-	// connections (see internal/migrate.Manager.EnsurePublicKey), generating
-	// a fresh passwordless keypair first if one doesn't exist yet. Copy the
-	// returned key into a target host's ~/.ssh/authorized_keys before
-	// migrating to it — `anvil host add` alone grants no trust by itself.
+	// Key returns anvild's own public key for its outbound migration SSH connections.
 	Key(ctx context.Context, in *MigrateKeyRequest, opts ...grpc.CallOption) (*MigrateKeyReply, error)
-	// GuestKey asks the host named by `to` (over the same SSH channel
-	// Migrate itself drives, not a new trust relationship) for its own
-	// default anvil guest-access public key — the one that host's own
-	// `anvil launch` already bakes into every VM it creates (see
-	// internal/cli/commands's resolveSSHKeys/ensureDefaultAnvilKey). The
-	// CLI's own `anvil migrate` calls this *before* migrating a VM and
-	// injects the returned key into that VM's guest directly over SSH
-	// (while it's still running, using whatever key already got it in
-	// there) — a migrated disk skips cloud-init entirely on relaunch (see
-	// the plan's Migration section), so without this, nothing the target
-	// host's own anvil shell/exec/transfer could use would ever be
-	// authorized in a VM migrated from elsewhere.
+	// GuestKey returns the target host's own default guest-access public key,
+	// so it can be authorized in a VM before migrating it.
 	GuestKey(ctx context.Context, in *MigrateGuestKeyRequest, opts ...grpc.CallOption) (*MigrateGuestKeyReply, error)
 }
 
@@ -1786,33 +1739,14 @@ func (c *migrateServiceClient) GuestKey(ctx context.Context, in *MigrateGuestKey
 // All implementations must embed UnimplementedMigrateServiceServer
 // for forward compatibility.
 //
-// MigrateService moves a single instance (M5) or a whole intent as one
-// group (M7) to a different anvil host. Per the plan: no daemon-to-daemon
-// gRPC trust — the source daemon SSHes into the target host and drives
-// the target's own local `anvil` CLI (specifically `anvil migrate-import`,
-// a plumbing-only command not meant to be run by hand), which talks to
-// the target's own local anvild over its own unix socket. Whatever SSH
-// access already exists to the target is the only trust this needs.
+// MigrateService moves a single instance or a whole intent to a different
+// anvil host over SSH, with no daemon-to-daemon gRPC trust required.
 type MigrateServiceServer interface {
 	Migrate(*MigrateRequest, grpc.ServerStreamingServer[MigrateProgress]) error
-	// Key returns anvild's own public key for its outbound migration SSH
-	// connections (see internal/migrate.Manager.EnsurePublicKey), generating
-	// a fresh passwordless keypair first if one doesn't exist yet. Copy the
-	// returned key into a target host's ~/.ssh/authorized_keys before
-	// migrating to it — `anvil host add` alone grants no trust by itself.
+	// Key returns anvild's own public key for its outbound migration SSH connections.
 	Key(context.Context, *MigrateKeyRequest) (*MigrateKeyReply, error)
-	// GuestKey asks the host named by `to` (over the same SSH channel
-	// Migrate itself drives, not a new trust relationship) for its own
-	// default anvil guest-access public key — the one that host's own
-	// `anvil launch` already bakes into every VM it creates (see
-	// internal/cli/commands's resolveSSHKeys/ensureDefaultAnvilKey). The
-	// CLI's own `anvil migrate` calls this *before* migrating a VM and
-	// injects the returned key into that VM's guest directly over SSH
-	// (while it's still running, using whatever key already got it in
-	// there) — a migrated disk skips cloud-init entirely on relaunch (see
-	// the plan's Migration section), so without this, nothing the target
-	// host's own anvil shell/exec/transfer could use would ever be
-	// authorized in a VM migrated from elsewhere.
+	// GuestKey returns the target host's own default guest-access public key,
+	// so it can be authorized in a VM before migrating it.
 	GuestKey(context.Context, *MigrateGuestKeyRequest) (*MigrateGuestKeyReply, error)
 	mustEmbedUnimplementedMigrateServiceServer()
 }

@@ -1,6 +1,7 @@
 package image
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -13,11 +14,7 @@ import (
 )
 
 // downloadDedup collapses concurrent requests for the same destination
-// path into one in-flight download — a minimal stand-in for
-// golang.org/x/sync/singleflight (not fetchable in this environment
-// without network access to `go get` it; swap Downloader.dedup for the
-// real thing once that dependency can be added, no call-site changes
-// needed since the behavior is identical).
+// path into one in-flight download.
 type downloadDedup struct {
 	mu       sync.Mutex
 	inFlight map[string]*sync.WaitGroup
@@ -69,20 +66,14 @@ func NewDownloader() *Downloader {
 	return &Downloader{dedup: newDownloadDedup(), HTTPClient: http.DefaultClient}
 }
 
-// Fetch downloads entry's image to destPath if it isn't already present
-// with a matching checksum. Concurrent Fetch calls for the same destPath
-// are deduplicated to a single download. progress, if non-nil, is called
-// with human-readable status updates (this can take a while on a slow
-// mirror, and a caller like the CLI wants to show *something* moving
-// rather than sit silent for however long that takes — see
-// internal/instance.Backend.Create's progress parameter, which this
-// ultimately feeds).
-func (d *Downloader) Fetch(entry DistroEntry, destPath string, progress func(status string)) error {
+// Fetch downloads entry's image to destPath if not already present with
+// a matching checksum, deduplicating concurrent calls for the same path.
+func (d *Downloader) Fetch(ctx context.Context, entry DistroEntry, destPath string, progress func(status string)) error {
 	return d.dedup.do(destPath, func() error {
 		if ok, _ := verifyExisting(destPath, entry.SHA256); ok {
 			return nil
 		}
-		return d.download(entry, destPath, progress)
+		return d.download(ctx, entry, destPath, progress)
 	})
 }
 
@@ -94,12 +85,7 @@ func verifyExisting(path, wantSHA256 string) (bool, error) {
 	defer f.Close()
 
 	if wantSHA256 == "" {
-		// No checksum published for this entry — an existing file is
-		// trusted as-is rather than re-downloaded every time. Real
-		// per-distro checksums should be filled into the catalog
-		// manifest before this is relied on for integrity, not just
-		// idempotency (see data/distros/distribution-info.json's
-		// current TODO state).
+		// No checksum published: trust an existing file as-is.
 		return true, nil
 	}
 	h := sha256.New()
@@ -109,7 +95,7 @@ func verifyExisting(path, wantSHA256 string) (bool, error) {
 	return hex.EncodeToString(h.Sum(nil)) == wantSHA256, nil
 }
 
-func (d *Downloader) download(entry DistroEntry, destPath string, progress func(status string)) error {
+func (d *Downloader) download(ctx context.Context, entry DistroEntry, destPath string, progress func(status string)) error {
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
 		return fmt.Errorf("image: creating cache dir: %w", err)
 	}
@@ -119,12 +105,19 @@ func (d *Downloader) download(entry DistroEntry, destPath string, progress func(
 	if err != nil {
 		return fmt.Errorf("image: creating temp file: %w", err)
 	}
-	defer os.Remove(tmpPath) // no-op once the rename below succeeds
+	defer os.Remove(tmpPath)
 
 	if progress != nil {
 		progress(fmt.Sprintf("downloading %s image from %s", entry.ID, entry.URL))
 	}
-	resp, err := d.HTTPClient.Get(entry.URL)
+	// No overall time limit or size cap: this is a multi-GB image that can
+	// legitimately take a while; ctx cancellation still stops it.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, entry.URL, nil)
+	if err != nil {
+		out.Close()
+		return fmt.Errorf("image: building request for %s: %w", entry.URL, err)
+	}
+	resp, err := d.HTTPClient.Do(req)
 	if err != nil {
 		out.Close()
 		return fmt.Errorf("image: fetching %s: %w", entry.URL, err)
@@ -164,12 +157,8 @@ func (d *Downloader) download(entry DistroEntry, destPath string, progress func(
 	return nil
 }
 
-// progressReader wraps a download body, reporting byte progress through to
-// progress at most every progressInterval — a plain "downloading" message
-// with no updates for a large image is exactly what left filippo unable to
-// tell a slow download apart from a stuck one; this is the fix; unbounded
-// per-Read reporting would be the opposite problem (a flood of near-
-// identical lines).
+// progressReader wraps a download body, reporting byte progress through
+// to progress at most every progressInterval.
 type progressReader struct {
 	r        io.Reader
 	total    int64 // 0 if the server didn't send Content-Length
@@ -199,8 +188,7 @@ func (p *progressReader) status() string {
 	return fmt.Sprintf("%s: %s", p.label, humanBytes(p.read))
 }
 
-// humanBytes renders a byte count like "512.0 MiB" — just for progress
-// messages, not worth a dependency over.
+// humanBytes renders a byte count like "512.0 MiB".
 func humanBytes(n int64) string {
 	const unit = 1024
 	if n < unit {

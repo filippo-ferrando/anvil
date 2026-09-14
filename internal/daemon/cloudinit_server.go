@@ -8,10 +8,7 @@ import (
 	"github.com/anvil-project/anvil/internal/store"
 )
 
-// CloudInitServer implements anvilv1.CloudInitServiceServer directly
-// against *store.Store — there's no separate domain/business-logic layer
-// here (unlike InstanceService's Manager) since the saved cloud-init
-// library is just CRUD, nothing to orchestrate.
+// CloudInitServer implements anvilv1.CloudInitServiceServer against *store.Store.
 type CloudInitServer struct {
 	anvilv1.UnimplementedCloudInitServiceServer
 	Store *store.Store
@@ -39,7 +36,7 @@ func (s *CloudInitServer) List(ctx context.Context, req *anvilv1.CloudInitListRe
 func (s *CloudInitServer) Get(ctx context.Context, req *anvilv1.CloudInitGetRequest) (*anvilv1.CloudInitGetReply, error) {
 	cfg, err := s.Store.GetCloudInit(req.GetName())
 	if err != nil {
-		return nil, err
+		return nil, wrapErr(err)
 	}
 	return &anvilv1.CloudInitGetReply{
 		Name:           cfg.Name,
@@ -69,17 +66,12 @@ func (s *CloudInitServer) Delete(ctx context.Context, req *anvilv1.CloudInitDele
 	return &anvilv1.CloudInitDeleteReply{}, nil
 }
 
-// ImportRepo fetches manifestURL (see docs/mirrors.md's "cloud-init
-// template repos" section) and saves each listed template into the
-// library, one CloudInitImportResult per template so a failure fetching
-// or saving any single one doesn't stop the rest of the repo from
-// importing. A manifest that can't be fetched or parsed at all is the
-// one thing that ends the stream outright — there's nothing to import
-// from it either way.
+// ImportRepo fetches manifestURL and saves each listed template into the
+// library, streaming one result per template.
 func (s *CloudInitServer) ImportRepo(req *anvilv1.CloudInitImportRepoRequest, stream anvilv1.CloudInitService_ImportRepoServer) error {
 	send := func(ev *anvilv1.CloudInitImportRepoProgress) { _ = stream.Send(ev) }
 
-	manifest, err := cloudinitrepo.FetchManifest(req.GetManifestUrl())
+	manifest, err := cloudinitrepo.FetchManifest(stream.Context(), req.GetManifestUrl())
 	if err != nil {
 		send(&anvilv1.CloudInitImportRepoProgress{Event: &anvilv1.CloudInitImportRepoProgress_Error{Error: err.Error()}})
 		return err
@@ -96,7 +88,7 @@ func (s *CloudInitServer) ImportRepo(req *anvilv1.CloudInitImportRepoRequest, st
 		}
 
 		send(&anvilv1.CloudInitImportRepoProgress{Event: &anvilv1.CloudInitImportRepoProgress_Status{Status: "fetching " + t.Name}})
-		content, err := cloudinitrepo.FetchTemplate(t.URL)
+		content, err := cloudinitrepo.FetchTemplate(stream.Context(), t.URL)
 		if err != nil {
 			send(&anvilv1.CloudInitImportRepoProgress{Event: &anvilv1.CloudInitImportRepoProgress_Imported{
 				Imported: &anvilv1.CloudInitImportResult{Name: t.Name, Error: err.Error()},

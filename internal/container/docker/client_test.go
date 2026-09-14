@@ -10,12 +10,8 @@ import (
 	"testing"
 )
 
-// newTestServer starts srv listening on a unix socket in t.TempDir() and
-// returns a Client pointed at it — this exercises the real HTTP/JSON wire
-// path (request construction, status handling, response decoding) against
-// a server that mimics Docker's documented API shape, not a real dockerd
-// (unavailable in this sandbox: no root, no rootless docker tooling,
-// checked), but a meaningful test of this package's own logic regardless.
+// newTestServer starts handler listening on a unix socket in t.TempDir()
+// and returns a Client pointed at it.
 func newTestServer(t *testing.T, handler http.Handler) *Client {
 	t.Helper()
 	socket := filepath.Join(t.TempDir(), "docker.sock")
@@ -110,10 +106,7 @@ func TestCreateContainerNetworkAliasAndExtraHosts(t *testing.T) {
 }
 
 func TestCreateContainerNoNetworkAliasWithoutNetworkMode(t *testing.T) {
-	// NetworkAlias only makes sense scoped to a specific network — without
-	// NetworkMode set there's nothing to attach the alias to, so
-	// NetworkingConfig should stay nil rather than sending a
-	// meaningless/empty EndpointsConfig entry.
+	// NetworkingConfig should stay nil when NetworkMode isn't set.
 	var gotBody createContainerRequest
 	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&gotBody)
@@ -236,6 +229,96 @@ func TestInspectState(t *testing.T) {
 	}
 }
 
+func TestInspectReturnsStartedAtAndAddress(t *testing.T) {
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"State": map[string]any{
+				"Running":   true,
+				"StartedAt": "2024-01-02T03:04:05.123456789Z",
+			},
+			"NetworkSettings": map[string]any{
+				"IPAddress": "172.17.0.5",
+			},
+		})
+	}))
+	insp, err := c.Inspect(t.Context(), "abc123")
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if !insp.Running {
+		t.Error("expected Running to be true")
+	}
+	if insp.Address != "172.17.0.5" {
+		t.Errorf("expected the top-level IPAddress, got %q", insp.Address)
+	}
+	if insp.StartedAt.IsZero() || insp.StartedAt.Year() != 2024 {
+		t.Errorf("expected StartedAt to parse to 2024, got %v", insp.StartedAt)
+	}
+}
+
+func TestInspectFallsBackToPerNetworkAddress(t *testing.T) {
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"State": map[string]any{"Running": true},
+			"NetworkSettings": map[string]any{
+				"IPAddress": "", // empty: attached only to a custom (non-default) network
+				"Networks": map[string]any{
+					"anvil-myapp": map[string]any{"IPAddress": "10.55.201.4"},
+				},
+			},
+		})
+	}))
+	insp, err := c.Inspect(t.Context(), "abc123")
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if insp.Address != "10.55.201.4" {
+		t.Errorf("expected the per-network address as a fallback, got %q", insp.Address)
+	}
+}
+
+func TestStatsComputesCumulativeCounters(t *testing.T) {
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.URL.Path, "/v1.41/containers/abc123/stats"; got != want {
+			t.Errorf("expected path %q, got %q", want, got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"cpu_stats": map[string]any{
+				"cpu_usage":        map[string]any{"total_usage": 500},
+				"system_cpu_usage": 10000,
+				"online_cpus":      2,
+			},
+			"memory_stats": map[string]any{"usage": 1024, "limit": 2048},
+			"networks": map[string]any{
+				"eth0": map[string]any{"rx_bytes": 100, "tx_bytes": 50},
+			},
+			"blkio_stats": map[string]any{
+				"io_service_bytes_recursive": []map[string]any{
+					{"op": "Read", "value": 300},
+					{"op": "Write", "value": 400},
+					{"op": "Read", "value": 20},
+				},
+			},
+		})
+	}))
+	snap, err := c.Stats(t.Context(), "abc123")
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if snap.CPUTotalUsageNanos != 500 || snap.CPUSystemNanos != 10000 || snap.OnlineCPUs != 2 {
+		t.Errorf("unexpected CPU counters: %+v", snap)
+	}
+	if snap.MemUsedBytes != 1024 || snap.MemLimitBytes != 2048 {
+		t.Errorf("unexpected memory counters: %+v", snap)
+	}
+	if snap.NetRxBytes != 100 || snap.NetTxBytes != 50 {
+		t.Errorf("unexpected network counters: %+v", snap)
+	}
+	if snap.BlkReadBytes != 320 || snap.BlkWriteBytes != 400 {
+		t.Errorf("unexpected blkio counters (Read entries should sum): %+v", snap)
+	}
+}
+
 func TestLogsDemux(t *testing.T) {
 	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeFrame(w, 1, "hello stdout\n")
@@ -335,12 +418,7 @@ func TestPullImageCollapsesRepeatedLayerStatusButKeepsTransitions(t *testing.T) 
 	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		enc := json.NewEncoder(w)
-		// Same layer ("abc123"), same "Downloading" status, five times in a
-		// row with just the progress bar moving — this is the exact spam a
-		// real pull produces that pullProgressInterval is meant to collapse,
-		// not the "did it move at all" question (each call here is instant,
-		// well under the interval, so only the two status *transitions*
-		// should make it through, not all 7 lines).
+		// Same layer and status repeated five times, then two transitions.
 		_ = enc.Encode(map[string]string{"id": "abc123", "status": "Pulling fs layer"})
 		for i := 0; i < 5; i++ {
 			_ = enc.Encode(map[string]string{"id": "abc123", "status": "Downloading", "progress": "[=>] 1MB/5MB"})

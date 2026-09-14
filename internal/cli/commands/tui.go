@@ -6,10 +6,7 @@ import (
 	"github.com/anvil-project/anvil/internal/tui"
 )
 
-// newTuiCommand is `anvil tui` (M8): launches the terminal UI. Same
-// socket flag as every other command, no separate config — see
-// internal/tui's own doc comment for what it covers and its one honest
-// caveat (untested against a real terminal in this sandbox).
+// newTuiCommand launches the terminal UI using the shared daemon socket flag.
 func newTuiCommand(flags *globalFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:   "tui",

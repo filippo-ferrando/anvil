@@ -1,6 +1,5 @@
-// Package cloudinit builds NoCloud cloud-init seed images (user-data,
-// meta-data, optional network-config) that get attached to a VM as a
-// virtio-blk drive.
+// Package cloudinit builds NoCloud cloud-init seed images attached to a
+// VM as a virtio-blk drive.
 package cloudinit
 
 import (
@@ -18,36 +17,24 @@ type Seed struct {
 	NetworkConfig string // optional; empty means omit network-config entirely
 }
 
-// Builder writes a Seed out as a disk image QEMU can attach with
-// `-drive if=virtio,format=raw,readonly=on`. There are two implementations:
-// xorrisoBuilder (shells out, no extra Go dependency, available today) and
-// a planned pure-Go ISO9660 writer (github.com/kdomanski/iso9660) that
-// removes the xorriso/genisoimage runtime dependency once network access
-// allows fetching it — swapping the default returned by NewBuilder is the
-// only change needed, callers depend on this interface, not a concrete type.
+// Builder writes a Seed out as a disk image QEMU can attach as a drive.
 type Builder interface {
 	// Build writes an ISO9660 image containing seed's files to outputPath.
 	Build(seed Seed, outputPath string) error
 }
 
-// NewBuilder returns anvil's current default Builder. Today that's
-// xorrisoBuilder; see the Builder doc comment for the pure-Go follow-up.
+// NewBuilder returns anvil's default Builder.
 func NewBuilder() Builder { return xorrisoBuilder{} }
 
 type xorrisoBuilder struct{}
 
-// Build shells out to `xorriso -as genisoimage` (Arch's officially-packaged
-// equivalent of genisoimage/mkisofs — see the Arch packaging plan) to
-// produce a volume labeled "cidata", the label cloud-init's NoCloud
-// datasource requires.
+// Build shells out to `xorriso -as genisoimage` to produce a volume
+// labeled "cidata", as cloud-init's NoCloud datasource requires.
 func (xorrisoBuilder) Build(seed Seed, outputPath string) error {
 	if seed.UserData == "" {
 		return fmt.Errorf("cloudinit: seed.UserData must not be empty")
 	}
 	if seed.MetaData == "" {
-		// cloud-init tolerates an empty meta-data file, but an explicitly
-		// empty string here almost always indicates a caller bug (missing
-		// instance-id), so fail fast rather than writing a broken seed.
 		return fmt.Errorf("cloudinit: seed.MetaData must not be empty")
 	}
 

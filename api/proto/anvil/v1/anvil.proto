@@ -5,8 +5,6 @@ package anvil.v1;
 option go_package = "github.com/anvil-project/anvil/api/gen/anvil/v1;anvilv1";
 
 // InstanceService manages the lifecycle of VM and container instances.
-// This is the M1 slice: VM-only fields are populated today, container
-// fields exist so the wire schema doesn't need a breaking change in M3.
 service InstanceService {
   rpc Launch(LaunchRequest) returns (stream LaunchProgress);
   rpc List(ListRequest) returns (ListReply);
@@ -18,6 +16,43 @@ service InstanceService {
   rpc Logs(LogsRequest) returns (stream LogChunk);
   rpc Mount(MountRequest) returns (MountReply);
   rpc Umount(UmountRequest) returns (UmountReply);
+
+  // Stats returns a live resource-usage snapshot for a running instance.
+  rpc Stats(StatsRequest) returns (StatsReply);
+}
+
+message StatsRequest {
+  string name = 1;
+}
+
+// InstanceStats is a point-in-time resource-usage reading for one running instance.
+message InstanceStats {
+  double cpu_percent = 1; // normalized to the instance's own CPU allocation (100% = fully using every assigned CPU)
+
+  int64 mem_used_bytes = 2;
+  int64 mem_limit_bytes = 3;
+
+  // Disk space: VM only (the provisioned qcow2). disk_total_bytes of 0
+  // means space usage isn't available for this instance.
+  int64 disk_used_bytes = 4;
+  int64 disk_total_bytes = 5;
+
+  // Disk I/O rate: container only, averaged over a short live sample.
+  double disk_read_bytes_per_sec = 6;
+  double disk_write_bytes_per_sec = 7;
+
+  // Network throughput, averaged over a short live sample. Not available
+  // for a VM using SLIRP networking (no host-visible interface to sample).
+  bool net_available = 8;
+  double net_rx_bytes_per_sec = 9;
+  double net_tx_bytes_per_sec = 10;
+
+  int64 uptime_seconds = 11;
+  string address = 12; // best-known reachable address; empty if unknown
+}
+
+message StatsReply {
+  InstanceStats stats = 1;
 }
 
 enum Kind {
@@ -44,78 +79,37 @@ message VMSpec {
   int64 memory_mib = 4;
   int64 disk_gib = 5;
   string cloud_init_user_data = 6;
-  string cloud_init_name = 7; // reference into the saved cloud-init library; mutually exclusive with inline data
+  string cloud_init_name = 7; // reference into the saved cloud-init library
   string network_mode = 8;    // "slirp" | "bridge"
   repeated string ssh_public_keys = 9;
 
-  // ssh_port is daemon-populated, not client input: a read-only output the
-  // client uses for `anvil shell`/`exec`/`transfer` to reach a running
-  // instance, set by internal/vm.Backend.Start (a freshly allocated SLIRP
-  // host-forward port — it can change across a stop/start cycle, don't
-  // cache it client-side).
-  //
-  // default_user is normally daemon-populated too (from the image
-  // catalog, by internal/vm.Backend.Create) and any client-supplied value
-  // is overwritten in that case — except when source_disk_path is set
-  // (see below), where there's no catalog entry to read a default user
-  // from at all, so `anvil migrate`'s own re-launch on the target host is
-  // the one legitimate case that actually sets this as real input.
+  // Daemon-populated: the allocated SSH host-forward port and the image's default user.
   int32 ssh_port = 10;
   string default_user = 11;
 
-  // Host directories shared into the guest via 9p (see anvil.v1.Mount).
-  // Managed by `anvil mount`/`anvil umount`, not settable at launch time.
+  // Host directories shared into the guest via 9p, managed by InstanceService.Mount/Umount.
   repeated Mount mounts = 12;
 
-  // Daemon-populated, not client input: set by internal/intent.Manager
-  // before a launch that joins an intent (network_mode becomes "bridge"
-  // in that case), consumed by internal/vm.Backend to attach a tap device
-  // instead of using SLIRP, and by cloud-init's generated network-config.
-  // Meaningless when network_mode isn't "bridge".
+  // Daemon-populated when this VM joins an intent's bridge network.
   string bridge_interface = 13; // Linux interface name of the intent's shared bridge
   string static_ip = 14;        // CIDR, e.g. "10.55.201.4/24"
   string gateway = 15;
 
-  // Ports to publish from the host into the guest, same idea (and same
-  // message type) as ContainerSpec.ports below — e.g. a plain nginx
-  // install running directly inside a cloud-init VM, reachable the same
-  // way `--publish` already works for containers. Only meaningful in
-  // SLIRP mode (network_mode unset/"slirp"): a bridged intent member
-  // already has its own directly-reachable address, there's nothing to
-  // forward.
+  // Ports to publish from the host into the guest; only meaningful in SLIRP mode.
   repeated PortMapping ports = 16;
 
-  // Daemon-populated, not client input: set by internal/intent.Manager for
-  // an intent member. A VM has no DNS resolution mechanism of its own
-  // (unlike a container, which gets Docker's embedded DNS for free) — this
-  // is every other already-known intent member's role -> static IP at the
-  // time this VM was launched, injected into /etc/hosts via cloud-init
-  // (see internal/vm.Backend's buildSeed/mergeExtraHosts). A member added
-  // to the intent later isn't retroactively added here; this VM would
-  // need a restart to pick it up. Meaningless outside an intent.
+  // Daemon-populated: every other intent member's role -> static IP at launch time.
   map<string, string> extra_hosts = 17;
 
-  // source_disk_path is client input, but only meaningful for `anvil
-  // migrate`'s own internal re-launch of a migrated instance on the
-  // target host (see MigrateService below): when set, Create adopts this
-  // already-prepared disk as the instance's own disk.qcow2 directly,
-  // skipping catalog resolution and overlay creation entirely, and skips
-  // generating a cloud-init seed too — the disk already has everything
-  // from its original first boot baked in (users, SSH keys, packages),
-  // and re-running cloud-init against a new instance-id risks re-applying
-  // modules that aren't all idempotent. Not meant to be set by a normal
-  // `anvil launch`.
+  // Set only when relaunching a migrated instance: adopts this disk directly, skipping cloud-init.
   string source_disk_path = 18;
 }
 
-// Mount is one host directory shared into a VM's guest over 9p. Added and
-// removed one at a time via InstanceService.Mount/Umount (see those RPCs
-// below) — there's no `--mount` flag on Launch, this is deliberately a
-// post-creation operation.
+// Mount is one host directory shared into a VM's guest over 9p.
 message Mount {
   string host_path = 1;
   string guest_path = 2;
-  string tag = 3; // internal 9p mount_tag, assigned automatically, not user-facing
+  string tag = 3; // internal 9p mount_tag, assigned automatically
   bool read_only = 4;
 }
 
@@ -135,21 +129,10 @@ message ContainerSpec {
   string network_mode = 7;
   ContainerEngine engine = 8;
 
-  // Daemon-populated, not client input: the engine's own container ID,
-  // set by the backend's Create. Every call after Create (start/stop/
-  // inspect/logs) is by this ID, not by anvil's own instance ID.
+  // Daemon-populated: the engine's own container ID, set at create time.
   string container_id = 9;
 
-  // Daemon-populated, not client input: set by internal/intent.Manager for
-  // an intent member, same idea as VMSpec's bridge fields. network_alias
-  // is this container's own resolvable name on the intent's network (its
-  // role) — Docker's embedded DNS resolves it automatically for other
-  // container peers, no extra_hosts entry needed for those. extra_hosts
-  // covers what Docker's DNS can't: other intent members that are VMs
-  // (not Docker-managed, invisible to Docker's own DNS), keyed by role,
-  // valued by their static IP — becomes a `--add-host`-equivalent
-  // (HostConfig.ExtraHosts) at container-create time. Meaningless outside
-  // an intent.
+  // Daemon-populated when this container joins an intent's network.
   string network_alias = 10;
   map<string, string> extra_hosts = 11;
 }
@@ -183,28 +166,15 @@ message LaunchRequest {
   VMSpec vm = 3;
   ContainerSpec container = 4;
 
-  // Both optional. When intent_name is set, this launch joins that intent
-  // as a member (creating the intent first if it doesn't exist yet)
-  // instead of just producing a standalone instance — see IntentService
-  // below. role labels the member (defaults to the instance's own name if
-  // left blank) and has no effect unless intent_name is also set.
+  // When set, this launch joins (or creates) that intent as a member instead
+  // of producing a standalone instance.
   string intent_name = 5;
   string role = 6;
 
   bool no_start = 7;
 
-  // Internal only, not meant to be set by a normal `anvil launch` — used
-  // by `anvil migrate-import` relaunching one member of a migrated
-  // intent, to pin the target's newly-created intent to the exact
-  // subnet/gateway/docker-IP-range — and, for a VM, the exact static
-  // address — the source intent already had, instead of letting
-  // IntentService auto-allocate a fresh one (see
-  // internal/migrate.Manager.migrateIntent's doc comment for why: a
-  // migrated VM's disk skips cloud-init entirely on relaunch, so its
-  // already-baked-in static network config, and whatever peer
-  // /etc/hosts entries it already has, have no chance to catch up to a
-  // brand new subnet on their own). Ignored unless intent_name is also
-  // set; pinned_static_ip is VM-only.
+  // Internal only: used by `anvil migrate-import` to pin a relaunched
+  // intent member to its exact original network.
   string pinned_subnet = 8;
   string pinned_gateway = 9;
   string pinned_docker_ip_range = 10;
@@ -269,17 +239,12 @@ message LogsRequest {
   int32 tail_lines = 3; // 0 means "from the beginning"
 }
 
-// For a VM this is boot/console output (what cloud-init prints while it
-// runs), not application logs from inside the guest — see the plan's "VM
-// vs container" CLI notes. Once M3 lands, a container's Logs instead
-// streams its actual stdout/stderr.
+// LogChunk carries one piece of a VM's console output or a container's stdout/stderr.
 message LogChunk {
   bytes data = 1;
 }
 
-// CloudInitService manages the saved cloud-init user-data library (M2).
-// A VM's LaunchRequest can reference a saved config by name
-// (VMSpec.cloud_init_name) instead of shipping the content inline.
+// CloudInitService manages the saved cloud-init user-data library.
 service CloudInitService {
   rpc List(CloudInitListRequest) returns (CloudInitListReply);
   rpc Get(CloudInitGetRequest) returns (CloudInitGetReply);
@@ -287,14 +252,8 @@ service CloudInitService {
   rpc Rename(CloudInitRenameRequest) returns (CloudInitRenameReply);
   rpc Delete(CloudInitDeleteRequest) returns (CloudInitDeleteReply);
 
-  // ImportRepo fetches a template-repo manifest (see docs/mirrors.md's
-  // "cloud-init template repos" section for the manifest shape and how
-  // to host one) and saves each listed template into the same saved
-  // library `anvil cloud-init *` already manages — same idea as a VM
-  // mirror's manifest, just for cloud-init templates instead of distro
-  // images, and fetched here (daemon-side) for the same reason: one
-  // implementation instead of a second copy in the CLI and another in
-  // the TUI.
+  // ImportRepo fetches a template-repo manifest and saves every listed
+  // template into the library. See docs/mirrors.md for the manifest shape.
   rpc ImportRepo(CloudInitImportRepoRequest) returns (stream CloudInitImportRepoProgress);
 }
 
@@ -341,30 +300,25 @@ message CloudInitDeleteReply {}
 
 message CloudInitImportRepoRequest {
   string manifest_url = 1;
-  bool force = 2; // overwrite a name already in the library; default skips it, doesn't error
+  bool force = 2; // overwrite a name already in the library; default skips it
 }
 
 message CloudInitImportRepoProgress {
   oneof event {
-    string status = 1;                       // human-readable phase, e.g. "fetching nginx"
-    CloudInitImportResult imported = 2;       // one template's own result, as it finishes
-    string error = 3;                         // a fetch/parse failure for the manifest itself; ends the stream
+    string status = 1;                  // human-readable phase, e.g. "fetching nginx"
+    CloudInitImportResult imported = 2; // one template's own result, as it finishes
+    string error = 3;                   // a manifest fetch/parse failure; ends the stream
   }
 }
 
-// CloudInitImportResult is one template's own outcome within a whole
-// ImportRepo call — a failure fetching or saving *this* template doesn't
-// stop the rest of the repo from importing.
+// CloudInitImportResult is one template's own outcome within an ImportRepo call.
 message CloudInitImportResult {
   string name = 1;
   bool skipped = 2; // true: already existed in the library and force wasn't set
-  string error = 3; // set if fetching/saving this one specific template failed
+  string error = 3; // set if fetching/saving this template failed
 }
 
-// MirrorService manages runtime-added image mirrors (M2 for VM manifest
-// mirrors, M3 for container registry mirrors). The built-in catalog
-// (data/distros/distribution-info.json) always applies; mirrors add to or
-// override it by priority.
+// MirrorService manages runtime-added VM image and container registry mirrors.
 service MirrorService {
   rpc Add(MirrorAddRequest) returns (MirrorAddReply);
   rpc List(MirrorListRequest) returns (MirrorListReply);
@@ -416,21 +370,12 @@ message MirrorSetEnabledRequest {
 
 message MirrorSetEnabledReply {}
 
-// ImageService manages the on-disk cache of downloaded VM base images
-// (internal/vm/image.Vault's "prepared" tier) — this is about the shared
-// base images instances are cloned from, not a per-instance disk. There's
-// no container-image equivalent here: once M3 lands, container images are
-// Docker's/Podman's own cache to manage, anvil doesn't duplicate that.
+// ImageService manages the on-disk cache of downloaded VM base images.
 service ImageService {
   rpc List(ImageListRequest) returns (ImageListReply);
   rpc Delete(ImageDeleteRequest) returns (ImageDeleteReply);
 
-  // Catalog lists the source distro images `anvil launch --kind vm
-  // <id>` resolves against — the built-in multi-distro catalog merged
-  // with every enabled VM mirror (internal/vm.Backend.EffectiveCatalog),
-  // the same merge a real launch uses, not a separate listing. This is
-  // the catalog of what *can* be downloaded and launched; ImageService's
-  // List above is the different, already-downloaded cache tier.
+  // Catalog lists every distro image `anvil launch --kind vm <id>` can resolve against.
   rpc Catalog(CatalogRequest) returns (CatalogReply);
 }
 
@@ -439,7 +384,7 @@ message CachedImage {
   string arch = 2;
   string path = 3;
   int64 size_bytes = 4;
-  int32 ref_count = 5; // number of current instances whose disk is backed by this image
+  int32 ref_count = 5; // number of instances whose disk is backed by this image
 }
 
 message ImageListRequest {}
@@ -448,7 +393,7 @@ message ImageListReply {
   repeated CachedImage images = 1;
 }
 
-// CatalogEntry is one fetchable distro image (internal/vm/image.DistroEntry).
+// CatalogEntry is one fetchable distro image.
 message CatalogEntry {
   string id = 1;      // e.g. "ubuntu-24.04" — what `anvil launch --kind vm <id>` takes
   string name = 2;    // e.g. "Ubuntu 24.04 LTS"
@@ -467,8 +412,8 @@ message CatalogReply {
 
 message ImageDeleteRequest {
   string id = 1;
-  string arch = 2;   // optional; only needed if id is ambiguous across architectures
-  bool force = 3;    // delete even if ref_count > 0 — will break those instances' disks
+  string arch = 2; // optional; only needed if id is ambiguous across architectures
+  bool force = 3;  // delete even if ref_count > 0 — will break those instances' disks
 }
 
 message ImageDeleteReply {}
@@ -489,13 +434,9 @@ message UmountRequest {
 
 message UmountReply {}
 
-// IntentService manages named groups of VM/container instances (M4).
-// There's no Create/Add RPC here on purpose: a member is created exactly
-// the same way a standalone instance is, through
-// InstanceService.Launch(intent_name, role) — see LaunchRequest above.
-// This service is just for reading and managing the group afterward. The
-// shared per-intent network described in the plan isn't implemented yet;
-// right now an intent is membership bookkeeping only.
+// IntentService manages named groups of VM/container instances. Members are
+// created via InstanceService.Launch(intent_name, role); this service just
+// reads and manages the group afterward.
 service IntentService {
   rpc List(IntentListRequest) returns (IntentListReply);
   rpc Info(IntentInfoRequest) returns (IntentInfoReply);
@@ -516,8 +457,7 @@ message Intent {
   IntentNetwork network = 4; // unset until the first member is launched
 }
 
-// IntentNetwork is the shared bridge network created for one intent (see
-// PLAN.md's Intents section) — daemon-populated, not client input.
+// IntentNetwork is the shared bridge network created for one intent.
 message IntentNetwork {
   string engine_network_name = 1; // Docker/Podman network name
   string bridge_interface = 2;    // underlying Linux bridge interface name
@@ -540,9 +480,7 @@ message IntentInfoReply {
   Intent intent = 1;
 }
 
-// Remove ungroups member (matched by instance ID or role) from the
-// intent without deleting the underlying instance — for that, delete the
-// instance normally via InstanceService.Delete.
+// Remove ungroups member (by instance ID or role) without deleting the underlying instance.
 message IntentRemoveRequest {
   string name = 1;
   string member = 2;
@@ -562,26 +500,18 @@ message IntentDeleteReply {
 }
 
 // HostService manages the known-hosts list migration targets are resolved
-// against (M5) — see MigrateService below. A host here is nothing more
-// than an SSH destination anvil already trusts you to have real access
-// to; adding one grants no trust by itself, it's just a saved shortcut so
-// `anvil migrate --to <alias>` doesn't need a literal user@host every
-// time. mDNS auto-discovery of peer anvil hosts (from the original plan)
-// is deferred, not built — this is the manual "known hosts" half only.
+// against. Adding a host grants no trust by itself, it's just a saved shortcut.
 service HostService {
   rpc Add(HostAddRequest) returns (HostAddReply);
   rpc List(HostListRequest) returns (HostListReply);
   rpc Remove(HostRemoveRequest) returns (HostRemoveReply);
-  // Test checks that alias is actually reachable over SSH and that
-  // `anvil`/`anvild` are installed there — a real connectivity/sanity
-  // check, not just "is this alias saved."
-  rpc Test(HostTestRequest) returns (HostTestReply);
+  rpc Test(HostTestRequest) returns (HostTestReply); // checks real SSH reachability
 }
 
 message Host {
   string alias = 1;
   string target = 2;   // "user@host[:port]"
-  string identity = 3; // optional path to a private key; empty uses ssh's own default identity resolution
+  string identity = 3; // optional path to a private key
 }
 
 message HostAddRequest {
@@ -608,38 +538,19 @@ message HostTestRequest {
 
 message HostTestReply {
   bool ok = 1;
-  string message = 2; // human-readable detail either way, e.g. the remote anvil version, or the SSH error
+  string message = 2; // human-readable detail either way
 }
 
-// MigrateService moves a single instance (M5) or a whole intent as one
-// group (M7) to a different anvil host. Per the plan: no daemon-to-daemon
-// gRPC trust — the source daemon SSHes into the target host and drives
-// the target's own local `anvil` CLI (specifically `anvil migrate-import`,
-// a plumbing-only command not meant to be run by hand), which talks to
-// the target's own local anvild over its own unix socket. Whatever SSH
-// access already exists to the target is the only trust this needs.
+// MigrateService moves a single instance or a whole intent to a different
+// anvil host over SSH, with no daemon-to-daemon gRPC trust required.
 service MigrateService {
   rpc Migrate(MigrateRequest) returns (stream MigrateProgress);
 
-  // Key returns anvild's own public key for its outbound migration SSH
-  // connections (see internal/migrate.Manager.EnsurePublicKey), generating
-  // a fresh passwordless keypair first if one doesn't exist yet. Copy the
-  // returned key into a target host's ~/.ssh/authorized_keys before
-  // migrating to it — `anvil host add` alone grants no trust by itself.
+  // Key returns anvild's own public key for its outbound migration SSH connections.
   rpc Key(MigrateKeyRequest) returns (MigrateKeyReply);
 
-  // GuestKey asks the host named by `to` (over the same SSH channel
-  // Migrate itself drives, not a new trust relationship) for its own
-  // default anvil guest-access public key — the one that host's own
-  // `anvil launch` already bakes into every VM it creates (see
-  // internal/cli/commands's resolveSSHKeys/ensureDefaultAnvilKey). The
-  // CLI's own `anvil migrate` calls this *before* migrating a VM and
-  // injects the returned key into that VM's guest directly over SSH
-  // (while it's still running, using whatever key already got it in
-  // there) — a migrated disk skips cloud-init entirely on relaunch (see
-  // the plan's Migration section), so without this, nothing the target
-  // host's own anvil shell/exec/transfer could use would ever be
-  // authorized in a VM migrated from elsewhere.
+  // GuestKey returns the target host's own default guest-access public key,
+  // so it can be authorized in a VM before migrating it.
   rpc GuestKey(MigrateGuestKeyRequest) returns (MigrateGuestKeyReply);
 }
 
@@ -658,27 +569,17 @@ message MigrateGuestKeyReply {
 }
 
 message MigrateRequest {
-  // name is looked up as a single instance first, a whole intent second
-  // (the two are separate namespaces, nothing stops both existing under
-  // the same name — a plain instance is just the more common, more
-  // specific case, so it wins the lookup).
-  string name = 1;
-  string to = 2; // a known host's alias (HostService), or a literal "user@host[:port]"
+  string name = 1; // resolved as a single instance first, a whole intent second
+  string to = 2;   // a known host's alias, or a literal "user@host[:port]"
 
-  // Default mode is destructive: copy, verify the target actually has
-  // it, then delete the source — never delete-first. copy skips that
-  // last step and leaves the source instance running/stopped as-is.
+  // Default mode is destructive: copy, verify, then delete the source. copy skips the delete.
   bool copy = 3;
 
-  string dest_name = 4; // single-instance migration only; rejected if name resolves to an intent
-  bool dry_run = 5;     // validate connectivity/preconditions and report the plan, transfer nothing
+  string dest_name = 4; // single-instance migration only
+  bool dry_run = 5;     // validate connectivity/preconditions, transfer nothing
 
-  // best_effort only applies when name resolves to an intent (rejected
-  // for a single instance): migrate every member independently instead
-  // of aborting the whole group and rolling back the target on the
-  // first member that fails. Whatever succeeds gets deleted from the
-  // source same as always; whatever fails is left alone, reported in
-  // IntentDone.members either way.
+  // Intent migration only: keep whatever members succeed instead of
+  // rolling back the whole group on the first failure.
   bool best_effort = 6;
 }
 
@@ -686,19 +587,12 @@ message MigrateProgress {
   oneof event {
     string status = 1;
     string error = 2;
-    string done = 3; // single-instance migration: the new instance's ID on the target, final event on success
+    string done = 3; // single-instance migration: the new instance's ID on the target
 
-    // member_done reports one intent member's own result, only ever
-    // sent during an intent migration — one per member, all sent
-    // together right after the whole group has been attempted (plain
-    // status events already cover progress along the way), immediately
-    // followed by the terminal intent_done summary below.
+    // Sent once per member, right after a whole-intent migration finishes.
     MigrateMemberResult member_done = 4;
 
-    // intent_done is an intent migration's final event, on success or
-    // on a handled rollback alike (a genuine RPC error — can't resolve
-    // the target, can't stop the members — still ends the stream with
-    // MigrateProgress_Error instead, same as a single instance).
+    // The whole-intent migration's terminal event.
     IntentMigrateDone intent_done = 5;
   }
 }
@@ -714,10 +608,5 @@ message MigrateMemberResult {
 message IntentMigrateDone {
   string intent_name = 1;
   repeated MigrateMemberResult members = 2;
-
-  // rolled_back is true if this was an all-or-nothing migration
-  // (best_effort false) that hit a member failure: whatever had already
-  // landed on the target was deleted there, and every source member was
-  // left untouched, exactly as if the migration had never started.
-  bool rolled_back = 3;
+  bool rolled_back = 3; // true if an all-or-nothing migration hit a member failure and was undone
 }

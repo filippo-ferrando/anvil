@@ -1,6 +1,9 @@
 package commands
 
 import (
+	"fmt"
+	"os"
+
 	"github.com/spf13/cobra"
 )
 
@@ -28,6 +31,9 @@ func newExecCommand(flags *globalFlags) *cobra.Command {
 			}
 
 			if inst.GetContainer() != nil {
+				if cmd.Flags().Changed("user") || cmd.Flags().Changed("identity") {
+					fmt.Fprintln(os.Stderr, "anvil: --user/--identity have no effect on a container instance, ignoring")
+				}
 				return runContainerExec(inst, command)
 			}
 

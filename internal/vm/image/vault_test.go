@@ -1,6 +1,7 @@
 package image
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,9 +23,7 @@ func TestOverlayForUsesExistingPreparedImage(t *testing.T) {
 		MinDiskGiB: 1,
 	}
 
-	// Pre-place a "prepared" base image at the exact path Ensure/Fetch
-	// would otherwise try to download to, so this test exercises the
-	// overlay-creation mechanics without requiring network access.
+	// Pre-place a "prepared" base image so this doesn't need to download.
 	if err := os.MkdirAll(filepath.Dir(v.preparedPath(entry)), 0o750); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -34,7 +33,7 @@ func TestOverlayForUsesExistingPreparedImage(t *testing.T) {
 	}
 
 	overlayPath := filepath.Join(dir, "instance", "disk.qcow2")
-	if err := v.OverlayFor(entry, overlayPath, 1, nil); err != nil {
+	if err := v.OverlayFor(context.Background(), entry, overlayPath, 1, nil); err != nil {
 		t.Fatalf("OverlayFor: %v", err)
 	}
 
@@ -65,20 +64,14 @@ func TestOverlayForRejectsShrinkingBelowBaseImageSize(t *testing.T) {
 		t.Fatalf("creating fake base image: %v: %s", err, out)
 	}
 
-	err := v.OverlayFor(entry, filepath.Join(dir, "instance", "disk.qcow2"), 1, nil)
+	err := v.OverlayFor(context.Background(), entry, filepath.Join(dir, "instance", "disk.qcow2"), 1, nil)
 	if err == nil {
 		t.Error("expected an error when the requested disk is smaller than the base image's own virtual size")
 	}
 }
 
-// TestOverlayForDefaultSizeInheritsBaseImageSize is a regression test for a
-// real bug: a launch with no --disk flag defaulted to the catalog's
-// MinDiskGiB (3 for ubuntu-24.04), but the actual downloaded base image
-// was already bigger than that, so "resizing" to 3GiB was really an
-// (unsupported) shrink and qemu-img refused it outright. diskGiB=0 must
-// mean "inherit whatever the base image already is", full stop, not "use
-// a catalog value that can go stale the moment a distro's cloud image
-// grows release over release".
+// TestOverlayForDefaultSizeInheritsBaseImageSize checks that diskGiB=0
+// makes the overlay inherit the base image's own virtual size.
 func TestOverlayForDefaultSizeInheritsBaseImageSize(t *testing.T) {
 	if _, err := exec.LookPath("qemu-img"); err != nil {
 		t.Skip("qemu-img not installed, skipping")
@@ -98,7 +91,7 @@ func TestOverlayForDefaultSizeInheritsBaseImageSize(t *testing.T) {
 	}
 
 	overlayPath := filepath.Join(dir, "instance", "disk.qcow2")
-	if err := v.OverlayFor(entry, overlayPath, 0, nil); err != nil {
+	if err := v.OverlayFor(context.Background(), entry, overlayPath, 0, nil); err != nil {
 		t.Fatalf("OverlayFor with default (0) disk size: %v", err)
 	}
 
@@ -195,7 +188,7 @@ func TestBackingFile(t *testing.T) {
 	}
 
 	overlayPath := filepath.Join(dir, "instance", "disk.qcow2")
-	if err := v.OverlayFor(entry, overlayPath, 0, nil); err != nil {
+	if err := v.OverlayFor(context.Background(), entry, overlayPath, 0, nil); err != nil {
 		t.Fatalf("OverlayFor: %v", err)
 	}
 

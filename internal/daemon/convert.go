@@ -1,8 +1,5 @@
-// Package daemon implements anvilv1.InstanceServiceServer against
-// internal/instance.Manager, translating between the gRPC wire types
-// (api/gen/anvil/v1) and anvil's domain model (internal/instance) — kept
-// as an explicit conversion layer, per the plan, so the two can evolve
-// independently.
+// Package daemon implements the anvil gRPC services against their
+// underlying managers and stores.
 package daemon
 
 import (
@@ -67,14 +64,8 @@ func vmSpecFromPB(v *anvilv1.VMSpec) *instance.VMSpec {
 		CloudInitName:     v.GetCloudInitName(),
 		NetworkMode:       v.GetNetworkMode(),
 		SSHPublicKeys:     v.GetSshPublicKeys(),
-		// DefaultUser and SourceDiskPath are real client input only for
-		// `anvil migrate`'s own re-launch on the target host — a normal
-		// launch's Create always overwrites DefaultUser from the catalog
-		// entry regardless of what's read here, so accepting it
-		// unconditionally is harmless. SSHPort/BridgeInterface/StaticIP/
-		// Gateway stay daemon-only outputs, nothing to read for those.
-		DefaultUser:    v.GetDefaultUser(),
-		SourceDiskPath: v.GetSourceDiskPath(),
+		DefaultUser:       v.GetDefaultUser(),
+		SourceDiskPath:    v.GetSourceDiskPath(),
 	}
 	for _, p := range v.GetPorts() {
 		spec.Ports = append(spec.Ports, instance.PortMapping{
@@ -159,8 +150,6 @@ func containerSpecFromPB(c *anvilv1.ContainerSpec) *instance.ContainerSpec {
 		Cmd:         c.GetCmd(),
 		NetworkMode: c.GetNetworkMode(),
 		Engine:      containerEngineFromPB(c.GetEngine()),
-		// ContainerID is daemon-populated, not client input — see
-		// containerSpecToPB for where it's actually set.
 	}
 	for _, vol := range c.GetVolumes() {
 		spec.Volumes = append(spec.Volumes, instance.VolumeMount{
@@ -230,6 +219,23 @@ func specsToPB(specs []*instance.Spec) []*anvilv1.Instance {
 		out[i] = specToPB(s)
 	}
 	return out
+}
+
+func statsToPB(s instance.Stats) *anvilv1.InstanceStats {
+	return &anvilv1.InstanceStats{
+		CpuPercent:           s.CPUPercent,
+		MemUsedBytes:         s.MemUsedBytes,
+		MemLimitBytes:        s.MemLimitBytes,
+		DiskUsedBytes:        s.DiskUsedBytes,
+		DiskTotalBytes:       s.DiskTotalBytes,
+		DiskReadBytesPerSec:  s.DiskReadBytesPerSec,
+		DiskWriteBytesPerSec: s.DiskWriteBytesPerSec,
+		NetAvailable:         s.NetAvailable,
+		NetRxBytesPerSec:     s.NetRxBytesPerSec,
+		NetTxBytesPerSec:     s.NetTxBytesPerSec,
+		UptimeSeconds:        s.UptimeSeconds,
+		Address:              s.Address,
+	}
 }
 
 func launchParamsFromPB(req *anvilv1.LaunchRequest) instance.LaunchParams {

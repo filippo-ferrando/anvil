@@ -31,13 +31,7 @@ func (i catalogItem) Description() string {
 		i.entry.GetDistro(), i.entry.GetVersion(), i.entry.GetArch(), i.entry.GetMinDiskGib(), i.entry.GetDefaultUser())
 }
 
-// imagesModel is the Images screen: cached (downloaded) base images next
-// to the catalog of what can be downloaded and launched — the feature
-// gap flagged directly ("TUI and CLI miss the option to list the
-// available cloud images"): ImageService already managed the cached
-// tier, but nothing exposed the catalog itself, in the CLI or the TUI.
-// See also `anvil find`, the CLI's own new entry point for the same
-// data.
+// imagesModel is the Images screen: cached base images alongside the catalog of what can be downloaded.
 type imagesModel struct {
 	cached        list.Model
 	catalog       list.Model

@@ -191,36 +191,14 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 	return cmd
 }
 
-// launchProgressStream is the subset of InstanceService_LaunchClient
-// streamLaunchProgress needs — just Recv, so `anvil intent create`/`add`
-// (internal/cli/commands/intent.go) can reuse this against the same real
-// stream type without this function needing to know about intents at all.
+// launchProgressStream is the subset of InstanceService_LaunchClient that
+// streamLaunchProgress needs.
 type launchProgressStream interface {
 	Recv() (*anvilv1.LaunchProgress, error)
 }
 
-// streamLaunchProgress prints each LaunchProgress event as it arrives —
-// shared by `anvil launch` and `anvil intent create`/`add`, since both
-// ultimately drive the same streaming Launch RPC and want identical
-// output.
-//
-// When out is a real terminal, consecutive status updates that share the
-// same "key" (see progressKey) redraw in place with a carriage return
-// instead of each becoming its own line — a real download/pull produces a
-// status update every ~500ms (see the backends' own throttling), and one
-// line per tick was, in filippo's own words, awful to watch. Piped/
-// redirected output (out isn't a terminal — e.g. into a file or `less`)
-// falls back to one line per update, since carriage-return redraws only
-// make sense on a real screen.
-//
-// This isn't a full multi-line progress renderer: a Docker pull can have
-// several layers downloading concurrently, and their status lines
-// legitimately interleave (different keys arriving back to back). Each
-// key change ends the previous in-place line and starts a new one, so a
-// multi-layer pull still prints more than one line, just far fewer than
-// today's one-line-per-tick — a real multi-line redraw (tracking N
-// concurrent lines, moving the cursor up to update each in place) would
-// need real terminal-size/cursor handling this doesn't attempt.
+// streamLaunchProgress prints each LaunchProgress event as it arrives. On a real
+// terminal, consecutive updates sharing the same key redraw in place instead of each getting its own line.
 func streamLaunchProgress(out io.Writer, stream launchProgressStream) error {
 	term := isTerminalWriter(out)
 	var lastKey string
@@ -233,12 +211,12 @@ func streamLaunchProgress(out io.Writer, stream launchProgressStream) error {
 		}
 		key := progressKey(status)
 		if haveLine && key == lastKey {
-			fmt.Fprintf(out, "\r\033[K%s", status) // redraw this same line in place
+			fmt.Fprintf(out, "\r\033[K%s", status) // redraw in place
 		} else {
 			if haveLine {
-				fmt.Fprintln(out) // finalize the previous in-place line
+				fmt.Fprintln(out) // end the previous line
 			}
-			fmt.Fprint(out, status) // no trailing newline yet, may still be overwritten
+			fmt.Fprint(out, status)
 		}
 		lastKey = key
 		haveLine = true
@@ -273,12 +251,8 @@ func streamLaunchProgress(out io.Writer, stream launchProgressStream) error {
 	}
 }
 
-// progressKey groups status updates that should redraw the same line
-// rather than each getting their own: everything before the first ": ",
-// or the whole string if there isn't one. Matches both this project's own
-// status shapes: "downloading ubuntu-24.04: 43% (...)" groups by image
-// name, "abc123: Downloading [...]" (a Docker pull's per-layer status)
-// groups by layer ID.
+// progressKey returns the part of status before the first ": ", or the whole
+// string if there isn't one, used to group updates that should redraw the same line.
 func progressKey(status string) string {
 	if idx := strings.Index(status, ": "); idx != -1 {
 		return status[:idx]
@@ -286,13 +260,7 @@ func progressKey(status string) string {
 	return status
 }
 
-// isTerminalWriter reports whether w is a real terminal rather than a
-// pipe/file redirect — same os.ModeCharDevice trick as
-// container_exec.go's isStdinTerminal, just checking stdout-shaped output
-// instead of stdin. Deliberately checks the concrete *os.File rather than
-// trusting an io.Writer's type alone: cobra's cmd.OutOrStdout() returns
-// os.Stdout by default but can be swapped for a plain buffer (tests,
-// programmatic use), which should never trigger escape-code redraws.
+// isTerminalWriter reports whether w is a real terminal rather than a pipe/file redirect.
 func isTerminalWriter(w io.Writer) bool {
 	f, ok := w.(*os.File)
 	if !ok {
@@ -398,13 +366,8 @@ func readCloudInitFile(path string) (string, error) {
 	return string(data), nil
 }
 
-// resolveSSHKeys always includes anvil's own managed public key (generated
-// on first use if it doesn't exist yet, see internal/sshkey) — this is
-// what makes `anvil shell`/`exec`/`transfer` work by default with zero
-// flags, on any instance, without depending on whatever personal keys a
-// given user happens to have in ~/.ssh. --ssh-key values (literal keys or
-// paths to .pub files) are additive on top of that, for anyone who also
-// wants to authorize their own personal key.
+// resolveSSHKeys always includes anvil's own managed public key, generated on
+// first use, plus any additional explicit keys or .pub file paths.
 func resolveSSHKeys(explicit []string) ([]string, error) {
 	anvilPub, err := sshkey.EnsureDefaultPublic()
 	if err != nil {
@@ -423,9 +386,8 @@ func resolveSSHKeys(explicit []string) ([]string, error) {
 }
 
 func resolveSSHKey(k string) (string, error) {
-	// A literal public key, e.g. "ssh-ed25519 AAAA... comment", vs. a path
-	// to a .pub file — distinguished by the well-known key-type prefixes,
-	// since a real file path never starts with one of these.
+	// Treat k as a literal public key if it starts with a known key-type prefix,
+	// otherwise as a path to a .pub file.
 	for _, prefix := range []string{"ssh-", "ecdsa-", "sk-"} {
 		if strings.HasPrefix(k, prefix) {
 			return k, nil

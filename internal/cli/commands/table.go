@@ -26,7 +26,7 @@ func engineLabel(e anvilv1.ContainerEngine) string {
 	case anvilv1.ContainerEngine_CONTAINER_ENGINE_PODMAN:
 		return "podman"
 	default:
-		return "docker" // unset defaults to docker server-side too, see container.Backend.engineFor
+		return "docker" // unset defaults to docker
 	}
 }
 
@@ -51,8 +51,7 @@ func stateLabel(s anvilv1.State) string {
 	}
 }
 
-// humanBytes renders a byte count like "1.2 GiB" — good enough for a CLI
-// table, no need for a dependency over this.
+// humanBytes renders a byte count as a human-readable string, e.g. "1.2 GiB".
 func humanBytes(n int64) string {
 	const unit = 1024
 	if n < unit {
@@ -66,8 +65,7 @@ func humanBytes(n int64) string {
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
-// printInstanceTable is a minimal stdlib text/tabwriter table — a nice-to-
-// have richer table (color, sorting) is a TUI/M7 concern, not the CLI's.
+// printInstanceTable prints instances as a tab-aligned table to w.
 func printInstanceTable(w io.Writer, instances []*anvilv1.Instance) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "NAME\tKIND\tENGINE\tSTATE\tIMAGE")

@@ -39,7 +39,7 @@ type mirrorsModel struct {
 
 func newMirrorsModel() mirrorsModel {
 	l := list.New(nil, list.NewDefaultDelegate(), 0, 0)
-	l.SetFilteringEnabled(false) // small lists; also avoids single-letter shortcuts (n/s/d/...) colliding with filter typing
+	l.SetFilteringEnabled(false) // avoids single-letter shortcuts colliding with filter typing
 	l.Title = "Mirrors"
 	l.SetShowHelp(false)
 	return mirrorsModel{list: l}

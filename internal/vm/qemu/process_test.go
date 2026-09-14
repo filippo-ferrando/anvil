@@ -7,14 +7,8 @@ import (
 	"time"
 )
 
-// spawnFakeQEMU starts a real, long-lived process (the real `sleep`
-// binary) whose argv[0] we override to contain "qemu-system" and diskPath
-// — looksLikeOurQEMU only inspects /proc/<pid>/cmdline as a whole, it
-// doesn't care what actually runs, and a real program never validates its
-// own argv[0]. This has to be done by execing sleep directly (not via a
-// shell): a shell running `sh -c "sleep 5 # marker"` optimizes a lone
-// trailing command into an execve that replaces its own argv entirely,
-// which was tried first and silently threw the marker text away.
+// spawnFakeQEMU starts a real `sleep` process with argv[0] overridden to
+// contain "qemu-system" and diskPath, for looksLikeOurQEMU to match against.
 func spawnFakeQEMU(t *testing.T, diskPath string) (pid int, kill func()) {
 	t.Helper()
 	sleep, err := exec.LookPath("sleep")
@@ -23,19 +17,12 @@ func spawnFakeQEMU(t *testing.T, diskPath string) (pid int, kill func()) {
 	}
 	cmd := &exec.Cmd{
 		Path: sleep,
-		// argv[0] is never inspected by the program itself, only the real
-		// CLI parsing (argv[1:]) is, so the marker text lives there and
-		// "5" (a valid duration, no leading "-") is the only real argument.
 		Args: []string{"qemu-system-x86_64-disk-" + diskPath, "5"},
 	}
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("spawning fake qemu process: %v", err)
 	}
-	// Start() returns once fork+exec has been kicked off, not necessarily
-	// once the child has finished calling execve() — /proc/<pid>/cmdline
-	// can briefly still be empty right after Start() returns. This is a
-	// test-harness-only race (production reconciliation only ever looks at
-	// long-since-started processes), so a short sleep here is fine.
+	// Give the child a moment to finish its execve.
 	time.Sleep(50 * time.Millisecond)
 	return cmd.Process.Pid, func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() }
 }

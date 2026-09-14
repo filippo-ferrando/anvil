@@ -1,7 +1,5 @@
-// Package commands implements anvil's CLI verbs (cobra commands). Each
-// command dials anvild over its gRPC unix socket via pkg/client and does
-// nothing but translate flags to a request and print the reply — all
-// actual logic lives in the daemon, per the plan's thin-client mandate.
+// Package commands implements anvil's CLI verbs (cobra commands), each
+// dialing anvild over its gRPC unix socket via pkg/client.
 package commands
 
 import (
@@ -22,10 +20,7 @@ func NewRootCommand() *cobra.Command {
 		Use:          "anvil",
 		Short:        "Manage cloud-init VMs and Docker/Podman containers",
 		SilenceUsage: true,
-		// cmd/anvil/main.go already prints whatever error Execute()
-		// returns (prefixed "anvil:"), so cobra printing its own "Error:
-		// ..." line first would just be the same message twice — that's
-		// exactly what was happening before this was set to true.
+		// The caller prints the returned error itself, so cobra shouldn't print its own.
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().StringVar(&flags.socket, "socket", config.SocketPath(), "anvild unix socket path")
@@ -34,6 +29,7 @@ func NewRootCommand() *cobra.Command {
 		newLaunchCommand(flags),
 		newListCommand(flags),
 		newInfoCommand(flags),
+		newStatsCommand(flags),
 		newStartCommand(flags),
 		newStopCommand(flags),
 		newDeleteCommand(flags),

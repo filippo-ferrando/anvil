@@ -12,28 +12,19 @@ import (
 	"github.com/anvil-project/anvil/pkg/client"
 )
 
-// maxLogLines bounds how much log text logsModel keeps around during a
-// long `-f`-style follow session — unbounded growth for a VM console
-// that's been running for hours isn't something a terminal UI needs to
-// hold onto, only the CLI's own `anvil logs -f` (which just streams
-// straight to stdout, no buffering) does.
+// maxLogLines bounds how much log text logsModel keeps in memory while following.
 const maxLogLines = 2000
 
-// logsModel is the Logs screen (was missing outright) — no
-// suspend/resume handoff at all, unlike shell/exec: InstanceService.Logs
-// is a plain gRPC server-streaming RPC the daemon answers directly (a
-// VM's console/boot output, or a container's stdout/stderr), so this
-// streams straight into a scrollable viewport the same way the launch
-// and migration screens stream their own progress, with none of the
-// real terminal-handoff/query-race risk tea.ExecProcess carries (see
-// PLAN.md's notes on the stray-escape-sequence issue that affects
-// shell/exec specifically).
+// logsModel is the Logs screen: streams an instance's console/stdout output into a scrollable viewport.
 type logsModel struct {
 	inst      *anvilv1.Instance
 	viewport  viewport.Model
 	lines     []string
 	following bool // auto-scroll to the bottom on new data; turned off once the user scrolls up manually
 	streaming bool
+
+	// cancel ends the Logs RPC's context; call it when the user leaves this screen.
+	cancel context.CancelFunc
 }
 
 func newLogsModel(inst *anvilv1.Instance, width, height int) logsModel {
@@ -41,14 +32,16 @@ func newLogsModel(inst *anvilv1.Instance, width, height int) logsModel {
 	return logsModel{inst: inst, viewport: vp, following: true, streaming: true}
 }
 
-func startLogsStream(c *client.Client, name string) tea.Cmd {
+// startLogsStream returns the Cmd that kicks off the stream and the CancelFunc for its RPC context.
+func startLogsStream(c *client.Client, name string) (tea.Cmd, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
 	return func() tea.Msg {
-		stream, err := c.Logs(context.Background(), &anvilv1.LogsRequest{Name: name, Follow: true, TailLines: 200})
+		stream, err := c.Logs(ctx, &anvilv1.LogsRequest{Name: name, Follow: true, TailLines: 200})
 		if err != nil {
 			return logsStreamMsg{err: err, done: true}
 		}
 		return receiveLogChunk(stream)()
-	}
+	}, cancel
 }
 
 func receiveLogChunk(stream anvilv1.InstanceService_LogsClient) tea.Cmd {
@@ -84,6 +77,9 @@ func (m model) updateLogs(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "esc", "q":
+			if m.logs.cancel != nil {
+				m.logs.cancel()
+			}
 			m.screen = screenInstances
 			return m, nil
 		case "f":
@@ -104,9 +100,7 @@ func (m model) updateLogs(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// appendLines adds text (a raw LogChunk's bytes) to the buffer, capping
-// total retained lines at maxLogLines, and re-renders the viewport,
-// auto-scrolling to the bottom only while following is on.
+// appendLines adds text to the buffer, capping it at maxLogLines, and re-renders the viewport.
 func (m *logsModel) appendLines(text string) {
 	m.lines = append(m.lines, strings.Split(strings.TrimRight(text, "\n"), "\n")...)
 	if len(m.lines) > maxLogLines {

@@ -13,16 +13,8 @@ import (
 	"github.com/anvil-project/anvil/internal/vm/image"
 )
 
-// ImageServer implements anvilv1.ImageServiceServer: the on-disk cache of
-// downloaded VM base images (internal/vm/image.Vault's "prepared" tier,
-// List/Delete) plus the source catalog of what can be downloaded and
-// launched in the first place (Catalog, via *vm.Backend so it's exactly
-// the same built-in-plus-mirrors merge a real launch resolves against,
-// not a separate copy of that logic). Before deleting a cached image, it
-// checks every current VM instance's disk (via image.BackingFile) so it
-// never silently deletes an image a running instance's overlay still
-// depends on — that would corrupt that instance's disk, since a qcow2
-// overlay needs its backing file to stay put.
+// ImageServer implements anvilv1.ImageServiceServer, managing the cached VM
+// base image store and its source catalog.
 type ImageServer struct {
 	anvilv1.UnimplementedImageServiceServer
 	Store   *store.Store
@@ -116,19 +108,7 @@ func (s *ImageServer) Delete(ctx context.Context, req *anvilv1.ImageDeleteReques
 	return &anvilv1.ImageDeleteReply{}, nil
 }
 
-// usersOf returns the names of specs that currently have imagePath as
-// their disk's backing file. Best-effort: a spec whose disk can't be
-// inspected (already deleted, mid-transition, whatever) is silently
-// skipped rather than blocking the whole check — it's not this image's
-// problem.
-//
-// Compares via samePath, not a plain string equality: imagePath is
-// computed by joining config.PreparedImageDir() with a filename, while
-// backing is whatever qemu-img itself reports for the overlay's
-// -b argument — normally identical, but if any directory on that path
-// (StateDir, CacheDir, or something above them) is a symlink, the two
-// strings can refer to the same file without being byte-identical, which
-// a plain == would silently and permanently report as "not in use."
+// usersOf returns the names of specs whose disk's backing file is imagePath.
 func usersOf(imagePath string, specs []*instance.Spec) (names []string) {
 	for _, spec := range specs {
 		if spec.VM == nil || spec.VM.DiskPath == "" {
@@ -146,9 +126,7 @@ func usersOf(imagePath string, specs []*instance.Spec) (names []string) {
 }
 
 // samePath reports whether a and b refer to the same file, resolving
-// symlinks first (falling back to filepath.Clean, and then plain string
-// equality, if either side can't be resolved — e.g. because a path was
-// never actually valid, which a plain comparison still catches).
+// symlinks first and falling back to path comparison.
 func samePath(a, b string) bool {
 	if a == b {
 		return true

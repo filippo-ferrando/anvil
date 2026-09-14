@@ -9,9 +9,7 @@ import (
 )
 
 // IntentServer implements anvilv1.IntentServiceServer against an
-// *intent.Manager. There's no Create/Add RPC to implement here — a member
-// is created via InstanceService.Launch(intent_name, role), see
-// server.go's Launch handler.
+// *intent.Manager.
 type IntentServer struct {
 	anvilv1.UnimplementedIntentServiceServer
 	Manager *intent.Manager
@@ -61,7 +59,7 @@ func (s *IntentServer) List(ctx context.Context, req *anvilv1.IntentListRequest)
 func (s *IntentServer) Info(ctx context.Context, req *anvilv1.IntentInfoRequest) (*anvilv1.IntentInfoReply, error) {
 	it, err := s.Manager.Info(req.GetName())
 	if err != nil {
-		return nil, err
+		return nil, wrapErr(err)
 	}
 	return &anvilv1.IntentInfoReply{Intent: intentToPB(it)}, nil
 }

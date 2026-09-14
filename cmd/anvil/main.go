@@ -1,5 +1,4 @@
-// Command anvil is the CLI client for anvild. It holds no business logic —
-// see internal/cli/commands and pkg/client.
+// Command anvil is the CLI client for anvild.
 package main
 
 import (

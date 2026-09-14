@@ -8,10 +8,8 @@ import (
 	"github.com/anvil-project/anvil/internal/store"
 )
 
-// HostServer implements anvilv1.HostServiceServer. Like MirrorServer/
-// CloudInitServer, most of this is plain CRUD against *store.Store; only
-// Test needs real logic (an actual SSH connectivity check), which it
-// borrows from *migrate.Manager rather than duplicating.
+// HostServer implements anvilv1.HostServiceServer against *store.Store,
+// using *migrate.Manager for connectivity tests.
 type HostServer struct {
 	anvilv1.UnimplementedHostServiceServer
 	Store   *store.Store

@@ -8,9 +8,7 @@ import (
 )
 
 // MigrateServer implements anvilv1.MigrateServiceServer against a
-// *migrate.Manager — all the actual SSH/export/relaunch logic lives
-// there, this just streams its progress callback out over gRPC, same
-// pattern as Server.Launch.
+// *migrate.Manager, streaming its progress over gRPC.
 type MigrateServer struct {
 	anvilv1.UnimplementedMigrateServiceServer
 	Manager *migrate.Manager
@@ -37,12 +35,8 @@ func (s *MigrateServer) Migrate(req *anvilv1.MigrateRequest, stream anvilv1.Migr
 		return err
 	}
 
-	// An intent migration (result.IntentName set, see migrate.Result's
-	// doc comment) reports one member_done per member plus a final
-	// intent_done summary instead of the single-instance done event —
-	// all sent together here, right after Migrate returns (it doesn't
-	// stream them mid-flight itself, just plain status lines along the
-	// way), not literally as each member finishes.
+	// An intent migration reports one member_done per member plus a final
+	// intent_done summary instead of a single done event.
 	if result.IntentName != "" {
 		members := make([]*anvilv1.MigrateMemberResult, 0, len(result.Members))
 		for _, mr := range result.Members {

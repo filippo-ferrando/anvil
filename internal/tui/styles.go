@@ -2,11 +2,7 @@ package tui
 
 import "github.com/charmbracelet/lipgloss"
 
-// One shared palette + a handful of reusable styles, so every screen looks
-// like part of the same application instead of six ad hoc layouts. Kept
-// deliberately simple (a single accent color, one muted color for
-// secondary text) rather than a full theme system — there's only one
-// theme.
+// One shared color palette and set of reusable styles for every screen.
 var (
 	colorAccent    = lipgloss.Color("#7C6FF0") // headers, focused borders, primary actions
 	colorAccentDim = lipgloss.Color("#4A4370")
@@ -46,9 +42,7 @@ var (
 				Background(colorAccent)
 )
 
-// helpBar renders a consistent "key: action" footer, the same shape on
-// every screen, so navigation reads as one language instead of each view
-// inventing its own — directly the thing that was missing before.
+// helpBar renders a "key: action" footer from alternating key/action pairs.
 func helpBar(pairs ...string) string {
 	var b []string
 	for i := 0; i+1 < len(pairs); i += 2 {

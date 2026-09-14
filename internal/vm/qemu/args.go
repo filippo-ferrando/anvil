@@ -1,41 +1,31 @@
 package qemu
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
-// Config describes everything needed to build a qemu-system-* command line
-// for one instance. It intentionally doesn't reference internal/instance's
-// Spec type directly — the caller (internal/instance/manager) is
-// responsible for translating a VMSpec into this narrower, QEMU-specific
-// shape, keeping this package ignorant of the registry/domain model.
+// Config describes everything needed to build a qemu-system-* command
+// line for one instance.
 type Config struct {
-	Arch          string // "x86_64" for v1; kept as a field so aarch64 is additive later
+	Arch          string // "x86_64" for v1
 	CPUs          int
 	MemoryMiB     int64
 	DiskPath      string
 	SeedISOPath   string // NoCloud seed; empty means no cloud-init drive attached
 	QMPSocket     string
-	SerialLogPath string // guest console (boot messages, cloud-init output) captured here; empty discards it entirely
-	KVM           bool   // false falls back to -accel tcg (no /dev/kvm access)
+	SerialLogPath string // guest console captured here; empty discards it
+	KVM           bool   // false falls back to -accel tcg
 
 	// Networking: exactly one of these is expected to be set by the caller.
-	// SLIRP is the default for a standalone instance; Bridge is used for an
-	// intent's shared network (see internal/vm/network).
 	SLIRPHostForwards []HostForward // -netdev user,hostfwd=...
 	BridgeTapDevice   string        // name of an already-created tap device to attach to
 
 	// MACAddress, when set, is passed to the NIC device explicitly
-	// instead of letting QEMU pick one itself — needed for a bridged
-	// (BridgeTapDevice) NIC specifically, so the cloud-init network-config
-	// generated for it (internal/vm.Backend's bridgeNetworkConfig) can
-	// match this exact interface by MAC, sidestepping guest interface
-	// *naming* entirely (see that function's doc comment for the real bug
-	// this fixes). Empty for SLIRP, which has no guest-side static config
-	// to match against in the first place.
+	// instead of letting QEMU pick one. Empty for SLIRP.
 	MACAddress string
 
-	// Mounts are 9p host-directory shares — see Mount's doc comment for why
-	// this is 9p rather than virtiofs, and why there's no way to add one to
-	// an already-running instance without a restart.
+	// Mounts are 9p host-directory shares.
 	Mounts []Mount
 }
 
@@ -46,17 +36,7 @@ type HostForward struct {
 }
 
 // Mount is one host directory to share into the guest via 9p
-// (virtio-9p-pci + a "local" fsdev backend). Chosen over virtiofs
-// deliberately: virtiofs needs a separate virtiofsd process per share
-// (not a dependency this project has today) plus a shared memory backend
-// configured at VM boot time, and — checked empirically against a real
-// QEMU 11.1.1 build, not assumed — neither a 9p fsdev backend nor (as far
-// as could be determined) a virtiofs one can be hot-added to an
-// already-running instance via QMP (`qom-list-types` reports no
-// user-creatable fsdev-backend object at all). So a 9p share added to a
-// running instance requires restarting its QEMU process either way; 9p
-// just avoids the extra virtiofsd dependency and boot-time memory-backend
-// requirement for a capability neither backend can truly hot-plug anyway.
+// (virtio-9p-pci + a "local" fsdev backend).
 type Mount struct {
 	HostPath string
 	Tag      string // 9p mount_tag; guest-side `mount -t 9p -o trans=virtio` uses this, not the host path
@@ -71,8 +51,7 @@ func BinaryName(arch string) string {
 	return "qemu-system-" + arch
 }
 
-// MachineType returns this arch's default machine type. Only x86_64/q35 is
-// implemented for v1; other arches are a placeholder for later work.
+// MachineType returns this arch's default machine type.
 func MachineType(arch string) string {
 	switch arch {
 	case "", "x86_64":
@@ -103,9 +82,6 @@ func BuildArgs(cfg Config) ([]string, error) {
 
 	serial := "null" // discard entirely if the caller didn't ask for a log
 	if cfg.SerialLogPath != "" {
-		// file: is one-way (guest output only, no input) — fine for our
-		// purposes, this is for capturing boot/cloud-init messages for
-		// debugging, not an interactive console.
 		serial = "file:" + cfg.SerialLogPath
 	}
 
@@ -148,11 +124,17 @@ func BuildArgs(cfg Config) ([]string, error) {
 	return args, nil
 }
 
+// escapeQEMUOpt doubles literal commas in v so it survives being embedded
+// as one field of a QEMU comma-delimited option string.
+func escapeQEMUOpt(v string) string {
+	return strings.ReplaceAll(v, ",", ",,")
+}
+
 func buildMounts(mounts []Mount) []string {
 	var args []string
 	for i, m := range mounts {
 		fsdevID := fmt.Sprintf("fsdev%d", i)
-		opts := fmt.Sprintf("local,id=%s,path=%s,security_model=mapped-xattr", fsdevID, m.HostPath)
+		opts := fmt.Sprintf("local,id=%s,path=%s,security_model=mapped-xattr", fsdevID, escapeQEMUOpt(m.HostPath))
 		if m.ReadOnly {
 			opts += ",readonly=on"
 		}

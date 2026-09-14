@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 	"github.com/anvil-project/anvil/pkg/client"
@@ -43,12 +45,8 @@ func newMigrateCommand(flags *globalFlags) *cobra.Command {
 			}
 			defer c.Close()
 
-			// A migrated disk skips cloud-init entirely on relaunch (see
-			// PLAN.md's Migration section), so the target's own default
-			// guest-access key needs to already be in the guest before
-			// it ever gets there — done here, client-side, while the
-			// source VM is still running, using whatever key already
-			// gets this identity into it (same as `anvil shell` would).
+			// Authorize the target's guest-access key on the source VM before migrating,
+			// since a migrated disk skips cloud-init on relaunch.
 			if !dryRun {
 				if err := injectGuestKeys(cmd.Context(), c, args[0], to); err != nil {
 					return fmt.Errorf("preparing guest SSH access on the target: %w", err)
@@ -114,15 +112,8 @@ func newMigrateCommand(flags *globalFlags) *cobra.Command {
 	return cmd
 }
 
-// injectGuestKeys makes sure the destination host's own default anvil
-// guest-access key is authorized in every currently-running VM about to
-// be migrated, before anything is actually stopped or transferred. name
-// resolves the same way internal/migrate.Manager.Migrate itself resolves
-// it: a single instance first, a whole intent second. Containers, and
-// any instance that isn't currently running (nothing to SSH into), are
-// skipped, not errors — the latter just gets a warning, since a stopped
-// VM might genuinely have no key set up for the target and that's on the
-// person migrating it to sort out, not a reason to refuse the migration.
+// injectGuestKeys authorizes the target host's guest-access key in every
+// running VM about to be migrated (name: a single instance, or a whole intent).
 func injectGuestKeys(ctx context.Context, c *client.Client, name, to string) error {
 	vms, err := resolveMigratingVMs(ctx, c, name)
 	if err != nil {
@@ -143,11 +134,7 @@ func injectGuestKeys(ctx context.Context, c *client.Client, name, to string) err
 		return err
 	}
 
-	// The key travels over stdin, never interpolated into the remote
-	// command line — same reasoning as the daemon's own migrate-import/
-	// migrate-rollback. Appends it to authorized_keys only if it isn't
-	// already there, so migrating the same instance more than once
-	// doesn't pile up duplicates.
+	// Appends the key (piped via stdin) to authorized_keys unless it's already present.
 	const remoteCommand = `mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && ` +
 		`key=$(cat) && (grep -qxF "$key" ~/.ssh/authorized_keys || echo "$key" >> ~/.ssh/authorized_keys) && ` +
 		`chmod 600 ~/.ssh/authorized_keys`
@@ -168,24 +155,27 @@ func injectGuestKeys(ctx context.Context, c *client.Client, name, to string) err
 	return nil
 }
 
-// resolveMigratingVMs looks up name the same way
-// internal/migrate.Manager.Migrate does (a single instance first, a
-// whole intent second) and returns every VM involved: the instance
-// itself, or every VM member of the intent. A container has no
-// SSH/cloud-init concept, so it's just left out, not an error.
+// resolveMigratingVMs looks up name as a single instance first, then as an intent,
+// and returns every VM involved. Container members are skipped.
 func resolveMigratingVMs(ctx context.Context, c *client.Client, name string) ([]*anvilv1.Instance, error) {
 	infoReply, err := c.Info(ctx, &anvilv1.InfoRequest{Names: []string{name}})
-	if err == nil && len(infoReply.GetInstances()) > 0 {
+	switch {
+	case err == nil && len(infoReply.GetInstances()) > 0:
 		inst := infoReply.GetInstances()[0]
 		if inst.GetVm() == nil {
 			return nil, nil
 		}
 		return []*anvilv1.Instance{inst}, nil
+	case err != nil && status.Code(err) != codes.NotFound:
+		return nil, fmt.Errorf("migrate: looking up %q: %w", name, err)
 	}
 
 	intentReply, err := c.Intent.Info(ctx, &anvilv1.IntentInfoRequest{Name: name})
 	if err != nil {
-		return nil, fmt.Errorf("no instance or intent named %q", name)
+		if status.Code(err) == codes.NotFound {
+			return nil, fmt.Errorf("no instance or intent named %q", name)
+		}
+		return nil, fmt.Errorf("migrate: looking up %q as an intent: %w", name, err)
 	}
 	memberIDs := make(map[string]bool)
 	for _, mem := range intentReply.GetIntent().GetMembers() {
@@ -197,9 +187,7 @@ func resolveMigratingVMs(ctx context.Context, c *client.Client, name string) ([]
 		return nil, nil
 	}
 
-	// IntentMember only carries an instance ID, and InstanceService.Info
-	// only resolves by name — list everything and match by ID instead of
-	// adding a lookup-by-ID RPC just for this.
+	// List all instances and match by ID, since Info only resolves by name.
 	listReply, err := c.List(ctx, &anvilv1.ListRequest{})
 	if err != nil {
 		return nil, err

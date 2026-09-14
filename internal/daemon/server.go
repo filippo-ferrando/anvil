@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"log"
 	"time"
 
@@ -11,9 +12,7 @@ import (
 )
 
 // Server implements anvilv1.InstanceServiceServer against an
-// *instance.Manager. It holds no state of its own beyond that — all
-// business logic lives in internal/instance and the backends it dispatches
-// to, per the plan's "daemon owns all logic, clients are thin" mandate.
+// *instance.Manager.
 type Server struct {
 	anvilv1.UnimplementedInstanceServiceServer
 	Manager *instance.Manager
@@ -37,9 +36,7 @@ func (s *Server) Launch(req *anvilv1.LaunchRequest, stream anvilv1.InstanceServi
 		}
 	}
 	// A launch with an intent_name joins (or creates) that intent instead
-	// of producing a standalone instance — see internal/intent.Manager's
-	// doc comment for why that routing decision lives here rather than
-	// inside instance.Manager.Launch itself.
+	// of producing a standalone instance.
 	if params.IntentName != "" {
 		return s.Intents.Launch(stream.Context(), params, send)
 	}
@@ -57,7 +54,7 @@ func (s *Server) List(ctx context.Context, req *anvilv1.ListRequest) (*anvilv1.L
 func (s *Server) Info(ctx context.Context, req *anvilv1.InfoRequest) (*anvilv1.InfoReply, error) {
 	specs, err := s.Manager.Info(req.GetNames())
 	if err != nil {
-		return nil, err
+		return nil, wrapErr(err)
 	}
 	return &anvilv1.InfoReply{Instances: specsToPB(specs)}, nil
 }
@@ -81,25 +78,23 @@ func (s *Server) Stop(ctx context.Context, req *anvilv1.StopRequest) (*anvilv1.S
 }
 
 func (s *Server) Delete(ctx context.Context, req *anvilv1.DeleteRequest) (*anvilv1.DeleteReply, error) {
-	// Resolved before deleting, not after: once gone, an instance's own
-	// Labels (where its intent membership is tagged) aren't retrievable
-	// through the normal Info path any more.
+	// Resolved before deleting so each instance's intent-membership label
+	// is still available afterward.
 	specs, err := s.Manager.Info(req.GetNames())
 	if err != nil {
 		return nil, err
 	}
 
-	if err := s.Manager.Delete(ctx, req.GetNames(), req.GetPurge()); err != nil {
-		return nil, err
-	}
-
-	// `anvil delete` (as opposed to `anvil intent remove`/`delete`) doesn't
-	// go through internal/intent at all, so a deleted member would
-	// otherwise leave a stale entry behind in its intent's Members list
-	// forever, pointing at an instance ID that no longer exists — best-
-	// effort cleanup here, not fatal to Delete itself if it fails (the
-	// instance is already gone regardless).
+	// Deleted one instance at a time so a failure on one instance doesn't
+	// block deletion or intent cleanup of the others.
+	var errs []error
 	for _, spec := range specs {
+		if err := s.Manager.Delete(ctx, []string{spec.Name}, req.GetPurge()); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+
+		// Best-effort cleanup of the deleted instance's intent membership.
 		intentName := spec.Labels["intent"]
 		if intentName == "" {
 			continue
@@ -107,6 +102,9 @@ func (s *Server) Delete(ctx context.Context, req *anvilv1.DeleteRequest) (*anvil
 		if _, err := s.Intents.Remove(intentName, spec.ID); err != nil {
 			log.Printf("daemon: removing deleted instance %s from intent %q: %v", spec.Name, intentName, err)
 		}
+	}
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
 	}
 
 	return &anvilv1.DeleteReply{}, nil
@@ -137,4 +135,12 @@ func (s *Server) Umount(ctx context.Context, req *anvilv1.UmountRequest) (*anvil
 		return nil, err
 	}
 	return &anvilv1.UmountReply{}, nil
+}
+
+func (s *Server) Stats(ctx context.Context, req *anvilv1.StatsRequest) (*anvilv1.StatsReply, error) {
+	stats, err := s.Manager.Stats(ctx, req.GetName())
+	if err != nil {
+		return nil, wrapErr(err)
+	}
+	return &anvilv1.StatsReply{Stats: statsToPB(stats)}, nil
 }

@@ -10,13 +10,8 @@ import (
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 )
 
-// newFindCommand is `anvil find [term]`: lists the VM base images
-// `anvil launch --kind vm <id>` can actually resolve — the built-in
-// catalog merged with every enabled `anvil mirror add --kind vm` mirror
-// (ImageService.Catalog, backed by the exact same
-// internal/vm.Backend.EffectiveCatalog a real launch uses). Was in the
-// original plan's CLI surface but never actually built until now — both
-// this and the TUI's Images screen were missing it.
+// newFindCommand lists the VM base images available to launch, optionally
+// filtered by a search term.
 func newFindCommand(flags *globalFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:   "find [term]",

@@ -8,20 +8,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// simpleForm is the one form component every screen's "add/launch/edit"
-// flow builds on (the launch form, mirror-add, host-add, and the
-// cloud-init new/import/rename prompts) — Tab/Shift+Tab between fields,
-// Enter or a dedicated submit key to confirm, Esc to cancel. One
-// implementation instead of six ad hoc ones is what keeps every form in
-// this app behaving the same way.
-//
-// Rendering is deliberately compact (no per-field bordered box, a hint
-// line only under the focused field) and, when maxHeight is set,
-// windowed to whatever's around the focused field — a form with enough
-// fields (the launch form has eleven) otherwise produces more lines than
-// a normal terminal has rows, and the earliest fields (Name, Image)
-// scroll off the top before anyone can see them. Caught on a real run,
-// not designed in up front.
+// simpleForm is a shared form component: Tab/Shift+Tab between fields,
+// Enter or a submit key to confirm, Esc to cancel.
 type simpleForm struct {
 	title     string
 	fields    []formField
@@ -46,9 +34,7 @@ type formField struct {
 	on    bool            // fieldToggle
 }
 
-// textField/toggleField are the two ways to declare a formField —
-// callers build a []formField with these instead of poking the
-// unexported textinput.Model directly.
+// textField and toggleField construct a formField of each kind.
 func textField(label, hint, value string) formField {
 	ti := textinput.New()
 	ti.Placeholder = hint
@@ -69,12 +55,10 @@ func newSimpleForm(title string, fields []formField) simpleForm {
 	return f
 }
 
-// SetHeight constrains View() to at most h lines of field content (title/
-// help footer are added on top of that), windowed around whichever field
-// is currently focused. 0 (the zero value) means unconstrained.
+// SetHeight constrains View() to at most h lines of field content. 0 means unconstrained.
 func (f *simpleForm) SetHeight(h int) { f.maxHeight = h }
 
-// Value/Bool are what a screen reads back after the user submits.
+// Value returns the current text value of the field with the given label.
 func (f simpleForm) Value(label string) string {
 	for _, field := range f.fields {
 		if field.Label == label {
@@ -84,6 +68,7 @@ func (f simpleForm) Value(label string) string {
 	return ""
 }
 
+// Bool returns the current value of the toggle field with the given label.
 func (f simpleForm) Bool(label string) bool {
 	for _, field := range f.fields {
 		if field.Label == label {
@@ -93,10 +78,7 @@ func (f simpleForm) Bool(label string) bool {
 	return false
 }
 
-// update handles the form's own keys (Tab/Shift+Tab/Space/typing) and
-// returns (updated form, submitted, cancelled) — the caller (a screen's
-// Update) checks submitted/cancelled to decide what to do next; nothing
-// here calls back into application logic itself.
+// update handles the form's keys and returns (updated form, submitted, cancelled).
 func (f simpleForm) update(msg tea.Msg) (simpleForm, bool, bool) {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
@@ -122,10 +104,7 @@ func (f simpleForm) update(msg tea.Msg) (simpleForm, bool, bool) {
 			return f, false, false
 		}
 	case "enter":
-		// Only the last field submits on Enter, regardless of its kind —
-		// a toggle field partway through the form (e.g. migrationModel's
-		// Copy/Best-effort/Dry-run before Migrate would otherwise
-		// misfire itself) should just move on, same as any text field.
+		// Only the last field submits on Enter; others just advance focus.
 		if f.focus == len(f.fields)-1 {
 			return f, true, false
 		}
@@ -140,7 +119,7 @@ func (f simpleForm) update(msg tea.Msg) (simpleForm, bool, bool) {
 	if f.fields[f.focus].Kind == fieldText {
 		var cmd tea.Cmd
 		f.fields[f.focus].input, cmd = f.fields[f.focus].input.Update(msg)
-		_ = cmd // textinput.Blink is the only cmd this ever produces; the form doesn't need to relay it
+		_ = cmd // the form doesn't need to relay textinput's blink cmd
 	}
 	return f, false, false
 }
@@ -204,10 +183,7 @@ func (f simpleForm) View() string {
 	return strings.Join(content, "\n") + "\n\n" + helpBar("tab", "next field", "enter", "submit", "esc", "cancel")
 }
 
-// windowLines returns at most maxHeight consecutive lines from lines,
-// centered on focusLine so the field the user is actually editing is
-// always visible, with a one-line indicator when content is cut off
-// above or below.
+// windowLines returns at most maxHeight consecutive lines centered on focusLine.
 func windowLines(lines []string, focusLine, maxHeight int) []string {
 	if maxHeight < 1 {
 		maxHeight = 1

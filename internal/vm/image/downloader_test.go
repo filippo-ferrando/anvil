@@ -1,6 +1,7 @@
 package image
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
@@ -27,7 +28,7 @@ func TestDownloaderFetchReportsProgress(t *testing.T) {
 
 	d := NewDownloader()
 	var statuses []string
-	err := d.Fetch(entry, dest, func(status string) { statuses = append(statuses, status) })
+	err := d.Fetch(context.Background(), entry, dest, func(status string) { statuses = append(statuses, status) })
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
@@ -56,7 +57,7 @@ func TestDownloaderFetchSkippedWhenAlreadyCached(t *testing.T) {
 	entry := DistroEntry{ID: "fake-distro", URL: "https://example.invalid/should-not-be-fetched", SHA256: hex.EncodeToString(sum[:])}
 	d := NewDownloader()
 	called := false
-	if err := d.Fetch(entry, dest, func(string) { called = true }); err != nil {
+	if err := d.Fetch(context.Background(), entry, dest, func(string) { called = true }); err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
 	if called {

@@ -11,12 +11,8 @@ import (
 	"time"
 )
 
-// QMPClient is a minimal hand-rolled client for QEMU's QMP protocol
-// (newline-delimited JSON over a unix socket). Hand-rolled rather than a
-// third-party dependency: the protocol is small, and this avoids taking on
-// a library of uncertain maintenance status for something anvil only needs
-// a handful of commands from (system_powerdown, quit, query-status,
-// snapshot-save, snapshot-load).
+// QMPClient is a minimal client for QEMU's QMP protocol (newline-delimited
+// JSON over a unix socket).
 type QMPClient struct {
 	conn   net.Conn
 	reader *bufio.Reader
@@ -92,6 +88,8 @@ func (c *QMPClient) readLoop() {
 	for {
 		line, err := c.reader.ReadBytes('\n')
 		if err != nil {
+			// Connection gone: fail every outstanding command.
+			c.failPending(fmt.Errorf("connection closed: %w", err))
 			return
 		}
 		var resp qmpResponse
@@ -99,10 +97,7 @@ func (c *QMPClient) readLoop() {
 			continue
 		}
 		if resp.Event != "" {
-			// Async events (e.g. SHUTDOWN) aren't consumed yet; the
-			// supervisor loop (internal/instance/supervisor.go, M1
-			// follow-up) will subscribe to these for crash detection
-			// instead of relying solely on process-exit.
+			// Async events aren't consumed yet.
 			continue
 		}
 		c.mu.Lock()
@@ -114,6 +109,17 @@ func (c *QMPClient) readLoop() {
 		if ok {
 			ch <- resp
 		}
+	}
+}
+
+// failPending delivers err to every command still waiting on a response.
+func (c *QMPClient) failPending(err error) {
+	c.mu.Lock()
+	pending := c.pending
+	c.pending = make(map[string]chan qmpResponse)
+	c.mu.Unlock()
+	for _, ch := range pending {
+		ch <- qmpResponse{Error: &qmpError{Class: "internal", Desc: err.Error()}}
 	}
 }
 
@@ -135,6 +141,10 @@ func (c *QMPClient) Execute(ctx context.Context, command string, args interface{
 	_, writeErr := c.conn.Write(payload)
 	c.mu.Unlock()
 	if writeErr != nil {
+		// No response will ever arrive for this id; clean up the entry.
+		c.mu.Lock()
+		delete(c.pending, id)
+		c.mu.Unlock()
 		return nil, fmt.Errorf("qmp: writing command: %w", writeErr)
 	}
 
@@ -150,9 +160,7 @@ func (c *QMPClient) Execute(ctx context.Context, command string, args interface{
 }
 
 // GracefulShutdown asks the guest OS to power down via ACPI. It does not
-// wait for the VM to actually exit — the caller (internal/instance
-// supervisor) is expected to watch the process/QMP socket and escalate to
-// Quit after a timeout.
+// wait for the VM to actually exit.
 func (c *QMPClient) GracefulShutdown(ctx context.Context) error {
 	_, err := c.Execute(ctx, "system_powerdown", nil)
 	return err
@@ -181,13 +189,7 @@ func (c *QMPClient) QueryStatus(ctx context.Context) (QueryStatusResult, error) 
 	return res, nil
 }
 
-// SnapshotSave issues QMP's snapshot-save job. NOT YET WIRED to real
-// device/vmstate identifiers — snapshot-save needs the vmstate-holding
-// block device's node name and the list of block nodes to snapshot, both
-// of which depend on how BuildArgs (args.go) names its -drive nodes; that
-// naming isn't finalized yet, so this intentionally returns an error rather
-// than sending a guessed, likely-wrong command. Wire this up alongside
-// giving -drive stable node-name= values in args.go.
+// SnapshotSave issues QMP's snapshot-save job. Not yet implemented.
 func (c *QMPClient) SnapshotSave(ctx context.Context, name string, timeout time.Duration) error {
 	return fmt.Errorf("qmp: SnapshotSave not yet implemented (needs stable -drive node names from args.go)")
 }

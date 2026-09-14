@@ -8,29 +8,23 @@ import (
 	"github.com/anvil-project/anvil/internal/instance"
 )
 
-// Backend is what instance.Manager actually registers for
-// instance.KindContainer — it dispatches every call to the concrete
-// per-engine backend (DockerBackend today, a future PodmanBackend once M3's
-// second half lands) selected by spec.Container.Engine. This exists
-// because instance.Manager's backend map is keyed by Kind alone (vm vs
-// container), not by engine — Kind doesn't distinguish Docker from Podman,
-// so something has to, and doing it here keeps that dispatch out of
-// Manager entirely.
+// Backend dispatches instance.KindContainer calls to the concrete
+// per-engine backend selected by spec.Container.Engine.
 type Backend struct {
 	Docker instance.Backend // nil if Docker isn't configured
 	Podman instance.Backend // nil until Podman lands
 }
 
-var _ instance.Backend = (*Backend)(nil)
+var (
+	_ instance.Backend       = (*Backend)(nil)
+	_ instance.StatsProvider = (*Backend)(nil)
+)
 
 func NewBackend(dockerBackend instance.Backend) *Backend {
 	return &Backend{Docker: dockerBackend}
 }
 
-// engineFor picks the concrete backend for spec, defaulting an unset
-// engine to Docker — the plan's eventual default (once Podman also
-// exists) is Podman, but that's not meaningful to enforce while Docker is
-// still the only engine actually wired up.
+// engineFor picks the concrete backend for spec, defaulting an unset engine to Docker.
 func (b *Backend) engineFor(spec *instance.Spec) (instance.Backend, error) {
 	if spec.Container == nil {
 		return nil, fmt.Errorf("container: spec has no ContainerSpec")
@@ -101,4 +95,16 @@ func (b *Backend) Logs(ctx context.Context, spec *instance.Spec, follow bool, ta
 		return err
 	}
 	return eng.Logs(ctx, spec, follow, tailLines, send)
+}
+
+func (b *Backend) Stats(ctx context.Context, spec *instance.Spec) (instance.Stats, error) {
+	eng, err := b.engineFor(spec)
+	if err != nil {
+		return instance.Stats{}, err
+	}
+	sp, ok := eng.(instance.StatsProvider)
+	if !ok {
+		return instance.Stats{}, fmt.Errorf("container: this engine doesn't support stats")
+	}
+	return sp.Stats(ctx, spec)
 }

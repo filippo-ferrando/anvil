@@ -13,36 +13,19 @@ import (
 	"github.com/anvil-project/anvil/internal/sshkey"
 )
 
-// shellDoneMsg reports the outcome of a suspended shell/exec session (see
-// shellInto/execInto) back into the update loop, so the instances screen
-// can show a status line instead of silently swallowing a failure.
+// shellDoneMsg reports the outcome of a suspended shell/exec session back into the update loop.
 type shellDoneMsg struct{ err error }
 
-// ttyCompatSSHArgs are extra -o flags that keep a local terminal's own
-// quirks from leaking into the guest session: SetEnv=TERM=... overrides
-// whatever $TERM the local terminal itself would otherwise send (kitty's
-// own "xterm-kitty" being the real case this fixes — its shell
-// integration queries terminal capabilities in a way that produced
-// literal escape-sequence garbage after a suspended shell/exec session
-// resumed the TUI, once the reply arrived late). IgnoreUnknown paired
-// with WarnWeakCrypto means an ssh client too old to recognize that
-// specific keyword just skips it instead of refusing to start at all.
-// Same small copy internal/cli/commands/ssh.go has, for the same reason
-// as knownHostsPath: this package only reuses pkg/client, not
-// internal/cli/commands.
+// ttyCompatSSHArgs are extra ssh -o flags that keep local terminal quirks
+// (e.g. TERM) from leaking into the guest session.
 var ttyCompatSSHArgs = []string{
 	"-o", "SetEnv=TERM=xterm-256color",
 	"-o", "IgnoreUnknown=WarnWeakCrypto",
 	"-o", "WarnWeakCrypto=no-pq-kex",
 }
 
-// shellInto is the M8 checklist's "shell/SSH handoff": tea.ExecProcess is
-// Bubble Tea's own supported way to suspend the program, hand the real
-// terminal to an external process, and resume automatically when it
-// exits — simpler and more robust than tview's manual Suspend/resume
-// pairing, since the framework itself owns putting the terminal back the
-// way it found it. user overrides the image's own default user
-// (blank keeps that default) — VM only, same as `anvil shell --user`.
+// shellInto suspends the TUI and execs an interactive ssh session into inst.
+// user overrides the image's default user; blank keeps that default.
 func (m model) shellInto(inst *anvilv1.Instance, user string) (tea.Model, tea.Cmd) {
 	cmd, err := buildShellCommand(inst, user, nil)
 	if err != nil {
@@ -52,9 +35,7 @@ func (m model) shellInto(inst *anvilv1.Instance, user string) (tea.Model, tea.Cm
 	return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return shellDoneMsg{err: err} })
 }
 
-// execInto is `anvil exec`'s TUI equivalent: runs command inside inst (SSH
-// for a VM, `docker`/`podman exec` for a container) via the same
-// suspend/resume handoff as shellInto, instead of an interactive login.
+// execInto runs command inside inst (SSH for a VM, docker/podman exec for a container).
 func (m model) execInto(inst *anvilv1.Instance, user, command string) (tea.Model, tea.Cmd) {
 	fields := strings.Fields(command)
 	if len(fields) == 0 {
@@ -76,10 +57,8 @@ func (m model) execInto(inst *anvilv1.Instance, user, command string) (tea.Model
 	return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return shellDoneMsg{err: err} })
 }
 
-// buildShellCommand builds the real `ssh` invocation for inst — an
-// interactive login when command is nil/empty, a one-off remote command
-// (`anvil exec`'s shape) otherwise. user overrides the image's own
-// default user; blank keeps that default.
+// buildShellCommand builds the ssh invocation for inst: an interactive
+// login when command is empty, a one-off remote command otherwise.
 func buildShellCommand(inst *anvilv1.Instance, user string, command []string) (*exec.Cmd, error) {
 	vm := inst.GetVm()
 	if vm == nil {
@@ -135,11 +114,7 @@ func buildShellCommand(inst *anvilv1.Instance, user string, command []string) (*
 	return cmd, nil
 }
 
-// buildContainerExecCommand mirrors internal/cli/commands/
-// container_exec.go's runContainerExec: `docker exec`/`podman exec`
-// against inst's own engine, inheriting stdio. A separate, small copy of
-// that logic — this package only reuses pkg/client, not
-// internal/cli/commands, per the plan's TUI section.
+// buildContainerExecCommand builds a `docker exec`/`podman exec` invocation against inst's engine.
 func buildContainerExecCommand(inst *anvilv1.Instance, command []string) (*exec.Cmd, error) {
 	spec := inst.GetContainer()
 	if inst.GetState() != anvilv1.State_STATE_RUNNING {
@@ -164,10 +139,7 @@ func buildContainerExecCommand(inst *anvilv1.Instance, command []string) (*exec.
 	return cmd, nil
 }
 
-// knownHostsPath mirrors internal/cli/commands/ssh.go's sshKnownHostsPath:
-// keyed by instance ID rather than "host:port", since a SLIRP
-// host-forwarded port is ephemeral and gets reused across unrelated
-// instances.
+// knownHostsPath returns the known_hosts file path for instanceID.
 func knownHostsPath(instanceID string) (string, error) {
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {

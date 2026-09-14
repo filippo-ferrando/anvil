@@ -1,21 +1,4 @@
-// Package network manages the host-side networking a VM needs to join an
-// intent's shared bridge (see the plan's Intents section): creating a tap
-// device and attaching it to an already-existing Linux bridge, so a QEMU
-// process can be pointed at it with `-netdev tap,ifname=...,script=no`
-// (see internal/vm/qemu.Config.BridgeTapDevice, already wired to accept
-// this). Nothing here creates the bridge itself — that's
-// internal/container's job (a Docker/Podman network's own bridge device),
-// this package only ever attaches a VM's tap to a bridge that already
-// exists by the time it's called.
-//
-// Uses github.com/vishvananda/netlink (real netlink sockets, not shelling
-// out to `ip`) — the same library Docker/containerd/most Go CNI tooling
-// uses for this exact job. This is meaningfully less verified than the
-// rest of this project's networking code: there was no way to fetch this
-// dependency or exercise it against a real bridge in the sandbox this was
-// written in (no network access, no root, no existing bridge to test
-// against) — treat this file as the one part of M4 that most needs a real
-// smoke test before trusting it.
+// Package network manages the tap device a VM needs to join a shared bridge.
 package network
 
 import (
@@ -24,12 +7,8 @@ import (
 	"github.com/vishvananda/netlink"
 )
 
-// CreateTap creates a persistent tap device named tapName and attaches it
-// to the already-existing bridge bridgeName, bringing the tap up.
-// Requires CAP_NET_ADMIN in the calling process's effective set — anvild
-// runs as the unprivileged "anvil" user (see PLAN.md's M6 notes), granted
-// this specific capability as an ambient capability by
-// packaging/anvild.service, not by running as root.
+// CreateTap creates a persistent tap device named tapName, attaches it to
+// the already-existing bridge bridgeName, and brings it up.
 func CreateTap(tapName, bridgeName string) error {
 	bridge, err := netlink.LinkByName(bridgeName)
 	if err != nil {
@@ -55,11 +34,8 @@ func CreateTap(tapName, bridgeName string) error {
 	return nil
 }
 
-// DeleteTap removes a tap device previously created by CreateTap. Called
-// on VM stop/delete so tap devices don't accumulate on the host across
-// restarts — a missing device is not an error, matching how
-// internal/container's Delete treats an already-gone container as
-// success.
+// DeleteTap removes a tap device previously created by CreateTap. A
+// missing device is not an error.
 func DeleteTap(tapName string) error {
 	link, err := netlink.LinkByName(tapName)
 	if err != nil {
@@ -71,17 +47,27 @@ func DeleteTap(tapName string) error {
 	return netlink.LinkDel(link)
 }
 
-// TapName derives a deterministic tap device name from an instance ID.
-// Linux interface names are capped at 15 usable characters (IFNAMSIZ=16
-// including the trailing NUL), too short for a full ULID, so this just
-// takes a prefix — collisions are only possible if two instance IDs share
-// the same first 10 characters, which ULID's own monotonic/random design
-// makes astronomically unlikely for anything actually running on the same
-// host at once.
+// TapName derives a deterministic tap device name from the last 10
+// characters of an instance ID, to fit Linux's interface name length limit.
 func TapName(instanceID string) string {
 	id := instanceID
 	if len(id) > 10 {
-		id = id[:10]
+		id = id[len(id)-10:]
 	}
 	return "tap-" + id
+}
+
+// TapStats returns tapName's cumulative byte counters as seen from the
+// host: rxBytes is what the guest has sent (host receives it on the tap),
+// txBytes is what the guest has received (host sent it onto the tap).
+func TapStats(tapName string) (rxBytes, txBytes uint64, err error) {
+	link, err := netlink.LinkByName(tapName)
+	if err != nil {
+		return 0, 0, fmt.Errorf("network: finding tap device %q: %w", tapName, err)
+	}
+	stats := link.Attrs().Statistics
+	if stats == nil {
+		return 0, 0, nil
+	}
+	return stats.RxBytes, stats.TxBytes, nil
 }

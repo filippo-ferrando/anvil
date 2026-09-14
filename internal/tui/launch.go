@@ -169,11 +169,7 @@ func buildLaunchRequest(kind string, form simpleForm) (*anvilv1.LaunchRequest, e
 	return req, nil
 }
 
-// startLaunchStream opens the Launch RPC and receives its first event —
-// every event after that is chained by launchStreamMsg's own handler in
-// updateLaunch re-issuing receiveLaunchEvent, the standard Bubble Tea
-// pattern for consuming a gRPC server-streaming call one message at a
-// time without blocking the UI loop.
+// startLaunchStream opens the Launch RPC and receives its first event.
 func startLaunchStream(c *client.Client, req *anvilv1.LaunchRequest) tea.Cmd {
 	return func() tea.Msg {
 		stream, err := c.Launch(context.Background(), req)

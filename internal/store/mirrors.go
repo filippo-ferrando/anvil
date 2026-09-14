@@ -6,14 +6,14 @@ import (
 	"sort"
 
 	"go.etcd.io/bbolt"
+
+	"github.com/anvil-project/anvil/internal/instance"
 )
 
 var bucketMirrors = []byte("mirrors") // name -> json(Mirror)
 
-// MirrorKind distinguishes a VM image mirror (a distribution-info.json
-// shaped manifest URL) from a container registry mirror (applied via a
-// registries.conf.d drop-in once the Podman backend lands in M3). It's its
-// own type, not instance.Kind, since a mirror isn't an instance.
+// MirrorKind distinguishes a VM image mirror from a container registry
+// mirror.
 type MirrorKind string
 
 const (
@@ -21,11 +21,8 @@ const (
 	MirrorKindContainer MirrorKind = "container"
 )
 
-// Mirror is a runtime-added image source, on top of the embedded default
-// catalog (data/distros/distribution-info.json). See the plan's "Image
-// mirrors" section: a VM mirror's ManifestURL points at a manifest in the
-// same schema as the embedded catalog; a container mirror's Registry/
-// MirrorOf/Insecure fields describe a registries.conf.d entry.
+// Mirror is a runtime-added image source layered on top of the embedded
+// default catalog.
 type Mirror struct {
 	Name         string
 	Kind         MirrorKind
@@ -57,16 +54,15 @@ func (s *Store) GetMirror(name string) (Mirror, error) {
 	err := s.db.View(func(tx *bbolt.Tx) error {
 		data := tx.Bucket(bucketMirrors).Get([]byte(name))
 		if data == nil {
-			return fmt.Errorf("store: no mirror named %q", name)
+			return fmt.Errorf("store: no mirror named %q: %w", name, instance.ErrNotFound)
 		}
 		return json.Unmarshal(data, &m)
 	})
 	return m, err
 }
 
-// ListMirrors returns every mirror, optionally filtered by kind (pass ""
-// for no filter), sorted by descending priority then name so callers that
-// want "highest priority first" don't have to re-sort.
+// ListMirrors returns every mirror, optionally filtered by kind, sorted by
+// descending priority then name.
 func (s *Store) ListMirrors(kindFilter MirrorKind) ([]Mirror, error) {
 	var out []Mirror
 	err := s.db.View(func(tx *bbolt.Tx) error {
@@ -97,7 +93,7 @@ func (s *Store) DeleteMirror(name string) error {
 	return s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketMirrors)
 		if bucket.Get([]byte(name)) == nil {
-			return fmt.Errorf("store: no mirror named %q", name)
+			return fmt.Errorf("store: no mirror named %q: %w", name, instance.ErrNotFound)
 		}
 		return bucket.Delete([]byte(name))
 	})

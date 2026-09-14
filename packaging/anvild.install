@@ -27,37 +27,28 @@ add_to_docker_group() {
 }
 
 post_install() {
-	# Guarantee the "anvil" user/group and its directories exist right
-	# now, synchronously — pacman's own systemd-sysusers/systemd-tmpfiles
-	# hooks only run once, at the very end of the whole transaction,
-	# which is too late for the rest of this script to depend on.
+	# Create the "anvil" user/group and its directories now, synchronously.
 	systemd-sysusers anvil.conf
 	systemd-tmpfiles --create anvil.conf
 
 	generate_migrate_key
 	add_to_docker_group
 
-	echo "==> anvild now runs as the unprivileged anvil system user, not root."
-	echo "==> See PLAN.md's M6 packaging notes for what that does and does not cover"
-	echo "    (in particular: \`anvil mount\` now needs the anvil user to actually have"
-	echo "    access to whatever host directory you share; root no longer bypasses that)."
+	echo "==> anvild runs as the unprivileged anvil system user, not root."
+	echo "==> \`anvil mount\` needs the anvil user to have access to whatever"
+	echo "    host directory you share."
 }
 
 post_upgrade() {
 	systemd-sysusers anvil.conf
 	systemd-tmpfiles --create anvil.conf
 
-	# Defensive: pick up ownership left behind by an older build of this
-	# package that ran anvild as root.
+	# Fix ownership left behind by an older build that ran anvild as root.
 	chown -R anvil:anvil /var/lib/anvil /var/cache/anvil 2>/dev/null || true
 
 	generate_migrate_key
 	add_to_docker_group
 }
 
-# Deliberately no post_remove/pre_remove: the "anvil" user, its home
-# directory, and its migration SSH key are left in place on removal,
-# matching how most Arch packages that create a system user (postgresql,
-# for one) leave that user and its data alone rather than deleting it —
-# removing anvild isn't a signal that its VMs/instances/migration key
-# should be destroyed too.
+# No post_remove/pre_remove: the "anvil" user and its data are left in
+# place on removal, same as most Arch packages that create a system user.

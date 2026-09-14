@@ -1,7 +1,5 @@
-// Package client is the thin gRPC client wrapper both cmd/anvil and (later)
-// internal/tui build on — it holds no business logic, just a dial helper
-// and the generated service client, per the plan's "clients are thin"
-// mandate.
+// Package client provides a gRPC client wrapper around anvild's generated
+// service clients.
 package client
 
 import (
@@ -13,12 +11,7 @@ import (
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 )
 
-// Client embeds InstanceServiceClient anonymously so existing call sites
-// (c.Launch, c.List, ...) keep working unqualified, but keeps CloudInit and
-// Mirror as named fields rather than also embedding them — all three
-// generated clients have a List method, and Go can't resolve an unqualified
-// c.List if it's promoted from more than one embedded interface at the same
-// depth.
+// Client wraps a gRPC connection to anvild and its generated service clients.
 type Client struct {
 	conn *grpc.ClientConn
 	anvilv1.InstanceServiceClient
@@ -31,8 +24,6 @@ type Client struct {
 }
 
 // Dial connects to anvild's gRPC API over its unix socket at socketPath.
-// No TLS/auth is configured — access control is the socket's filesystem
-// permissions (the "anvil" group), per the plan.
 func Dial(socketPath string) (*Client, error) {
 	conn, err := grpc.NewClient(
 		"unix://"+socketPath,

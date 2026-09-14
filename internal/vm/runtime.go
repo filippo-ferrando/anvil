@@ -7,9 +7,7 @@ import (
 	"time"
 )
 
-// runtimeState is the small, high-churn bit of per-instance state that
-// deliberately does NOT live in the bbolt registry (see the plan's
-// "Instance registry" section): just enough for Reconcile to find and
+// runtimeState is the per-instance state Reconcile uses to find and
 // re-verify a process a previous anvild instance spawned.
 type runtimeState struct {
 	Pid       int       `json:"pid"`
@@ -29,10 +27,8 @@ func saveRuntimeState(instanceDir string, rt runtimeState) error {
 	return os.WriteFile(runtimeStatePath(instanceDir), data, 0o640)
 }
 
-// loadRuntimeState returns (state, true, nil) if a runtime file exists and
-// parses, (zero, false, nil) if there's simply nothing there (the normal
-// case for an instance that was never started, or was cleanly stopped),
-// and a non-nil error only for a genuine read/parse failure.
+// loadRuntimeState returns (state, true, nil) if a runtime file exists
+// and parses, (zero, false, nil) if there's none, or a read/parse error.
 func loadRuntimeState(instanceDir string) (runtimeState, bool, error) {
 	data, err := os.ReadFile(runtimeStatePath(instanceDir))
 	if os.IsNotExist(err) {

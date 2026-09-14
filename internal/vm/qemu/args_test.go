@@ -88,9 +88,6 @@ func TestBuildArgsBridgeTapWithMAC(t *testing.T) {
 }
 
 func TestBuildArgsBridgeTapWithoutMAC(t *testing.T) {
-	// SLIRP mode already has no need for a fixed MAC (no guest-side static
-	// config to match against); confirms an unset MACAddress doesn't leak
-	// a stray ",mac=" suffix onto the device either.
 	args, err := BuildArgs(Config{
 		DiskPath:        "/d",
 		QMPSocket:       "/q",

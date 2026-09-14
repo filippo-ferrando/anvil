@@ -1,21 +1,25 @@
-// Package image resolves VM base images: the built-in multi-distro catalog,
-// runtime-added mirrors (see WithMirrors and the plan's "Image mirrors"
-// section), and the on-disk prepared/instance vault.
+// Package image resolves VM base images: the built-in multi-distro
+// catalog, runtime-added mirrors, and the on-disk prepared/instance vault.
 package image
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/anvil-project/anvil/data/distros"
 )
 
+// manifestFetchTimeout bounds a mirror manifest fetch.
+const manifestFetchTimeout = 30 * time.Second
+
+// maxManifestBytes caps how much of a manifest response is read.
+const maxManifestBytes = 10 << 20 // 10MiB, generous for a distro list
+
 // CurrentSchemaVersion is the manifest schema this build understands.
-// Loader rejects a manifest whose SchemaVersion has a different major
-// version than this (mirror manifests share the same schema — see the
-// plan's "Image mirrors" section).
 const CurrentSchemaVersion = 1
 
 // DistroEntry describes one fetchable base image.
@@ -28,12 +32,11 @@ type DistroEntry struct {
 	URL         string `json:"url"`
 	SHA256      string `json:"sha256"`
 	MinDiskGiB  int64  `json:"min_disk_gib"`
-	DefaultUser string `json:"default_user"` // the account cloud-init sets up by default, for `anvil shell`/`exec`; best-effort, see distribution-info.json's notes
+	DefaultUser string `json:"default_user"` // account cloud-init sets up by default
 }
 
 // Manifest is the on-disk shape of both the embedded default catalog and
-// any runtime-added mirror manifest (anvil mirror add --kind vm
-// --manifest-url ...) — the same schema serves both.
+// any runtime-added mirror manifest.
 type Manifest struct {
 	SchemaVersion int           `json:"schema_version"`
 	Distros       []DistroEntry `json:"distros"`
@@ -45,9 +48,7 @@ type catalogEntry struct {
 }
 
 // Catalog resolves a distro/version/arch selector to a fetchable
-// DistroEntry, merging the built-in manifest (priority 0) with any
-// runtime-added mirrors (see WithMirrors). On a collision (same id+arch)
-// the highest-priority entry wins.
+// DistroEntry, merging the built-in manifest with any runtime-added mirrors.
 type Catalog struct {
 	entries []catalogEntry
 }
@@ -72,13 +73,15 @@ func loadManifest(raw []byte, priority int) (*Catalog, error) {
 	return &Catalog{entries: entries}, nil
 }
 
-// FetchManifest downloads and validates a mirror manifest (same schema as
-// the embedded catalog) from url, returning the raw bytes to cache
-// alongside the mirror record (see store.Mirror.ManifestJSON) — validating
-// here, at `anvil mirror add` time, means a bad manifest is rejected
-// immediately instead of surfacing as a confusing failure at launch time.
-func FetchManifest(url string) ([]byte, error) {
-	resp, err := http.Get(url)
+// FetchManifest downloads and validates a mirror manifest from url,
+// returning the raw bytes to cache alongside the mirror record.
+func FetchManifest(ctx context.Context, url string) ([]byte, error) {
+	client := http.Client{Timeout: manifestFetchTimeout}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("image: building request for manifest %s: %w", url, err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("image: fetching manifest %s: %w", url, err)
 	}
@@ -86,9 +89,12 @@ func FetchManifest(url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("image: fetching manifest %s: unexpected status %s", url, resp.Status)
 	}
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxManifestBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("image: reading manifest %s: %w", url, err)
+	}
+	if len(raw) > maxManifestBytes {
+		return nil, fmt.Errorf("image: manifest at %s exceeds %d bytes", url, maxManifestBytes)
 	}
 	if _, err := loadManifest(raw, 0); err != nil {
 		return nil, fmt.Errorf("image: manifest at %s is invalid: %w", url, err)
@@ -97,10 +103,7 @@ func FetchManifest(url string) ([]byte, error) {
 }
 
 // MirrorManifest is one runtime-added mirror's cached manifest content,
-// ready to merge into a Catalog. The daemon is responsible for populating
-// ManifestJSON (fetched once when the mirror is added, cached in the
-// mirrors bbolt bucket — see internal/store/mirrors.go) so building the
-// effective catalog never needs a network call.
+// ready to merge into a Catalog.
 type MirrorManifest struct {
 	ManifestJSON string
 	Priority     int

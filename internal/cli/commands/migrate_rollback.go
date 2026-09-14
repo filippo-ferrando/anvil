@@ -10,15 +10,8 @@ import (
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 )
 
-// newMigrateRollbackCommand is `anvil migrate-rollback`: plumbing, not
-// meant to be run by hand, same as `anvil migrate-import`. Run by the
-// source daemon when an all-or-nothing intent migration
-// (internal/migrate.Manager.migrateIntent) fails partway through, to
-// delete whatever members already landed on this host, so a partial
-// group never lingers here. Reads a JSON array of instance names from
-// stdin (never as command-line arguments, same reasoning as
-// migrate-import) and force-deletes them through this host's own local
-// anvild.
+// newMigrateRollbackCommand reads a JSON array of instance names from
+// stdin and force-deletes them through the local anvild.
 func newMigrateRollbackCommand(flags *globalFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:    "migrate-rollback",

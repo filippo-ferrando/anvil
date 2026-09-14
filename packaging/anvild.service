@@ -2,43 +2,9 @@
 Description=anvil daemon (cloud-init VMs and Docker/Podman containers)
 After=network.target
 
-# Runs as the dedicated, unprivileged "anvil" system user (created by
-# anvil.sysusers), not root. Getting there from a plain unprivileged
-# process to everything anvild actually needs takes three separate
-# mechanisms, not one:
-#
-#  - /dev/kvm: the "kvm" supplementary group below, same as any other
-#    desktop QEMU/libvirt setup on Arch (udev owns /dev/kvm as
-#    root:kvm 0660) — DeviceAllow is the systemd-native cgroup-level
-#    version of the same intent, redundant with the group but cheap to
-#    also state explicitly.
-#  - tap/bridge creation for an intent's shared network
-#    (internal/vm/network, real netlink calls): CAP_NET_ADMIN, granted
-#    as an ambient capability so it survives across exec despite the
-#    process not being root — plus DeviceAllow=/dev/net/tun below, a
-#    second, separate enforcement layer that CAP_NET_ADMIN alone doesn't
-#    cover. Any DeviceAllow= entry flips DevicePolicy=auto's default
-#    from "allow everything" to "deny everything except what's listed"
-#    (see systemd.resource-control(5)), so once /dev/kvm was added here,
-#    /dev/net/tun access was silently cgroup-denied even with the right
-#    capability — caught on a real `anvil launch` into an intent, tap
-#    creation failed with a plain "operation not permitted" that had
-#    nothing to do with CAP_NET_ADMIN at all.
-#  - the Docker socket: NOT listed here as a supplementary group,
-#    deliberately — "docker" is an optional dependency and might not be
-#    installed (or its group might not exist) when this unit is loaded,
-#    which would otherwise fail the whole service to start. Membership
-#    is instead granted persistently to the "anvil" user itself by
-#    anvild.install's post_install/post_upgrade hooks, conditionally, if
-#    and when Docker is actually present.
-#
-# What this does NOT solve: `anvil mount` sharing an arbitrary host
-# directory into a VM. QEMU's 9p backend does that file I/O as whatever
-# user anvild runs as, so unlike the old root-anvild design, the target
-# directory now actually needs to be readable (and, for a rw mount,
-# writable) by the "anvil" user — group permissions or an ACL on that
-# specific directory, not something this unit grants. See PLAN.md's M6
-# notes.
+# Runs as the unprivileged "anvil" system user (created by anvil.sysusers),
+# with just enough grants for KVM and tap/bridge networking; Docker group
+# membership, if applicable, is added separately by anvild.install.
 [Service]
 Type=simple
 User=anvil

@@ -6,14 +6,14 @@ import (
 	"sort"
 
 	"go.etcd.io/bbolt"
+
+	"github.com/anvil-project/anvil/internal/instance"
 )
 
 var bucketHosts = []byte("hosts") // alias -> json(Host)
 
-// Host is a saved SSH destination `anvil migrate --to <alias>` can
-// resolve against — see the plan's Migration section. Adding one grants
-// no trust by itself, it's just a shortcut for whatever real SSH access
-// already exists to Target.
+// Host is a saved SSH destination that `anvil migrate --to <alias>` can
+// resolve against.
 type Host struct {
 	Alias    string
 	Target   string // "user@host[:port]"
@@ -38,7 +38,7 @@ func (s *Store) GetHost(alias string) (Host, error) {
 	err := s.db.View(func(tx *bbolt.Tx) error {
 		data := tx.Bucket(bucketHosts).Get([]byte(alias))
 		if data == nil {
-			return fmt.Errorf("store: no host named %q", alias)
+			return fmt.Errorf("store: no host named %q: %w", alias, instance.ErrNotFound)
 		}
 		return json.Unmarshal(data, &h)
 	})
@@ -69,7 +69,7 @@ func (s *Store) DeleteHost(alias string) error {
 	return s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketHosts)
 		if bucket.Get([]byte(alias)) == nil {
-			return fmt.Errorf("store: no host named %q", alias)
+			return fmt.Errorf("store: no host named %q: %w", alias, instance.ErrNotFound)
 		}
 		return bucket.Delete([]byte(alias))
 	})

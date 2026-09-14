@@ -1,6 +1,9 @@
 package commands
 
 import (
+	"fmt"
+	"os"
+
 	"github.com/spf13/cobra"
 )
 
@@ -16,12 +19,16 @@ func newShellCommand(flags *globalFlags) *cobra.Command {
 				return err
 			}
 			inst, err := resolveInstance(cmd.Context(), c, args[0])
-			c.Close() // hand the terminal over to ssh/docker/podman, don't hold the daemon connection open for it
+			c.Close() // release the daemon connection before handing off the terminal
 			if err != nil {
 				return err
 			}
 
 			if inst.GetContainer() != nil {
+				// Warn when VM-only flags are set for a container instance.
+				if cmd.Flags().Changed("user") || cmd.Flags().Changed("identity") {
+					fmt.Fprintln(os.Stderr, "anvil: --user/--identity have no effect on a container instance, ignoring")
+				}
 				return runContainerExec(inst, nil)
 			}
 

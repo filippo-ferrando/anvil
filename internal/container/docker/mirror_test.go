@@ -50,8 +50,7 @@ func TestResolveMirrorLeavesRefAloneWhenNoMirrorMatches(t *testing.T) {
 }
 
 func TestResolveMirrorFirstMatchWins(t *testing.T) {
-	// Caller is expected to pre-sort by descending priority — ResolveMirror
-	// itself just takes the first match, so this documents that contract.
+	// ResolveMirror takes the first matching mirror in the slice.
 	mirrors := []RegistryMirror{
 		{Registry: "high-priority.corp"},
 		{Registry: "low-priority.corp"},

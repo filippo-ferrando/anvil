@@ -9,10 +9,7 @@ import (
 	"github.com/anvil-project/anvil/internal/vm/image"
 )
 
-// MirrorServer implements anvilv1.MirrorServiceServer. Like
-// CloudInitServer, it talks to *store.Store directly rather than through a
-// Manager, since mirror CRUD has no instance-lifecycle orchestration to do
-// beyond validating and caching a VM mirror's manifest at Add time.
+// MirrorServer implements anvilv1.MirrorServiceServer against *store.Store.
 type MirrorServer struct {
 	anvilv1.UnimplementedMirrorServiceServer
 	Store *store.Store
@@ -82,9 +79,7 @@ func (s *MirrorServer) Add(ctx context.Context, req *anvilv1.MirrorAddRequest) (
 		if m.ManifestURL == "" {
 			return nil, fmt.Errorf("mirror: a vm mirror needs a manifest_url")
 		}
-		// Fetched and validated once here, not re-fetched on every launch —
-		// see internal/vm.Backend.EffectiveCatalog.
-		raw, err := image.FetchManifest(m.ManifestURL)
+		raw, err := image.FetchManifest(ctx, m.ManifestURL)
 		if err != nil {
 			return nil, err
 		}
@@ -93,13 +88,6 @@ func (s *MirrorServer) Add(ctx context.Context, req *anvilv1.MirrorAddRequest) (
 		if m.Registry == "" {
 			return nil, fmt.Errorf("mirror: a container mirror needs a registry")
 		}
-		// Nothing more to do here at Add time: unlike a VM mirror's
-		// manifest, there's no remote fetch/validation to do up front.
-		// The record is just stored; it gets applied per-pull, by
-		// rewriting the image ref before create, see
-		// internal/container/docker.ResolveMirror (Podman's own
-		// registries.conf.d mechanism, once that backend lands, would
-		// apply mirrors a different way, at the daemon level instead).
 	default:
 		return nil, fmt.Errorf("mirror: kind must be \"vm\" or \"container\"")
 	}

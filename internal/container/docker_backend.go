@@ -1,12 +1,4 @@
-// Package container is the instance.Backend for instance.KindContainer —
-// see backend.go for how it dispatches between engines (Docker landed
-// first, Podman is next) by spec.Container.Engine. This package (not
-// internal/container/docker itself) is what depends on internal/instance:
-// keeping internal/container/docker to just the REST client, with no
-// dependency on the domain model, is what makes that client testable
-// against a mock server independent of anything else in the daemon
-// (see internal/vm/qemu vs internal/vm for the same split, done for the
-// same reason).
+// Package container implements the instance.Backend for instance.KindContainer.
 package container
 
 import (
@@ -20,18 +12,12 @@ import (
 )
 
 // Source is the subset of *store.Store's methods DockerBackend needs to
-// resolve container registry mirrors — same narrow-interface pattern as
-// internal/vm.Backend's own Source, and for the same reason: it's obvious
-// at a glance what this backend actually reads from the registry.
+// resolve container registry mirrors.
 type Source interface {
 	ListMirrors(kindFilter store.MirrorKind) ([]store.Mirror, error)
 }
 
 // DockerBackend implements instance.Backend against a real Docker daemon.
-// Unlike internal/vm.Backend, there's no in-process "is it running" state
-// to lose on a daemon restart and no Reconciler to implement: Docker
-// itself persists container objects independent of anvild, so Status just
-// asks Docker fresh every time instead of trusting anything cached here.
 type DockerBackend struct {
 	Client *docker.Client
 	Source Source // nil is fine, just means no mirrors ever get applied
@@ -44,9 +30,7 @@ func NewDockerBackend(socket string, source Source) *DockerBackend {
 }
 
 // resolveImageRef rewrites ref through the highest-priority enabled
-// `--kind container` mirror configured for its upstream registry, if any
-// — see docker.ResolveMirror's doc comment for why this is a client-side
-// rewrite rather than reconfiguring dockerd itself.
+// container mirror configured for its upstream registry, if any.
 func (b *DockerBackend) resolveImageRef(ref string) (string, error) {
 	if b.Source == nil {
 		return ref, nil
@@ -66,9 +50,7 @@ func (b *DockerBackend) resolveImageRef(ref string) (string, error) {
 }
 
 // Create creates (but does not start) the container, recording its
-// Docker-assigned ID on spec.Container.ContainerID — every later call
-// (Start/Stop/Status/Logs/Delete) is by that ID, not by anvil's own
-// instance ID or name.
+// Docker-assigned ID on spec.Container.ContainerID.
 func (b *DockerBackend) Create(ctx context.Context, spec *instance.Spec, progress func(status string)) error {
 	if spec.Container == nil {
 		return fmt.Errorf("docker: Create called with a nil ContainerSpec")
@@ -91,13 +73,8 @@ func (b *DockerBackend) Create(ctx context.Context, spec *instance.Spec, progres
 		return fmt.Errorf("docker: checking for image %s: %w", imageRef, err)
 	}
 	if !exists {
-		// Unlike `docker run`, a plain container-create doesn't auto-pull a
-		// missing image — it just 404s (the real bug this fixes, caught by
-		// filippo's own `anvil launch --kind container nginx:alpine` on a
-		// real Docker daemon, no cached image locally). Docker's own pull
-		// progress (per-layer download/extract status) is forwarded as-is,
-		// see docker.Client.PullImage's own throttling — this is exactly
-		// the "is it stuck or just slow" visibility that was missing.
+		// Unlike `docker run`, container-create doesn't auto-pull a missing
+		// image, so pull it explicitly and forward Docker's progress.
 		if err := b.Client.PullImage(ctx, imageRef, progress); err != nil {
 			return fmt.Errorf("docker: pulling %s: %w", imageRef, err)
 		}
@@ -136,10 +113,7 @@ func (b *DockerBackend) Create(ctx context.Context, spec *instance.Spec, progres
 	return nil
 }
 
-// containerName gives Docker a name derived from anvil's own instance
-// name, so `docker ps` is at least somewhat legible on its own — prefixed
-// to avoid colliding with an unrelated container of the same name a user
-// created outside anvil entirely.
+// containerName derives a Docker container name from anvil's instance name.
 func containerName(spec *instance.Spec) string {
 	return "anvil-" + spec.Name
 }
@@ -174,9 +148,7 @@ func (b *DockerBackend) Stop(ctx context.Context, spec *instance.Spec, force boo
 	return nil
 }
 
-// Delete removes the container outright (force, so a still-running one is
-// stopped first rather than requiring a separate Stop call) — matching
-// the VM backend's Delete, which also tears down unconditionally.
+// Delete forcibly removes the container, stopping it first if still running.
 func (b *DockerBackend) Delete(ctx context.Context, spec *instance.Spec) error {
 	if spec.Container == nil {
 		return fmt.Errorf("docker: Delete called with a nil ContainerSpec")
@@ -221,9 +193,7 @@ func dockerStatusToState(s docker.ContainerState) instance.State {
 	}
 }
 
-// Logs streams the container's actual stdout/stderr — unlike a VM's Logs
-// (boot/console output only), this really is the application's own
-// output, since Docker already captures it directly.
+// Logs streams the container's stdout/stderr.
 func (b *DockerBackend) Logs(ctx context.Context, spec *instance.Spec, follow bool, tailLines int, send func([]byte) error) error {
 	if spec.Container == nil {
 		return fmt.Errorf("docker: Logs called with a nil ContainerSpec")
@@ -232,4 +202,78 @@ func (b *DockerBackend) Logs(ctx context.Context, spec *instance.Spec, follow bo
 		return nil
 	}
 	return b.Client.Logs(ctx, spec.Container.ContainerID, follow, tailLines, send)
+}
+
+// statsSampleWindow bounds how long Stats waits between its two live
+// samples when computing network/disk-IO rates.
+const statsSampleWindow = 200 * time.Millisecond
+
+var _ instance.StatsProvider = (*DockerBackend)(nil)
+
+// Stats samples the container's live resource usage: CPU comes from
+// Docker's own cpu_stats/precpu_stats pairing on the second sample;
+// network/disk-IO throughput are computed from the delta between two
+// samples statsSampleWindow apart.
+func (b *DockerBackend) Stats(ctx context.Context, spec *instance.Spec) (instance.Stats, error) {
+	if spec.Container == nil {
+		return instance.Stats{}, fmt.Errorf("docker: Stats called with a nil ContainerSpec")
+	}
+	id := spec.Container.ContainerID
+	if id == "" {
+		return instance.Stats{}, fmt.Errorf("docker: %s isn't running", spec.Name)
+	}
+
+	s0, err := b.Client.Stats(ctx, id)
+	if err != nil {
+		return instance.Stats{}, err
+	}
+	select {
+	case <-time.After(statsSampleWindow):
+	case <-ctx.Done():
+		return instance.Stats{}, ctx.Err()
+	}
+	s1, err := b.Client.Stats(ctx, id)
+	if err != nil {
+		return instance.Stats{}, err
+	}
+	elapsed := s1.At.Sub(s0.At).Seconds()
+
+	var cpuPercent float64
+	cpuDelta := float64(s1.CPUTotalUsageNanos - s0.CPUTotalUsageNanos)
+	systemDelta := float64(s1.CPUSystemNanos - s0.CPUSystemNanos)
+	if systemDelta > 0 {
+		cpuPercent = (cpuDelta / systemDelta) * float64(s1.OnlineCPUs) * 100
+	}
+
+	var netRx, netTx, blkRead, blkWrite float64
+	if elapsed > 0 {
+		netRx = float64(s1.NetRxBytes-s0.NetRxBytes) / elapsed
+		netTx = float64(s1.NetTxBytes-s0.NetTxBytes) / elapsed
+		blkRead = float64(s1.BlkReadBytes-s0.BlkReadBytes) / elapsed
+		blkWrite = float64(s1.BlkWriteBytes-s0.BlkWriteBytes) / elapsed
+	}
+
+	insp, err := b.Client.Inspect(ctx, id)
+	if err != nil {
+		return instance.Stats{}, err
+	}
+	var uptime int64
+	if !insp.StartedAt.IsZero() {
+		if d := time.Since(insp.StartedAt); d > 0 {
+			uptime = int64(d.Seconds())
+		}
+	}
+
+	return instance.Stats{
+		CPUPercent:           cpuPercent,
+		MemUsedBytes:         s1.MemUsedBytes,
+		MemLimitBytes:        s1.MemLimitBytes,
+		DiskReadBytesPerSec:  blkRead,
+		DiskWriteBytesPerSec: blkWrite,
+		NetAvailable:         true,
+		NetRxBytesPerSec:     netRx,
+		NetTxBytesPerSec:     netTx,
+		UptimeSeconds:        uptime,
+		Address:              insp.Address,
+	}, nil
 }

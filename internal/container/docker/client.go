@@ -1,16 +1,5 @@
 // Package docker implements instance.Backend for containers running on
-// Docker (instance.ContainerEngineDocker) — see backend.go. This talks to
-// the Docker Engine API directly over its unix socket with a small,
-// hand-rolled HTTP client (client.go), rather than depending on
-// github.com/docker/docker/client: that SDK's package layout has moved
-// around across versions in ways there was no way to verify against here
-// (no network access to fetch and inspect it, no way to run a real
-// dockerd in this sandbox either — checked, needs root or rootless
-// tooling neither of which is available here). The wire-level REST API
-// itself is far more stable and well documented than the Go SDK's
-// internal structure, so hand-rolling against it is the same tradeoff
-// already made for QMP (internal/vm/qemu) and is fully stdlib, no new
-// dependency to get wrong.
+// Docker, talking to the Docker Engine API over its unix socket.
 package docker
 
 import (
@@ -31,11 +20,7 @@ const (
 	// DefaultSocket is where dockerd listens by default on Linux.
 	DefaultSocket = "/var/run/docker.sock"
 
-	// apiVersion is deliberately conservative (not the newest the daemon
-	// might support): Docker's API negotiation is fine with a client
-	// requesting an older, still-supported version prefix, and pinning
-	// one here means this doesn't silently start depending on a field
-	// only a very recent daemon has.
+	// apiVersion is the Docker Engine API version this client targets.
 	apiVersion = "v1.41"
 )
 
@@ -67,8 +52,7 @@ func (c *Client) url(path string) string {
 }
 
 // do sends a request with an optional JSON body and returns the raw
-// response — callers are responsible for checking StatusCode and closing
-// Body (via decodeJSON, expectStatus, or directly).
+// response. Callers must check StatusCode and close Body.
 func (c *Client) do(ctx context.Context, method, path string, body any) (*http.Response, error) {
 	var reader io.Reader
 	if body != nil {
@@ -141,12 +125,7 @@ type hostConfig struct {
 	Binds        []string                 `json:"Binds,omitempty"`
 	PortBindings map[string][]portBinding `json:"PortBindings,omitempty"`
 	NetworkMode  string                   `json:"NetworkMode,omitempty"`
-	// ExtraHosts is Docker's own name for a static /etc/hosts entry
-	// (`docker run --add-host host:ip`), each formatted "host:ip" — this
-	// is how a container resolves an intent's VM members, which aren't
-	// Docker-managed and so aren't visible to Docker's embedded DNS. See
-	// NetworkAlias on endpointSettings for the reverse direction
-	// (container peers resolving this one).
+	// ExtraHosts holds static /etc/hosts entries, each formatted "host:ip".
 	ExtraHosts []string `json:"ExtraHosts,omitempty"`
 }
 
@@ -173,11 +152,7 @@ type createContainerResponse struct {
 	Warnings []string `json:"Warnings"`
 }
 
-// CreateContainerParams mirrors the subset of instance.ContainerSpec this
-// package actually needs — kept separate from that type so this package
-// doesn't import internal/instance (internal/container/docker_backend.go
-// does the translation, same pattern as internal/vm/qemu.Config staying
-// decoupled from VMSpec).
+// CreateContainerParams holds the parameters needed to create a container.
 type CreateContainerParams struct {
 	Name        string
 	Image       string
@@ -188,12 +163,8 @@ type CreateContainerParams struct {
 	Ports       []PortMapping
 	NetworkMode string
 
-	// NetworkAlias, if set, is an additional network-scoped DNS name
-	// Docker's embedded DNS resolves to this container (on top of its own
-	// container name) — see internal/intent.Manager, which sets this to
-	// an intent member's role. ExtraHosts adds static "host:ip" entries
-	// (Docker's --add-host equivalent) for peers Docker's own DNS can't
-	// resolve (VM members).
+	// NetworkAlias, if set, is an additional DNS name for this container
+	// on its network. ExtraHosts adds static "host:ip" entries for peers.
 	NetworkAlias string
 	ExtraHosts   map[string]string
 }
@@ -211,9 +182,7 @@ type PortMapping struct {
 }
 
 // ImageExists reports whether ref is already present in Docker's local
-// image store. Plain `POST /containers/create` does NOT auto-pull a
-// missing image the way the `docker run` CLI appears to (it 404s instead),
-// so callers need this (plus PullImage below) to get that same convenience.
+// image store.
 func (c *Client) ImageExists(ctx context.Context, ref string) (bool, error) {
 	resp, err := c.do(ctx, http.MethodGet, "/images/"+ref+"/json", nil)
 	if err != nil {
@@ -230,12 +199,8 @@ func (c *Client) ImageExists(ctx context.Context, ref string) (bool, error) {
 	}
 }
 
-// splitImageRef splits ref into the repository and tag/digest Docker's pull
-// endpoint wants as separate query parameters. A bare digest reference
-// (repo@sha256:...) keeps the digest as-is; otherwise the tag is whatever
-// follows the last ":" after the final "/" (so a registry host with its
-// own port, like "host:5000/name", isn't mistaken for a tag separator), or
-// "latest" if there's no tag at all — the same default Docker itself uses.
+// splitImageRef splits ref into a repository and tag/digest, defaulting the
+// tag to "latest" when ref has none.
 func splitImageRef(ref string) (repo, tag string) {
 	if idx := strings.Index(ref, "@"); idx != -1 {
 		return ref[:idx], ref[idx+1:]
@@ -252,19 +217,12 @@ func splitImageRef(ref string) (repo, tag string) {
 	return ref, "latest"
 }
 
-// pullProgressInterval bounds how often the same layer's progress gets
-// forwarded to onProgress while its status isn't otherwise changing (e.g.
-// while it's sitting in "Downloading" with just the byte count moving) —
-// see PullImage's doc comment for why this exists at all.
+// pullProgressInterval throttles repeated progress updates for a layer
+// whose status hasn't changed.
 const pullProgressInterval = 500 * time.Millisecond
 
 // PullImage pulls ref from its registry, same as `docker pull`. onProgress,
-// if non-nil, is called with a human-readable line per layer as its status
-// changes (e.g. "a3ed95c: Pulling fs layer" -> "a3ed95c: Downloading" ->
-// "a3ed95c: Download complete"), throttled while a layer sits in the same
-// status so a long download doesn't flood the caller with near-identical
-// lines — but never silent for longer than pullProgressInterval either,
-// which is the actual point: telling a slow pull apart from a stuck one.
+// if non-nil, receives a status line per layer as it changes.
 func (c *Client) PullImage(ctx context.Context, ref string, onProgress func(status string)) error {
 	repo, tag := splitImageRef(ref)
 	path := "/images/create?fromImage=" + url.QueryEscape(repo) + "&tag=" + url.QueryEscape(tag)
@@ -311,10 +269,7 @@ func (c *Client) PullImage(ctx context.Context, ref string, onProgress func(stat
 			return line.Status
 		}()
 		if line.ID == "" {
-			// An image-level line, not tied to a specific layer (e.g.
-			// "Pulling from library/nginx", the final "Status: Downloaded
-			// newer image for ...") — always forwarded, there's no
-			// per-layer spam risk here.
+			// An image-level line, not tied to a specific layer.
 			onProgress(text)
 			continue
 		}
@@ -378,7 +333,7 @@ func (c *Client) CreateContainer(ctx context.Context, p CreateContainerParams) (
 
 	path := "/containers/create"
 	if p.Name != "" {
-		path += "?name=" + p.Name
+		path += "?name=" + url.QueryEscape(p.Name)
 	}
 	resp, err := c.do(ctx, http.MethodPost, path, req)
 	if err != nil {
@@ -405,10 +360,7 @@ func (c *Client) StartContainer(ctx context.Context, id string) error {
 }
 
 // StopContainer stops a running container, giving it timeoutSeconds to
-// exit gracefully (SIGTERM) before Docker escalates to SIGKILL itself —
-// Docker's own stop endpoint already implements exactly the escalation
-// internal/vm/qemu.Process.Stop hand-rolls for QEMU, so there's no need to
-// reimplement that here.
+// exit gracefully before Docker forces it to stop.
 func (c *Client) StopContainer(ctx context.Context, id string, timeoutSeconds int) error {
 	path := fmt.Sprintf("/containers/%s/stop?t=%d", id, timeoutSeconds)
 	resp, err := c.do(ctx, http.MethodPost, path, nil)
@@ -432,8 +384,7 @@ func (c *Client) RemoveContainer(ctx context.Context, id string, force bool) err
 	if err != nil {
 		return err
 	}
-	// A container that's already gone isn't a failure for our purposes —
-	// Delete should be idempotent, same as the VM backend's Delete.
+	// A container that's already gone isn't treated as a failure.
 	if err := expectStatus(resp, http.StatusNoContent, http.StatusNotFound); err != nil {
 		return fmt.Errorf("docker: removing container %s: %w", id, err)
 	}
@@ -443,12 +394,14 @@ func (c *Client) RemoveContainer(ctx context.Context, id string, force bool) err
 // ContainerState is the subset of `docker inspect`'s State object this
 // package needs.
 type ContainerState struct {
-	Status  string `json:"Status"` // "created" | "running" | "paused" | "restarting" | "removing" | "exited" | "dead"
-	Running bool   `json:"Running"`
+	Status    string `json:"Status"` // "created" | "running" | "paused" | "restarting" | "removing" | "exited" | "dead"
+	Running   bool   `json:"Running"`
+	StartedAt string `json:"StartedAt"` // RFC3339Nano; zero-value time string when never started
 }
 
 type networkSettings struct {
-	Networks map[string]struct {
+	IPAddress string `json:"IPAddress"` // legacy top-level field, populated for the default bridge network
+	Networks  map[string]struct {
 		IPAddress string `json:"IPAddress"`
 	} `json:"Networks"`
 }
@@ -458,9 +411,7 @@ type inspectResponse struct {
 	NetworkSettings networkSettings `json:"NetworkSettings"`
 }
 
-// InspectState returns id's current state. Unlike the VM backend, there's
-// no in-process "is it running" tracking to lose on a daemon restart —
-// Docker itself is the source of truth, queried fresh every time.
+// InspectState returns id's current state, queried fresh from Docker.
 func (c *Client) InspectState(ctx context.Context, id string) (ContainerState, error) {
 	resp, err := c.do(ctx, http.MethodGet, "/containers/"+id+"/json", nil)
 	if err != nil {
@@ -473,11 +424,128 @@ func (c *Client) InspectState(ctx context.Context, id string) (ContainerState, e
 	return out.State, nil
 }
 
-// ContainerNetworkAddress returns id's assigned IP address on networkName
-// — used by internal/intent.Manager right after creating an intent
-// member container, so a later-launched VM member's ExtraHosts can
-// resolve it (see instance.VMSpec.ExtraHosts). Docker assigns this
-// address itself (via its own IPAM), it isn't something anvil picks.
+// Inspection is id's live status, address, and start time.
+type Inspection struct {
+	Running   bool
+	StartedAt time.Time
+	Address   string
+}
+
+// Inspect returns id's current status, best-known address, and start time.
+func (c *Client) Inspect(ctx context.Context, id string) (Inspection, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/containers/"+id+"/json", nil)
+	if err != nil {
+		return Inspection{}, err
+	}
+	var out inspectResponse
+	if err := decodeJSON(resp, &out, http.StatusOK); err != nil {
+		return Inspection{}, fmt.Errorf("docker: inspecting container %s: %w", id, err)
+	}
+	addr := out.NetworkSettings.IPAddress
+	if addr == "" {
+		for _, n := range out.NetworkSettings.Networks {
+			if n.IPAddress != "" {
+				addr = n.IPAddress
+				break
+			}
+		}
+	}
+	startedAt, _ := time.Parse(time.RFC3339Nano, out.State.StartedAt)
+	return Inspection{Running: out.State.Running, StartedAt: startedAt, Address: addr}, nil
+}
+
+// StatsSnapshot is id's cumulative resource-usage counters at one instant —
+// two snapshots taken a short time apart let a caller compute live rates.
+type StatsSnapshot struct {
+	At time.Time
+
+	CPUTotalUsageNanos uint64
+	CPUSystemNanos     uint64
+	OnlineCPUs         uint32
+
+	MemUsedBytes  int64
+	MemLimitBytes int64
+
+	NetRxBytes uint64
+	NetTxBytes uint64
+
+	BlkReadBytes  uint64
+	BlkWriteBytes uint64
+}
+
+type dockerStatsResponse struct {
+	CPUStats struct {
+		CPUUsage struct {
+			TotalUsage uint64 `json:"total_usage"`
+		} `json:"cpu_usage"`
+		SystemCPUUsage uint64 `json:"system_cpu_usage"`
+		OnlineCPUs     uint32 `json:"online_cpus"`
+	} `json:"cpu_stats"`
+	MemoryStats struct {
+		Usage uint64 `json:"usage"`
+		Limit uint64 `json:"limit"`
+	} `json:"memory_stats"`
+	Networks map[string]struct {
+		RxBytes uint64 `json:"rx_bytes"`
+		TxBytes uint64 `json:"tx_bytes"`
+	} `json:"networks"`
+	BlkioStats struct {
+		IoServiceBytesRecursive []struct {
+			Op    string `json:"op"`
+			Value uint64 `json:"value"`
+		} `json:"io_service_bytes_recursive"`
+	} `json:"blkio_stats"`
+}
+
+// Stats returns id's current resource-usage counters, a single HTTP
+// round trip (Docker's own "stream=false" mode still populates a valid
+// cpu_stats snapshot, just not the historical precpu_stats pairing this
+// package uses for a rate — see docker/backend Stats callers, which take
+// two of these a short time apart instead).
+func (c *Client) Stats(ctx context.Context, id string) (StatsSnapshot, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/containers/"+id+"/stats?stream=false", nil)
+	if err != nil {
+		return StatsSnapshot{}, err
+	}
+	var out dockerStatsResponse
+	if err := decodeJSON(resp, &out, http.StatusOK); err != nil {
+		return StatsSnapshot{}, fmt.Errorf("docker: reading stats for container %s: %w", id, err)
+	}
+
+	var rx, tx uint64
+	for _, n := range out.Networks {
+		rx += n.RxBytes
+		tx += n.TxBytes
+	}
+	var read, write uint64
+	for _, e := range out.BlkioStats.IoServiceBytesRecursive {
+		switch strings.ToLower(e.Op) {
+		case "read":
+			read += e.Value
+		case "write":
+			write += e.Value
+		}
+	}
+	ncpus := out.CPUStats.OnlineCPUs
+	if ncpus == 0 {
+		ncpus = 1
+	}
+
+	return StatsSnapshot{
+		At:                 time.Now(),
+		CPUTotalUsageNanos: out.CPUStats.CPUUsage.TotalUsage,
+		CPUSystemNanos:     out.CPUStats.SystemCPUUsage,
+		OnlineCPUs:         ncpus,
+		MemUsedBytes:       int64(out.MemoryStats.Usage),
+		MemLimitBytes:      int64(out.MemoryStats.Limit),
+		NetRxBytes:         rx,
+		NetTxBytes:         tx,
+		BlkReadBytes:       read,
+		BlkWriteBytes:      write,
+	}, nil
+}
+
+// ContainerNetworkAddress returns id's assigned IP address on networkName.
 func (c *Client) ContainerNetworkAddress(ctx context.Context, id, networkName string) (string, error) {
 	resp, err := c.do(ctx, http.MethodGet, "/containers/"+id+"/json", nil)
 	if err != nil {
@@ -494,10 +562,8 @@ func (c *Client) ContainerNetworkAddress(ctx context.Context, id, networkName st
 	return net.IPAddress, nil
 }
 
-// Logs streams id's stdout+stderr to send, one demuxed chunk at a time —
-// see demuxLogs for why this needs demultiplexing at all. tailLines of 0
-// means "from the beginning" (Docker's own convention: an empty/"all"
-// tail value, sent as "all").
+// Logs streams id's stdout+stderr to send, one demuxed chunk at a time.
+// tailLines of 0 means from the beginning.
 func (c *Client) Logs(ctx context.Context, id string, follow bool, tailLines int, send func([]byte) error) error {
 	tail := "all"
 	if tailLines > 0 {
@@ -515,12 +581,8 @@ func (c *Client) Logs(ctx context.Context, id string, follow bool, tailLines int
 	return demuxLogs(resp.Body, send)
 }
 
-// demuxLogs strips Docker's log stream framing: when a container wasn't
-// created with a TTY (anvil never allocates one — see backend.go), each
-// chunk of stdout/stderr is prefixed with an 8-byte header
-// [stream-type(1), 0, 0, 0, size(4 bytes, big-endian)] followed by that
-// many bytes of payload. This has been Docker's stable, documented log
-// stream format for a long time.
+// demuxLogs strips Docker's log stream framing: each chunk is prefixed
+// with an 8-byte header giving its stream type and size, then the payload.
 func demuxLogs(r io.Reader, send func([]byte) error) error {
 	header := make([]byte, 8)
 	for {

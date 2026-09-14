@@ -11,20 +11,30 @@ import (
 	"github.com/anvil-project/anvil/pkg/client"
 )
 
-// Every RPC call becomes a tea.Cmd (a func() tea.Msg run by the bubbletea
-// runtime in its own goroutine) that reports back one of these messages —
-// the same "daemon owns all logic, this is just a thin client" mandate as
-// the CLI, just wired through bubbletea's message loop instead of a
-// direct function call.
+// Every RPC call becomes a tea.Cmd that reports back one of these messages.
 
 type instancesLoadedMsg struct {
 	instances []*anvilv1.Instance
 	err       error
 }
 
+// statsLoadedMsg carries one instance's live resource-usage snapshot back
+// from a Stats RPC call — name lets the handler ignore a stale reply that
+// arrives after the user has since selected a different instance.
+type statsLoadedMsg struct {
+	name  string
+	stats *anvilv1.InstanceStats
+	err   error
+}
+
 type actionDoneMsg struct {
 	verb string // "started" / "stopped" / "deleted" — for the status line
-	err  error
+
+	// screen is which screen's action produced this message, regardless of
+	// which screen the user is currently viewing.
+	screen screen
+
+	err error
 }
 
 type intentsLoadedMsg struct {
@@ -73,12 +83,8 @@ type hostTestedMsg struct {
 	err           error
 }
 
-// launchStreamMsg/migrateStreamMsg carry one event off a streaming RPC,
-// plus the stream itself so the handler can chain a "receive the next
-// one" command — the standard Bubble Tea pattern for consuming a
-// server-streaming gRPC call one message at a time without blocking the
-// UI loop. done is set on the terminal event (success or failure), at
-// which point stream is nil and there's nothing left to chain.
+// launchStreamMsg carries one event off the Launch streaming RPC, plus
+// the stream itself to chain the next receive. done marks the terminal event.
 type launchStreamMsg struct {
 	stream   anvilv1.InstanceService_LaunchClient
 	status   string
@@ -101,9 +107,7 @@ type logsStreamMsg struct {
 	done   bool
 }
 
-// cloudInitImportStreamMsg carries one event off a CloudInitService.ImportRepo
-// stream — same "receive one, re-issue the next as a Cmd" chaining pattern as
-// migrateStreamMsg/logsStreamMsg above.
+// cloudInitImportStreamMsg carries one event off a CloudInitService.ImportRepo stream.
 type cloudInitImportStreamMsg struct {
 	stream anvilv1.CloudInitService_ImportRepoClient
 	status string
@@ -119,6 +123,19 @@ func loadInstances(c *client.Client) tea.Cmd {
 			return instancesLoadedMsg{err: err}
 		}
 		return instancesLoadedMsg{instances: reply.GetInstances()}
+	}
+}
+
+// loadStats fetches name's live resource-usage snapshot. The RPC itself
+// takes ~200ms (the daemon samples twice to compute a rate), which is fine
+// for a periodic poll but would visibly stutter the UI if called inline.
+func loadStats(c *client.Client, name string) tea.Cmd {
+	return func() tea.Msg {
+		reply, err := c.Stats(context.Background(), &anvilv1.StatsRequest{Name: name})
+		if err != nil {
+			return statsLoadedMsg{name: name, err: err}
+		}
+		return statsLoadedMsg{name: name, stats: reply.GetStats()}
 	}
 }
 
@@ -145,28 +162,25 @@ func loadCatalog(c *client.Client) tea.Cmd {
 func deleteCachedImage(c *client.Client, id string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.Image.Delete(context.Background(), &anvilv1.ImageDeleteRequest{Id: id})
-		return actionDoneMsg{verb: "deleted", err: err}
+		return actionDoneMsg{screen: screenImages, verb: "deleted", err: err}
 	}
 }
 
 func startInstance(c *client.Client, name string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.Start(context.Background(), &anvilv1.StartRequest{Names: []string{name}})
-		return actionDoneMsg{verb: "started", err: err}
+		return actionDoneMsg{screen: screenInstances, verb: "started", err: err}
 	}
 }
 
 func stopInstance(c *client.Client, name string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.Stop(context.Background(), &anvilv1.StopRequest{Names: []string{name}})
-		return actionDoneMsg{verb: "stopped", err: err}
+		return actionDoneMsg{screen: screenInstances, verb: "stopped", err: err}
 	}
 }
 
-// deleteInstance mirrors `anvil delete [--purge]`: purge=false leaves the
-// instance recoverable (state DELETED, until a later purge); purge=true
-// removes it outright in the same call — DeleteRequest already has both
-// behaviors, so this needed no new RPC, just actually exposing the flag.
+// deleteInstance deletes an instance; purge also removes it outright rather than leaving it recoverable.
 func deleteInstance(c *client.Client, name string, purge bool) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.Delete(context.Background(), &anvilv1.DeleteRequest{Names: []string{name}, Purge: purge})
@@ -174,7 +188,7 @@ func deleteInstance(c *client.Client, name string, purge bool) tea.Cmd {
 		if purge {
 			verb = "deleted permanently"
 		}
-		return actionDoneMsg{verb: verb, err: err}
+		return actionDoneMsg{screen: screenInstances, verb: verb, err: err}
 	}
 }
 
@@ -183,14 +197,14 @@ func mountInstance(c *client.Client, name, hostPath, guestPath string, readOnly 
 		_, err := c.Mount(context.Background(), &anvilv1.MountRequest{
 			Name: name, HostPath: hostPath, GuestPath: guestPath, ReadOnly: readOnly,
 		})
-		return actionDoneMsg{verb: "mounted", err: err}
+		return actionDoneMsg{screen: screenInstances, verb: "mounted", err: err}
 	}
 }
 
 func umountInstance(c *client.Client, name, guestPath string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.Umount(context.Background(), &anvilv1.UmountRequest{Name: name, GuestPath: guestPath})
-		return actionDoneMsg{verb: "unmounted", err: err}
+		return actionDoneMsg{screen: screenInstances, verb: "unmounted", err: err}
 	}
 }
 
@@ -231,7 +245,7 @@ func renameCloudInit(c *client.Client, oldName, newName string) tea.Cmd {
 func deleteCloudInit(c *client.Client, name string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.CloudInit.Delete(context.Background(), &anvilv1.CloudInitDeleteRequest{Name: name})
-		return actionDoneMsg{verb: "deleted", err: err}
+		return actionDoneMsg{screen: screenCloudInit, verb: "deleted", err: err}
 	}
 }
 
@@ -282,21 +296,21 @@ func loadMirrors(c *client.Client) tea.Cmd {
 func addMirror(c *client.Client, m *anvilv1.Mirror) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.Mirror.Add(context.Background(), &anvilv1.MirrorAddRequest{Mirror: m})
-		return actionDoneMsg{verb: "added", err: err}
+		return actionDoneMsg{screen: screenMirrors, verb: "added", err: err}
 	}
 }
 
 func setMirrorEnabled(c *client.Client, name string, enabled bool) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.Mirror.SetEnabled(context.Background(), &anvilv1.MirrorSetEnabledRequest{Name: name, Enabled: enabled})
-		return actionDoneMsg{verb: "updated", err: err}
+		return actionDoneMsg{screen: screenMirrors, verb: "updated", err: err}
 	}
 }
 
 func removeMirror(c *client.Client, name string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.Mirror.Remove(context.Background(), &anvilv1.MirrorRemoveRequest{Name: name})
-		return actionDoneMsg{verb: "removed", err: err}
+		return actionDoneMsg{screen: screenMirrors, verb: "removed", err: err}
 	}
 }
 
@@ -313,14 +327,14 @@ func loadHosts(c *client.Client) tea.Cmd {
 func addHost(c *client.Client, h *anvilv1.Host) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.Host.Add(context.Background(), &anvilv1.HostAddRequest{Host: h})
-		return actionDoneMsg{verb: "added", err: err}
+		return actionDoneMsg{screen: screenMigration, verb: "added", err: err}
 	}
 }
 
 func removeHost(c *client.Client, alias string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.Host.Remove(context.Background(), &anvilv1.HostRemoveRequest{Alias: alias})
-		return actionDoneMsg{verb: "removed", err: err}
+		return actionDoneMsg{screen: screenMigration, verb: "removed", err: err}
 	}
 }
 

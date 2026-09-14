@@ -24,14 +24,8 @@ func (i intentItem) Description() string {
 	return fmt.Sprintf("%d member(s)  •  %s", len(i.intent.GetMembers()), net)
 }
 
-// intentsModel is the Intents page — flagged as missing outright (there
-// wasn't one). Lists every intent (name, member count, shared network if
-// it has one — see internal/intent.Manager), `i`/`enter` shows each
-// member's role/kind, `x` removes the group (with the same recoverable-
-// vs-purge-members choice `anvil intent delete [--purge-members]` gives).
-// Creating one isn't a distinct action here, same as the CLI: an intent
-// comes into existence the first time something is launched with
-// `--intent`, from the Launch form on the Instances page.
+// intentsModel is the Intents page: lists intents, with `i`/`enter` to
+// view members and `x` to remove a group.
 type intentsModel struct {
 	list          list.Model
 	showingInfo   *anvilv1.Intent // non-nil while showing a member-list modal
@@ -63,7 +57,7 @@ func deleteIntent(c *client.Client, name string, purgeMembers bool) tea.Cmd {
 		if purgeMembers {
 			verb = "removed, members purged"
 		}
-		return actionDoneMsg{verb: verb, err: err}
+		return actionDoneMsg{screen: screenIntents, verb: verb, err: err}
 	}
 }
 

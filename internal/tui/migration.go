@@ -30,12 +30,12 @@ type migrationModel struct {
 	migrating     bool
 	progressLines []string
 
-	panelHeight int // the hosts list is pinned to this, see View() and cloudinit.go's setSize
+	panelHeight int // height the hosts list is pinned to
 }
 
 func newMigrationModel() migrationModel {
 	l := list.New(nil, list.NewDefaultDelegate(), 0, 0)
-	l.SetFilteringEnabled(false) // small lists; also avoids single-letter shortcuts (n/s/d/...) colliding with filter typing
+	l.SetFilteringEnabled(false) // avoids single-letter shortcuts colliding with filter typing
 	l.Title = "Known hosts"
 	l.SetShowHelp(false)
 	return migrationModel{hosts: l, migrateForm: newMigrateForm()}
@@ -52,9 +52,6 @@ func newMigrateForm() simpleForm {
 }
 
 func (m *migrationModel) setSize(width, height int) {
-	// boxOverhead (see cloudinit.go) accounts for styleBox's own border
-	// plus padding, so the hosts box and the form box next to it don't
-	// combine to overflow the terminal's actual width.
 	m.panelHeight = height - boxHeightOverhead
 	if m.panelHeight < 3 {
 		m.panelHeight = 3
@@ -119,6 +116,19 @@ func (m model) updateMigrationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	mg := &m.migration
 
 	if mg.migrating {
+		return m, nil
+	}
+
+	// A finished migration's transcript stays on screen until dismissed here.
+	if len(mg.progressLines) > 0 {
+		switch msg.String() {
+		case "tab", "esc", "q":
+			mg.progressLines = nil
+			mg.focusForm = false
+			if msg.String() != "tab" {
+				m.sidebarFocused = true
+			}
+		}
 		return m, nil
 	}
 
@@ -249,11 +259,7 @@ func (m migrationModel) View() string {
 	} else {
 		hostsBox = styleBoxFocused
 	}
-	// Pinned explicitly, same reasoning as cloudinit.go's left panel:
-	// bubbles' list.Model doesn't pad itself to fill its given height
-	// the way a form's text naturally varies, so an empty/short hosts
-	// list would otherwise render as a much shorter box than the form
-	// next to it.
+	// Pin the hosts list to a fixed height so it matches the form box beside it.
 	left := hostsBox.Render(lipgloss.NewStyle().Height(m.panelHeight).Render(m.hosts.View()))
 	right := formBox.Render(m.migrateForm.View())
 
@@ -263,6 +269,12 @@ func (m migrationModel) View() string {
 
 func startMigrateStream(c *client.Client, req *anvilv1.MigrateRequest) tea.Cmd {
 	return func() tea.Msg {
+		// Skip guest-key injection for a dry run.
+		if !req.GetDryRun() {
+			if err := injectGuestKeys(context.Background(), c, req.GetName(), req.GetTo()); err != nil {
+				return migrateStreamMsg{err: fmt.Errorf("preparing guest SSH access on the target: %w", err), done: true}
+			}
+		}
 		stream, err := c.Migrate.Migrate(context.Background(), req)
 		if err != nil {
 			return migrateStreamMsg{err: err, done: true}

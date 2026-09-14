@@ -9,12 +9,8 @@ import (
 	"github.com/anvil-project/anvil/internal/hostpath"
 )
 
-// newCreateDirCommand is `anvil create-dir`: makes a host directory and
-// grants anvild's own unprivileged "anvil" system user access to it, so
-// a later `anvil mount` on the same path doesn't hit the permission-denied
-// error hostpath.Hint describes. This runs entirely client-side (mkdir +
-// setfacl are local filesystem operations the invoking user can already
-// do), not through anvild — there's no RPC involved.
+// newCreateDirCommand creates a host directory and grants the "anvil"
+// system user access to it, entirely client-side.
 func newCreateDirCommand(flags *globalFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:   "create-dir <path>",

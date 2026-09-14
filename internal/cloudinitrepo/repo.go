@@ -1,23 +1,22 @@
 // Package cloudinitrepo fetches a cloud-init template repo's manifest and
-// the templates it lists — the cloud-init-library equivalent of
-// internal/vm/image's VM mirror manifest handling, see docs/mirrors.md
-// for the manifest shape and how to host one. Pure stdlib (net/http,
-// encoding/json), same reasoning as internal/vm/image.FetchManifest: no
-// dependency whose exact behavior needs verifying, just a GET and a JSON
-// parse.
+// the templates it lists.
 package cloudinitrepo
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
-// CurrentSchemaVersion is the manifest schema this build understands —
-// same "reject an unrecognized major version outright" rule
-// internal/vm/image.Catalog's own schema_version already uses.
+// CurrentSchemaVersion is the manifest schema this build understands.
 const CurrentSchemaVersion = 1
+
+// fetchTimeout and maxFetchBytes bound a manifest or template fetch.
+const fetchTimeout = 30 * time.Second
+const maxFetchBytes = 10 << 20 // 10MiB
 
 // Template describes one cloud-init config a repo manifest lists.
 type Template struct {
@@ -34,8 +33,8 @@ type Manifest struct {
 }
 
 // FetchManifest downloads and validates a template repo's manifest.
-func FetchManifest(url string) (Manifest, error) {
-	raw, err := fetch(url)
+func FetchManifest(ctx context.Context, url string) (Manifest, error) {
+	raw, err := fetch(ctx, url)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("cloudinitrepo: fetching manifest %s: %w", url, err)
 	}
@@ -58,18 +57,22 @@ func FetchManifest(url string) (Manifest, error) {
 	return m, nil
 }
 
-// FetchTemplate downloads one template's raw cloud-init content (the
-// exact text that becomes a saved library entry's content, unmodified).
-func FetchTemplate(url string) (string, error) {
-	raw, err := fetch(url)
+// FetchTemplate downloads one template's raw cloud-init content.
+func FetchTemplate(ctx context.Context, url string) (string, error) {
+	raw, err := fetch(ctx, url)
 	if err != nil {
 		return "", fmt.Errorf("cloudinitrepo: fetching template %s: %w", url, err)
 	}
 	return string(raw), nil
 }
 
-func fetch(url string) ([]byte, error) {
-	resp, err := http.Get(url)
+func fetch(ctx context.Context, url string) ([]byte, error) {
+	client := http.Client{Timeout: fetchTimeout}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -77,5 +80,12 @@ func fetch(url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status %s", resp.Status)
 	}
-	return io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maxFetchBytes {
+		return nil, fmt.Errorf("response exceeds %d bytes", maxFetchBytes)
+	}
+	return raw, nil
 }

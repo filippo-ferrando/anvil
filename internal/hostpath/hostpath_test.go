@@ -47,10 +47,7 @@ func TestAncestorsExcludesRootAndTarget(t *testing.T) {
 }
 
 func TestGrantSkipsWhenAnvilUserMissing(t *testing.T) {
-	// Force the "anvil user doesn't exist" path regardless of whatever
-	// this machine actually has, so the test is deterministic — Grant
-	// should no-op rather than failing, same as a manual dev setup
-	// running anvild as root.
+	// Force the "anvil user doesn't exist" path.
 	orig := lookupUser
 	lookupUser = func(string) (*user.User, error) { return nil, errors.New("no such user") }
 	defer func() { lookupUser = orig }()

@@ -1,6 +1,7 @@
 package cloudinitrepo
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -20,7 +21,7 @@ func TestFetchManifestValid(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m, err := FetchManifest(srv.URL)
+	m, err := FetchManifest(context.Background(), srv.URL)
 	if err != nil {
 		t.Fatalf("FetchManifest: %v", err)
 	}
@@ -38,7 +39,7 @@ func TestFetchManifestRejectsWrongSchemaVersion(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := FetchManifest(srv.URL); err == nil {
+	if _, err := FetchManifest(context.Background(), srv.URL); err == nil {
 		t.Fatal("expected an error for an unrecognized schema_version")
 	}
 }
@@ -49,7 +50,7 @@ func TestFetchManifestRejectsMissingFields(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := FetchManifest(srv.URL); err == nil {
+	if _, err := FetchManifest(context.Background(), srv.URL); err == nil {
 		t.Fatal("expected an error for a template with no name")
 	}
 }
@@ -60,7 +61,7 @@ func TestFetchManifestRejectsHTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := FetchManifest(srv.URL); err == nil {
+	if _, err := FetchManifest(context.Background(), srv.URL); err == nil {
 		t.Fatal("expected an error for a 404")
 	}
 }
@@ -72,7 +73,7 @@ func TestFetchTemplate(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := FetchTemplate(srv.URL)
+	got, err := FetchTemplate(context.Background(), srv.URL)
 	if err != nil {
 		t.Fatalf("FetchTemplate: %v", err)
 	}
@@ -87,10 +88,10 @@ func TestFetchTemplateRejectsHTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := FetchTemplate(srv.URL); err == nil {
+	if _, err := FetchTemplate(context.Background(), srv.URL); err == nil {
 		t.Fatal("expected an error for a 500")
 	}
-	if _, err := FetchTemplate("http://127.0.0.1:0"); err == nil || !strings.Contains(err.Error(), "cloudinitrepo") {
+	if _, err := FetchTemplate(context.Background(), "http://127.0.0.1:0"); err == nil || !strings.Contains(err.Error(), "cloudinitrepo") {
 		t.Fatalf("expected a wrapped cloudinitrepo error for an unreachable host, got: %v", err)
 	}
 }

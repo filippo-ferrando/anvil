@@ -12,32 +12,22 @@ import (
 	"time"
 )
 
-// Process wraps one qemu-system-* invocation, either one we spawned
-// ourselves (Spawn) or one we're re-attaching to after a daemon restart
-// (Attach, used by reconciliation — see internal/vm.Backend.Reconcile).
-// internal/instance's per-instance supervisor goroutine is the sole owner
-// of a Process value; nothing else should touch it concurrently.
+// Process controls one running or reattached qemu-system-* instance.
 type Process struct {
 	cfg  Config
 	pid  int
-	cmd  *exec.Cmd // nil when Attach'd rather than Spawn'd — see kill()'s comment on why that matters
+	cmd  *exec.Cmd // nil when Attach'd rather than Spawn'd
 	logF *os.File  // nil when Attach'd, we don't own its log file
 
 	QMP *QMPClient
 
-	// exited is closed exactly once when we've determined the process is
-	// gone: via cmd.Wait() for a Spawn'd process, via liveness polling for
-	// an Attach'd one (see the field's use in each constructor).
+	// exited is closed exactly once the process is known to be gone.
 	exited  chan struct{}
 	waitErr error
 }
 
 // Spawn starts qemu-system-* for cfg, redirecting its stdout/stderr to
-// logPath (QEMU's own diagnostics, not the guest console — see args.go's
-// `-serial null`; guest console capture is a follow-up). It does not dial
-// QMP itself: the QMP socket isn't guaranteed to be accepting connections
-// the instant the process starts, so the caller should retry DialQMP with
-// a short backoff (a handful of attempts over ~1s is normally enough).
+// logPath. It does not dial QMP itself; the caller should retry DialQMP.
 func Spawn(ctx context.Context, cfg Config, logPath string) (*Process, error) {
 	args, err := BuildArgs(cfg)
 	if err != nil {
@@ -56,11 +46,7 @@ func Spawn(ctx context.Context, cfg Config, logPath string) (*Process, error) {
 	cmd := exec.Command(bin, args...)
 	cmd.Stdout = logF
 	cmd.Stderr = logF
-	// New process group so Stop's SIGKILL escalation (below) can target the
-	// whole group, not just the immediate qemu-system-* pid, in case it
-	// ever forks helper processes. This also means the group ID always
-	// equals the qemu process's own pid, which Attach's reconciliation
-	// path relies on (see kill()).
+	// New process group so Stop's SIGKILL escalation can target the whole group.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
@@ -76,16 +62,8 @@ func Spawn(ctx context.Context, cfg Config, logPath string) (*Process, error) {
 	return p, nil
 }
 
-// Attach re-establishes control over a qemu-system-* process a *previous*
-// anvild process spawned, found during startup reconciliation (see
-// internal/vm.Backend.Reconcile). It refuses to trust a bare pid: pids get
-// reused, so it first checks /proc/<pid>/cmdline actually looks like a
-// qemu-system process for diskPath before doing anything else.
-//
-// Unlike a Spawn'd process, this one isn't our child — the anvild that
-// spawned it is gone, and only a process's real parent can reap it via
-// wait(4). So exit detection here is polling-based (see pollLiveness), not
-// cmd.Wait()-based.
+// Attach re-establishes control over a previously-spawned qemu-system-*
+// process, verifying pid looks like a qemu process for diskPath.
 func Attach(cfg Config, pid int, diskPath string) (*Process, error) {
 	if !looksLikeOurQEMU(pid, diskPath) {
 		return nil, fmt.Errorf("qemu: pid %d is not a qemu-system process for %s (stale or reused pid)", pid, diskPath)
@@ -106,7 +84,7 @@ func looksLikeOurQEMU(pid int, diskPath string) bool {
 }
 
 func processAlive(pid int) bool {
-	proc, err := os.FindProcess(pid) // always succeeds on Unix, doesn't itself check liveness
+	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return false
 	}
@@ -130,9 +108,7 @@ func (p *Process) Pid() int {
 }
 
 // AttachQMP dials the process's QMP socket, retrying briefly since the
-// socket may not be accepting connections the instant qemu-system-* starts
-// (irrelevant for an Attach'd process, where it should already be up, but
-// harmless to retry there too).
+// socket may not be accepting connections yet.
 func (p *Process) AttachQMP(ctx context.Context) error {
 	deadline := time.Now().Add(5 * time.Second)
 	var lastErr error
@@ -152,9 +128,8 @@ func (p *Process) AttachQMP(ctx context.Context) error {
 	return fmt.Errorf("qemu: QMP never became reachable at %s: %w", p.cfg.QMPSocket, lastErr)
 }
 
-// Stop escalates gracefully: QMP system_powerdown, then (after timeout) QMP
-// quit, then (after a further short grace period) SIGKILL to the process
-// group. Callers needing an immediate hard stop should pass timeout=0.
+// Stop escalates gracefully: QMP system_powerdown, then QMP quit, then
+// SIGKILL. Pass timeout=0 for an immediate hard stop.
 func (p *Process) Stop(ctx context.Context, timeout time.Duration) error {
 	if p.QMP != nil && timeout > 0 {
 		shutdownCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -184,19 +159,22 @@ func (p *Process) kill() error {
 	if p.pid == 0 {
 		return nil
 	}
-	// Negative pid targets the whole process group. Safe in both Spawn and
-	// Attach modes: every qemu process anvil starts uses Setpgid (see
-	// Spawn), so the group ID always equals the process's own pid, whether
-	// or not *this* anvild instance is the one that originally spawned it.
+	// Negative pid targets the whole process group.
 	_ = syscall.Kill(-p.pid, syscall.SIGKILL)
 	<-p.exited
+	if p.cmd == nil {
+		return nil
+	}
+	// A signaled process reports as a non-nil *exec.ExitError; dying of
+	// the SIGKILL we just sent counts as a successful kill.
+	if ws, ok := p.cmd.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() && ws.Signal() == syscall.SIGKILL {
+		return nil
+	}
 	return p.waitErr
 }
 
-// waitExit blocks until the process has exited (detected by whichever
-// mechanism Spawn or Attach set up) or ctx is done, returning whether it
-// exited in time. Safe to call multiple times/concurrently, unlike
-// cmd.Wait().
+// waitExit blocks until the process has exited or ctx is done, returning
+// whether it exited in time. Safe to call multiple times/concurrently.
 func (p *Process) waitExit(ctx context.Context) bool {
 	select {
 	case <-p.exited:
@@ -206,9 +184,8 @@ func (p *Process) waitExit(ctx context.Context) bool {
 	}
 }
 
-// Close releases the process's file handles (log file, QMP connection)
-// without affecting whether qemu-system-* itself is still running — call
-// this once you've confirmed the process has actually exited.
+// Close releases the process's file handles without affecting whether
+// qemu-system-* itself is still running.
 func (p *Process) Close() error {
 	if p.QMP != nil {
 		_ = p.QMP.Close()

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 )
@@ -103,8 +105,12 @@ func newCloudInitEditCommand(flags *globalFlags) *cobra.Command {
 
 			current := "#cloud-config\n"
 			existing, err := c.CloudInit.Get(cmd.Context(), &anvilv1.CloudInitGetRequest{Name: name})
-			if err == nil {
+			switch {
+			case err == nil:
 				current = existing.GetContent()
+			case status.Code(err) == codes.NotFound:
+			default:
+				return fmt.Errorf("cloud-init: loading %q before edit: %w", name, err)
 			}
 
 			edited, err := editInEditor(current)
@@ -173,13 +179,8 @@ func newCloudInitDeleteCommand(flags *globalFlags) *cobra.Command {
 	}
 }
 
-// newCloudInitImportRepoCommand is `anvil cloud-init import-repo
-// <manifest-url>`: bulk-imports a whole repo of ready-made cloud-init
-// templates into the saved library in one shot — see docs/mirrors.md's
-// "cloud-init template repos" section for the manifest shape and how to
-// host your own. Fetched daemon-side (ImportRepo), same reasoning as a
-// VM mirror's manifest: one implementation instead of a second copy of
-// this fetch logic in the TUI's own Cloud-Init view.
+// newCloudInitImportRepoCommand bulk-imports cloud-init templates from a repo
+// manifest into the saved library.
 func newCloudInitImportRepoCommand(flags *globalFlags) *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
@@ -237,9 +238,8 @@ func newCloudInitImportRepoCommand(flags *globalFlags) *cobra.Command {
 	return cmd
 }
 
-// editInEditor writes initial to a temp file, opens $EDITOR (falling back
-// to vi) on it attached to the real terminal, and returns the edited
-// content once the editor exits.
+// editInEditor writes initial to a temp file, opens it in $EDITOR (falling back
+// to vi), and returns the edited content once the editor exits.
 func editInEditor(initial string) (string, error) {
 	tmp, err := os.CreateTemp("", "anvil-cloud-init-*.yaml")
 	if err != nil {

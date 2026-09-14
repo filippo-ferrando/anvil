@@ -8,14 +8,8 @@ import (
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 )
 
-// newMigrateKeyCommand is `anvil migrate-key`: prints anvild's own public
-// key for its outbound `anvil migrate` SSH connections, generating a
-// fresh passwordless keypair first if one doesn't exist yet (normally
-// already done once by packaging/anvild.install, but a manually-run
-// anvild wouldn't have one otherwise). Copy the printed key into a
-// target host's ~/.ssh/authorized_keys before migrating to it — adding a
-// host with `anvil host add` grants no trust by itself, this is the
-// actual key anvild connects with.
+// newMigrateKeyCommand prints anvild's public SSH key, generating a
+// keypair first if one doesn't exist yet.
 func newMigrateKeyCommand(flags *globalFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:   "migrate-key",

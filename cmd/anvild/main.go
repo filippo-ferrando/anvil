@@ -1,7 +1,5 @@
-// Command anvild is anvil's daemon: it owns all business logic (instance
-// lifecycle, image vault, registry) and exposes it over gRPC on a unix
-// socket. anvil (the CLI) and, later, anvil tui are both thin clients of
-// this API — see pkg/client.
+// Command anvild is anvil's daemon: it owns instance lifecycle, the image
+// vault, and the registry, and exposes them over gRPC on a unix socket.
 package main
 
 import (
@@ -12,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -57,22 +56,11 @@ func run() error {
 	vault := image.NewVault(config.PreparedImageDir())
 	vmBackend := vm.NewBackend(catalog, vault, db)
 
-	// The docker.Client is just an HTTP client wrapper — constructing it
-	// doesn't connect to anything, so this doesn't fail (and doesn't need
-	// to be conditional on Docker actually being installed/running) even
-	// on a host with no Docker at all; that only surfaces as a normal
-	// per-request error the first time someone actually tries
-	// `anvil launch --kind container`. Podman is deferred (filippo doesn't
-	// have it on this machine to test against), hence container.Backend.Podman
-	// staying nil. db satisfies container.Source (just ListMirrors), used to
-	// resolve `--kind container` mirrors at pull time.
+	// db satisfies container.Source, used to resolve container mirrors at pull time.
 	dockerBackend := container.NewDockerBackend(docker.DefaultSocket, db)
 	containerBackend := container.NewBackend(dockerBackend)
 
-	// A second docker.Client instance, not the one inside dockerBackend —
-	// harmless, it's just an HTTP client wrapper with no connection state
-	// of its own, and this keeps DockerNetworker's construction
-	// independent of DockerBackend's.
+	// A separate docker.Client instance from the one inside dockerBackend.
 	dockerNetworker := container.NewDockerNetworker(docker.NewClient(docker.DefaultSocket))
 
 	mgr := instance.NewManager(db, map[instance.Kind]instance.Backend{
@@ -85,7 +73,7 @@ func run() error {
 	}
 
 	intentMgr := intent.NewManager(db, mgr, dockerNetworker)
-	migrateMgr := migrate.NewManager(db, mgr, vmBackend)
+	migrateMgr := migrate.NewManager(db, mgr, vmBackend, intentMgr)
 
 	socketPath := config.SocketPath()
 	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
@@ -95,11 +83,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("listening on %s: %w", socketPath, err)
 	}
-	// 0660 + a dedicated "anvil" group (set up by packaging's sysusers.d
-	// rule) is how non-root CLI/TUI users get access — see the plan's
-	// "Arch Linux packaging" section. Best-effort here since running this
-	// binary directly in dev (not via the systemd unit) may not have an
-	// "anvil" group to chown to.
+	// Grants access to non-root CLI/TUI users via the "anvil" group; best-effort.
 	_ = os.Chmod(socketPath, 0o660)
 
 	grpcServer := grpc.NewServer()
@@ -118,7 +102,19 @@ func run() error {
 	select {
 	case <-ctx.Done():
 		log.Print("anvild: shutting down")
-		grpcServer.GracefulStop()
+		// GracefulStop waits for in-flight RPCs to finish; fall back to a
+		// hard Stop if that takes too long.
+		stopped := make(chan struct{})
+		go func() {
+			grpcServer.GracefulStop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-time.After(10 * time.Second):
+			log.Print("anvild: graceful shutdown timed out (an RPC — e.g. `logs --follow` — was still in flight), forcing stop")
+			grpcServer.Stop()
+		}
 		return nil
 	case err := <-errCh:
 		return err

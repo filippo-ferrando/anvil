@@ -1,20 +1,9 @@
 #!/usr/bin/env bash
-# Downloads every entry in data/distros/distribution-info.json, checks the
-# URL actually resolves to something, and prints the real sha256 so it can
-# be pasted back into the manifest. Needs real internet access and enough
-# disk space for a handful of cloud images (a few GB total), so this is
-# meant to be run by hand, not in CI or in a sandboxed dev session.
+# Downloads every entry in data/distros/distribution-info.json, verifies
+# the URL resolves to a real image, and prints its sha256.
 #
 # Usage: scripts/verify-catalog.sh [--keep]
 #   --keep   don't delete the downloaded images afterward (default: delete)
-#
-# A first version of this script only checked for HTTP 200, which isn't
-# enough: a directory-listing URL (not a specific file) also returns 200,
-# so it was reporting a real-looking sha256 for what was actually just the
-# HTML listing page. Caught for real when fedora-40's listing URL 404'd
-# outright, but opensuse-leap-15.6 and alpine-3.20's (also listing URLs at
-# the time) silently "passed" with a checksum of an HTML page, not an
-# image. Now rejects anything that isn't clearly a binary disk image.
 set -euo pipefail
 
 manifest="data/distros/distribution-info.json"

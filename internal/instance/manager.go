@@ -2,6 +2,7 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -9,10 +10,7 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
-// Manager orchestrates Registry (persistence) and the per-Kind Backend
-// implementations, presenting the single API internal/daemon's gRPC
-// handlers call into. It has no gRPC/protobuf awareness — that conversion
-// lives in internal/daemon.
+// Manager orchestrates a Registry and the per-Kind Backend implementations.
 type Manager struct {
 	registry Registry
 	backends map[Kind]Backend
@@ -22,14 +20,8 @@ func NewManager(registry Registry, backends map[Kind]Backend) *Manager {
 	return &Manager{registry: registry, backends: backends}
 }
 
-// Reconcile re-derives the live state of every instance the registry
-// thinks is running or starting, correcting drift from a daemon restart
-// (a VM that's actually still alive, or one that silently died while
-// anvild was down) rather than blindly trusting the registry. Call this
-// once at daemon startup, before serving requests.
-//
-// Backends that don't implement Reconciler are left alone — their
-// instances keep whatever state the registry already has.
+// Reconcile re-derives the live state of every running/starting instance from its backend.
+// Call once at daemon startup, before serving requests.
 func (m *Manager) Reconcile(ctx context.Context) error {
 	specs, err := m.registry.List("")
 	if err != nil {
@@ -71,8 +63,7 @@ func (m *Manager) backendFor(kind Kind) (Backend, error) {
 	return b, nil
 }
 
-// LaunchParams is Manager.Launch's input, already validated/translated
-// from the wire request by internal/daemon.
+// LaunchParams is Manager.Launch's input.
 type LaunchParams struct {
 	Name      string
 	Kind      Kind
@@ -80,63 +71,47 @@ type LaunchParams struct {
 	Container *ContainerSpec
 	NoStart   bool
 
-	// Labels are stored on the new instance verbatim — this package has no
-	// opinion on what any key means. internal/intent uses this to tag
-	// intent membership (Labels["intent"]/Labels["role"]) without
-	// internal/instance needing to import internal/store to know what an
-	// Intent is (that would cycle back: store already imports instance).
+	// Labels are stored on the instance verbatim.
 	Labels map[string]string
 
-	// IntentName/Role are read by internal/daemon (not by Manager.Launch
-	// itself) to decide whether a launch should route through
-	// internal/intent.Manager.Launch instead of straight through here —
-	// see that package's doc comment. Manager.Launch ignores both fields;
-	// they exist on this struct only so LaunchRequest's wire fields have
-	// one obvious place to land before that routing decision is made.
+	// IntentName/Role route the launch through internal/intent.Manager instead, when set.
 	IntentName string
 	Role       string
 
-	// PinnedNetwork/PinnedStaticIP are read by internal/intent.Manager
-	// (not by Manager.Launch itself, same as IntentName/Role above), and
-	// ignored unless IntentName is also set. Set only by `anvil
-	// migrate-import` relaunching one member of a migrated intent, to
-	// pin the target's newly-created intent to the exact subnet/gateway
-	// — and, for a VM, the exact static address — the source intent
-	// already had, instead of letting intent.Manager auto-allocate a
-	// fresh one. See internal/migrate.Manager.migrateIntent's doc
-	// comment for why this matters: a migrated VM's disk skips
-	// cloud-init entirely on relaunch, so its already-baked-in static
-	// network config (and whatever peer /etc/hosts entries it already
-	// has) has no chance to catch up to a brand new subnet on its own.
+	// PinnedNetwork/PinnedStaticIP reuse an exact subnet/address instead of
+	// auto-allocating, used when relaunching a migrated intent member.
 	PinnedNetwork  *PinnedNetwork
 	PinnedStaticIP string
 }
 
-// PinnedNetwork is an intent's exact subnet/gateway/docker-IP-range, see
-// LaunchParams.PinnedNetwork.
+// PinnedNetwork is an intent's exact subnet/gateway/docker-IP-range.
 type PinnedNetwork struct {
 	Subnet        string
 	Gateway       string
 	DockerIPRange string
 }
 
-// LaunchEvent is one step of Launch's progress callback. Exactly one of
-// Status, Instance, or Err is meaningful per call: Status for an
-// in-progress phase description, Instance on successful completion (the
-// final event), Err on failure (also final).
+// LaunchEvent is one step of Launch's progress callback: exactly one of
+// Status, Instance, or Err is set per call.
 type LaunchEvent struct {
 	Status   string
 	Instance *Spec
 	Err      error
 }
 
-// Launch provisions (and, unless params.NoStart, starts) a new instance,
-// reporting progress via progress. It returns the same terminal error (if
-// any) that was already reported through progress, so callers that only
-// care about success/failure don't have to inspect events.
+// Launch provisions (and, unless params.NoStart, starts) a new instance, reporting progress.
 func (m *Manager) Launch(ctx context.Context, params LaunchParams, progress func(LaunchEvent)) error {
 	b, err := m.backendFor(params.Kind)
 	if err != nil {
+		progress(LaunchEvent{Err: err})
+		return err
+	}
+
+	if _, err := m.registry.GetByName(params.Name); err == nil {
+		err := fmt.Errorf("instance: name %q is already in use", params.Name)
+		progress(LaunchEvent{Err: err})
+		return err
+	} else if !errors.Is(err, ErrNotFound) {
 		progress(LaunchEvent{Err: err})
 		return err
 	}
@@ -168,6 +143,10 @@ func (m *Manager) Launch(ctx context.Context, params LaunchParams, progress func
 	} else {
 		progress(LaunchEvent{Status: "starting"})
 		if err := b.Start(ctx, spec); err != nil {
+			// Roll back what Create already provisioned so nothing is leaked untracked.
+			if delErr := b.Delete(ctx, spec); delErr != nil {
+				log.Printf("instance: rolling back failed start of %s (%s): %v", spec.Name, spec.ID, delErr)
+			}
 			progress(LaunchEvent{Err: err})
 			return err
 		}
@@ -175,6 +154,10 @@ func (m *Manager) Launch(ctx context.Context, params LaunchParams, progress func
 	}
 
 	if err := m.registry.PutInstance(spec); err != nil {
+		// Tear down the just-provisioned resource rather than leave it live and untracked.
+		if delErr := b.Delete(ctx, spec); delErr != nil {
+			log.Printf("instance: rolling back %s (%s) after registry write failure: %v", spec.Name, spec.ID, delErr)
+		}
 		progress(LaunchEvent{Err: err})
 		return err
 	}
@@ -207,16 +190,29 @@ func (m *Manager) Info(names []string) ([]*Spec, error) {
 	return m.resolve(names)
 }
 
-// GetByID looks up a single instance by its ID rather than its name — used
-// by internal/intent.Manager, which stores members by instance ID (an
-// intent member's role/name can collide across intents in a way IDs
-// can't).
+// GetByID looks up a single instance by ID.
 func (m *Manager) GetByID(id string) (*Spec, error) {
 	return m.registry.GetByID(id)
 }
 
-// Logs streams name's log output — a VM's boot/console output, or (once M3
-// lands) a container's actual stdout/stderr, see Backend.Logs — to send.
+// Stats returns name's current resource-usage snapshot.
+func (m *Manager) Stats(ctx context.Context, name string) (Stats, error) {
+	spec, err := m.registry.GetByName(name)
+	if err != nil {
+		return Stats{}, err
+	}
+	b, err := m.backendFor(spec.Kind)
+	if err != nil {
+		return Stats{}, err
+	}
+	sp, ok := b.(StatsProvider)
+	if !ok {
+		return Stats{}, fmt.Errorf("instance: %s instances don't support stats", spec.Kind)
+	}
+	return sp.Stats(ctx, spec)
+}
+
+// Logs streams name's log output to send.
 func (m *Manager) Logs(ctx context.Context, name string, follow bool, tailLines int, send func([]byte) error) error {
 	spec, err := m.registry.GetByName(name)
 	if err != nil {
@@ -229,8 +225,7 @@ func (m *Manager) Logs(ctx context.Context, name string, follow bool, tailLines 
 	return b.Logs(ctx, spec, follow, tailLines, send)
 }
 
-// Mount shares hostPath into name's guest at guestPath — see the
-// Mounter interface's doc comment for why this isn't just part of Backend.
+// Mount shares hostPath into name's guest at guestPath.
 func (m *Manager) Mount(ctx context.Context, name, hostPath, guestPath string, readOnly bool) error {
 	spec, err := m.registry.GetByName(name)
 	if err != nil {
@@ -312,39 +307,40 @@ func (m *Manager) Stop(ctx context.Context, names []string, force bool, timeout 
 	return nil
 }
 
-// Delete tears down each named instance's backend resources. When purge is
-// false the registry record is kept with State=StateDeleted (so `anvil
-// purge` can remove it later, matching Multipass's delete/purge two-step);
-// when purge is true the record is removed immediately.
+// Delete tears down each named instance's backend resources, keeping the
+// registry record (as StateDeleted) unless purge is true. Every name is
+// attempted even if an earlier one fails.
 func (m *Manager) Delete(ctx context.Context, names []string, purge bool) error {
 	specs, err := m.resolve(names)
 	if err != nil {
 		return err
 	}
+	var errs []error
 	for _, spec := range specs {
 		b, err := m.backendFor(spec.Kind)
 		if err != nil {
-			return err
+			errs = append(errs, err)
+			continue
 		}
 		if err := b.Delete(ctx, spec); err != nil {
-			return fmt.Errorf("instance: deleting %s: %w", spec.Name, err)
+			errs = append(errs, fmt.Errorf("instance: deleting %s: %w", spec.Name, err))
+			continue
 		}
 		if purge {
 			if err := m.registry.DeleteByID(spec.ID); err != nil {
-				return err
+				errs = append(errs, err)
 			}
 			continue
 		}
 		spec.State = StateDeleted
 		if err := m.registry.PutInstance(spec); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
-// Purge permanently removes records already in StateDeleted. An empty
-// names list purges every such record.
+// Purge permanently removes records already in StateDeleted; an empty names list purges all of them.
 func (m *Manager) Purge(names []string) error {
 	specs, err := m.resolve(names)
 	if err != nil {

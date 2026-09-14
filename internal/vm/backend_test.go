@@ -9,14 +9,6 @@ import (
 	"github.com/anvil-project/anvil/internal/instance"
 )
 
-// TestMergeSSHKeys is a regression test for a real bug: the default empty
-// cloud-config used to be the literal string "#cloud-config\n{}\n", and
-// SSH keys were appended by string concatenation ("ssh_authorized_keys:\n
-// - key\n") rather than by parsing and re-serializing the YAML. That's not
-// valid YAML (you can't follow a flow-style "{}" with more block-style
-// keys), so cloud-init silently parsed only the "{}" and dropped every
-// injected key — caught on a real VM boot, "ci-info: no authorized SSH
-// keys fingerprints found for user ubuntu" despite --ssh-key being passed.
 func TestMergeSSHKeysNoExistingDataNoKeys(t *testing.T) {
 	out, err := mergeSSHKeys("", nil)
 	if err != nil {
@@ -113,7 +105,8 @@ func TestMergeMountsAddsFstabEntryAndMkdir(t *testing.T) {
 	}
 
 	bootcmd, ok := doc["bootcmd"].([]any)
-	if !ok || len(bootcmd) != 1 || bootcmd[0] != "mkdir -p /mnt/project" {
+	// Guest path is single-quoted for safe shell interpolation.
+	if !ok || len(bootcmd) != 1 || bootcmd[0] != "mkdir -p '/mnt/project'" {
 		t.Errorf("expected a bootcmd entry creating the mountpoint, got %#v", doc["bootcmd"])
 	}
 }
@@ -234,11 +227,8 @@ func toStrings(t *testing.T, items []any) []string {
 	return out
 }
 
-// assertValidCloudConfigWithKey parses out as YAML (after stripping the
-// non-YAML "#cloud-config" header line, same as cloud-init itself does)
-// and checks key is present in ssh_authorized_keys — this is the assertion
-// that actually would have caught the original bug: it exercises the same
-// parse path cloud-init uses, not just a substring check on the raw text.
+// assertValidCloudConfigWithKey parses out as YAML and checks key is
+// present in ssh_authorized_keys.
 func assertValidCloudConfigWithKey(t *testing.T, out, key string) {
 	t.Helper()
 	var doc map[string]any

@@ -1,11 +1,5 @@
-// Package store is anvil's bbolt-backed instance registry. Transactional
-// writes avoid the partial-write corruption risk plain per-instance JSON
-// files would carry, which matters because the reconciliation pass
-// (internal/vm's backend, on daemon startup) trusts this persisted state.
-//
-// High-churn ephemeral runtime state (pid, qmp socket path) deliberately
-// does NOT live here — see internal/config.InstanceDir — to avoid lock
-// contention between the registry and frequent runtime-state updates.
+// Package store is anvil's bbolt-backed registry for instances, intents,
+// hosts, mirrors, and cloud-init configs.
 package store
 
 import (
@@ -23,9 +17,7 @@ var (
 	bucketInstanceNames = []byte("instance_names") // name -> id
 )
 
-// record is the on-disk shape of a Spec — kept separate from
-// instance.Spec so storage format can evolve without touching the domain
-// type callers work with directly.
+// record is the on-disk shape of an instance.Spec.
 type record struct {
 	ID        string                  `json:"id"`
 	Name      string                  `json:"name"`
@@ -79,9 +71,8 @@ func Open(path string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
-// PutInstance inserts or replaces spec's record, keeping the name->id index
-// in sync (including removing a stale index entry if spec was renamed,
-// though anvil doesn't expose a rename operation as of M1).
+// PutInstance inserts or replaces spec's record and points the name->id
+// index at spec.ID.
 func (s *Store) PutInstance(spec *instance.Spec) error {
 	data, err := json.Marshal(toRecord(spec))
 	if err != nil {
@@ -101,7 +92,7 @@ func (s *Store) GetByID(id string) (*instance.Spec, error) {
 	err := s.db.View(func(tx *bbolt.Tx) error {
 		data := tx.Bucket(bucketInstances).Get([]byte(id))
 		if data == nil {
-			return fmt.Errorf("store: no instance with id %q", id)
+			return fmt.Errorf("store: no instance with id %q: %w", id, instance.ErrNotFound)
 		}
 		return json.Unmarshal(data, &rec)
 	})
@@ -117,7 +108,7 @@ func (s *Store) GetByName(name string) (*instance.Spec, error) {
 	err := s.db.View(func(tx *bbolt.Tx) error {
 		idBytes := tx.Bucket(bucketInstanceNames).Get([]byte(name))
 		if idBytes == nil {
-			return fmt.Errorf("store: no instance named %q", name)
+			return fmt.Errorf("store: no instance named %q: %w", name, instance.ErrNotFound)
 		}
 		id = string(idBytes)
 		return nil
@@ -156,7 +147,7 @@ func (s *Store) DeleteByID(id string) error {
 		bucket := tx.Bucket(bucketInstances)
 		data := bucket.Get([]byte(id))
 		if data == nil {
-			return fmt.Errorf("store: no instance with id %q", id)
+			return fmt.Errorf("store: no instance with id %q: %w", id, instance.ErrNotFound)
 		}
 		var rec record
 		if err := json.Unmarshal(data, &rec); err != nil {

@@ -1,6 +1,5 @@
-// Package vm implements backend.Backend for VM instances: resolving a
-// catalog/mirror image, creating a QCOW2 overlay, building a NoCloud
-// cloud-init seed, and spawning/supervising qemu-system-x86_64.
+// Package vm implements backend.Backend for VM instances: resolving an
+// image, building a disk overlay and cloud-init seed, and running QEMU.
 package vm
 
 import (
@@ -31,10 +30,8 @@ import (
 	"github.com/anvil-project/anvil/internal/vm/qemu"
 )
 
-// Source is the subset of *store.Store's methods Backend needs to resolve
-// --cloud-init-name and runtime VM mirrors — a narrow interface (rather
-// than depending on *store.Store's full method set) so it's obvious at a
-// glance what Backend actually reads from the registry.
+// Source is the subset of *store.Store's methods Backend needs to
+// resolve cloud-init configs and VM mirrors.
 type Source interface {
 	ListMirrors(kindFilter store.MirrorKind) ([]store.Mirror, error)
 	GetCloudInit(name string) (store.CloudInitConfig, error)
@@ -47,8 +44,9 @@ type Backend struct {
 	Seed    cloudinit.Builder
 	Source  Source
 
-	mu      sync.Mutex
-	running map[string]*qemu.Process // instance ID -> live process; repopulated by Reconcile after a daemon restart
+	mu       sync.Mutex
+	running  map[string]*qemu.Process // instance ID -> live process
+	starting map[string]struct{}      // instance ID -> in-progress Start call
 }
 
 var (
@@ -59,22 +57,17 @@ var (
 
 func NewBackend(catalog *image.Catalog, vault *image.Vault, source Source) *Backend {
 	return &Backend{
-		Catalog: catalog,
-		Vault:   vault,
-		Seed:    cloudinit.NewBuilder(),
-		Source:  source,
-		running: make(map[string]*qemu.Process),
+		Catalog:  catalog,
+		Vault:    vault,
+		Seed:     cloudinit.NewBuilder(),
+		Source:   source,
+		running:  make(map[string]*qemu.Process),
+		starting: make(map[string]struct{}),
 	}
 }
 
 // EffectiveCatalog merges the base catalog with every enabled VM mirror
-// currently in the registry. Mirror manifests are read from the store
-// (cached at `anvil mirror add` time), not re-fetched over the network on
-// every launch — see internal/store/mirrors.go and the plan's "Image
-// mirrors" section. Exported so internal/daemon.ImageServer's Catalog RPC
-// (`anvil find`, and the TUI's Images screen) can list exactly what a
-// launch would actually resolve against, not a separate copy of this
-// merge logic.
+// currently in the registry, using each mirror's cached manifest.
 func (b *Backend) EffectiveCatalog() (*image.Catalog, error) {
 	mirrors, err := b.Source.ListMirrors(store.MirrorKindVM)
 	if err != nil {
@@ -93,9 +86,7 @@ func (b *Backend) EffectiveCatalog() (*image.Catalog, error) {
 	return b.Catalog.WithMirrors(manifests)
 }
 
-// ListCatalog returns every distro entry EffectiveCatalog currently
-// resolves against — what `anvil launch --kind vm <id>` would actually
-// pick from.
+// ListCatalog returns every distro entry EffectiveCatalog resolves against.
 func (b *Backend) ListCatalog() ([]image.DistroEntry, error) {
 	catalog, err := b.EffectiveCatalog()
 	if err != nil {
@@ -130,7 +121,7 @@ func (b *Backend) Create(ctx context.Context, spec *instance.Spec, progress func
 	v.DefaultUser = entry.DefaultUser
 
 	diskPath := filepath.Join(dir, "disk.qcow2")
-	if err := b.Vault.OverlayFor(entry, diskPath, v.DiskGiB, progress); err != nil {
+	if err := b.Vault.OverlayFor(ctx, entry, diskPath, v.DiskGiB, progress); err != nil {
 		return fmt.Errorf("vm: preparing disk: %w", err)
 	}
 	v.DiskPath = diskPath
@@ -141,13 +132,8 @@ func (b *Backend) Create(ctx context.Context, spec *instance.Spec, progress func
 	return b.buildSeed(spec)
 }
 
-// adoptMigratedDisk is Create's path for an `anvil migrate`-driven launch
-// (see instance.VMSpec.SourceDiskPath's doc comment for why): the disk at
-// v.SourceDiskPath already came from a real, previously-booted instance
-// (flattened and shipped over by internal/migrate), so it becomes this
-// instance's own disk.qcow2 directly — no catalog lookup, no overlay, and
-// deliberately no cloud-init seed either, since the disk already has
-// everything from its original first boot baked in.
+// adoptMigratedDisk moves v.SourceDiskPath into place as this instance's
+// disk.qcow2, skipping catalog lookup, overlay creation, and reseeding.
 func (b *Backend) adoptMigratedDisk(spec *instance.Spec, dir string, progress func(status string)) error {
 	v := spec.VM
 	if progress != nil {
@@ -156,24 +142,18 @@ func (b *Backend) adoptMigratedDisk(spec *instance.Spec, dir string, progress fu
 
 	diskPath := filepath.Join(dir, "disk.qcow2")
 	if err := os.Rename(v.SourceDiskPath, diskPath); err != nil {
-		// os.Rename fails across filesystems (EXDEV) — very likely here,
-		// since the migrated disk typically lands in a staging path like
-		// /tmp that isn't guaranteed to share a filesystem with the
-		// instance dir. Fall back to a real copy in that case.
+		// Rename can fail across filesystems; fall back to a copy.
 		if err := copyFile(v.SourceDiskPath, diskPath); err != nil {
 			return fmt.Errorf("vm: adopting migrated disk: %w", err)
 		}
 		_ = os.Remove(v.SourceDiskPath)
 	}
 	v.DiskPath = diskPath
-	v.SourceDiskPath = "" // consumed — nothing left at the old path to reference
+	v.SourceDiskPath = ""
 	return nil
 }
 
-// copyFile is os.Rename's fallback for a cross-filesystem move: read the
-// whole source file and write it to dest, then the caller removes the
-// source. Only used for adopting a migrated VM disk (an infrequent,
-// already-slow-by-nature operation), not on any hot path.
+// copyFile copies src to dst; used as os.Rename's cross-filesystem fallback.
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -192,11 +172,8 @@ func copyFile(src, dst string) error {
 	return out.Close()
 }
 
-// ExportDisk flattens spec's current disk (backing-file overlay and all)
-// into a standalone qcow2 file at destPath — the source side of `anvil
-// migrate`'s VM path (see internal/migrate.Manager). Must only be called
-// while spec's VM is stopped: qemu-img reading a disk a live QEMU process
-// is actively writing to would be unsafe.
+// ExportDisk flattens spec's current disk into a standalone qcow2 file
+// at destPath. Must only be called while spec's VM is stopped.
 func (b *Backend) ExportDisk(ctx context.Context, spec *instance.Spec, destPath string) error {
 	if spec.VM == nil {
 		return fmt.Errorf("vm: ExportDisk called with a nil VMSpec")
@@ -212,12 +189,7 @@ func (b *Backend) ExportDisk(ctx context.Context, spec *instance.Spec, destPath 
 }
 
 // buildSeed (re)builds spec's cloud-init seed ISO from its current
-// CloudInitUserData/CloudInitName, SSHPublicKeys, and Mounts, overwriting
-// whatever's at v.SeedISOPath. Called once by Create, and again by
-// Mount/Umount whenever the mount list changes after creation — since
-// there's no way to hot-add a 9p share to a live QEMU instance (see
-// qemu.Mount's doc comment), the only way a mount change ever reaches the
-// guest is through a rebuilt seed plus a restart.
+// user-data, SSH keys, and mounts, overwriting v.SeedISOPath.
 func (b *Backend) buildSeed(spec *instance.Spec) error {
 	v := spec.VM
 	dir := config.InstanceDir(spec.ID)
@@ -243,12 +215,8 @@ func (b *Backend) buildSeed(spec *instance.Spec) error {
 		return fmt.Errorf("vm: preparing cloud-init user-data: %w", err)
 	}
 
-	// Generation is bumped by Mount/Umount before calling buildSeed again —
-	// baking it into instance-id means cloud-init treats a post-creation
-	// reconfiguration as a "new" instance and re-applies every module
-	// (mounts, ssh keys, everything), sidestepping any uncertainty about
-	// which modules' default frequency would or wouldn't rerun on a plain
-	// reboot that reused the same instance-id.
+	// Bumping Generation into instance-id forces cloud-init to treat a
+	// reconfiguration as a new instance and re-run every module.
 	metaData := fmt.Sprintf("instance-id: %s-gen%d\nlocal-hostname: %s\n", spec.ID, v.Generation, spec.Name)
 
 	seedPath := filepath.Join(dir, "seed.iso")
@@ -260,6 +228,8 @@ func (b *Backend) buildSeed(spec *instance.Spec) error {
 	return nil
 }
 
+// Start is idempotent for an already-running instance, but rejects a
+// concurrent Start call for the same spec.ID rather than double-spawning.
 func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 	if spec.VM == nil {
 		return fmt.Errorf("vm: Start called with a nil VMSpec")
@@ -271,7 +241,17 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		b.mu.Unlock()
 		return nil // already running, Start is idempotent
 	}
+	if _, ok := b.starting[spec.ID]; ok {
+		b.mu.Unlock()
+		return fmt.Errorf("vm: %s is already being started by a concurrent call", spec.ID)
+	}
+	b.starting[spec.ID] = struct{}{}
 	b.mu.Unlock()
+	defer func() {
+		b.mu.Lock()
+		delete(b.starting, spec.ID)
+		b.mu.Unlock()
+	}()
 
 	dir := config.InstanceDir(spec.ID)
 	cfg := qemu.Config{
@@ -285,11 +265,7 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		KVM:           kvmAvailable(),
 	}
 	if v.NetworkMode == "bridge" {
-		// An intent member: attach a tap device to the intent's shared
-		// bridge instead of SLIRP. There's no host-forwarded SSH port in
-		// this mode — the guest has its own address on the bridge
-		// (v.StaticIP), reachable directly; see internal/cli/commands/ssh.go's
-		// resolveSSHTarget for how the CLI picks between the two modes.
+		// Intent member: attach a tap device to the intent's shared bridge.
 		tapName := network.TapName(spec.ID)
 		if err := network.CreateTap(tapName, v.BridgeInterface); err != nil {
 			return fmt.Errorf("vm: attaching to bridge %s: %w", v.BridgeInterface, err)
@@ -298,10 +274,8 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		cfg.MACAddress = macFromInstanceID(spec.ID)
 		v.SSHPort = 0
 	} else {
-		// SLIRP with an SSH host-forward, the default for a standalone
-		// instance (not part of any intent). Any --publish ports (see
-		// launch.go) get their own hostfwd entries the same way, e.g. for
-		// an nginx install running directly inside the guest.
+		// Standalone instance: SLIRP with an SSH host-forward plus any
+		// published ports.
 		sshPort, err := allocateFreePort()
 		if err != nil {
 			return fmt.Errorf("vm: allocating SSH forward port: %w", err)
@@ -326,7 +300,7 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 	proc, err := qemu.Spawn(ctx, cfg, filepath.Join(dir, "qemu.log"))
 	if err != nil {
 		if cfg.BridgeTapDevice != "" {
-			_ = network.DeleteTap(cfg.BridgeTapDevice) // don't leak the tap device we just created
+			_ = network.DeleteTap(cfg.BridgeTapDevice)
 		}
 		return fmt.Errorf("vm: spawning qemu: %w", err)
 	}
@@ -338,9 +312,6 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		return fmt.Errorf("vm: attaching QMP: %w", err)
 	}
 	if err := saveRuntimeState(dir, runtimeState{Pid: proc.Pid(), QMPSocket: cfg.QMPSocket, StartedAt: time.Now()}); err != nil {
-		// Not fatal to Start itself (the instance is genuinely running),
-		// but Reconcile won't be able to find it after a daemon restart —
-		// worth a log line, not worth failing the launch over.
 		log.Printf("vm: failed to persist runtime state for %s: %v", spec.ID, err)
 	}
 
@@ -357,10 +328,7 @@ func (b *Backend) Stop(ctx context.Context, spec *instance.Spec, force bool, tim
 	proc, ok := b.running[spec.ID]
 	b.mu.Unlock()
 	if !ok {
-		// Not tracked as running in this daemon process. Could be already
-		// stopped, or a process from a previous daemon run that Reconcile
-		// hasn't (yet) been asked to check — Stop doesn't reconcile on its
-		// own, that only happens at daemon startup (see Manager.Reconcile).
+		// Not tracked as running in this daemon process.
 		removeRuntimeState(dir)
 		return nil
 	}
@@ -369,13 +337,11 @@ func (b *Backend) Stop(ctx context.Context, spec *instance.Spec, force bool, tim
 	if force {
 		stopTimeout = 0
 	}
-	if err := proc.Stop(ctx, stopTimeout); err != nil {
-		return fmt.Errorf("vm: stopping instance %s: %w", spec.ID, err)
-	}
+	stopErr := proc.Stop(ctx, stopTimeout)
+	// Clean up unconditionally: the process is gone by now either way.
 	_ = proc.Close()
 	if spec.VM != nil && spec.VM.NetworkMode == "bridge" {
-		// Best-effort: a tap device left behind is a leak worth avoiding,
-		// but not worth failing Stop over.
+		// Best-effort tap cleanup; not worth failing Stop over.
 		if err := network.DeleteTap(network.TapName(spec.ID)); err != nil {
 			log.Printf("vm: failed to delete tap device for %s: %v", spec.ID, err)
 		}
@@ -385,15 +351,15 @@ func (b *Backend) Stop(ctx context.Context, spec *instance.Spec, force bool, tim
 	b.mu.Lock()
 	delete(b.running, spec.ID)
 	b.mu.Unlock()
+
+	if stopErr != nil {
+		return fmt.Errorf("vm: stopping instance %s: %w", spec.ID, stopErr)
+	}
 	return nil
 }
 
-// Reconcile implements instance.Reconciler: after a daemon restart, this
-// backend's b.running map starts out empty even for VMs the registry
-// still thinks are running, since that map only lives in this process's
-// memory. Reconcile re-derives the truth from the OS instead of trusting
-// the registry blindly — see runtime.go's runtimeState (pid + QMP socket,
-// persisted outside bbolt) and qemu.Attach (pid liveness + cmdline match).
+// Reconcile re-derives an instance's real running state from the OS
+// after a daemon restart, rather than trusting the registry blindly.
 func (b *Backend) Reconcile(ctx context.Context, spec *instance.Spec) (instance.State, error) {
 	if spec.VM == nil {
 		return instance.StateStopped, nil
@@ -405,8 +371,7 @@ func (b *Backend) Reconcile(ctx context.Context, spec *instance.Spec) (instance.
 		return instance.StateStopped, fmt.Errorf("vm: reading runtime state: %w", err)
 	}
 	if !found {
-		// Nothing was ever persisted (or Stop/Delete already cleaned it
-		// up) — nothing to reconcile, the registry's "running" was stale.
+		// Nothing was ever persisted, or it was already cleaned up.
 		return instance.StateStopped, nil
 	}
 
@@ -421,18 +386,14 @@ func (b *Backend) Reconcile(ctx context.Context, spec *instance.Spec) (instance.
 	b.mu.Unlock()
 
 	if err := proc.AttachQMP(ctx); err != nil {
-		// The process is genuinely alive (Attach already verified that),
-		// we just can't control it over QMP. Still track it — Stop's
-		// SIGKILL escalation doesn't need QMP — but report this as an
-		// error state rather than silently claiming it's healthy.
+		// The process is alive but uncontrollable over QMP; report it as an error state.
 		return instance.StateError, fmt.Errorf("vm: reconciled pid %d is alive but QMP is unreachable at %s: %w", rt.Pid, rt.QMPSocket, err)
 	}
 	return instance.StateRunning, nil
 }
 
 func (b *Backend) Delete(ctx context.Context, spec *instance.Spec) error {
-	// Best-effort stop first; Delete shouldn't fail just because the
-	// instance was already stopped or untracked.
+	// Best-effort stop first.
 	_ = b.Stop(ctx, spec, true, 0)
 
 	dir := config.InstanceDir(spec.ID)
@@ -447,10 +408,7 @@ func (b *Backend) Status(ctx context.Context, spec *instance.Spec) (instance.Sta
 	proc, ok := b.running[spec.ID]
 	b.mu.Unlock()
 	if !ok {
-		// Not tracked in this process's memory. As long as Manager.Reconcile
-		// ran at daemon startup, this is a legitimate "actually stopped" —
-		// it only stayed wrong if reconciliation itself hasn't run yet
-		// (e.g. this method gets called mid-reconciliation somehow).
+		// Not tracked in this process's memory: treated as stopped.
 		return instance.StateStopped, nil
 	}
 	if proc.QMP == nil {
@@ -466,13 +424,8 @@ func (b *Backend) Status(ctx context.Context, spec *instance.Spec) (instance.Sta
 	return instance.StateStopped, nil
 }
 
-// Logs streams spec's console.log: QEMU's own capture of the guest's
-// serial console (see qemu.Config.SerialLogPath in Start), which is where
-// boot messages and cloud-init's own output land — not application logs
-// from inside the guest OS, there's no way to see those without actually
-// SSHing in (see `anvil shell`/`exec`). If the instance was never started,
-// or console.log hasn't been created yet, this returns cleanly with no
-// output rather than an error.
+// Logs streams spec's console.log, QEMU's capture of the guest's serial
+// console. Returns cleanly with no output if the log doesn't exist yet.
 func (b *Backend) Logs(ctx context.Context, spec *instance.Spec, follow bool, tailLines int, send func([]byte) error) error {
 	if spec.VM == nil {
 		return fmt.Errorf("vm: Logs called with a nil VMSpec")
@@ -504,10 +457,7 @@ func (b *Backend) Logs(ctx context.Context, spec *instance.Spec, follow bool, ta
 		return nil
 	}
 
-	// f's read offset is now at EOF (from the io.ReadAll above); since
-	// console.log is append-only (QEMU keeps the same fd open for the
-	// whole VM lifetime), just keep reading from here as more gets written,
-	// no need to reopen or re-seek.
+	// console.log is append-only, so keep reading from the current offset.
 	buf := make([]byte, 4096)
 	for {
 		select {
@@ -528,10 +478,7 @@ func (b *Backend) Logs(ctx context.Context, spec *instance.Spec, follow bool, ta
 }
 
 // Mount shares hostPath into spec's guest at guestPath over 9p, adding a
-// new qemu.Mount and rebuilding the cloud-init seed. See
-// reconfigureAndRestartIfRunning and qemu.Mount's doc comment for why this
-// restarts the guest OS instead of hot-plugging: there isn't a hot-plug
-// path for a 9p share, verified empirically against a real QEMU build.
+// new mount and rebuilding the cloud-init seed.
 func (b *Backend) Mount(ctx context.Context, spec *instance.Spec, hostPath, guestPath string, readOnly bool) error {
 	if spec.VM == nil {
 		return fmt.Errorf("vm: Mount called with a nil VMSpec")
@@ -587,18 +534,8 @@ func (b *Backend) Umount(ctx context.Context, spec *instance.Spec, guestPath str
 	return b.reconfigureAndRestartIfRunning(ctx, spec)
 }
 
-// reconfigureAndRestartIfRunning rebuilds spec's cloud-init seed (the only
-// way a mount change actually reaches the guest — see buildSeed) and, if
-// the instance is currently running, restarts QEMU so its command line
-// picks up the new/removed 9p fsdev+device pair.
-//
-// This is a real reboot of the guest OS, not a transparent hot-plug:
-// checked empirically (spawn a real qemu-system-x86_64, ask QMP's
-// qom-list-types for anything implementing "fsdev-backend" or that's
-// otherwise user-creatable and fs-shaped — nothing exists) rather than
-// assumed, there is genuinely no QMP path to attach a new 9p share to an
-// already-running QEMU process. Anything running inside the guest is
-// interrupted; the persisted disk itself is untouched.
+// reconfigureAndRestartIfRunning rebuilds spec's cloud-init seed and, if
+// the instance is running, restarts QEMU to pick up the mount change.
 func (b *Backend) reconfigureAndRestartIfRunning(ctx context.Context, spec *instance.Spec) error {
 	spec.VM.Generation++
 	if err := b.buildSeed(spec); err != nil {
@@ -629,19 +566,8 @@ func tailLinesOf(data []byte, n int) []byte {
 	return bytes.Join(lines[len(lines)-n:], []byte("\n"))
 }
 
-// mergeSSHKeys adds keys to existing's top-level ssh_authorized_keys list,
-// returning a complete "#cloud-config\n..." document. existing may be empty
-// (no cloud-init customization at all) or an arbitrary cloud-config
-// document (from --cloud-init or the saved library).
-//
-// This parses and re-serializes existing as YAML rather than
-// string-concatenating "ssh_authorized_keys:\n  - key\n" onto the end of
-// it — a real bug, not a hypothetical: the empty-cloud-config default used
-// to be the literal string "#cloud-config\n{}\n", and appending more
-// block-style YAML after a flow-style "{}" isn't valid YAML at all, so
-// cloud-init silently parsed only the "{}" and dropped every injected key.
-// The same class of bug would hit a real user-supplied --cloud-init file
-// too, e.g. one that doesn't end in a trailing newline.
+// mergeSSHKeys adds keys to existing's top-level ssh_authorized_keys
+// list, returning a complete "#cloud-config\n..." document.
 func mergeSSHKeys(existing string, keys []string) (string, error) {
 	if len(keys) == 0 {
 		if existing == "" {
@@ -674,16 +600,13 @@ func mergeSSHKeys(existing string, keys []string) (string, error) {
 	return "#cloud-config\n" + string(out), nil
 }
 
+// shQuote single-quotes s for safe interpolation into a POSIX shell command.
+func shQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // mergeMounts adds mounts' fstab-shaped entries to existing's top-level
-// "mounts" list (cloud-init's `mounts` config module — see
-// https://cloudinit.readthedocs.io — reads these as
-// [device, mountpoint, fstype, options, ...] tuples), plus a `bootcmd` per
-// mount to create its mountpoint directory first: cloud-init's mounts
-// module doesn't create missing mountpoints itself, and bootcmd runs
-// early enough (cloud-init's Local/Network stage) to happen before mounts
-// runs (Config stage). Same parse/merge/re-serialize approach as
-// mergeSSHKeys, for the same reason: string-concatenating onto arbitrary
-// existing YAML isn't safe.
+// "mounts" list, plus a bootcmd per mount to create its mountpoint first.
 func mergeMounts(existing string, mounts []instance.Mount) (string, error) {
 	if len(mounts) == 0 {
 		return existing, nil
@@ -708,15 +631,10 @@ func mergeMounts(existing string, mounts []instance.Mount) (string, error) {
 		if m.ReadOnly {
 			rw = "ro"
 		}
-		// nofail matters here specifically: it's not confirmed whether
-		// cloud-init's mounts module prunes an fstab entry whose tag no
-		// longer appears in a later boot's user-data (an `anvil umount`,
-		// say) — if it leaves a stale entry behind, nofail is what stops
-		// that from hanging boot waiting on a 9p device that's genuinely
-		// gone from the qemu command line.
+		// nofail avoids hanging boot on a removed 9p device.
 		opts := fmt.Sprintf("trans=virtio,version=9p2000.L,%s,nofail", rw)
 		existingMounts = append(existingMounts, []any{m.Tag, m.GuestPath, "9p", opts, "0", "0"})
-		newBootcmd = append(newBootcmd, fmt.Sprintf("mkdir -p %s", m.GuestPath))
+		newBootcmd = append(newBootcmd, fmt.Sprintf("mkdir -p %s", shQuote(m.GuestPath)))
 	}
 	doc["mounts"] = existingMounts
 	doc["bootcmd"] = append(newBootcmd, existingBootcmd...)
@@ -728,18 +646,8 @@ func mergeMounts(existing string, mounts []instance.Mount) (string, error) {
 	return "#cloud-config\n" + string(out), nil
 }
 
-// mergeExtraHosts adds one /etc/hosts entry per host (see
-// instance.VMSpec.ExtraHosts — an intent's other already-known members,
-// role -> IP) via a bootcmd line, since cloud-init has no first-class
-// "static hosts" module in the minimal config surface this project
-// otherwise generates. Same parse/merge/re-serialize approach as
-// mergeSSHKeys/mergeMounts, for the same reason: string-concatenating
-// onto arbitrary existing YAML isn't safe. Each line is guarded with a
-// grep check so it's safe to run again on every boot (a Mount/Umount
-// bumps Generation, which forces a full module re-run, see buildSeed)
-// without duplicating entries. Sorted by name so the generated seed is
-// deterministic across regenerations, not dependent on Go's random map
-// iteration order.
+// mergeExtraHosts adds one /etc/hosts entry per host via idempotent
+// bootcmd lines, sorted by name for deterministic output.
 func mergeExtraHosts(existing string, hosts map[string]string) (string, error) {
 	if len(hosts) == 0 {
 		return existing, nil
@@ -764,7 +672,8 @@ func mergeExtraHosts(existing string, hosts map[string]string) (string, error) {
 	sort.Strings(names)
 	for _, name := range names {
 		line := fmt.Sprintf("%s %s", hosts[name], name)
-		existingBootcmd = append(existingBootcmd, fmt.Sprintf(`grep -qxF %q /etc/hosts || echo %q >> /etc/hosts`, line, line))
+		quoted := shQuote(line)
+		existingBootcmd = append(existingBootcmd, fmt.Sprintf(`grep -qxF %s /etc/hosts || echo %s >> /etc/hosts`, quoted, quoted))
 	}
 	doc["bootcmd"] = existingBootcmd
 
@@ -775,23 +684,8 @@ func mergeExtraHosts(existing string, hosts map[string]string) (string, error) {
 	return "#cloud-config\n" + string(out), nil
 }
 
-// bridgeNetworkConfig returns a cloud-init NoCloud network-config (v2,
-// netplan-shaped) that statically assigns v.StaticIP/v.Gateway, or "" when
-// v isn't joining an intent's bridged network (v.NetworkMode != "bridge",
-// the default) — SLIRP's own built-in DHCP needs no guest-side
-// configuration at all, so there's nothing to generate in that case.
-//
-// Matches by macaddress (mac, the exact value also passed to QEMU's NIC
-// device via qemu.Config.MACAddress, see Start), not by interface name —
-// a real bug, caught on a real guest boot: this used to match on
-// name: "en*", assuming systemd's "predictable network interface names"
-// scheme (enp0s3 and similar). A real Arch Linux cloud image named its
-// NIC plain "eth0" instead, which "en*" never matches at all, so the
-// static IP was silently never applied — the guest booted with its NIC
-// completely unconfigured (down, no address), and every connection to it
-// failed with "No route to host," even from the anvil host itself.
-// Matching by MAC sidesteps guest interface naming entirely: it works
-// regardless of what the guest calls the interface.
+// bridgeNetworkConfig returns a cloud-init network-config statically
+// assigning v.StaticIP/v.Gateway to mac, or "" when not on a bridge.
 func bridgeNetworkConfig(v *instance.VMSpec, mac string) string {
 	if v.NetworkMode != "bridge" || v.StaticIP == "" {
 		return ""
@@ -808,15 +702,8 @@ func bridgeNetworkConfig(v *instance.VMSpec, mac string) string {
 `, mac, v.StaticIP, v.Gateway)
 }
 
-// macFromInstanceID derives a deterministic MAC address from id, always
-// within QEMU's own conventional locally-administered OUI (52:54:00) so
-// it looks exactly like the MAC QEMU would have auto-assigned anyway —
-// just stable across a stop/start cycle and known ahead of time, instead
-// of picked fresh by QEMU on every boot. Needed so bridgeNetworkConfig's
-// generated network-config can be told exactly which NIC to configure
-// (see its own doc comment for the bug this fixes) — the same instance
-// ID going in every time means the same MAC comes out every time, so
-// there's nothing to persist separately on the spec.
+// macFromInstanceID derives a deterministic MAC address from id, within
+// QEMU's locally-administered OUI (52:54:00).
 func macFromInstanceID(id string) string {
 	sum := sha256.Sum256([]byte(id))
 	return fmt.Sprintf("52:54:00:%02x:%02x:%02x", sum[0], sum[1], sum[2])
@@ -827,11 +714,8 @@ func kvmAvailable() bool {
 	return err == nil
 }
 
-// allocateFreePort asks the OS for an ephemeral port by briefly binding to
-// port 0, reading back what was assigned, then releasing it. This has an
-// inherent (if narrow) race — another process could claim the port before
-// qemu binds it — accepted for v1; see the plan's networking section for
-// the bridged-networking path intents will use instead once implemented.
+// allocateFreePort asks the OS for an ephemeral port by briefly binding
+// to port 0, reading back what was assigned, then releasing it.
 func allocateFreePort() (int, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

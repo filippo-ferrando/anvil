@@ -15,7 +15,7 @@ import (
 )
 
 // target is a parsed "user@host[:port]" SSH destination, plus an optional
-// identity file — see store.Host and MigrateRequest.to.
+// identity file.
 type target struct {
 	User     string
 	Host     string
@@ -23,9 +23,7 @@ type target struct {
 	Identity string
 }
 
-// parseTarget parses "user@host[:port]" into its parts. user is required
-// (there's no sensible default to assume for a daemon-driven SSH session,
-// unlike an interactive terminal that could fall back to $USER).
+// parseTarget parses "user@host[:port]" into its parts. user is required.
 func parseTarget(s string) (target, error) {
 	user, rest, ok := strings.Cut(s, "@")
 	if !ok || user == "" {
@@ -44,16 +42,16 @@ func parseTarget(s string) (target, error) {
 	if host == "" {
 		return target{}, fmt.Errorf("migrate: target %q must be \"user@host[:port]\"", s)
 	}
+	// Reject a user/host starting with "-": ssh/scp would otherwise parse
+	// it as an option rather than a destination.
+	if strings.HasPrefix(user, "-") || strings.HasPrefix(host, "-") {
+		return target{}, fmt.Errorf("migrate: target %q: user/host must not start with \"-\"", s)
+	}
 	return target{User: user, Host: host, Port: port}, nil
 }
 
 // commonArgs returns the -p/-i/host-key-checking flags shared by ssh and
-// scp invocations against t. identity defaults to
-// config.MigrateIdentityPath() (anvild's own generated migration key,
-// see that function's doc comment) when t didn't specify one — always
-// passed explicitly, never left to ssh's own default identity
-// resolution, for the same reason the CLI side of this project already
-// stopped relying on that once (see internal/cli/commands/ssh.go).
+// scp invocations against t.
 func commonArgs(t target, portFlag string) []string {
 	var args []string
 	if t.Port != 0 {
@@ -67,21 +65,13 @@ func commonArgs(t target, portFlag string) []string {
 	args = append(args,
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", "UserKnownHostsFile="+config.MigrateKnownHostsPath(),
-		"-o", "BatchMode=yes", // never prompt — a stuck daemon-side password prompt would hang the whole migration with no way to answer it
+		"-o", "BatchMode=yes", // never prompt for credentials
 	)
 	return args
 }
 
-// scpUpload copies localPath to t's remotePath. scp's own progress meter
-// only ever writes to a real terminal (it checks stderr's isatty), so
-// redirecting its output into a buffer — the only way to still capture an
-// error message — means a multi-hundred-MB/GB disk transfer otherwise
-// produces zero output until it finishes or fails, which reads as hung
-// rather than working. progress gets a heartbeat line (elapsed time, plus
-// the file's total size so there's at least a sense of scale) every 5
-// seconds for as long as the transfer is still running — not real
-// byte-level progress (that would need parsing scp's own meter, which
-// isn't there to parse in a non-tty), but enough to show it's alive.
+// scpUpload copies localPath to t's remotePath, sending progress a
+// heartbeat status line every 5 seconds while the transfer runs.
 func scpUpload(ctx context.Context, t target, localPath, remotePath string, progress func(status string)) error {
 	scpBin, err := exec.LookPath("scp")
 	if err != nil {
@@ -131,9 +121,7 @@ func scpUpload(ctx context.Context, t target, localPath, remotePath string, prog
 	return nil
 }
 
-// humanBytes renders n as a short, human-readable size (KiB/MiB/...),
-// just for scpUpload's heartbeat note — not a general-purpose formatter,
-// so it doesn't need to handle negative sizes or anything past exabytes.
+// humanBytes renders n as a short, human-readable size (KiB/MiB/...).
 func humanBytes(n int64) string {
 	const unit = 1024
 	if n < unit {
@@ -148,11 +136,7 @@ func humanBytes(n int64) string {
 }
 
 // sshRun runs remoteCommand on t, piping stdin to it and returning
-// everything it wrote to stdout. Used to invoke `anvil migrate-import` on
-// the target (see Manager.Migrate) — remoteCommand is always a fixed,
-// argument-free string in practice (no untrusted content ever becomes
-// part of the command line itself; the actual migration payload travels
-// over stdin instead, precisely to avoid needing to shell-quote it).
+// everything it wrote to stdout.
 func sshRun(ctx context.Context, t target, remoteCommand string, stdin io.Reader) (string, error) {
 	sshBin, err := exec.LookPath("ssh")
 	if err != nil {
