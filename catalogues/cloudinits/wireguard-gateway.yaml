@@ -1,0 +1,45 @@
+#cloud-config
+# WireGuard VPN gateway with IP forwarding + NAT (a small site-to-site or
+# road-warrior VPN endpoint).
+#
+# This needs a real TUN device, kernel-level IP forwarding, and NAT
+# (iptables MASQUERADE) applied at the host network namespace level —
+# exactly the kind of privileged, host-networking-adjacent setup that
+# needs `--privileged`/`--cap-add=NET_ADMIN`/`--sysctl` gymnastics to even
+# attempt in a container, and still behaves differently depending on the
+# container network driver. A VM just has a normal kernel and a normal
+# network interface, so none of that applies.
+#
+# Before first use: run `wg genkey | tee privatekey | wg pubkey >
+# publickey` on this VM (or generate the keypair elsewhere and paste the
+# private key into /etc/wireguard/wg0.conf), replace the placeholder key
+# below, and add [Peer] blocks for whoever should be able to connect.
+
+package_update: true
+
+packages:
+  - wireguard
+  - iptables
+
+write_files:
+  - path: /etc/wireguard/wg0.conf
+    permissions: "0600"
+    content: |
+      [Interface]
+      Address = 10.8.0.1/24
+      ListenPort = 51820
+      PrivateKey = CHANGE-ME-run-wg-genkey-and-paste-the-result-here
+      PostUp = iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+      PostDown = iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+
+      # [Peer]
+      # PublicKey = <a client's public key>
+      # AllowedIPs = 10.8.0.2/32
+  - path: /etc/sysctl.d/99-wireguard-forwarding.conf
+    permissions: "0644"
+    content: |
+      net.ipv4.ip_forward = 1
+
+runcmd:
+  - sysctl --system
+  - systemctl enable --now wg-quick@wg0

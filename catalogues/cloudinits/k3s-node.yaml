@@ -1,0 +1,16 @@
+#cloud-config
+# k3s, a single-node Kubernetes cluster.
+#
+# Kubernetes' own container runtime (containerd, inside k3s) expects to
+# own cgroups and manage its own containers directly — running it nested
+# inside another container ("Docker-in-Docker"-shaped) needs
+# `--privileged` and still has rough edges around cgroup delegation and
+# network isolation that vary by host kernel and container runtime
+# version. A VM gives k3s a normal, un-nested kernel to run its own
+# container runtime on top of, exactly like a real Kubernetes node.
+
+runcmd:
+  - curl -sfL https://get.k3s.io | sh -
+  # the installer above already enables+starts the k3s systemd service;
+  # kubeconfig lands at /etc/rancher/k3s/k3s.yaml, root-readable only —
+  # copy it out and fix the server address before using kubectl remotely

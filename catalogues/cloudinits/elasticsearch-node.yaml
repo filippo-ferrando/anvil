@@ -1,0 +1,41 @@
+#cloud-config
+# Elasticsearch, single-node.
+#
+# Elasticsearch needs `vm.max_map_count` raised well above the Linux
+# default (its JVM/Lucene memory-maps a huge number of index segment
+# files) — a *host kernel* sysctl, which a container can only get by the
+# host already having it set (or by running privileged), so the setting
+# effectively has to live outside the container anyway. It also wants a
+# locked-memory JVM heap (`bootstrap.memory_lock`) and enough file
+# descriptors, both easier to just set correctly once on a VM's own
+# kernel than to fight a container runtime's defaults for.
+
+package_update: true
+
+packages:
+  - gpg
+  - wget
+  - apt-transport-https
+
+write_files:
+  - path: /etc/sysctl.d/99-elasticsearch.conf
+    permissions: "0644"
+    content: |
+      vm.max_map_count = 262144
+  - path: /etc/elasticsearch/elasticsearch.yml.d-append.yml
+    permissions: "0644"
+    content: |
+      cluster.name: anvil-es
+      node.name: es-node-1
+      network.host: 0.0.0.0
+      discovery.type: single-node
+      bootstrap.memory_lock: true
+
+runcmd:
+  - wget -qO- https://artifacts.elastic.co/GPG-KEY-elasticsearch | gpg --dearmor -o /usr/share/keyrings/elasticsearch-keyring.gpg
+  - echo "deb [signed-by=/usr/share/keyrings/elasticsearch-keyring.gpg] https://artifacts.elastic.co/packages/8.x/apt stable main" > /etc/apt/sources.list.d/elastic-8.x.list
+  - apt-get update
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y elasticsearch
+  - sysctl --system
+  - cat /etc/elasticsearch/elasticsearch.yml.d-append.yml >> /etc/elasticsearch/elasticsearch.yml
+  - systemctl enable --now elasticsearch

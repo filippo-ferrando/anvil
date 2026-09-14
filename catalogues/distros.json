@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "distros": [
+    {
+      "id": "ubuntu-26.04",
+      "name": "Ubuntu 26.04 LTS (Resolute Raccoon)",
+      "distro": "ubuntu",
+      "version": "26.04",
+      "arch": "x86_64",
+      "url": "https://cloud-images.ubuntu.com/releases/resolute/release/ubuntu-26.04-server-cloudimg-amd64.img",
+      "sha256": "8196be9d7958059cb56c6c75c80fdf6cee8a8885bc149ea791d7db1c7ef93035",
+      "min_disk_gib": 3,
+      "default_user": "ubuntu"
+    },
+    {
+      "id": "ubuntu-24.04",
+      "name": "Ubuntu 24.04 LTS (Noble Numbat)",
+      "distro": "ubuntu",
+      "version": "24.04",
+      "arch": "x86_64",
+      "url": "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img",
+      "sha256": "612b2c0cc1bc413a6cb8c38fd611794caf0f2b436c50013d8b3794db12ad7354",
+      "min_disk_gib": 3,
+      "default_user": "ubuntu"
+    },
+    {
+      "id": "ubuntu-22.04",
+      "name": "Ubuntu 22.04 LTS (Jammy Jellyfish)",
+      "distro": "ubuntu",
+      "version": "22.04",
+      "arch": "x86_64",
+      "url": "https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img",
+      "sha256": "c0a5af17e6c0f76351fe07e2fffef3011dab1facb8a8ed5701dcf648dabd4f0a",
+      "min_disk_gib": 3,
+      "default_user": "ubuntu"
+    },
+    {
+      "id": "debian-13",
+      "name": "Debian 13 (Trixie)",
+      "distro": "debian",
+      "version": "13",
+      "arch": "x86_64",
+      "url": "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2",
+      "sha256": "5b842b549629637613f1770ad749b868b08c6e16c437a5940f21178816f3d7e9",
+      "min_disk_gib": 2,
+      "default_user": "debian"
+    },
+    {
+      "id": "debian-12",
+      "name": "Debian 12 (Bookworm)",
+      "distro": "debian",
+      "version": "12",
+      "arch": "x86_64",
+      "url": "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2",
+      "sha256": "5b842b549629637613f1770ad749b868b08c6e16c437a5940f21178816f3d7e9",
+      "min_disk_gib": 2,
+      "default_user": "debian"
+    },
+    {
+      "id": "archlinux",
+      "name": "Arch Linux",
+      "distro": "archlinux",
+      "version": "latest",
+      "arch": "x86_64",
+      "url": "https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2",
+      "sha256": "e3e688f97a71b265ce202905a504253f60f3680cf57d011a45411c43bedfa930",
+      "min_disk_gib": 2,
+      "default_user": "arch"
+    },
+    {
+      "id": "fedora-44",
+      "name": "Fedora Cloud 44",
+      "distro": "fedora",
+      "version": "44",
+      "arch": "x86_64",
+      "url": "https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2",
+      "sha256": "28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f",
+      "min_disk_gib": 5,
+      "default_user": "fedora"
+    },
+    {
+      "id": "rocky-9",
+      "name": "Rocky Linux 9",
+      "distro": "rocky",
+      "version": "9",
+      "arch": "x86_64",
+      "url": "https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2",
+      "sha256": "92c206cc6f790c61583247eefe87890f8828420662c17cacf247cec78ab4eec8",
+      "min_disk_gib": 10,
+      "default_user": "rocky"
+    },
+    {
+      "id": "rocky-10",
+      "name": "Rocky Linux 10",
+      "distro": "rocky",
+      "version": "10",
+      "arch": "x86_64",
+      "url": "https://download.rockylinux.org/pub/rocky/10/images/x86_64/Rocky-10-GenericCloud.latest.x86_64.qcow2",
+      "sha256": "9fc9e9ff16888bb68ac39b0392e25c9c92684d50c85f1cce6ab549363bbc4b48",
+      "min_disk_gib": 10,
+      "default_user": "rocky"
+    },
+    {
+      "id": "almalinux-9",
+      "name": "AlmaLinux 9",
+      "distro": "almalinux",
+      "version": "9",
+      "arch": "x86_64",
+      "url": "https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2",
+      "sha256": "6bdab6376d46d42e4203ace3733efafc7c5d37c7cb443a6cc74750097002d74b",
+      "min_disk_gib": 10,
+      "default_user": "almalinux"
+    },
+    {
+      "id": "almalinux-10",
+      "name": "AlmaLinux 10",
+      "distro": "almalinux",
+      "version": "10",
+      "arch": "x86_64",
+      "url": "https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/AlmaLinux-10-GenericCloud-latest.x86_64.qcow2",
+      "sha256": "bc59485c4828861a15887e30ff1bb913f0f16202fd7286208518f4814da1e10a",
+      "min_disk_gib": 10,
+      "default_user": "almalinux"
+    },
+    {
+      "id": "centos-stream-9",
+      "name": "CentOS Stream 9",
+      "distro": "centos-stream",
+      "version": "9",
+      "arch": "x86_64",
+      "url": "https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2",
+      "sha256": "d93b1ecfe4d77c8a364e5b2b8a751d1c7f1aa3a7e5bdf4de924ec9649c3b5e15",
+      "min_disk_gib": 10,
+      "default_user": "cloud-user"
+    },
+    {
+      "id": "centos-stream-10",
+      "name": "CentOS Stream 10",
+      "distro": "centos-stream",
+      "version": "10",
+      "arch": "x86_64",
+      "url": "https://cloud.centos.org/centos/10-stream/x86_64/images/CentOS-Stream-GenericCloud-10-latest.x86_64.qcow2",
+      "sha256": "01dd4840ce196680c048b6f1083b0d2f1a277ffb143e53402b61aa4bccc8e23f",
+      "min_disk_gib": 10,
+      "default_user": "cloud-user"
+    },
+    {
+      "id": "opensuse-leap-15.6",
+      "name": "openSUSE Leap 15.6",
+      "distro": "opensuse-leap",
+      "version": "15.6",
+      "arch": "x86_64",
+      "url": "https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.6/images/openSUSE-Leap-15.6.x86_64-NoCloud.qcow2",
+      "sha256": "",
+      "min_disk_gib": 10,
+      "default_user": "root"
+    },
+    {
+      "id": "alpine-3.24.1",
+      "name": "Alpine Linux 3.24.1",
+      "distro": "alpine",
+      "version": "3.24.1",
+      "arch": "x86_64",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/cloud/generic_alpine-3.24.1-x86_64-uefi-cloudinit-r0.qcow2",
+      "sha256": "",
+      "min_disk_gib": 1,
+      "default_user": "root"
+    }
+  ]
+}

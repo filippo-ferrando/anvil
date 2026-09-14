@@ -1,0 +1,33 @@
+#cloud-config
+# OpenLDAP, a standalone directory server.
+#
+# slapd's Debian/Ubuntu package configures itself through debconf and
+# keeps its database (the actual directory contents, and its own replayable
+# transaction log) as durable local files under /var/lib/ldap — an identity
+# store you want strong backup/snapshot guarantees on, which a VM's real
+# disk gives you directly. It's also one of those services people reach
+# for `dpkg-reconfigure slapd` on interactively, which fights a
+# container's usual "immutable image, no interactive config" model.
+#
+# Before real use: change the admin password below (this template sets a
+# throwaway one via debconf so the install doesn't hang waiting for
+# interactive input) and pick a real domain/org instead of the example
+# values.
+
+package_update: true
+
+packages:
+  - slapd
+  - ldap-utils
+
+runcmd:
+  - echo "slapd slapd/internal/generated_adminpw password CHANGE-ME" | debconf-set-selections
+  - echo "slapd slapd/internal/adminpw password CHANGE-ME" | debconf-set-selections
+  - echo "slapd slapd/password2 password CHANGE-ME" | debconf-set-selections
+  - echo "slapd slapd/password1 password CHANGE-ME" | debconf-set-selections
+  - echo "slapd slapd/domain string example.com" | debconf-set-selections
+  - echo "slapd shared/organization string Example Org" | debconf-set-selections
+  - echo "slapd slapd/no_configuration boolean false" | debconf-set-selections
+  - echo "slapd slapd/purge_database boolean false" | debconf-set-selections
+  - DEBIAN_FRONTEND=noninteractive dpkg-reconfigure -f noninteractive slapd
+  - systemctl enable --now slapd

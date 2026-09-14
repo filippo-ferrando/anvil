@@ -1,0 +1,54 @@
+#cloud-config
+# HashiCorp Vault, storage backend on S3.
+#
+# Vault manages long-lived encryption keys and unseal material on local
+# disk (/opt/vault/data by default even with a remote storage backend, for
+# its own Raft/HA bookkeeping) and expects a stable, directly-addressable
+# host for its listener — awkward to run correctly in a container without
+# real persistent volumes and careful network/capability configuration.
+# A VM gives it a normal, persistent filesystem and a normal network
+# identity with none of that friction.
+#
+# Before first use: edit /etc/vault.d/vault.hcl's S3 bucket/region, put
+# real AWS credentials somewhere Vault can read them (an instance profile
+# if this VM runs on EC2, or /etc/vault.d/aws-credentials.env otherwise —
+# never bake real keys into a shared template), then run
+# `vault operator init` and `vault operator unseal` by hand once, which
+# this template deliberately does not automate.
+
+package_update: true
+
+packages:
+  - gpg
+  - wget
+
+write_files:
+  - path: /etc/vault.d/vault.hcl
+    permissions: "0640"
+    owner: vault:vault
+    content: |
+      ui = true
+
+      storage "s3" {
+        bucket     = "CHANGE-ME-vault-storage-bucket"
+        region     = "us-east-1"
+        kms_key_id = "" # optional: a KMS key ARN for server-side encryption
+      }
+
+      listener "tcp" {
+        address     = "0.0.0.0:8200"
+        tls_disable = 1 # put a real cert here before exposing this beyond a private network
+      }
+
+      # S3 has no native locking, so Vault can't self-elect an HA leader
+      # against it alone; single-node only unless storage is later
+      # switched to something HA-aware (Consul, Raft).
+      disable_clustering = true
+      api_addr           = "http://127.0.0.1:8200"
+
+runcmd:
+  - wget -qO- https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+  - echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" > /etc/apt/sources.list.d/hashicorp.list
+  - apt-get update
+  - apt-get install -y vault
+  - systemctl enable --now vault

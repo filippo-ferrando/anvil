@@ -1,0 +1,46 @@
+#cloud-config
+# BIND9, an authoritative DNS server for one example zone.
+#
+# An authoritative nameserver needs to bind port 53 on a stable,
+# routable address and keep zone files as durable state that a real
+# process (this one) reloads in place on change (`rndc reload`) — fine on
+# a VM's normal network stack, but port 53 and low-numbered-port binding
+# is exactly the kind of thing that needs extra container capabilities/
+# host networking to work at all, and "stable address" is awkward when a
+# container's own address can change on every recreate.
+#
+# Before real use: replace example.com below with a real zone you
+# actually control, and update its registrar's NS records to point here.
+
+package_update: true
+
+packages:
+  - bind9
+  - bind9utils
+
+write_files:
+  - path: /etc/bind/named.conf.local
+    permissions: "0644"
+    content: |
+      zone "example.com" {
+          type master;
+          file "/etc/bind/db.example.com";
+      };
+  - path: /etc/bind/db.example.com
+    permissions: "0644"
+    content: |
+      $TTL    604800
+      @       IN      SOA     ns1.example.com. admin.example.com. (
+                              1         ; serial
+                              604800    ; refresh
+                              86400     ; retry
+                              2419200   ; expire
+                              604800 )  ; negative cache TTL
+      @       IN      NS      ns1.example.com.
+      ns1     IN      A       10.0.0.10
+      @       IN      A       10.0.0.10
+
+runcmd:
+  - named-checkconf
+  - named-checkzone example.com /etc/bind/db.example.com
+  - systemctl enable --now bind9

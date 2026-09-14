@@ -1,0 +1,34 @@
+#cloud-config
+# PostgreSQL 16 with the pgvector extension (embedding/similarity-search
+# columns), from the official PGDG apt repo rather than the older version
+# Debian/Ubuntu ship by default.
+#
+# Postgres itself runs fine containerized, but a database whose entire
+# job is durable on-disk state is a natural fit for a VM's real block
+# device and a normal backup/snapshot story, versus a container's volume
+# indirection. Listens on all interfaces here for convenience inside a
+# private/intent network; tighten pg_hba.conf before exposing this
+# anywhere less trusted.
+
+package_update: true
+
+packages:
+  - gpg
+  - wget
+  - lsb-release
+
+write_files:
+  - path: /etc/postgresql-pgvector-init.sql
+    permissions: "0644"
+    content: |
+      CREATE EXTENSION IF NOT EXISTS vector;
+
+runcmd:
+  - wget -qO- https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-archive-keyring.gpg
+  - echo "deb [signed-by=/usr/share/keyrings/postgresql-archive-keyring.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list
+  - apt-get update
+  - apt-get install -y postgresql-16 postgresql-16-pgvector
+  - echo "listen_addresses = '*'" >> /etc/postgresql/16/main/postgresql.conf
+  - echo "host all all 0.0.0.0/0 scram-sha-256" >> /etc/postgresql/16/main/pg_hba.conf
+  - systemctl restart postgresql
+  - sudo -u postgres psql -f /etc/postgresql-pgvector-init.sql
