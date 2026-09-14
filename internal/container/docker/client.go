@@ -199,6 +199,81 @@ func (c *Client) ImageExists(ctx context.Context, ref string) (bool, error) {
 	}
 }
 
+// ImageSummary is one image in Docker's local image store.
+type ImageSummary struct {
+	ID        string
+	RepoTags  []string // empty for a dangling/untagged image
+	SizeBytes int64
+}
+
+type imageSummaryResponse struct {
+	Id       string   `json:"Id"`
+	RepoTags []string `json:"RepoTags"`
+	Size     int64    `json:"Size"`
+}
+
+// ListImages returns every image currently in Docker's local store.
+func (c *Client) ListImages(ctx context.Context) ([]ImageSummary, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/images/json", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []imageSummaryResponse
+	if err := decodeJSON(resp, &out, http.StatusOK); err != nil {
+		return nil, fmt.Errorf("docker: listing images: %w", err)
+	}
+	images := make([]ImageSummary, len(out))
+	for i, im := range out {
+		// A "<none>" RepoTags entry means untagged, same as `docker
+		// images` itself filters out — leave it as an empty slice
+		// instead, so a caller doesn't have to know that convention.
+		tags := im.RepoTags
+		if len(tags) == 1 && tags[0] == "<none>:<none>" {
+			tags = nil
+		}
+		images[i] = ImageSummary{ID: im.Id, RepoTags: tags, SizeBytes: im.Size}
+	}
+	return images, nil
+}
+
+type containerSummaryResponse struct {
+	ImageID string `json:"ImageID"`
+}
+
+// ImagesInUse returns, for every image ID currently referenced by at least
+// one container (running or not), how many containers reference it.
+func (c *Client) ImagesInUse(ctx context.Context) (map[string]int, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/containers/json?all=true", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []containerSummaryResponse
+	if err := decodeJSON(resp, &out, http.StatusOK); err != nil {
+		return nil, fmt.Errorf("docker: listing containers: %w", err)
+	}
+	counts := make(map[string]int, len(out))
+	for _, cs := range out {
+		if cs.ImageID != "" {
+			counts[cs.ImageID]++
+		}
+	}
+	return counts, nil
+}
+
+// RemoveImage deletes an image from Docker's local store by ID. An
+// already-gone image is not an error, matching RemoveContainer's idempotency.
+func (c *Client) RemoveImage(ctx context.Context, id string, force bool) error {
+	path := fmt.Sprintf("/images/%s?force=%t", id, force)
+	resp, err := c.do(ctx, http.MethodDelete, path, nil)
+	if err != nil {
+		return err
+	}
+	if err := expectStatus(resp, http.StatusOK, http.StatusNotFound); err != nil {
+		return fmt.Errorf("docker: removing image %s: %w", id, err)
+	}
+	return nil
+}
+
 // splitImageRef splits ref into a repository and tag/digest, defaulting the
 // tag to "latest" when ref has none.
 func splitImageRef(ref string) (repo, tag string) {

@@ -108,3 +108,65 @@ func (b *Backend) Stats(ctx context.Context, spec *instance.Spec) (instance.Stat
 	}
 	return sp.Stats(ctx, spec)
 }
+
+// ImageInfo is one image cached by a container engine — a separate
+// inventory from the VM image vault (internal/vm/image.Vault).
+type ImageInfo struct {
+	ID        string
+	Engine    instance.ContainerEngine
+	RepoTags  []string
+	SizeBytes int64
+	RefCount  int
+}
+
+// ImageLister is implemented by an engine backend that can list its own
+// cached images.
+type ImageLister interface {
+	ListImages(ctx context.Context) ([]ImageInfo, error)
+}
+
+// ImageDeleter is implemented by an engine backend that can delete one of
+// its own cached images.
+type ImageDeleter interface {
+	DeleteImage(ctx context.Context, id string, force bool) error
+}
+
+// ListImages returns every image cached by every configured engine.
+// An engine that isn't configured, or doesn't implement ImageLister,
+// simply contributes nothing rather than failing the whole call.
+func (b *Backend) ListImages(ctx context.Context) ([]ImageInfo, error) {
+	var all []ImageInfo
+	for _, eng := range []instance.Backend{b.Docker, b.Podman} {
+		lister, ok := eng.(ImageLister)
+		if !ok {
+			continue
+		}
+		images, err := lister.ListImages(ctx)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, images...)
+	}
+	return all, nil
+}
+
+// DeleteImage deletes id from engine's own image store.
+func (b *Backend) DeleteImage(ctx context.Context, engine instance.ContainerEngine, id string, force bool) error {
+	var eng instance.Backend
+	switch engine {
+	case instance.ContainerEngineDocker, "":
+		eng = b.Docker
+	case instance.ContainerEnginePodman:
+		eng = b.Podman
+	default:
+		return fmt.Errorf("container: unknown engine %q", engine)
+	}
+	if eng == nil {
+		return fmt.Errorf("container: the %s engine isn't configured on this daemon", engine)
+	}
+	deleter, ok := eng.(ImageDeleter)
+	if !ok {
+		return fmt.Errorf("container: this engine doesn't support deleting images")
+	}
+	return deleter.DeleteImage(ctx, id, force)
+}

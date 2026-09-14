@@ -377,6 +377,11 @@ service ImageService {
 
   // Catalog lists every distro image `anvil launch --kind vm <id>` can resolve against.
   rpc Catalog(CatalogRequest) returns (CatalogReply);
+
+  // ListContainerImages lists every image cached by a container engine
+  // (Docker today), separate from the VM image cache above.
+  rpc ListContainerImages(ContainerImageListRequest) returns (ContainerImageListReply);
+  rpc DeleteContainerImage(ContainerImageDeleteRequest) returns (ContainerImageDeleteReply);
 }
 
 message CachedImage {
@@ -415,6 +420,30 @@ message ImageDeleteRequest {
   string arch = 2; // optional; only needed if id is ambiguous across architectures
   bool force = 3;  // delete even if ref_count > 0 — will break those instances' disks
 }
+
+// ContainerImage is one image cached by a container engine — a separate
+// inventory from CachedImage's VM disk images above.
+message ContainerImage {
+  string id = 1;
+  ContainerEngine engine = 2;
+  repeated string repo_tags = 3; // e.g. "nginx:alpine"; empty for a dangling/untagged image
+  int64 size_bytes = 4;
+  int32 ref_count = 5; // number of containers (running or not) using this image
+}
+
+message ContainerImageListRequest {}
+
+message ContainerImageListReply {
+  repeated ContainerImage images = 1;
+}
+
+message ContainerImageDeleteRequest {
+  string id = 1;
+  ContainerEngine engine = 2;
+  bool force = 3; // delete even if ref_count > 0
+}
+
+message ContainerImageDeleteReply {}
 
 message ImageDeleteReply {}
 

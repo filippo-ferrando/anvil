@@ -319,6 +319,77 @@ func TestStatsComputesCumulativeCounters(t *testing.T) {
 	}
 }
 
+func TestListImages(t *testing.T) {
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.URL.Path, "/v1.41/images/json"; got != want {
+			t.Errorf("expected path %q, got %q", want, got)
+		}
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"Id": "sha256:abc", "RepoTags": []string{"nginx:alpine"}, "Size": 1000},
+			{"Id": "sha256:def", "RepoTags": []string{"<none>:<none>"}, "Size": 2000},
+		})
+	}))
+	images, err := c.ListImages(t.Context())
+	if err != nil {
+		t.Fatalf("ListImages: %v", err)
+	}
+	if len(images) != 2 {
+		t.Fatalf("expected 2 images, got %d", len(images))
+	}
+	if images[0].ID != "sha256:abc" || len(images[0].RepoTags) != 1 || images[0].RepoTags[0] != "nginx:alpine" {
+		t.Errorf("unexpected first image: %+v", images[0])
+	}
+	if images[1].RepoTags != nil {
+		t.Errorf("expected a <none>:<none> RepoTags to normalize to nil, got %v", images[1].RepoTags)
+	}
+}
+
+func TestImagesInUseCountsByImageID(t *testing.T) {
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.URL.RawQuery, "all=true"; got != want {
+			t.Errorf("expected query %q, got %q", want, got)
+		}
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"ImageID": "sha256:abc"},
+			{"ImageID": "sha256:abc"},
+			{"ImageID": "sha256:def"},
+		})
+	}))
+	counts, err := c.ImagesInUse(t.Context())
+	if err != nil {
+		t.Fatalf("ImagesInUse: %v", err)
+	}
+	if counts["sha256:abc"] != 2 || counts["sha256:def"] != 1 {
+		t.Errorf("unexpected counts: %+v", counts)
+	}
+}
+
+func TestRemoveImage(t *testing.T) {
+	var gotPath, gotMethod string
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotMethod = r.URL.Path+"?"+r.URL.RawQuery, r.Method
+		w.WriteHeader(http.StatusOK)
+	}))
+	if err := c.RemoveImage(t.Context(), "sha256:abc", true); err != nil {
+		t.Fatalf("RemoveImage: %v", err)
+	}
+	if gotMethod != http.MethodDelete {
+		t.Errorf("expected DELETE, got %s", gotMethod)
+	}
+	if want := "/v1.41/images/sha256:abc?force=true"; gotPath != want {
+		t.Errorf("expected path %q, got %q", want, gotPath)
+	}
+}
+
+func TestRemoveImageAlreadyGoneIsNotAnError(t *testing.T) {
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	if err := c.RemoveImage(t.Context(), "gone", false); err != nil {
+		t.Errorf("expected removing an already-gone image to succeed, got: %v", err)
+	}
+}
+
 func TestLogsDemux(t *testing.T) {
 	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeFrame(w, 1, "hello stdout\n")

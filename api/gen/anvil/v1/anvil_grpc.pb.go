@@ -1038,9 +1038,11 @@ var MirrorService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ImageService_List_FullMethodName    = "/anvil.v1.ImageService/List"
-	ImageService_Delete_FullMethodName  = "/anvil.v1.ImageService/Delete"
-	ImageService_Catalog_FullMethodName = "/anvil.v1.ImageService/Catalog"
+	ImageService_List_FullMethodName                 = "/anvil.v1.ImageService/List"
+	ImageService_Delete_FullMethodName               = "/anvil.v1.ImageService/Delete"
+	ImageService_Catalog_FullMethodName              = "/anvil.v1.ImageService/Catalog"
+	ImageService_ListContainerImages_FullMethodName  = "/anvil.v1.ImageService/ListContainerImages"
+	ImageService_DeleteContainerImage_FullMethodName = "/anvil.v1.ImageService/DeleteContainerImage"
 )
 
 // ImageServiceClient is the client API for ImageService service.
@@ -1053,6 +1055,10 @@ type ImageServiceClient interface {
 	Delete(ctx context.Context, in *ImageDeleteRequest, opts ...grpc.CallOption) (*ImageDeleteReply, error)
 	// Catalog lists every distro image `anvil launch --kind vm <id>` can resolve against.
 	Catalog(ctx context.Context, in *CatalogRequest, opts ...grpc.CallOption) (*CatalogReply, error)
+	// ListContainerImages lists every image cached by a container engine
+	// (Docker today), separate from the VM image cache above.
+	ListContainerImages(ctx context.Context, in *ContainerImageListRequest, opts ...grpc.CallOption) (*ContainerImageListReply, error)
+	DeleteContainerImage(ctx context.Context, in *ContainerImageDeleteRequest, opts ...grpc.CallOption) (*ContainerImageDeleteReply, error)
 }
 
 type imageServiceClient struct {
@@ -1093,6 +1099,26 @@ func (c *imageServiceClient) Catalog(ctx context.Context, in *CatalogRequest, op
 	return out, nil
 }
 
+func (c *imageServiceClient) ListContainerImages(ctx context.Context, in *ContainerImageListRequest, opts ...grpc.CallOption) (*ContainerImageListReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ContainerImageListReply)
+	err := c.cc.Invoke(ctx, ImageService_ListContainerImages_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *imageServiceClient) DeleteContainerImage(ctx context.Context, in *ContainerImageDeleteRequest, opts ...grpc.CallOption) (*ContainerImageDeleteReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ContainerImageDeleteReply)
+	err := c.cc.Invoke(ctx, ImageService_DeleteContainerImage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ImageServiceServer is the server API for ImageService service.
 // All implementations must embed UnimplementedImageServiceServer
 // for forward compatibility.
@@ -1103,6 +1129,10 @@ type ImageServiceServer interface {
 	Delete(context.Context, *ImageDeleteRequest) (*ImageDeleteReply, error)
 	// Catalog lists every distro image `anvil launch --kind vm <id>` can resolve against.
 	Catalog(context.Context, *CatalogRequest) (*CatalogReply, error)
+	// ListContainerImages lists every image cached by a container engine
+	// (Docker today), separate from the VM image cache above.
+	ListContainerImages(context.Context, *ContainerImageListRequest) (*ContainerImageListReply, error)
+	DeleteContainerImage(context.Context, *ContainerImageDeleteRequest) (*ContainerImageDeleteReply, error)
 	mustEmbedUnimplementedImageServiceServer()
 }
 
@@ -1121,6 +1151,12 @@ func (UnimplementedImageServiceServer) Delete(context.Context, *ImageDeleteReque
 }
 func (UnimplementedImageServiceServer) Catalog(context.Context, *CatalogRequest) (*CatalogReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Catalog not implemented")
+}
+func (UnimplementedImageServiceServer) ListContainerImages(context.Context, *ContainerImageListRequest) (*ContainerImageListReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListContainerImages not implemented")
+}
+func (UnimplementedImageServiceServer) DeleteContainerImage(context.Context, *ContainerImageDeleteRequest) (*ContainerImageDeleteReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteContainerImage not implemented")
 }
 func (UnimplementedImageServiceServer) mustEmbedUnimplementedImageServiceServer() {}
 func (UnimplementedImageServiceServer) testEmbeddedByValue()                      {}
@@ -1197,6 +1233,42 @@ func _ImageService_Catalog_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ImageService_ListContainerImages_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerImageListRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ImageServiceServer).ListContainerImages(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ImageService_ListContainerImages_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ImageServiceServer).ListContainerImages(ctx, req.(*ContainerImageListRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ImageService_DeleteContainerImage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerImageDeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ImageServiceServer).DeleteContainerImage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ImageService_DeleteContainerImage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ImageServiceServer).DeleteContainerImage(ctx, req.(*ContainerImageDeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ImageService_ServiceDesc is the grpc.ServiceDesc for ImageService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1215,6 +1287,14 @@ var ImageService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Catalog",
 			Handler:    _ImageService_Catalog_Handler,
+		},
+		{
+			MethodName: "ListContainerImages",
+			Handler:    _ImageService_ListContainerImages_Handler,
+		},
+		{
+			MethodName: "DeleteContainerImage",
+			Handler:    _ImageService_DeleteContainerImage_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

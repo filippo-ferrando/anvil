@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
+	"github.com/anvil-project/anvil/internal/container"
 	"github.com/anvil-project/anvil/internal/instance"
 	"github.com/anvil-project/anvil/internal/store"
 	"github.com/anvil-project/anvil/internal/vm"
@@ -14,16 +15,17 @@ import (
 )
 
 // ImageServer implements anvilv1.ImageServiceServer, managing the cached VM
-// base image store and its source catalog.
+// base image store/catalog and the container engines' own cached images.
 type ImageServer struct {
 	anvilv1.UnimplementedImageServiceServer
-	Store   *store.Store
-	Vault   *image.Vault
-	Backend *vm.Backend
+	Store      *store.Store
+	Vault      *image.Vault
+	Backend    *vm.Backend
+	Containers *container.Backend
 }
 
-func NewImageServer(s *store.Store, v *image.Vault, backend *vm.Backend) *ImageServer {
-	return &ImageServer{Store: s, Vault: v, Backend: backend}
+func NewImageServer(s *store.Store, v *image.Vault, backend *vm.Backend, containers *container.Backend) *ImageServer {
+	return &ImageServer{Store: s, Vault: v, Backend: backend, Containers: containers}
 }
 
 func (s *ImageServer) Catalog(ctx context.Context, req *anvilv1.CatalogRequest) (*anvilv1.CatalogReply, error) {
@@ -106,6 +108,32 @@ func (s *ImageServer) Delete(ctx context.Context, req *anvilv1.ImageDeleteReques
 		return nil, err
 	}
 	return &anvilv1.ImageDeleteReply{}, nil
+}
+
+func (s *ImageServer) ListContainerImages(ctx context.Context, req *anvilv1.ContainerImageListRequest) (*anvilv1.ContainerImageListReply, error) {
+	images, err := s.Containers.ListImages(ctx)
+	if err != nil {
+		return nil, err
+	}
+	reply := &anvilv1.ContainerImageListReply{}
+	for _, img := range images {
+		reply.Images = append(reply.Images, &anvilv1.ContainerImage{
+			Id:        img.ID,
+			Engine:    containerEngineToPB(img.Engine),
+			RepoTags:  img.RepoTags,
+			SizeBytes: img.SizeBytes,
+			RefCount:  int32(img.RefCount),
+		})
+	}
+	return reply, nil
+}
+
+func (s *ImageServer) DeleteContainerImage(ctx context.Context, req *anvilv1.ContainerImageDeleteRequest) (*anvilv1.ContainerImageDeleteReply, error) {
+	engine := containerEngineFromPB(req.GetEngine())
+	if err := s.Containers.DeleteImage(ctx, engine, req.GetId(), req.GetForce()); err != nil {
+		return nil, err
+	}
+	return &anvilv1.ContainerImageDeleteReply{}, nil
 }
 
 // usersOf returns the names of specs whose disk's backing file is imagePath.

@@ -23,7 +23,11 @@ type DockerBackend struct {
 	Source Source // nil is fine, just means no mirrors ever get applied
 }
 
-var _ instance.Backend = (*DockerBackend)(nil)
+var (
+	_ instance.Backend = (*DockerBackend)(nil)
+	_ ImageLister      = (*DockerBackend)(nil)
+	_ ImageDeleter     = (*DockerBackend)(nil)
+)
 
 func NewDockerBackend(socket string, source Source) *DockerBackend {
 	return &DockerBackend{Client: docker.NewClient(socket), Source: source}
@@ -276,4 +280,33 @@ func (b *DockerBackend) Stats(ctx context.Context, spec *instance.Spec) (instanc
 		UptimeSeconds:        uptime,
 		Address:              insp.Address,
 	}, nil
+}
+
+// ListImages returns every image in Docker's local store, each tagged
+// with how many containers (running or not) currently reference it.
+func (b *DockerBackend) ListImages(ctx context.Context) ([]ImageInfo, error) {
+	images, err := b.Client.ListImages(ctx)
+	if err != nil {
+		return nil, err
+	}
+	inUse, err := b.Client.ImagesInUse(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ImageInfo, len(images))
+	for i, img := range images {
+		out[i] = ImageInfo{
+			ID:        img.ID,
+			Engine:    instance.ContainerEngineDocker,
+			RepoTags:  img.RepoTags,
+			SizeBytes: img.SizeBytes,
+			RefCount:  inUse[img.ID],
+		}
+	}
+	return out, nil
+}
+
+// DeleteImage removes id from Docker's local image store.
+func (b *DockerBackend) DeleteImage(ctx context.Context, id string, force bool) error {
+	return b.Client.RemoveImage(ctx, id, force)
 }

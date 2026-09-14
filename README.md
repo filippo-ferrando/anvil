@@ -73,6 +73,8 @@ way, tracked separately — see [limitations](#status--limitations)):
 - the same `shell`/`exec`/`transfer` commands work here too, backed by `docker
   exec`/`docker cp`
 - volumes, env vars, published ports, custom entrypoints, the works
+- `anvil image containers list` (and the TUI's Images screen) shows every image cached by
+  the engine, separate from VM images, and whether it's actually in use by a container
 
 **Intents** — group VMs and containers together and manage them as one thing:
 

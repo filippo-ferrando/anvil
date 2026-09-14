@@ -52,6 +52,11 @@ type catalogLoadedMsg struct {
 	err     error
 }
 
+type containerImagesLoadedMsg struct {
+	images []*anvilv1.ContainerImage
+	err    error
+}
+
 type cloudInitListLoadedMsg struct {
 	configs []*anvilv1.CloudInitConfigInfo
 	err     error
@@ -162,6 +167,23 @@ func loadCatalog(c *client.Client) tea.Cmd {
 func deleteCachedImage(c *client.Client, id string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.Image.Delete(context.Background(), &anvilv1.ImageDeleteRequest{Id: id})
+		return actionDoneMsg{screen: screenImages, verb: "deleted", err: err}
+	}
+}
+
+func loadContainerImages(c *client.Client) tea.Cmd {
+	return func() tea.Msg {
+		reply, err := c.Image.ListContainerImages(context.Background(), &anvilv1.ContainerImageListRequest{})
+		if err != nil {
+			return containerImagesLoadedMsg{err: err}
+		}
+		return containerImagesLoadedMsg{images: reply.GetImages()}
+	}
+}
+
+func deleteContainerImage(c *client.Client, id string, engine anvilv1.ContainerEngine) tea.Cmd {
+	return func() tea.Msg {
+		_, err := c.Image.DeleteContainerImage(context.Background(), &anvilv1.ContainerImageDeleteRequest{Id: id, Engine: engine})
 		return actionDoneMsg{screen: screenImages, verb: "deleted", err: err}
 	}
 }
