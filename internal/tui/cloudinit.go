@@ -25,6 +25,7 @@ const (
 	cloudInitPromptNone cloudInitPrompt = iota
 	cloudInitPromptNew
 	cloudInitPromptImport
+	cloudInitPromptImportRepo
 	cloudInitPromptRename
 	cloudInitPromptDelete
 )
@@ -38,6 +39,9 @@ type cloudInitModel struct {
 	prompt      cloudInitPrompt
 	promptFm    simpleForm
 	panelHeight int // both side-by-side panels are pinned to this, see View()
+
+	importingRepo bool // showing the ImportRepo streaming progress instead of the list+editor split
+	importLines   []string
 }
 
 func newCloudInitModel() cloudInitModel {
@@ -139,6 +143,30 @@ func (m model) updateCloudInit(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setStatus("config "+msg.verb, false)
 		return m, loadCloudInitList(m.client)
 
+	case cloudInitImportStreamMsg:
+		if msg.status != "" {
+			m.cloudInit.importLines = appendProgressLine(m.cloudInit.importLines, msg.status)
+		}
+		if msg.result != nil {
+			r := msg.result
+			switch {
+			case r.GetError() != "":
+				m.cloudInit.importLines = append(m.cloudInit.importLines, styleError.Render(r.GetName()+": FAILED: "+r.GetError()))
+			case r.GetSkipped():
+				m.cloudInit.importLines = append(m.cloudInit.importLines, styleWarn.Render(r.GetName()+": skipped (already exists)"))
+			default:
+				m.cloudInit.importLines = append(m.cloudInit.importLines, styleGood.Render(r.GetName()+": imported"))
+			}
+		}
+		if msg.err != nil {
+			m.cloudInit.importLines = append(m.cloudInit.importLines, styleError.Render(msg.err.Error()))
+			return m, nil
+		}
+		if msg.done {
+			return m, loadCloudInitList(m.client)
+		}
+		return m, receiveCloudInitImportEvent(msg.stream)
+
 	case tea.KeyMsg:
 		return m.updateCloudInitKey(msg)
 	}
@@ -147,6 +175,15 @@ func (m model) updateCloudInit(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) updateCloudInitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	ci := &m.cloudInit
+
+	if ci.importingRepo {
+		// Esc (or any key) only dismisses the progress view — an import
+		// still in flight keeps running and applying its results either
+		// way, see the cloudInitImportStreamMsg handler above; this just
+		// stops watching it.
+		ci.importingRepo = false
+		return m, nil
+	}
 
 	if ci.prompt != cloudInitPromptNone {
 		return m.updateCloudInitPrompt(msg)
@@ -197,6 +234,13 @@ func (m model) updateCloudInitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		ci.prompt = cloudInitPromptDelete
+		return m, nil
+	case "R":
+		ci.prompt = cloudInitPromptImportRepo
+		ci.promptFm = newSimpleForm("Import from a repo (see docs/mirrors.md)", []formField{
+			textField("Manifest URL", "", ""),
+			toggleField("Force", "overwrite a name that's already in the library", false),
+		})
 		return m, nil
 	case "enter", "tab":
 		if item, ok := ci.list.SelectedItem().(cloudInitItem); ok {
@@ -270,11 +314,29 @@ func (m model) updateCloudInitPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, renameCloudInit(m.client, oldName, newName)
+
+	case cloudInitPromptImportRepo:
+		url := ci.promptFm.Value("Manifest URL")
+		force := ci.promptFm.Bool("Force")
+		ci.prompt = cloudInitPromptNone
+		if url == "" {
+			return m, nil
+		}
+		ci.importingRepo = true
+		ci.importLines = nil
+		return m, startCloudInitImportRepo(m.client, url, force)
 	}
 	return m, nil
 }
 
 func (m cloudInitModel) View() string {
+	if m.importingRepo {
+		s := styleTitle.Render(" Importing… ") + "\n\n"
+		for _, line := range m.importLines {
+			s += line + "\n"
+		}
+		return s + "\n" + helpBar("any key", "dismiss (import keeps running)")
+	}
 	if m.prompt == cloudInitPromptDelete {
 		return styleWarn.Render("Delete cloud-init config "+m.current+"?") + "\n\n" +
 			helpBar("y", "confirm", "any other key", "cancel")
@@ -308,6 +370,7 @@ func (m cloudInitModel) View() string {
 	left := listBox.Render(lipgloss.NewStyle().Height(totalHeight).Render(m.list.View()))
 	right := editorBox.Render(styleFieldLabel.Render(editorTitle) + "\n" + m.editor.View())
 
-	help := helpBar("n", "new", "m", "import", "r", "rename", "d", "delete", "e", "edit", "ctrl+s", "save", "esc", "back")
+	help := helpBar("n", "new", "m", "import", "R", "import repo", "r", "rename",
+		"d", "delete", "e", "edit", "ctrl+s", "save", "esc", "back")
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right) + "\n" + help
 }

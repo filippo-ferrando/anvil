@@ -2,6 +2,8 @@ package tui
 
 import (
 	"context"
+	"fmt"
+	"io"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -95,6 +97,17 @@ type migrateStreamMsg struct {
 type logsStreamMsg struct {
 	stream anvilv1.InstanceService_LogsClient
 	data   []byte
+	err    error
+	done   bool
+}
+
+// cloudInitImportStreamMsg carries one event off a CloudInitService.ImportRepo
+// stream — same "receive one, re-issue the next as a Cmd" chaining pattern as
+// migrateStreamMsg/logsStreamMsg above.
+type cloudInitImportStreamMsg struct {
+	stream anvilv1.CloudInitService_ImportRepoClient
+	status string
+	result *anvilv1.CloudInitImportResult
 	err    error
 	done   bool
 }
@@ -219,6 +232,40 @@ func deleteCloudInit(c *client.Client, name string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.CloudInit.Delete(context.Background(), &anvilv1.CloudInitDeleteRequest{Name: name})
 		return actionDoneMsg{verb: "deleted", err: err}
+	}
+}
+
+func startCloudInitImportRepo(c *client.Client, manifestURL string, force bool) tea.Cmd {
+	return func() tea.Msg {
+		stream, err := c.CloudInit.ImportRepo(context.Background(), &anvilv1.CloudInitImportRepoRequest{
+			ManifestUrl: manifestURL, Force: force,
+		})
+		if err != nil {
+			return cloudInitImportStreamMsg{err: err, done: true}
+		}
+		return receiveCloudInitImportEvent(stream)()
+	}
+}
+
+func receiveCloudInitImportEvent(stream anvilv1.CloudInitService_ImportRepoClient) tea.Cmd {
+	return func() tea.Msg {
+		ev, err := stream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				return cloudInitImportStreamMsg{done: true}
+			}
+			return cloudInitImportStreamMsg{err: err, done: true}
+		}
+		switch e := ev.GetEvent().(type) {
+		case *anvilv1.CloudInitImportRepoProgress_Status:
+			return cloudInitImportStreamMsg{stream: stream, status: e.Status}
+		case *anvilv1.CloudInitImportRepoProgress_Error:
+			return cloudInitImportStreamMsg{err: fmt.Errorf("%s", e.Error), done: true}
+		case *anvilv1.CloudInitImportRepoProgress_Imported:
+			return cloudInitImportStreamMsg{stream: stream, result: e.Imported}
+		default:
+			return cloudInitImportStreamMsg{stream: stream}
+		}
 	}
 }
 

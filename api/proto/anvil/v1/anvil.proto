@@ -286,6 +286,16 @@ service CloudInitService {
   rpc Save(CloudInitSaveRequest) returns (CloudInitSaveReply); // creates or updates
   rpc Rename(CloudInitRenameRequest) returns (CloudInitRenameReply);
   rpc Delete(CloudInitDeleteRequest) returns (CloudInitDeleteReply);
+
+  // ImportRepo fetches a template-repo manifest (see docs/mirrors.md's
+  // "cloud-init template repos" section for the manifest shape and how
+  // to host one) and saves each listed template into the same saved
+  // library `anvil cloud-init *` already manages — same idea as a VM
+  // mirror's manifest, just for cloud-init templates instead of distro
+  // images, and fetched here (daemon-side) for the same reason: one
+  // implementation instead of a second copy in the CLI and another in
+  // the TUI.
+  rpc ImportRepo(CloudInitImportRepoRequest) returns (stream CloudInitImportRepoProgress);
 }
 
 message CloudInitConfigInfo {
@@ -328,6 +338,28 @@ message CloudInitDeleteRequest {
 }
 
 message CloudInitDeleteReply {}
+
+message CloudInitImportRepoRequest {
+  string manifest_url = 1;
+  bool force = 2; // overwrite a name already in the library; default skips it, doesn't error
+}
+
+message CloudInitImportRepoProgress {
+  oneof event {
+    string status = 1;                       // human-readable phase, e.g. "fetching nginx"
+    CloudInitImportResult imported = 2;       // one template's own result, as it finishes
+    string error = 3;                         // a fetch/parse failure for the manifest itself; ends the stream
+  }
+}
+
+// CloudInitImportResult is one template's own outcome within a whole
+// ImportRepo call — a failure fetching or saving *this* template doesn't
+// stop the rest of the repo from importing.
+message CloudInitImportResult {
+  string name = 1;
+  bool skipped = 2; // true: already existed in the library and force wasn't set
+  string error = 3; // set if fetching/saving this one specific template failed
+}
 
 // MirrorService manages runtime-added image mirrors (M2 for VM manifest
 // mirrors, M3 for container registry mirrors). The built-in catalog

@@ -340,10 +340,35 @@ easier:**
   `IgnoreUnknown=WarnWeakCrypto`/`WarnWeakCrypto=no-pq-kex` for a newer OpenSSH
   post-quantum-KEX warning some sessions were also hitting. Verified against a real
   `ssh -G` config dump (OpenSSH 10.5p1): all three parse and apply correctly
+- `anvil cloud-init import-repo <manifest-url> [--force]` bulk-imports a whole repo
+  of ready-made cloud-init templates into the saved library in one shot, and the
+  Cloud Init screen's new `R` key does the same from the TUI. Fetched daemon-side
+  (new `CloudInitService.ImportRepo` streaming RPC), same "one implementation, not
+  a second copy in the TUI" reasoning as a VM mirror's manifest fetch. New package
+  `internal/cloudinitrepo` owns the manifest/template fetching (6 real
+  `httptest`-backed tests, all passing); see `docs/mirrors.md`'s "Cloud-init
+  template repos" section for the manifest shape and how to host your own
+- **the "in-use" flag on a cached image was still wrong after the first attempted
+  fix, confirmed by filippo on real hardware**: `anvil image list` reported
+  `in use: no` for `archlinux` even with a real `Running` VM booted straight off
+  it. The first guess (a symlink somewhere making a plain path comparison miss,
+  fixed defensively with a symlink-aware `samePath`) wasn't the actual cause and
+  didn't fix it. The real cause, confirmed by reproducing it directly (booted a
+  real `qemu-system-x86_64` against a test overlay, then ran `qemu-img info` on
+  it): a running VM's own QEMU process holds an image lock on its disk (QEMU's
+  image-locking feature, active since QEMU 2.10), so `qemu-img info` (which is
+  how anvil reads an overlay's backing-file path to check whether it references
+  a given cached image) fails outright on any *running* instance's disk with
+  "Failed to get shared \"write\" lock", and the in-use check was silently
+  treating that failure as "doesn't use this image." Fixed with `-U`/
+  `--force-share` on that `qemu-img info` call (`internal/vm/image/vault.go`),
+  which opens the image read-only in shared mode, safe here since it's a pure
+  metadata read
 - **still can't build here**: no network access to fetch
   `github.com/charmbracelet/bubbletea`/`bubbles`/`lipgloss`, so `go.mod` doesn't
   pin them from this sandbox; `make tui-deps` (plus `make proto` again, for the
-  new Catalog RPC) on your end, then `anvil tui` for the next real walkthrough
+  Catalog RPC and now the new `CloudInitService.ImportRepo` RPC too) on your end,
+  then `anvil tui` for the next real walkthrough
 
 **Not built yet:**
 - Podman (the second container backend, deliberately deferred, see above; its own

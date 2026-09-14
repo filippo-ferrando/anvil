@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"text/tabwriter"
@@ -24,6 +25,7 @@ func newCloudInitCommand(flags *globalFlags) *cobra.Command {
 		newCloudInitShowCommand(flags),
 		newCloudInitRenameCommand(flags),
 		newCloudInitDeleteCommand(flags),
+		newCloudInitImportRepoCommand(flags),
 	)
 	return cmd
 }
@@ -169,6 +171,70 @@ func newCloudInitDeleteCommand(flags *globalFlags) *cobra.Command {
 			return err
 		},
 	}
+}
+
+// newCloudInitImportRepoCommand is `anvil cloud-init import-repo
+// <manifest-url>`: bulk-imports a whole repo of ready-made cloud-init
+// templates into the saved library in one shot — see docs/mirrors.md's
+// "cloud-init template repos" section for the manifest shape and how to
+// host your own. Fetched daemon-side (ImportRepo), same reasoning as a
+// VM mirror's manifest: one implementation instead of a second copy of
+// this fetch logic in the TUI's own Cloud-Init view.
+func newCloudInitImportRepoCommand(flags *globalFlags) *cobra.Command {
+	var force bool
+	cmd := &cobra.Command{
+		Use:   "import-repo <manifest-url>",
+		Short: "Bulk-import cloud-init templates from a repo manifest",
+		Long: "Fetch a repo manifest and save every template it lists into the saved " +
+			"library. A name that's already in the library is left alone unless " +
+			"--force is given; a template that fails to fetch or save doesn't stop " +
+			"the rest of the repo from importing. See docs/mirrors.md for the " +
+			"manifest shape and how to host a repo of your own.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := dial(flags)
+			if err != nil {
+				return err
+			}
+			defer c.Close()
+
+			stream, err := c.CloudInit.ImportRepo(cmd.Context(), &anvilv1.CloudInitImportRepoRequest{
+				ManifestUrl: args[0],
+				Force:       force,
+			})
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			for {
+				ev, err := stream.Recv()
+				if err == io.EOF {
+					return nil
+				}
+				if err != nil {
+					return err
+				}
+				switch e := ev.GetEvent().(type) {
+				case *anvilv1.CloudInitImportRepoProgress_Status:
+					fmt.Fprintln(out, e.Status)
+				case *anvilv1.CloudInitImportRepoProgress_Error:
+					return fmt.Errorf("%s", e.Error)
+				case *anvilv1.CloudInitImportRepoProgress_Imported:
+					r := e.Imported
+					switch {
+					case r.GetError() != "":
+						fmt.Fprintf(out, "%s: FAILED: %s\n", r.GetName(), r.GetError())
+					case r.GetSkipped():
+						fmt.Fprintf(out, "%s: skipped (already exists, use --force to overwrite)\n", r.GetName())
+					default:
+						fmt.Fprintf(out, "%s: imported\n", r.GetName())
+					}
+				}
+			}
+		},
+	}
+	cmd.Flags().BoolVar(&force, "force", false, "overwrite a saved config that already has this name")
+	return cmd
 }
 
 // editInEditor writes initial to a temp file, opens $EDITOR (falling back

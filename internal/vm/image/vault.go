@@ -114,7 +114,15 @@ type qemuImgInfo struct {
 }
 
 func qemuImgInspect(path string) (qemuImgInfo, error) {
-	cmd := exec.Command("qemu-img", "info", "--output=json", path)
+	// -U/--force-share: a running instance's qemu-system-x86_64 holds a
+	// shared "write" lock on its own disk.qcow2 (QEMU's image-locking
+	// feature, active since QEMU 2.10). Without -U, qemu-img info on that
+	// same file fails outright ("Failed to get shared \"write\" lock"),
+	// which made usersOf silently skip every *running* instance's disk —
+	// exactly the ones this in-use check most needs to catch. -U opens the
+	// image read-only in shared mode, which is safe here since this is a
+	// pure metadata read, never a write.
+	cmd := exec.Command("qemu-img", "info", "-U", "--output=json", path)
 	out, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {

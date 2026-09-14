@@ -4,6 +4,7 @@ import (
 	"context"
 
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
+	"github.com/anvil-project/anvil/internal/cloudinitrepo"
 	"github.com/anvil-project/anvil/internal/store"
 )
 
@@ -66,4 +67,51 @@ func (s *CloudInitServer) Delete(ctx context.Context, req *anvilv1.CloudInitDele
 		return nil, err
 	}
 	return &anvilv1.CloudInitDeleteReply{}, nil
+}
+
+// ImportRepo fetches manifestURL (see docs/mirrors.md's "cloud-init
+// template repos" section) and saves each listed template into the
+// library, one CloudInitImportResult per template so a failure fetching
+// or saving any single one doesn't stop the rest of the repo from
+// importing. A manifest that can't be fetched or parsed at all is the
+// one thing that ends the stream outright — there's nothing to import
+// from it either way.
+func (s *CloudInitServer) ImportRepo(req *anvilv1.CloudInitImportRepoRequest, stream anvilv1.CloudInitService_ImportRepoServer) error {
+	send := func(ev *anvilv1.CloudInitImportRepoProgress) { _ = stream.Send(ev) }
+
+	manifest, err := cloudinitrepo.FetchManifest(req.GetManifestUrl())
+	if err != nil {
+		send(&anvilv1.CloudInitImportRepoProgress{Event: &anvilv1.CloudInitImportRepoProgress_Error{Error: err.Error()}})
+		return err
+	}
+
+	for _, t := range manifest.Templates {
+		if !req.GetForce() {
+			if _, err := s.Store.GetCloudInit(t.Name); err == nil {
+				send(&anvilv1.CloudInitImportRepoProgress{Event: &anvilv1.CloudInitImportRepoProgress_Imported{
+					Imported: &anvilv1.CloudInitImportResult{Name: t.Name, Skipped: true},
+				}})
+				continue
+			}
+		}
+
+		send(&anvilv1.CloudInitImportRepoProgress{Event: &anvilv1.CloudInitImportRepoProgress_Status{Status: "fetching " + t.Name}})
+		content, err := cloudinitrepo.FetchTemplate(t.URL)
+		if err != nil {
+			send(&anvilv1.CloudInitImportRepoProgress{Event: &anvilv1.CloudInitImportRepoProgress_Imported{
+				Imported: &anvilv1.CloudInitImportResult{Name: t.Name, Error: err.Error()},
+			}})
+			continue
+		}
+		if err := s.Store.SaveCloudInit(t.Name, content); err != nil {
+			send(&anvilv1.CloudInitImportRepoProgress{Event: &anvilv1.CloudInitImportRepoProgress_Imported{
+				Imported: &anvilv1.CloudInitImportResult{Name: t.Name, Error: err.Error()},
+			}})
+			continue
+		}
+		send(&anvilv1.CloudInitImportRepoProgress{Event: &anvilv1.CloudInitImportRepoProgress_Imported{
+			Imported: &anvilv1.CloudInitImportResult{Name: t.Name},
+		}})
+	}
+	return nil
 }

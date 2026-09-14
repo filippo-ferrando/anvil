@@ -1386,6 +1386,55 @@ without `sudo cat` anyway).
       `internal/migrate`'s own host-to-host SSH calls, deliberately: those never
       request a pty in the first place (`BatchMode=yes`, no interactive session),
       so there's no terminal-capability negotiation for this to affect there at all.
+- [x] **cloud-init template repos, requested explicitly**: `anvil cloud-init
+      import-repo <manifest-url> [--force]` bulk-imports a whole repo of ready-made
+      cloud-init templates into the saved library in one shot (`nginx-tls`,
+      `postgres-16`, that kind of thing), and the Cloud Init screen's new `R` key
+      does the same from the TUI (a form for the manifest URL plus a Force toggle,
+      then a streamed per-template result view, reusing the same
+      `appendProgressLine` grouping and "receive one, re-issue the next as a Cmd"
+      streaming pattern already used everywhere else in the TUI). Fetched
+      **daemon-side** (`CloudInitServer.ImportRepo`, a new streaming RPC), same
+      reasoning as a VM mirror's manifest fetch: one implementation instead of a
+      second copy of the HTTP-fetch/manifest-parse logic in the TUI. New
+      pure-stdlib package `internal/cloudinitrepo` (mirrors `internal/vm/image`'s
+      manifest-handling shape) owns `FetchManifest`/`FetchTemplate` and the
+      `{"schema_version", "templates": [{"name", "description", "url"}]}` schema,
+      with the same "reject an unrecognized schema_version outright" rule the VM
+      mirror manifest already uses. A per-template fetch/save failure doesn't stop
+      the rest of the repo from importing (each gets its own result: imported/
+      skipped/failed); only a manifest fetch/parse failure ends the stream, since
+      there's nothing to import from it either way. `internal/cloudinitrepo` has 6
+      real `httptest`-backed tests, all passing. See `docs/mirrors.md`'s "Cloud-init
+      template repos" section for the manifest shape and how to host one, this is
+      the cloud-init-templates half of the "remote catalog" planning note below,
+      now done. **Needs `make proto`** (new `CloudInitService.ImportRepo` RPC plus
+      `CloudInitImportRepoRequest`/`CloudInitImportRepoProgress`/
+      `CloudInitImportResult` messages) before the next rebuild, same as every
+      other proto change this session, not yet build-tested.
+- [x] **the "in-use" flag on `anvil image list` was still wrong, confirmed by
+      filippo on real hardware after the first attempted fix**: a running
+      `test-arch` VM booted straight off the `archlinux` cached image, but
+      `anvil image list` kept reporting `in use: no` for it. The earlier fix
+      this session (a symlink-aware `samePath` in `usersOf`, `internal/daemon/
+      image_server.go`) was a defensive guess made without being able to
+      reproduce the bug, and it wasn't the real cause. Root-caused this time by
+      actually reproducing it: booted a real `qemu-system-x86_64` against a
+      test qcow2 overlay, then ran `qemu-img info` on that same file from
+      another process. It fails outright, with `Failed to get shared "write"
+      lock`, because QEMU's own image-locking (active since QEMU 2.10) holds a lock
+      on a disk while it's running. `usersOf` calls `image.BackingFile`, which
+      shells out to exactly that `qemu-img info` call to read an overlay's
+      backing-file path; on any *running* instance it was failing, and the
+      "best-effort, skip what can't be inspected" handling around it was
+      silently treating that failure as "this instance doesn't use this
+      image", precisely backwards, since a running instance is the one case
+      that most needs to be counted. Fixed with `-U`/`--force-share` on that
+      `qemu-img info` invocation (`internal/vm/image/vault.go`), which opens
+      the image read-only in shared mode; safe here since this call only ever
+      reads metadata, never writes. `samePath` stays in place too (harmless,
+      and a real defense if `PreparedImageDir` ever sits behind a symlink), but
+      the lock issue was the actual bug.
 
 ## Things we already know are unresolved
 
@@ -1411,7 +1460,10 @@ without `sudo cat` anyway).
 
 ## Planned, not started: a remote catalog instead of an embedded one
 
-Two related asks, not implemented yet, just written down so they don't get lost:
+One of the two asks below (ready-made cloud-init templates, fetchable from a repo) is
+now implemented, in a different shape than originally speculated here; see the
+"done" note under it. The other (the embedded distro catalog itself becoming
+runtime-fetched) is still not started.
 
 - **`data/distros/distribution-info.json` shouldn't be embedded in the binary.** Right
   now the built-in catalog is baked in at compile time (`image.LoadEmbedded`, a Go
@@ -1422,21 +1474,24 @@ Two related asks, not implemented yet, just written down so they don't get lost:
   needs some catalog to launch anything at all). Needs: a real place to fetch it from
   (see below), a refresh/cache strategy (don't re-fetch on every single launch), and
   the existing `schema_version` check already guards against a fetched manifest this
-  build doesn't understand.
+  build doesn't understand. **Still not started**: the VM mirror mechanism (§Image
+  catalog and mirrors) already covers "add one more catalog source at runtime," but the
+  embedded default itself still only ever changes via a rebuild.
 - **A real place for anvil to search for cloud images and cloud-init templates,
-  online** could live in this same repo (a `catalog/` directory or similar,
-  published via GitHub raw/releases rather than baked into the Go binary) rather than
-  standing up separate infrastructure. Two related pieces:
-  - the `distribution-info.json` catalog itself, moved here instead of embedded, so
-    updating it is a normal commit+push, not a new anvil release.
-  - a set of ready-made cloud-init configs for common self-hosted services (nginx,
-    postgres, and similar; real starter templates, not just the distro-boot configs
-    the embedded catalog already covers), fetchable the same way a VM mirror manifest
-    already is (`anvil mirror add --kind vm --manifest-url ...`), so this becomes
-    "one more mirror" conceptually rather than a whole new subsystem, and `anvil
-    cloud-init import`/the saved library already has somewhere to put what gets
-    fetched.
-  Not designed further than this yet: exact directory layout, whether templates get
-  their own manifest schema alongside `distribution-info.json`'s, and how discovery
-  surfaces in the CLI/TUI (an `anvil find --templates` alongside the existing
-  `anvil find`, most likely, given the catalog/mirror parallel above).
+  online** could live in this same repo (a `catalog/` directory or similar, published
+  via GitHub raw/releases rather than baked into the Go binary) rather than standing up
+  separate infrastructure.
+  - The distro-catalog half of this is the bullet just above, still not started.
+  - **The cloud-init-templates half is done, M8**, as `anvil cloud-init import-repo
+    <manifest-url>` / the Cloud Init screen's `R` key (see M8's own entry for the
+    implementation). It ended up as its own small package (`internal/cloudinitrepo`)
+    and manifest schema (`{"schema_version", "templates": [{"name", "description",
+    "url"}]}`) rather than "one more VM mirror kind" as originally speculated here:
+    a template repo is a one-shot bulk-import into the saved cloud-init library, not a
+    standing, re-consulted catalog source the way a VM mirror is, so reusing
+    `anvil mirror` for it would have been a poor fit (nothing to `list`/`enable`/
+    `disable` afterward, once imported a template is just a normal saved config).
+    See `docs/mirrors.md`'s "Cloud-init template repos" section for the manifest shape,
+    a worked hosting example, and how to create one. No `anvil find --templates`
+    equivalent exists (or is needed): the saved library's own `anvil cloud-init list`
+    already shows imported templates alongside hand-written ones, indistinguishably.
