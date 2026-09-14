@@ -193,6 +193,7 @@ func (m model) updateCloudInitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "esc":
 			ci.editing = false
+			ci.editor.Blur()
 			return m, nil
 		case "ctrl+s":
 			if ci.current == "" {
@@ -250,6 +251,7 @@ func (m model) updateCloudInitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "e":
 		if ci.current != "" {
 			ci.editing = true
+			return m, ci.editor.Focus()
 		}
 		return m, nil
 	}
