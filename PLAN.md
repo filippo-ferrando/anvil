@@ -802,6 +802,29 @@ Rough order, each milestone should leave you with something you can actually run
       confirmation predates M6's non-root daemon, though: M6 introduced a real
       regression here (tap creation cgroup-denied, see M6's `DeviceAllow=/dev/net/tun`
       note), now fixed.
+- [x] **a real bug the "confirmed for real" pass above didn't actually catch, found on a
+      later real Arch Linux guest boot**: `bridgeNetworkConfig`'s generated cloud-init
+      network-config matched the guest NIC by `name: "en*"`, assuming systemd's
+      "predictable network interface names" scheme (`enp0s3` and similar). A real Arch
+      Linux cloud image named its NIC plain `eth0` instead, which `"en*"` never matches
+      at all, so the static IP was silently never applied: the guest booted with its NIC
+      completely unconfigured (`ci-info` showed it `Up: False`), and every connection
+      attempt failed with `No route to host`, even `anvil shell` run directly on the
+      anvil host itself (ruling out a host-side bridge/routing problem: the guest
+      genuinely had no address). This is exactly the kind of guest-naming assumption
+      the code's own doc comment had flagged as unverified, and it turned out to be
+      wrong the first time a non-Ubuntu image actually exercised it.
+      Fixed by matching on MAC address instead of interface name, which works
+      regardless of what the guest calls the NIC: `qemu.Config` gained a `MACAddress`
+      field, passed to the NIC device explicitly (`-device virtio-net-pci,...,mac=...`)
+      instead of leaving QEMU to pick one at random each boot; a new
+      `macFromInstanceID` derives a stable MAC (in QEMU's own `52:54:00` OUI, so it
+      still looks like a normal auto-assigned one) from the instance ID alone, so the
+      exact same value is available both when building the QEMU args and when
+      generating the network-config, with nothing new to persist on the spec. Real
+      tests: `TestBuildArgsBridgeTapWithMAC`/`TestBuildArgsBridgeTapWithoutMAC` in
+      `internal/vm/qemu`, both passing for real (this package has no non-stdlib
+      dependencies, unlike the rest of `internal/vm`)
 - [x] **name resolution**: container members now also get a Docker network alias equal
       to their role (peers resolve `web`, not `anvil-web`, via Docker's own embedded DNS,
       which already worked, this just fixes the name). VM members get `/etc/hosts`
@@ -1304,6 +1327,65 @@ without `sudo cat` anyway).
       (`ImageService.Catalog`), `tab` to switch which panel has focus, `x` to
       delete a cached image (confirm overlay, cached only; a catalog entry isn't
       anything to delete), `r` to refresh both.
+- [x] Intents page (also missing outright): list every intent (name, member count,
+      shared network if it has one), `i`/`enter` shows each member's role/kind,
+      `x` removes the group with the same recoverable-vs-purge-members choice
+      `anvil intent delete [--purge-members]` gives. No separate "create" action,
+      same as the CLI: an intent comes into existence the first time something is
+      launched with `--intent`, from the Launch form.
+- [x] Logs screen (also missing outright): unlike shell/exec, `InstanceService.Logs`
+      is a plain gRPC server-streaming RPC the daemon answers directly (a VM's
+      console/boot output, or a container's stdout/stderr), no SSH, no
+      `docker`/`podman exec`, no `tea.ExecProcess` terminal handoff at all, just
+      chunks streamed straight into a scrollable `bubbles/viewport`, the same
+      pattern the launch/migration screens already use for their own progress.
+      `f` toggles follow (auto-scroll to the bottom on new data; turned off
+      automatically the moment the user scrolls up manually, so reading something
+      that already streamed past doesn't get yanked back to the bottom).
+- [x] delete-with-purge, mount/umount, exec, and an SSH-user override for shell were
+      all missing from the Instances screen (`DeleteRequest` already had a `purge`
+      field, `anvil mount`/`umount`/`exec --user` already existed CLI-side, just not
+      exposed here), added as `D`/`m`/`M`/`e`/`x`-with-a-user-prompt.
+- [x] the status line used to just sit there forever until the next action
+      overwrote it, reading as stale rather than as feedback for whatever just
+      happened; a recurring `tea.Tick` (started once in `Init`, re-armed every
+      second) now clears it ~4 seconds after `setStatus` runs, without needing to
+      thread a `tea.Cmd` through every one of `setStatus`'s many call sites.
+- [x] the launch/migration progress screens used to print one line per status
+      update, exactly the "one line per tick" problem the CLI's own progress
+      display had already solved once (see M2's `progressKey` notes), ported that
+      same grouping logic into the TUI (`internal/tui/parse.go`'s
+      `appendProgressLine`): consecutive updates for the same phase (an image
+      download's percentage ticking up, a migration's upload heartbeat) now redraw
+      the same line instead of each becoming a new one.
+- [x] **a real issue, found and fixed, initial diagnosis revised**: shell/exec (both
+      use `tea.ExecProcess` to hand the real terminal to `ssh`/`docker exec`/
+      `podman exec`) could leave stray terminal escape sequences printed as literal
+      garbage after the session ended, caught on a real run: output like
+      `␛P1+r6E616D65=787465726d2d6b69747479␛\␛[8;50;188t␛[50;188R`. Decoded, these
+      are a terminal's own responses to capability-detection queries (an
+      XTGETTCAP request for the terminal's name, here answered "xterm-kitty"; a
+      window-size-in-characters report; cursor-position reports). First guess was
+      that this was Bubble Tea's own internal terminal-capability querying racing
+      with `tea.ExecProcess`'s handoff; filippo's own read was more precise: this
+      is kitty terminal's shell integration, which activates on seeing
+      `TERM=xterm-kitty` and queries capabilities in a way that doesn't play well
+      once that TERM value propagates into a nested SSH session (or survives a
+      suspend/resume). Fixed the way kitty's own documentation recommends for
+      exactly this "ssh elsewhere from inside kitty" friction: force
+      `SetEnv=TERM=xterm-256color` on every `ssh` invocation anvil itself makes
+      (`anvil shell`/`exec`, and the TUI's own copy of the same), overriding
+      whatever the local terminal would otherwise send, regardless of what it
+      actually is. Paired with `IgnoreUnknown=WarnWeakCrypto` +
+      `WarnWeakCrypto=no-pq-kex` (a newer OpenSSH keyword suppressing a
+      post-quantum-KEX warning some sessions were also getting; `IgnoreUnknown`
+      means an older ssh client that doesn't recognize it yet just skips it rather
+      than refusing to start). Verified against a real installed `ssh` (OpenSSH
+      10.5p1) via `ssh -G` (dumps the effective config without connecting): all
+      three keywords parse and apply as intended. Not applied to
+      `internal/migrate`'s own host-to-host SSH calls, deliberately: those never
+      request a pty in the first place (`BatchMode=yes`, no interactive session),
+      so there's no terminal-capability negotiation for this to affect there at all.
 
 ## Things we already know are unresolved
 

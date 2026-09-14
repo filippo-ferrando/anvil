@@ -92,6 +92,13 @@ type migrateStreamMsg struct {
 	done   bool
 }
 
+type logsStreamMsg struct {
+	stream anvilv1.InstanceService_LogsClient
+	data   []byte
+	err    error
+	done   bool
+}
+
 func loadInstances(c *client.Client) tea.Cmd {
 	return func() tea.Msg {
 		reply, err := c.List(context.Background(), &anvilv1.ListRequest{})

@@ -123,6 +123,13 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.launch = newLaunchModel()
 		m.launch.form.SetHeight(contentHeight(m.height) - 2)
 		return m, nil
+	case "l":
+		if inst := m.selectedInstance(); inst != nil {
+			m.screen = screenLogs
+			m.logs = newLogsModel(inst, m.width, contentHeight(m.height))
+			return m, startLogsStream(m.client, inst.GetName())
+		}
+		return m, nil
 	case "r":
 		m.instances.loading = true
 		return m, loadInstances(m.client)
@@ -255,7 +262,7 @@ func (m instancesModel) View() string {
 	}
 	return body + "\n" + helpBar(
 		"n", "launch", "s", "start/stop", "d", "delete", "x", "shell",
-		"e", "exec", "m", "mount", "M", "umount", "r", "refresh", "esc", "back",
+		"e", "exec", "m", "mount", "M", "umount", "l", "logs", "r", "refresh", "esc", "back",
 	)
 }
 

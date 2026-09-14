@@ -128,6 +128,23 @@ func sshKnownHostsPath(instanceID string) (string, error) {
 // private key ssh tries doesn't match whatever public key actually got
 // authorized by --ssh-key) — passing an explicit path sidesteps that
 // instead of relying on ssh's own default-identity guessing.
+// ttyCompatSSHArgs are extra -o flags that keep a local terminal's own
+// quirks from leaking into the guest/remote session: SetEnv=TERM=...
+// overrides whatever $TERM the local terminal itself would otherwise
+// send (kitty's own "xterm-kitty" being the real case this fixes — its
+// shell integration queries terminal capabilities in a way that produced
+// literal escape-sequence garbage in `anvil shell`/`exec`, and TUI's own
+// suspend/resume around it, once the reply arrived late). IgnoreUnknown
+// paired with WarnWeakCrypto means an ssh client too old to recognize
+// that specific keyword just skips it instead of refusing to start at
+// all — this whole list needs to keep working on an ssh that doesn't
+// know a given keyword yet, not just the newest one.
+var ttyCompatSSHArgs = []string{
+	"-o", "SetEnv=TERM=xterm-256color",
+	"-o", "IgnoreUnknown=WarnWeakCrypto",
+	"-o", "WarnWeakCrypto=no-pq-kex",
+}
+
 func commonSSHArgs(target sshTarget, portFlag, identity string) ([]string, error) {
 	knownHosts, err := sshKnownHostsPath(target.InstanceID)
 	if err != nil {
@@ -143,6 +160,7 @@ func commonSSHArgs(target sshTarget, portFlag, identity string) ([]string, error
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", "UserKnownHostsFile=" + knownHosts,
 	}
+	args = append(args, ttyCompatSSHArgs...)
 	if identity != "" {
 		args = append(args, "-i", identity)
 	}

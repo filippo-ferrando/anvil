@@ -142,6 +142,15 @@ This is early. Here's what's actually real right now, versus what's just designe
 - `anvil intent delete` now removes the intent's Docker network too, not just the group
   record, best-effort: a member still attached to it (not purged, or a VM tap still on
   the bridge) will likely make Docker refuse, which is logged and not fatal to the delete
+- **a real bug the "confirmed for real" pass above didn't catch**: the generated
+  cloud-init network-config matched a bridged VM's NIC by `name: "en*"`, assuming
+  systemd's predictable interface naming. A real Arch Linux guest named its NIC plain
+  `eth0`, which never matched, so the static IP was silently never applied: the guest
+  booted with its NIC down, and every connection failed with "No route to host," even
+  `anvil shell` run right on the anvil host itself. Fixed by matching on MAC address
+  instead (a new, stable, per-instance MAC passed explicitly to QEMU), which works no
+  matter what the guest calls its NIC. Real tests, passing for real (this bit of code
+  lives in `internal/vm/qemu`, which has no non-stdlib dependencies)
 - **members can resolve each other by name now, not just IP**: containers already got
   this for free from Docker's own embedded DNS, but only under anvil's internal
   `anvil-<name>` container name; they now also get a network alias equal to their plain
@@ -308,10 +317,29 @@ easier:**
   screen showing cached images and the catalog side by side
 - shell/SSH handoff via `tea.ExecProcess`, Bubble Tea's own supported way to
   suspend the program, hand the real terminal to an `ssh` subprocess, and resume
-  automatically when it exits
+  automatically when it exits, plus `exec` (a one-off command instead of a login
+  shell, works for containers too) and mount/umount, previously missing from the TUI
+  entirely
+- an Intents page and a Logs page, both missing outright before. Logs streams
+  straight from the daemon's own RPC into a scrollable view, no SSH/exec handoff at
+  all, so it doesn't share shell/exec's one known issue (see below)
+- delete now offers permanent removal (`DeleteRequest.purge`, already existed,
+  just wasn't exposed), the status line clears itself after a few seconds instead of
+  sitting there forever, and download/pull/upload progress redraws in place instead
+  of printing a new line per tick (ported the CLI's own fix for the same problem)
 - pulled anvil's own default guest-access SSH key management out of
   `internal/cli/commands` into a new small package, `internal/sshkey`, so the launch
   form and the CLI's own `anvil launch` share one implementation instead of two
+- **fixed, initial diagnosis was wrong**: shell/exec could leave stray terminal
+  escape sequences printed as literal garbage after the session ended. First guess
+  was Bubble Tea's own terminal-capability querying racing with `tea.ExecProcess`;
+  the real cause (per filippo) is kitty terminal's shell integration reacting to
+  `TERM=xterm-kitty` propagating into a nested SSH session. Fixed with the fix
+  kitty's own docs recommend: force `SetEnv=TERM=xterm-256color` on every `ssh`
+  anvil itself runs, regardless of the local terminal, plus
+  `IgnoreUnknown=WarnWeakCrypto`/`WarnWeakCrypto=no-pq-kex` for a newer OpenSSH
+  post-quantum-KEX warning some sessions were also hitting. Verified against a real
+  `ssh -G` config dump (OpenSSH 10.5p1): all three parse and apply correctly
 - **still can't build here**: no network access to fetch
   `github.com/charmbracelet/bubbletea`/`bubbles`/`lipgloss`, so `go.mod` doesn't
   pin them from this sandbox; `make tui-deps` (plus `make proto` again, for the

@@ -18,6 +18,24 @@ import (
 // can show a status line instead of silently swallowing a failure.
 type shellDoneMsg struct{ err error }
 
+// ttyCompatSSHArgs are extra -o flags that keep a local terminal's own
+// quirks from leaking into the guest session: SetEnv=TERM=... overrides
+// whatever $TERM the local terminal itself would otherwise send (kitty's
+// own "xterm-kitty" being the real case this fixes — its shell
+// integration queries terminal capabilities in a way that produced
+// literal escape-sequence garbage after a suspended shell/exec session
+// resumed the TUI, once the reply arrived late). IgnoreUnknown paired
+// with WarnWeakCrypto means an ssh client too old to recognize that
+// specific keyword just skips it instead of refusing to start at all.
+// Same small copy internal/cli/commands/ssh.go has, for the same reason
+// as knownHostsPath: this package only reuses pkg/client, not
+// internal/cli/commands.
+var ttyCompatSSHArgs = []string{
+	"-o", "SetEnv=TERM=xterm-256color",
+	"-o", "IgnoreUnknown=WarnWeakCrypto",
+	"-o", "WarnWeakCrypto=no-pq-kex",
+}
+
 // shellInto is the M8 checklist's "shell/SSH handoff": tea.ExecProcess is
 // Bubble Tea's own supported way to suspend the program, hand the real
 // terminal to an external process, and resume automatically when it
@@ -107,8 +125,9 @@ func buildShellCommand(inst *anvilv1.Instance, user string, command []string) (*
 		"-i", identity,
 		"-o", "StrictHostKeyChecking=accept-new",
 		"-o", "UserKnownHostsFile=" + knownHosts,
-		fmt.Sprintf("%s@%s", user, host),
 	}
+	args = append(args, ttyCompatSSHArgs...)
+	args = append(args, fmt.Sprintf("%s@%s", user, host))
 	args = append(args, command...)
 
 	cmd := exec.Command(sshBin, args...)

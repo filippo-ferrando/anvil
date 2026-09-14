@@ -6,6 +6,7 @@ package vm
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log"
@@ -251,7 +252,7 @@ func (b *Backend) buildSeed(spec *instance.Spec) error {
 	metaData := fmt.Sprintf("instance-id: %s-gen%d\nlocal-hostname: %s\n", spec.ID, v.Generation, spec.Name)
 
 	seedPath := filepath.Join(dir, "seed.iso")
-	seed := cloudinit.Seed{UserData: userData, MetaData: metaData, NetworkConfig: bridgeNetworkConfig(v)}
+	seed := cloudinit.Seed{UserData: userData, MetaData: metaData, NetworkConfig: bridgeNetworkConfig(v, macFromInstanceID(spec.ID))}
 	if err := b.Seed.Build(seed, seedPath); err != nil {
 		return fmt.Errorf("vm: building cloud-init seed: %w", err)
 	}
@@ -294,6 +295,7 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 			return fmt.Errorf("vm: attaching to bridge %s: %w", v.BridgeInterface, err)
 		}
 		cfg.BridgeTapDevice = tapName
+		cfg.MACAddress = macFromInstanceID(spec.ID)
 		v.SSHPort = 0
 	} else {
 		// SLIRP with an SSH host-forward, the default for a standalone
@@ -779,12 +781,18 @@ func mergeExtraHosts(existing string, hosts map[string]string) (string, error) {
 // the default) — SLIRP's own built-in DHCP needs no guest-side
 // configuration at all, so there's nothing to generate in that case.
 //
-// Matches on "en*" rather than a fixed device name like "eth0": a virtio
-// NIC under QEMU's q35 machine type typically gets a systemd predictable
-// name like "enp0s3" on a modern cloud image, not "eth0", and there's
-// only ever one NIC to match here anyway. Not verified against a real
-// guest boot yet — see PLAN.md's M4 notes.
-func bridgeNetworkConfig(v *instance.VMSpec) string {
+// Matches by macaddress (mac, the exact value also passed to QEMU's NIC
+// device via qemu.Config.MACAddress, see Start), not by interface name —
+// a real bug, caught on a real guest boot: this used to match on
+// name: "en*", assuming systemd's "predictable network interface names"
+// scheme (enp0s3 and similar). A real Arch Linux cloud image named its
+// NIC plain "eth0" instead, which "en*" never matches at all, so the
+// static IP was silently never applied — the guest booted with its NIC
+// completely unconfigured (down, no address), and every connection to it
+// failed with "No route to host," even from the anvil host itself.
+// Matching by MAC sidesteps guest interface naming entirely: it works
+// regardless of what the guest calls the interface.
+func bridgeNetworkConfig(v *instance.VMSpec, mac string) string {
 	if v.NetworkMode != "bridge" || v.StaticIP == "" {
 		return ""
 	}
@@ -793,11 +801,25 @@ func bridgeNetworkConfig(v *instance.VMSpec) string {
   ethernets:
     anvil0:
       match:
-        name: "en*"
+        macaddress: "%s"
       dhcp4: false
       addresses: [%s]
       gateway4: %s
-`, v.StaticIP, v.Gateway)
+`, mac, v.StaticIP, v.Gateway)
+}
+
+// macFromInstanceID derives a deterministic MAC address from id, always
+// within QEMU's own conventional locally-administered OUI (52:54:00) so
+// it looks exactly like the MAC QEMU would have auto-assigned anyway —
+// just stable across a stop/start cycle and known ahead of time, instead
+// of picked fresh by QEMU on every boot. Needed so bridgeNetworkConfig's
+// generated network-config can be told exactly which NIC to configure
+// (see its own doc comment for the bug this fixes) — the same instance
+// ID going in every time means the same MAC comes out every time, so
+// there's nothing to persist separately on the spec.
+func macFromInstanceID(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return fmt.Sprintf("52:54:00:%02x:%02x:%02x", sum[0], sum[1], sum[2])
 }
 
 func kvmAvailable() bool {

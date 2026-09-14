@@ -66,6 +66,7 @@ const (
 	screenMirrors
 	screenMigration
 	screenLaunch // not in the sidebar: a full-screen takeover reached via Instances' "n", not a nav destination
+	screenLogs   // same: reached via Instances' "l"
 )
 
 // screenOrder is the sidebar's own list, top to bottom.
@@ -107,6 +108,7 @@ type model struct {
 	images    imagesModel
 	intents   intentsModel
 	launch    launchModel
+	logs      logsModel
 	cloudInit cloudInitModel
 	mirrors   mirrorsModel
 	migration migrationModel
@@ -177,13 +179,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mirrors.list.SetSize(contentWidth-2, h)
 		m.migration.setSize(contentWidth, h)
 		m.migration.migrateForm.SetHeight(h - 2)
-		m.launch.form.SetHeight(contentHeight(msg.Height) - 2) // launch is a full-width takeover, not squeezed by the sidebar
+		// launch/logs are both full-width takeovers, not squeezed by the sidebar.
+		m.launch.form.SetHeight(contentHeight(msg.Height) - 2)
+		m.logs.viewport.Width, m.logs.viewport.Height = msg.Width, contentHeight(msg.Height)-2
 		return m, nil
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
-		if m.screen != screenLaunch && m.sidebarFocused {
+		if m.screen != screenLaunch && m.screen != screenLogs && m.sidebarFocused {
 			return m.updateSidebar(msg)
 		}
 	}
@@ -203,6 +207,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateIntents(msg)
 	case screenLaunch:
 		return m.updateLaunch(msg)
+	case screenLogs:
+		return m.updateLogs(msg)
 	case screenCloudInit:
 		return m.updateCloudInit(msg)
 	case screenMirrors:
@@ -272,10 +278,14 @@ func (m model) View() string {
 	header := styleTitle.Render(" anvil ") + styleSubtitle.Render(fmt.Sprintf("  %s  socket=%s", m.who, m.socket))
 
 	var body string
-	if m.screen == screenLaunch {
-		// A full-screen takeover: no sidebar, matching how it's reached
-		// (Instances' "n") and left (submit or Esc, back to Instances).
-		body = m.launch.View()
+	if m.screen == screenLaunch || m.screen == screenLogs {
+		// A full-screen takeover: no sidebar, matching how each is reached
+		// (Instances' "n"/"l") and left (Esc, back to Instances).
+		if m.screen == screenLaunch {
+			body = m.launch.View()
+		} else {
+			body = m.logs.View()
+		}
 	} else {
 		content := m.screenView()
 		body = lipgloss.JoinHorizontal(lipgloss.Top, m.sidebarView(), strings.Repeat(" ", sidebarGutter), content)

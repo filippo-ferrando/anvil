@@ -71,6 +71,40 @@ func TestBuildArgsBridgeTap(t *testing.T) {
 	}
 }
 
+func TestBuildArgsBridgeTapWithMAC(t *testing.T) {
+	args, err := BuildArgs(Config{
+		DiskPath:        "/d",
+		QMPSocket:       "/q",
+		BridgeTapDevice: "anvil-tap0",
+		MACAddress:      "52:54:00:ab:cd:ef",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "virtio-net-pci,netdev=net0,mac=52:54:00:ab:cd:ef") {
+		t.Errorf("expected the NIC device to carry the given MAC, got: %s", joined)
+	}
+}
+
+func TestBuildArgsBridgeTapWithoutMAC(t *testing.T) {
+	// SLIRP mode already has no need for a fixed MAC (no guest-side static
+	// config to match against); confirms an unset MACAddress doesn't leak
+	// a stray ",mac=" suffix onto the device either.
+	args, err := BuildArgs(Config{
+		DiskPath:        "/d",
+		QMPSocket:       "/q",
+		BridgeTapDevice: "anvil-tap0",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "mac=") {
+		t.Errorf("expected no mac= suffix when MACAddress is unset, got: %s", joined)
+	}
+}
+
 func TestBuildArgsSerialLog(t *testing.T) {
 	noLog, err := BuildArgs(Config{DiskPath: "/d", QMPSocket: "/q"})
 	if err != nil {

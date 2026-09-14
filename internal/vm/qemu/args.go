@@ -23,6 +23,16 @@ type Config struct {
 	SLIRPHostForwards []HostForward // -netdev user,hostfwd=...
 	BridgeTapDevice   string        // name of an already-created tap device to attach to
 
+	// MACAddress, when set, is passed to the NIC device explicitly
+	// instead of letting QEMU pick one itself — needed for a bridged
+	// (BridgeTapDevice) NIC specifically, so the cloud-init network-config
+	// generated for it (internal/vm.Backend's bridgeNetworkConfig) can
+	// match this exact interface by MAC, sidestepping guest interface
+	// *naming* entirely (see that function's doc comment for the real bug
+	// this fixes). Empty for SLIRP, which has no guest-side static config
+	// to match against in the first place.
+	MACAddress string
+
 	// Mounts are 9p host-directory shares — see Mount's doc comment for why
 	// this is 9p rather than virtiofs, and why there's no way to add one to
 	// an already-running instance without a restart.
@@ -156,9 +166,13 @@ func buildMounts(mounts []Mount) []string {
 
 func buildNetdev(cfg Config) ([]string, error) {
 	if cfg.BridgeTapDevice != "" {
+		device := "virtio-net-pci,netdev=net0"
+		if cfg.MACAddress != "" {
+			device += ",mac=" + cfg.MACAddress
+		}
 		return []string{
 			"-netdev", fmt.Sprintf("tap,id=net0,ifname=%s,script=no,downscript=no", cfg.BridgeTapDevice),
-			"-device", "virtio-net-pci,netdev=net0",
+			"-device", device,
 		}, nil
 	}
 
