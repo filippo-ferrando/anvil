@@ -111,7 +111,7 @@ custom distro image (or a faster re-hosted copy of an existing one) from a plain
 file server.
 
 1. **Get the qcow2 image onto some HTTP host.** Anything that can serve a static file
-   over HTTP(S) works — S3/GCS/a bucket with public or VPN-only access, an nginx
+   over HTTP(S) works: S3/GCS/a bucket with public or VPN-only access, an nginx
    `autoindex`'d directory, a GitHub Pages site, even a `python3 -m http.server` for a
    quick test. anvil only ever does a plain `GET`, no special headers or auth scheme
    assumed, so anything requiring e.g. a signed URL or a login form in front of it won't
@@ -131,7 +131,7 @@ file server.
    ```
 
 3. **Write the manifest**, `distros.json`, next to it (or anywhere else reachable by
-   URL — it doesn't need to be on the same host as the images). One entry per image;
+   URL, it doesn't need to be on the same host as the images). One entry per image;
    `url` can point anywhere, it doesn't have to be relative to the manifest's own
    location:
 
@@ -188,10 +188,10 @@ file server.
    ```
 
    The qcow2 itself is only fetched (and its sha256 checked) the first time something
-   actually launches from that `id` — adding the mirror doesn't pre-download anything.
+   actually launches from that `id`, *adding the mirror doesn't pre-download anything*.
 
 Updating the mirror later (new image version, moved URL) is just editing `distros.json`
-on the server and re-running `anvil mirror add` with the same name — it re-fetches and
+on the server and re-running `anvil mirror add` with the same name: it re-fetches and
 replaces the cached manifest.
 
 ## Container mirrors
@@ -242,11 +242,11 @@ hasn't landed.
 
 ## Cloud-init template repos
 
-This is a separate, related mechanism, not a third `--kind` on `anvil mirror` — it
+This is a separate, related mechanism, not a third `--kind` on `anvil mirror`: it
 bulk-imports whole cloud-init configs into your saved library (`anvil cloud-init list`)
 rather than adding launchable catalog entries. Think of a VM mirror as "where the disk
 image comes from" and a template repo as "a bundle of ready-made `#cloud-config`
-documents someone else already wrote" — nginx-with-TLS, a Postgres instance with a data
+documents someone else already wrote" -> nginx-with-TLS, a Postgres instance with a data
 volume pre-mounted, a k3s single-node setup, that kind of thing.
 
 ```
@@ -256,7 +256,7 @@ anvil cloud-init import-repo <manifest-url> [--force]
 Every listed template is fetched and saved into the library under its own `name`, ready
 to use immediately as `anvil launch --kind vm ... --cloud-init-name <name>`. A name
 already in your library is left untouched unless you pass `--force`; a single template
-failing to fetch doesn't stop the rest of the repo from importing — you get a per-
+failing to fetch doesn't stop the rest of the repo from importing, you get a per-
 template result either way (`imported`, `skipped`, or `FAILED: <reason>`).
 
 ### The manifest
@@ -284,23 +284,23 @@ template result either way (`imported`, `skipped`, or `FAILED: <reason>`).
 Field notes:
 
 - `name` is what the template is saved into the library as, and what `--cloud-init-name`
-  later refers to. Required, and must be non-empty — a template missing it fails the
+  later refers to. Required, and must be non-empty: a template missing it fails the
   whole manifest at fetch time, same as a VM mirror manifest missing `id`.
 - `url` points at the actual cloud-init YAML content (a plain `#cloud-config` document,
   fetched and saved byte-for-byte, no templating/substitution applied). Required.
-- `description` is metadata only right now — not shown anywhere yet, just documents
+- `description` is metadata only right now, not shown anywhere yet, just documents
   intent for whoever's reading the manifest.
 - `schema_version` must be `1`, same "reject an unrecognized major version outright"
   rule as the VM mirror manifest.
 
-Unlike a VM mirror, a template repo isn't a standing, re-consulted registry entry —
+Unlike a VM mirror, a template repo isn't a standing, re-consulted registry entry,
 `import-repo` is a one-shot bulk copy into your library. There's nothing to `list`/
 `remove`/`enable`/`disable` afterward; once imported, a template is just a normal saved
 cloud-init config like any other, indistinguishable from one you wrote by hand.
 
 ### Creating your own template repo
 
-Same static-hosting story as a VM mirror — anything that serves plain files over
+Same static-hosting story as a VM mirror: anything that serves plain files over
 HTTP(S) works.
 
 1. **Write the cloud-init YAML files**, one per template, each a normal
@@ -347,7 +347,7 @@ HTTP(S) works.
 
    A public GitHub repo works well here too: point `url` at the raw content URL
    (`https://raw.githubusercontent.com/<org>/<repo>/<branch>/nginx-tls.yaml`) and
-   `<manifest-url>` at `templates.json`'s own raw URL — no server to run at all.
+   `<manifest-url>` at `templates.json`'s own raw URL.
 
 4. **Import it**:
 
@@ -358,7 +358,7 @@ HTTP(S) works.
    Or from `anvil tui`'s Cloud Init page, press `R` and enter the same URL.
 
 Updating a template later is just editing the YAML file (and `templates.json` if you
-added/removed one) on the server and re-running `import-repo --force` — it re-fetches
+added/removed one) on the server and re-running `import-repo --force`, it *re-fetches*
 and overwrites the matching saved configs by name.
 
 ## From the TUI
@@ -370,7 +370,7 @@ remove it.
 
 The Cloud Init page has its own, separate import action: `R` opens a form for a template
 repo's manifest URL (see above) plus a `Force` toggle, and streams a live per-template
-result as it imports — `m` (lowercase) is the older, single-file "Import" action
+result as it imports, `m` (lowercase) is the older, single-file "Import" action
 (reads one local file from disk into the library, unrelated to a repo's manifest, see
 §CLI command surface's `anvil cloud-init new --from`/`import`) and still works
 independently.
