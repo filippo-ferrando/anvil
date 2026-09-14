@@ -43,7 +43,16 @@ type Networker interface {
 
 	// ContainerAddress returns containerID's assigned address on networkName.
 	ContainerAddress(ctx context.Context, networkName, containerID string) (string, error)
+
+	// ListNetworks returns the names of every network the engine
+	// currently has, used by ReconcileNetworks to find orphans.
+	ListNetworks(ctx context.Context) ([]string, error)
 }
+
+// networkNamePrefix is what ensureNetwork names every network it creates
+// ("anvil-" + the owning intent's ID) — ReconcileNetworks uses this to
+// recognize which of the engine's networks are anvil's to manage.
+const networkNamePrefix = "anvil-"
 
 type Manager struct {
 	Store     Store
@@ -79,7 +88,7 @@ func (m *Manager) ensureNetwork(ctx context.Context, it *store.Intent, pinned *i
 		return nil
 	}
 
-	engineName := "anvil-" + it.ID
+	engineName := networkNamePrefix + it.ID
 	// Uses the last 10 characters of the ULID to stay within Linux's
 	// interface name length limit while keeping the random portion.
 	bridgeIface := "anvil" + it.ID[len(it.ID)-10:]
@@ -284,8 +293,13 @@ func (m *Manager) Info(name string) (store.Intent, error) {
 }
 
 // Remove ungroups member (matched by instance ID or role) from name
-// without deleting the underlying instance.
-func (m *Manager) Remove(name, member string) (store.Intent, error) {
+// without deleting the underlying instance. If this leaves the intent
+// with no members left, its shared network (if any) is torn down too,
+// best-effort — this is what catches every member being deleted
+// individually (`anvil delete`, `anvil purge`, migration) instead of via
+// `anvil intent delete`, which previously left the network (and its
+// bridge interface) orphaned on the host forever.
+func (m *Manager) Remove(ctx context.Context, name, member string) (store.Intent, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -307,6 +321,16 @@ func (m *Manager) Remove(name, member string) (store.Intent, error) {
 		return store.Intent{}, fmt.Errorf("intent: %q has no member %q", name, member)
 	}
 	it.Members = kept
+
+	if len(it.Members) == 0 && m.Networker != nil && it.Network != nil {
+		if err := m.Networker.RemoveNetwork(ctx, it.Network.EngineNetworkName); err != nil {
+			// Left set (not cleared) so ReconcileNetworks can still catch
+			// and finish this later instead of losing track of it.
+			log.Printf("intent: removing now-empty %q's network: %v", name, err)
+		} else {
+			it.Network = nil
+		}
+	}
 
 	if err := m.Store.PutIntent(it); err != nil {
 		return store.Intent{}, err
@@ -351,4 +375,42 @@ func (m *Manager) Delete(ctx context.Context, name string, purgeMembers bool) (s
 		return store.Intent{}, err
 	}
 	return it, nil
+}
+
+// ReconcileNetworks removes any engine network that looks anvil-created
+// (see networkNamePrefix) but doesn't belong to any intent currently in
+// the store. Call once at daemon startup, alongside instance
+// reconciliation: this is what actually recovers from an orphaned network
+// left behind by any means — a bug, a crash mid-operation, or the store
+// simply not agreeing with the engine's own state anymore — rather than
+// relying on every single deletion path getting cleanup exactly right.
+func (m *Manager) ReconcileNetworks(ctx context.Context) error {
+	if m.Networker == nil {
+		return nil
+	}
+	intents, err := m.Store.ListIntents()
+	if err != nil {
+		return fmt.Errorf("intent: listing intents to reconcile networks: %w", err)
+	}
+	known := make(map[string]bool, len(intents))
+	for _, it := range intents {
+		if it.Network != nil {
+			known[it.Network.EngineNetworkName] = true
+		}
+	}
+
+	names, err := m.Networker.ListNetworks(ctx)
+	if err != nil {
+		return fmt.Errorf("intent: listing engine networks to reconcile: %w", err)
+	}
+	for _, name := range names {
+		if !strings.HasPrefix(name, networkNamePrefix) || known[name] {
+			continue
+		}
+		log.Printf("intent: removing orphaned network %q (no intent references it)", name)
+		if err := m.Networker.RemoveNetwork(ctx, name); err != nil {
+			log.Printf("intent: removing orphaned network %q: %v", name, err)
+		}
+	}
+	return nil
 }

@@ -99,7 +99,7 @@ func (s *Server) Delete(ctx context.Context, req *anvilv1.DeleteRequest) (*anvil
 		if intentName == "" {
 			continue
 		}
-		if _, err := s.Intents.Remove(intentName, spec.ID); err != nil {
+		if _, err := s.Intents.Remove(ctx, intentName, spec.ID); err != nil {
 			log.Printf("daemon: removing deleted instance %s from intent %q: %v", spec.Name, intentName, err)
 		}
 	}

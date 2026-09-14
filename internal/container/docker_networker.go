@@ -40,6 +40,11 @@ func (n *DockerNetworker) RemoveNetwork(ctx context.Context, name string) error 
 	return n.Client.RemoveNetwork(ctx, name)
 }
 
+// ListNetworks returns the names of every network Docker currently has.
+func (n *DockerNetworker) ListNetworks(ctx context.Context) ([]string, error) {
+	return n.Client.ListNetworks(ctx)
+}
+
 // ContainerAddress returns containerID's assigned address on networkName.
 func (n *DockerNetworker) ContainerAddress(ctx context.Context, networkName, containerID string) (string, error) {
 	return n.Client.ContainerNetworkAddress(ctx, containerID, networkName)

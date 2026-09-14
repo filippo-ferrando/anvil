@@ -73,6 +73,13 @@ func run() error {
 	}
 
 	intentMgr := intent.NewManager(db, mgr, dockerNetworker)
+	// Best-effort: catches any intent network left behind by a deletion
+	// path that didn't clean up after itself (see intent.Manager.Remove
+	// and ReconcileNetworks' own doc comments), or by anything else that
+	// could desync the store from the engine's actual state.
+	if err := intentMgr.ReconcileNetworks(ctx); err != nil {
+		log.Printf("anvild: reconciling intent networks: %v", err)
+	}
 	migrateMgr := migrate.NewManager(db, mgr, vmBackend, intentMgr)
 
 	socketPath := config.SocketPath()

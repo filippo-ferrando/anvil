@@ -65,7 +65,7 @@ func (s *IntentServer) Info(ctx context.Context, req *anvilv1.IntentInfoRequest)
 }
 
 func (s *IntentServer) Remove(ctx context.Context, req *anvilv1.IntentRemoveRequest) (*anvilv1.IntentRemoveReply, error) {
-	it, err := s.Manager.Remove(req.GetName(), req.GetMember())
+	it, err := s.Manager.Remove(ctx, req.GetName(), req.GetMember())
 	if err != nil {
 		return nil, err
 	}

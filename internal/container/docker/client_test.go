@@ -319,6 +319,25 @@ func TestStatsComputesCumulativeCounters(t *testing.T) {
 	}
 }
 
+func TestListNetworks(t *testing.T) {
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.URL.Path, "/v1.41/networks"; got != want {
+			t.Errorf("expected path %q, got %q", want, got)
+		}
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"Name": "anvil-01ABC"},
+			{"Name": "bridge"},
+		})
+	}))
+	names, err := c.ListNetworks(t.Context())
+	if err != nil {
+		t.Fatalf("ListNetworks: %v", err)
+	}
+	if len(names) != 2 || names[0] != "anvil-01ABC" || names[1] != "bridge" {
+		t.Errorf("unexpected names: %v", names)
+	}
+}
+
 func TestListImages(t *testing.T) {
 	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got, want := r.URL.Path, "/v1.41/images/json"; got != want {

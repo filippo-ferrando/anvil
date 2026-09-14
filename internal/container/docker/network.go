@@ -79,6 +79,27 @@ func (c *Client) NetworkExists(ctx context.Context, name string) (bool, error) {
 	}
 }
 
+type networkSummary struct {
+	Name string `json:"Name"`
+}
+
+// ListNetworks returns the names of every network currently in Docker's local store.
+func (c *Client) ListNetworks(ctx context.Context) ([]string, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/networks", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []networkSummary
+	if err := decodeJSON(resp, &out, http.StatusOK); err != nil {
+		return nil, fmt.Errorf("docker: listing networks: %w", err)
+	}
+	names := make([]string, len(out))
+	for i, n := range out {
+		names[i] = n.Name
+	}
+	return names, nil
+}
+
 // RemoveNetwork deletes a network. An already-gone network is not an error.
 func (c *Client) RemoveNetwork(ctx context.Context, name string) error {
 	resp, err := c.do(ctx, http.MethodDelete, "/networks/"+url.PathEscape(name), nil)

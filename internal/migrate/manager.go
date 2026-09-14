@@ -47,7 +47,7 @@ type Exporter interface {
 // IntentCleanup removes a migrated member from its source intent's
 // membership list once deleted. A nil IntentCleanup skips this.
 type IntentCleanup interface {
-	Remove(name, member string) (store.Intent, error)
+	Remove(ctx context.Context, name, member string) (store.Intent, error)
 }
 
 type Manager struct {
@@ -379,7 +379,7 @@ func (m *Manager) migrateIntent(ctx context.Context, t target, it store.Intent, 
 				continue
 			}
 			if m.IntentCleanup != nil {
-				if _, err := m.IntentCleanup.Remove(it.Name, s.name); err != nil {
+				if _, err := m.IntentCleanup.Remove(ctx, it.Name, s.name); err != nil {
 					log.Printf("migrate: removing migrated member %q from source intent %q: %v", s.name, it.Name, err)
 				}
 			}
