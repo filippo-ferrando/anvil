@@ -100,6 +100,7 @@ func Run(socketPath string) error {
 		instances:      newInstancesModel(),
 		images:         newImagesModel(),
 		intents:        newIntentsModel(),
+		launch:         newLaunchModel(),
 		cloudInit:      newCloudInitModel(),
 		mirrors:        newMirrorsModel(),
 		migration:      newMigrationModel(),
@@ -141,6 +142,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.migration.migrateForm.SetHeight(h - 2)
 		// launch/logs are full-width takeovers, not squeezed by the sidebar.
 		m.launch.form.SetHeight(contentHeight(msg.Height) - 2)
+		m.launch.cloudInitEditor.SetWidth(msg.Width - 4)
+		m.launch.cloudInitEditor.SetHeight(contentHeight(msg.Height) - 2)
 		m.logs.viewport.Width, m.logs.viewport.Height = msg.Width, contentHeight(msg.Height)-2
 		return m, nil
 	case tea.KeyMsg:
