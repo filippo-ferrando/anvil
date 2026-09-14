@@ -478,11 +478,12 @@ var InstanceService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	CloudInitService_List_FullMethodName   = "/anvil.v1.CloudInitService/List"
-	CloudInitService_Get_FullMethodName    = "/anvil.v1.CloudInitService/Get"
-	CloudInitService_Save_FullMethodName   = "/anvil.v1.CloudInitService/Save"
-	CloudInitService_Rename_FullMethodName = "/anvil.v1.CloudInitService/Rename"
-	CloudInitService_Delete_FullMethodName = "/anvil.v1.CloudInitService/Delete"
+	CloudInitService_List_FullMethodName       = "/anvil.v1.CloudInitService/List"
+	CloudInitService_Get_FullMethodName        = "/anvil.v1.CloudInitService/Get"
+	CloudInitService_Save_FullMethodName       = "/anvil.v1.CloudInitService/Save"
+	CloudInitService_Rename_FullMethodName     = "/anvil.v1.CloudInitService/Rename"
+	CloudInitService_Delete_FullMethodName     = "/anvil.v1.CloudInitService/Delete"
+	CloudInitService_ImportRepo_FullMethodName = "/anvil.v1.CloudInitService/ImportRepo"
 )
 
 // CloudInitServiceClient is the client API for CloudInitService service.
@@ -498,6 +499,15 @@ type CloudInitServiceClient interface {
 	Save(ctx context.Context, in *CloudInitSaveRequest, opts ...grpc.CallOption) (*CloudInitSaveReply, error)
 	Rename(ctx context.Context, in *CloudInitRenameRequest, opts ...grpc.CallOption) (*CloudInitRenameReply, error)
 	Delete(ctx context.Context, in *CloudInitDeleteRequest, opts ...grpc.CallOption) (*CloudInitDeleteReply, error)
+	// ImportRepo fetches a template-repo manifest (see docs/mirrors.md's
+	// "cloud-init template repos" section for the manifest shape and how
+	// to host one) and saves each listed template into the same saved
+	// library `anvil cloud-init *` already manages — same idea as a VM
+	// mirror's manifest, just for cloud-init templates instead of distro
+	// images, and fetched here (daemon-side) for the same reason: one
+	// implementation instead of a second copy in the CLI and another in
+	// the TUI.
+	ImportRepo(ctx context.Context, in *CloudInitImportRepoRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CloudInitImportRepoProgress], error)
 }
 
 type cloudInitServiceClient struct {
@@ -558,6 +568,25 @@ func (c *cloudInitServiceClient) Delete(ctx context.Context, in *CloudInitDelete
 	return out, nil
 }
 
+func (c *cloudInitServiceClient) ImportRepo(ctx context.Context, in *CloudInitImportRepoRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CloudInitImportRepoProgress], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &CloudInitService_ServiceDesc.Streams[0], CloudInitService_ImportRepo_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[CloudInitImportRepoRequest, CloudInitImportRepoProgress]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CloudInitService_ImportRepoClient = grpc.ServerStreamingClient[CloudInitImportRepoProgress]
+
 // CloudInitServiceServer is the server API for CloudInitService service.
 // All implementations must embed UnimplementedCloudInitServiceServer
 // for forward compatibility.
@@ -571,6 +600,15 @@ type CloudInitServiceServer interface {
 	Save(context.Context, *CloudInitSaveRequest) (*CloudInitSaveReply, error)
 	Rename(context.Context, *CloudInitRenameRequest) (*CloudInitRenameReply, error)
 	Delete(context.Context, *CloudInitDeleteRequest) (*CloudInitDeleteReply, error)
+	// ImportRepo fetches a template-repo manifest (see docs/mirrors.md's
+	// "cloud-init template repos" section for the manifest shape and how
+	// to host one) and saves each listed template into the same saved
+	// library `anvil cloud-init *` already manages — same idea as a VM
+	// mirror's manifest, just for cloud-init templates instead of distro
+	// images, and fetched here (daemon-side) for the same reason: one
+	// implementation instead of a second copy in the CLI and another in
+	// the TUI.
+	ImportRepo(*CloudInitImportRepoRequest, grpc.ServerStreamingServer[CloudInitImportRepoProgress]) error
 	mustEmbedUnimplementedCloudInitServiceServer()
 }
 
@@ -595,6 +633,9 @@ func (UnimplementedCloudInitServiceServer) Rename(context.Context, *CloudInitRen
 }
 func (UnimplementedCloudInitServiceServer) Delete(context.Context, *CloudInitDeleteRequest) (*CloudInitDeleteReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
+}
+func (UnimplementedCloudInitServiceServer) ImportRepo(*CloudInitImportRepoRequest, grpc.ServerStreamingServer[CloudInitImportRepoProgress]) error {
+	return status.Errorf(codes.Unimplemented, "method ImportRepo not implemented")
 }
 func (UnimplementedCloudInitServiceServer) mustEmbedUnimplementedCloudInitServiceServer() {}
 func (UnimplementedCloudInitServiceServer) testEmbeddedByValue()                          {}
@@ -707,6 +748,17 @@ func _CloudInitService_Delete_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CloudInitService_ImportRepo_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(CloudInitImportRepoRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(CloudInitServiceServer).ImportRepo(m, &grpc.GenericServerStream[CloudInitImportRepoRequest, CloudInitImportRepoProgress]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CloudInitService_ImportRepoServer = grpc.ServerStreamingServer[CloudInitImportRepoProgress]
+
 // CloudInitService_ServiceDesc is the grpc.ServiceDesc for CloudInitService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -735,7 +787,13 @@ var CloudInitService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _CloudInitService_Delete_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "ImportRepo",
+			Handler:       _CloudInitService_ImportRepo_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "anvil/v1/anvil.proto",
 }
 
