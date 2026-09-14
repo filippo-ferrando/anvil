@@ -50,42 +50,42 @@ But a few things about it kept getting in the way:
   run is Linux.
 
 Anvil is a from-scratch Go rewrite that fixes exactly those five things and nothing else.
-It's Linux-only on purpose — that's what makes "just spawn QEMU and talk to the real
+It's Linux-only on purpose, that's what makes "just spawn QEMU and talk to the real
 Docker API" possible without a platform abstraction layer getting in the way.
 
 ## Features
 
 **VMs**, driven straight against `qemu-system-x86_64` over QMP (no libvirt in between):
 
-- 15 base images out of the box — Ubuntu, Debian, Arch, Fedora, Rocky, AlmaLinux, CentOS
-  Stream, openSUSE, Alpine — or bring your own via a mirror
+- 15 base images out of the box: Ubuntu, Debian, Arch, Fedora, Rocky, AlmaLinux, CentOS
+  Stream, openSUSE, Alpine (or bring your own via a mirror)
 - real cloud-init under the hood, plus a saved cloud-init config library you can write,
   edit, and reuse (`anvil cloud-init`)
 - `anvil shell` / `anvil exec` / `anvil transfer` over real SSH, using a keypair Anvil
-  manages for you — zero flags, zero setup
+  manages for you, *zero* flags, *zero* setup
 - `anvil mount` shares a host directory into the guest over 9p
 - live progress on downloads instead of a silent terminal
 
 **Containers**, talking to Docker's real HTTP API directly (Podman backend is on the
-way, tracked separately — see [limitations](#status--limitations)):
+way, tracked separately, see [limitations](#status--limitations)):
 
-- `anvil launch --kind container nginx:alpine` — auto-pulls, just like `docker run`
+- `anvil launch --kind container nginx:alpine` -> auto-pulls, just like `docker run`
 - the same `shell`/`exec`/`transfer` commands work here too, backed by `docker
   exec`/`docker cp`
 - volumes, env vars, published ports, custom entrypoints, the works
 - `anvil image containers list` (and the TUI's Images screen) shows every image cached by
   the engine, separate from VM images, and whether it's actually in use by a container
 
-**Intents** — group VMs and containers together and manage them as one thing:
+**Intents**: group VMs and containers together and manage them as one thing:
 
 ```
 anvil intent create myapp --vm db:postgres:16 --container cache:redis:7
 ```
 
 Every member gets its own bridge network, a real IP, and can resolve every other member
-by name — no manual networking required.
+by name -> no manual networking required.
 
-**Migration** — move an instance, or a whole intent, to a different host over plain SSH:
+**Migration**: move an instance, or a whole intent, to a different host over plain SSH:
 
 ```
 anvil migrate myapp --to user@otherhost
@@ -123,13 +123,13 @@ makepkg -si -p packaging/PKGBUILD
 ```
 
 This builds two packages, `anvil` (the CLI/TUI) and `anvild` (the daemon), and installs
-the daemon as a proper systemd service running under its own unprivileged `anvil` user —
-not root. `anvild.install` sets up the user, generates a migration keypair, and adds
+the daemon as a proper systemd service running under its own unprivileged `anvil` user:
+**not root**. `anvild.install` sets up the user, generates a migration keypair, and adds
 `anvil` to the `docker` group if it's already installed.
 
 ### From source
 
-You'll need Go 1.27+, `protoc`, and — to actually run VMs — `qemu-system-x86_64`,
+You'll need Go 1.27+, `protoc`, and `qemu-system-x86_64`,
 `qemu-img`, and `xorriso` on your `PATH`.
 
 ```
@@ -150,7 +150,7 @@ sudo ./anvild &
 ./anvil delete box --purge
 ```
 
-(Running as root here is just the fast path for trying it out locally — the packaged
+(Running as root here is just the fast path for trying it out locally, the packaged
 version runs the daemon as an unprivileged system user instead, see [Install](#install).)
 
 ## The TUI
@@ -180,11 +180,11 @@ anvil (CLI + TUI, one binary)  ──gRPC over a unix socket──▶  anvild (d
 
 The daemon owns every bit of business logic. The CLI and TUI are dumb clients: build a
 request, call the daemon, print the reply. Access control is just being in the `anvil`
-Unix group and being able to reach the socket — no accounts, no portal, no password.
+Unix group and being able to reach the socket, *no* accounts, *no* portal, *no* password.
 
 Everything the daemon does across hosts (migration) goes over plain SSH to the target's
 own local `anvil` CLI, never daemon-to-daemon gRPC. That means Anvil never has to solve
-cross-host trust on its own — whatever SSH access you already have is enough.
+cross-host trust on its own, whatever SSH access you already have is enough.
 
 ```
 cmd/anvild/      daemon entrypoint
@@ -207,7 +207,7 @@ packaging/       PKGBUILD, systemd unit, sysusers/tmpfiles rules
 
 ## Status & limitations
 
-Anvil is young but everything above is real and working, not vaporware — VMs,
+Anvil is young but everything above is real and working, not vaporware: VMs,
 containers, intents, migration, the TUI, and Arch packaging all run today. A few things
 aren't there yet:
 
@@ -216,14 +216,14 @@ aren't there yet:
 - **No mDNS auto-discovery** of other Anvil hosts. `anvil host add` (a saved
   `user@host` alias) covers migration fine without it.
 - **No man pages** yet, just `--help` and this README.
-- The built-in image catalog's checksums are a work in progress — run
+- The built-in image catalog's checksums are a work in progress: run
   `scripts/verify-catalog.sh` if you want to double-check before you trust it blindly, or
   point `anvil mirror add` at your own verified manifest instead.
 
 ## Contributing
 
 Issues and PRs are welcome. If you're touching daemon logic, keep it in `internal/`
-behind the gRPC boundary — the CLI and TUI are meant to stay dumb clients, that's what
+behind the gRPC boundary, the CLI and TUI are meant to stay dumb clients, that's what
 keeps them in sync with each other for free.
 
 ## License
