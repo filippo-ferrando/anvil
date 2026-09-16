@@ -119,6 +119,7 @@ func run() error {
 	anvilv1.RegisterHostServiceServer(grpcServer, daemon.NewHostServer(db, migrateMgr))
 	anvilv1.RegisterMigrateServiceServer(grpcServer, daemon.NewMigrateServer(migrateMgr))
 	anvilv1.RegisterExportServiceServer(grpcServer, daemon.NewExportServer(exportMgr))
+	anvilv1.RegisterSnapshotServiceServer(grpcServer, daemon.NewSnapshotServer(mgr))
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- grpcServer.Serve(lis) }()

@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 )
 
 const bytesPerGiB = 1 << 30
@@ -89,10 +91,18 @@ func (v *Vault) OverlayFor(ctx context.Context, entry DistroEntry, overlayPath s
 	return nil
 }
 
+type qemuImgSnapshotInfo struct {
+	Name        string `json:"name"`
+	VMStateSize int64  `json:"vm-state-size"`
+	DateSec     int64  `json:"date-sec"`
+	DateNSec    int64  `json:"date-nsec"`
+}
+
 type qemuImgInfo struct {
-	VirtualSize     int64  `json:"virtual-size"`
-	ActualSize      int64  `json:"actual-size"`
-	BackingFilename string `json:"backing-filename"`
+	VirtualSize     int64                 `json:"virtual-size"`
+	ActualSize      int64                 `json:"actual-size"`
+	BackingFilename string                `json:"backing-filename"`
+	Snapshots       []qemuImgSnapshotInfo `json:"snapshots"`
 }
 
 func qemuImgInspect(path string) (qemuImgInfo, error) {
@@ -129,6 +139,38 @@ func BackingFile(path string) (string, error) {
 		return "", err
 	}
 	return info.BackingFilename, nil
+}
+
+// Snapshot is one internal QCOW2 snapshot recorded in a disk image's own metadata.
+type Snapshot struct {
+	Name      string
+	CreatedAt time.Time
+
+	// HasVMState is true when the snapshot embeds full VM state (RAM),
+	// as QMP's savevm does; false for a disk-only snapshot (qemu-img
+	// snapshot -c, or nothing beyond that ever written into it).
+	HasVMState bool
+}
+
+// ListSnapshots returns every internal snapshot recorded in path's own
+// qcow2 metadata, oldest first. Like BackingFile/DiskUsage, this works
+// against a disk a running QEMU process holds a write lock on (qemu-img
+// info -U opens it read-only in shared mode).
+func ListSnapshots(path string) ([]Snapshot, error) {
+	info, err := qemuImgInspect(path)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Snapshot, len(info.Snapshots))
+	for i, s := range info.Snapshots {
+		out[i] = Snapshot{
+			Name:       s.Name,
+			CreatedAt:  time.Unix(s.DateSec, s.DateNSec),
+			HasVMState: s.VMStateSize > 0,
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
 }
 
 // DiskUsage returns how many bytes of path are actually allocated on host

@@ -67,6 +67,24 @@ func (b *Backend) RemovePort(ctx context.Context, spec *instance.Spec, hostPort 
 	return errNotImplemented("RemovePort")
 }
 
+// CreateSnapshot, RestoreSnapshot, DeleteSnapshot, and ListSnapshots
+// satisfy instance.Snapshotter, same as internal/vm.Backend.
+func (b *Backend) CreateSnapshot(ctx context.Context, spec *instance.Spec, name string) error {
+	return errNotImplemented("CreateSnapshot")
+}
+
+func (b *Backend) RestoreSnapshot(ctx context.Context, spec *instance.Spec, name string) error {
+	return errNotImplemented("RestoreSnapshot")
+}
+
+func (b *Backend) DeleteSnapshot(ctx context.Context, spec *instance.Spec, name string) error {
+	return errNotImplemented("DeleteSnapshot")
+}
+
+func (b *Backend) ListSnapshots(ctx context.Context, spec *instance.Spec) ([]instance.Snapshot, error) {
+	return nil, errNotImplemented("ListSnapshots")
+}
+
 func (b *Backend) Create(ctx context.Context, spec *instance.Spec, progress func(status string)) error {
 	return errNotImplemented("Create")
 }

@@ -2180,3 +2180,233 @@ var ExportService_ServiceDesc = grpc.ServiceDesc{
 	},
 	Metadata: "anvil/v1/anvil.proto",
 }
+
+const (
+	SnapshotService_Create_FullMethodName  = "/anvil.v1.SnapshotService/Create"
+	SnapshotService_Restore_FullMethodName = "/anvil.v1.SnapshotService/Restore"
+	SnapshotService_Delete_FullMethodName  = "/anvil.v1.SnapshotService/Delete"
+	SnapshotService_List_FullMethodName    = "/anvil.v1.SnapshotService/List"
+)
+
+// SnapshotServiceClient is the client API for SnapshotService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// SnapshotService manages QCOW2 internal snapshots of a VM's disk — a
+// point-in-time checkpoint you can restore back to later, in place.
+// Container instances don't support this (no equivalent primitive).
+// Create/Delete apply live over QMP when the instance is running, no stop
+// needed; Restore always stops it first and restarts it afterward if it
+// was running (see internal/vm.Backend.RestoreSnapshot's doc for why).
+type SnapshotServiceClient interface {
+	Create(ctx context.Context, in *SnapshotCreateRequest, opts ...grpc.CallOption) (*SnapshotCreateReply, error)
+	Restore(ctx context.Context, in *SnapshotRestoreRequest, opts ...grpc.CallOption) (*SnapshotRestoreReply, error)
+	Delete(ctx context.Context, in *SnapshotDeleteRequest, opts ...grpc.CallOption) (*SnapshotDeleteReply, error)
+	List(ctx context.Context, in *SnapshotListRequest, opts ...grpc.CallOption) (*SnapshotListReply, error)
+}
+
+type snapshotServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewSnapshotServiceClient(cc grpc.ClientConnInterface) SnapshotServiceClient {
+	return &snapshotServiceClient{cc}
+}
+
+func (c *snapshotServiceClient) Create(ctx context.Context, in *SnapshotCreateRequest, opts ...grpc.CallOption) (*SnapshotCreateReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SnapshotCreateReply)
+	err := c.cc.Invoke(ctx, SnapshotService_Create_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *snapshotServiceClient) Restore(ctx context.Context, in *SnapshotRestoreRequest, opts ...grpc.CallOption) (*SnapshotRestoreReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SnapshotRestoreReply)
+	err := c.cc.Invoke(ctx, SnapshotService_Restore_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *snapshotServiceClient) Delete(ctx context.Context, in *SnapshotDeleteRequest, opts ...grpc.CallOption) (*SnapshotDeleteReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SnapshotDeleteReply)
+	err := c.cc.Invoke(ctx, SnapshotService_Delete_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *snapshotServiceClient) List(ctx context.Context, in *SnapshotListRequest, opts ...grpc.CallOption) (*SnapshotListReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SnapshotListReply)
+	err := c.cc.Invoke(ctx, SnapshotService_List_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SnapshotServiceServer is the server API for SnapshotService service.
+// All implementations must embed UnimplementedSnapshotServiceServer
+// for forward compatibility.
+//
+// SnapshotService manages QCOW2 internal snapshots of a VM's disk — a
+// point-in-time checkpoint you can restore back to later, in place.
+// Container instances don't support this (no equivalent primitive).
+// Create/Delete apply live over QMP when the instance is running, no stop
+// needed; Restore always stops it first and restarts it afterward if it
+// was running (see internal/vm.Backend.RestoreSnapshot's doc for why).
+type SnapshotServiceServer interface {
+	Create(context.Context, *SnapshotCreateRequest) (*SnapshotCreateReply, error)
+	Restore(context.Context, *SnapshotRestoreRequest) (*SnapshotRestoreReply, error)
+	Delete(context.Context, *SnapshotDeleteRequest) (*SnapshotDeleteReply, error)
+	List(context.Context, *SnapshotListRequest) (*SnapshotListReply, error)
+	mustEmbedUnimplementedSnapshotServiceServer()
+}
+
+// UnimplementedSnapshotServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedSnapshotServiceServer struct{}
+
+func (UnimplementedSnapshotServiceServer) Create(context.Context, *SnapshotCreateRequest) (*SnapshotCreateReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
+}
+func (UnimplementedSnapshotServiceServer) Restore(context.Context, *SnapshotRestoreRequest) (*SnapshotRestoreReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Restore not implemented")
+}
+func (UnimplementedSnapshotServiceServer) Delete(context.Context, *SnapshotDeleteRequest) (*SnapshotDeleteReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
+}
+func (UnimplementedSnapshotServiceServer) List(context.Context, *SnapshotListRequest) (*SnapshotListReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method List not implemented")
+}
+func (UnimplementedSnapshotServiceServer) mustEmbedUnimplementedSnapshotServiceServer() {}
+func (UnimplementedSnapshotServiceServer) testEmbeddedByValue()                         {}
+
+// UnsafeSnapshotServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to SnapshotServiceServer will
+// result in compilation errors.
+type UnsafeSnapshotServiceServer interface {
+	mustEmbedUnimplementedSnapshotServiceServer()
+}
+
+func RegisterSnapshotServiceServer(s grpc.ServiceRegistrar, srv SnapshotServiceServer) {
+	// If the following call pancis, it indicates UnimplementedSnapshotServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&SnapshotService_ServiceDesc, srv)
+}
+
+func _SnapshotService_Create_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SnapshotCreateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SnapshotServiceServer).Create(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SnapshotService_Create_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SnapshotServiceServer).Create(ctx, req.(*SnapshotCreateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SnapshotService_Restore_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SnapshotRestoreRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SnapshotServiceServer).Restore(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SnapshotService_Restore_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SnapshotServiceServer).Restore(ctx, req.(*SnapshotRestoreRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SnapshotService_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SnapshotDeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SnapshotServiceServer).Delete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SnapshotService_Delete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SnapshotServiceServer).Delete(ctx, req.(*SnapshotDeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SnapshotService_List_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SnapshotListRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SnapshotServiceServer).List(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SnapshotService_List_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SnapshotServiceServer).List(ctx, req.(*SnapshotListRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// SnapshotService_ServiceDesc is the grpc.ServiceDesc for SnapshotService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var SnapshotService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "anvil.v1.SnapshotService",
+	HandlerType: (*SnapshotServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Create",
+			Handler:    _SnapshotService_Create_Handler,
+		},
+		{
+			MethodName: "Restore",
+			Handler:    _SnapshotService_Restore_Handler,
+		},
+		{
+			MethodName: "Delete",
+			Handler:    _SnapshotService_Delete_Handler,
+		},
+		{
+			MethodName: "List",
+			Handler:    _SnapshotService_List_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "anvil/v1/anvil.proto",
+}

@@ -715,3 +715,56 @@ message ImportDone {
   string intent_name = 1;
   repeated ImportMemberResult members = 2;
 }
+
+// SnapshotService manages QCOW2 internal snapshots of a VM's disk — a
+// point-in-time checkpoint you can restore back to later, in place.
+// Container instances don't support this (no equivalent primitive).
+// Create/Delete apply live over QMP when the instance is running, no stop
+// needed; Restore always stops it first and restarts it afterward if it
+// was running (see internal/vm.Backend.RestoreSnapshot's doc for why).
+service SnapshotService {
+  rpc Create(SnapshotCreateRequest) returns (SnapshotCreateReply);
+  rpc Restore(SnapshotRestoreRequest) returns (SnapshotRestoreReply);
+  rpc Delete(SnapshotDeleteRequest) returns (SnapshotDeleteReply);
+  rpc List(SnapshotListRequest) returns (SnapshotListReply);
+}
+
+message SnapshotCreateRequest {
+  string name = 1; // instance name
+  string snapshot_name = 2;
+}
+
+message SnapshotCreateReply {}
+
+message SnapshotRestoreRequest {
+  string name = 1;
+  string snapshot_name = 2;
+}
+
+message SnapshotRestoreReply {}
+
+message SnapshotDeleteRequest {
+  string name = 1;
+  string snapshot_name = 2;
+}
+
+message SnapshotDeleteReply {}
+
+message SnapshotListRequest {
+  string name = 1;
+}
+
+message SnapshotInfo {
+  string name = 1;
+  int64 created_at_unix = 2;
+
+  // has_vm_state is true for a snapshot taken live (embeds full VM
+  // state alongside the disk data) and false for a disk-only one — see
+  // instance.Snapshot.HasVMState. Informational only: restore always
+  // resets disk content only, regardless of this field.
+  bool has_vm_state = 3;
+}
+
+message SnapshotListReply {
+  repeated SnapshotInfo snapshots = 1;
+}

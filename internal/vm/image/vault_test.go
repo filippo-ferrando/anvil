@@ -170,6 +170,61 @@ func TestVaultDelete(t *testing.T) {
 	}
 }
 
+func TestListSnapshots(t *testing.T) {
+	if _, err := exec.LookPath("qemu-img"); err != nil {
+		t.Skip("qemu-img not installed, skipping")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "disk.qcow2")
+	create := exec.Command("qemu-img", "create", "-f", "qcow2", path, "16M")
+	if out, err := create.CombinedOutput(); err != nil {
+		t.Fatalf("creating disk: %v: %s", err, out)
+	}
+
+	if snaps, err := ListSnapshots(path); err != nil {
+		t.Fatalf("ListSnapshots on a fresh disk: %v", err)
+	} else if len(snaps) != 0 {
+		t.Fatalf("expected no snapshots yet, got %+v", snaps)
+	}
+
+	for _, name := range []string{"before-upgrade", "after-upgrade"} {
+		cmd := exec.Command("qemu-img", "snapshot", "-c", name, path)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("creating snapshot %q: %v: %s", name, err, out)
+		}
+	}
+
+	snaps, err := ListSnapshots(path)
+	if err != nil {
+		t.Fatalf("ListSnapshots: %v", err)
+	}
+	if len(snaps) != 2 {
+		t.Fatalf("expected 2 snapshots, got %d: %+v", len(snaps), snaps)
+	}
+	if snaps[0].Name != "before-upgrade" || snaps[1].Name != "after-upgrade" {
+		t.Errorf("expected oldest-first order [before-upgrade after-upgrade], got [%s %s]", snaps[0].Name, snaps[1].Name)
+	}
+	for _, s := range snaps {
+		if s.HasVMState {
+			t.Errorf("snapshot %q created via qemu-img -c should be disk-only, not HasVMState", s.Name)
+		}
+		if s.CreatedAt.IsZero() {
+			t.Errorf("snapshot %q has a zero CreatedAt", s.Name)
+		}
+	}
+
+	del := exec.Command("qemu-img", "snapshot", "-d", "before-upgrade", path)
+	if out, err := del.CombinedOutput(); err != nil {
+		t.Fatalf("deleting snapshot: %v: %s", err, out)
+	}
+	if snaps, err := ListSnapshots(path); err != nil {
+		t.Fatalf("ListSnapshots after delete: %v", err)
+	} else if len(snaps) != 1 || snaps[0].Name != "after-upgrade" {
+		t.Fatalf("expected only after-upgrade left, got %+v", snaps)
+	}
+}
+
 func TestBackingFile(t *testing.T) {
 	if _, err := exec.LookPath("qemu-img"); err != nil {
 		t.Skip("qemu-img not installed, skipping")

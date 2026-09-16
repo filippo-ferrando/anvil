@@ -48,6 +48,19 @@ type PortForwarder interface {
 	RemovePort(ctx context.Context, spec *Spec, hostPort int, protocol string) error
 }
 
+// Snapshotter is implemented by a Backend that supports QCOW2 internal
+// snapshots of an instance's disk (VM only — a container engine has no
+// equivalent primitive here). Create/Delete apply live over QMP when the
+// instance is running; Restore always stops it first (see
+// vm.Backend.RestoreSnapshot's doc for why) and restarts it afterward if
+// it was running.
+type Snapshotter interface {
+	CreateSnapshot(ctx context.Context, spec *Spec, name string) error
+	RestoreSnapshot(ctx context.Context, spec *Spec, name string) error
+	DeleteSnapshot(ctx context.Context, spec *Spec, name string) error
+	ListSnapshots(ctx context.Context, spec *Spec) ([]Snapshot, error)
+}
+
 // Reconciler is implemented by a Backend that can re-derive an instance's live state after a restart.
 type Reconciler interface {
 	Reconcile(ctx context.Context, spec *Spec) (State, error)

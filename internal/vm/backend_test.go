@@ -255,3 +255,18 @@ func assertValidCloudConfigWithKey(t *testing.T, out, key string) {
 func stripHeader(userData string) string {
 	return strings.TrimPrefix(userData, "#cloud-config\n")
 }
+
+func TestCheckSnapshotName(t *testing.T) {
+	for _, name := range []string{"before-upgrade", "snap_1", "v1.2.3", "A"} {
+		if err := checkSnapshotName(name); err != nil {
+			t.Errorf("checkSnapshotName(%q): unexpected error: %v", name, err)
+		}
+	}
+	// A name that could confuse a shell arg or an HMP "savevm <name>"
+	// command line (built by plain string concatenation) must be rejected.
+	for _, name := range []string{"", "has space", "a/b", "a;b", "a\tb"} {
+		if err := checkSnapshotName(name); err == nil {
+			t.Errorf("checkSnapshotName(%q): expected an error", name)
+		}
+	}
+}

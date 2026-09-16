@@ -306,6 +306,69 @@ func (m *Manager) RemovePort(ctx context.Context, name string, hostPort int, pro
 	return m.registry.PutInstance(spec)
 }
 
+// snapshotter resolves name to its spec and Snapshotter backend, for
+// CreateSnapshot/RestoreSnapshot/DeleteSnapshot/ListSnapshots.
+func (m *Manager) snapshotter(name string) (*Spec, Snapshotter, error) {
+	spec, err := m.registry.GetByName(name)
+	if err != nil {
+		return nil, nil, err
+	}
+	b, err := m.backendFor(spec.Kind)
+	if err != nil {
+		return nil, nil, err
+	}
+	sn, ok := b.(Snapshotter)
+	if !ok {
+		return nil, nil, fmt.Errorf("instance: %s instances don't support snapshots", spec.Kind)
+	}
+	return spec, sn, nil
+}
+
+// CreateSnapshot creates a new named snapshot of name's disk.
+func (m *Manager) CreateSnapshot(ctx context.Context, name, snapshotName string) error {
+	spec, sn, err := m.snapshotter(name)
+	if err != nil {
+		return err
+	}
+	if err := sn.CreateSnapshot(ctx, spec, snapshotName); err != nil {
+		return err
+	}
+	return m.registry.PutInstance(spec)
+}
+
+// RestoreSnapshot resets name's disk back to a previously created snapshot.
+func (m *Manager) RestoreSnapshot(ctx context.Context, name, snapshotName string) error {
+	spec, sn, err := m.snapshotter(name)
+	if err != nil {
+		return err
+	}
+	if err := sn.RestoreSnapshot(ctx, spec, snapshotName); err != nil {
+		return err
+	}
+	return m.registry.PutInstance(spec)
+}
+
+// DeleteSnapshot removes a previously created snapshot.
+func (m *Manager) DeleteSnapshot(ctx context.Context, name, snapshotName string) error {
+	spec, sn, err := m.snapshotter(name)
+	if err != nil {
+		return err
+	}
+	if err := sn.DeleteSnapshot(ctx, spec, snapshotName); err != nil {
+		return err
+	}
+	return m.registry.PutInstance(spec)
+}
+
+// ListSnapshots returns every snapshot currently recorded on name's disk.
+func (m *Manager) ListSnapshots(ctx context.Context, name string) ([]Snapshot, error) {
+	spec, sn, err := m.snapshotter(name)
+	if err != nil {
+		return nil, err
+	}
+	return sn.ListSnapshots(ctx, spec)
+}
+
 func (m *Manager) Start(ctx context.Context, names []string) error {
 	specs, err := m.resolve(names)
 	if err != nil {

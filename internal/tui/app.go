@@ -27,6 +27,7 @@ type screen int
 
 const (
 	screenInstances screen = iota
+	screenSnapshots
 	screenImages
 	screenIntents
 	screenCloudInit
@@ -37,10 +38,11 @@ const (
 )
 
 // screenOrder is the sidebar's own list, top to bottom.
-var screenOrder = []screen{screenInstances, screenImages, screenIntents, screenCloudInit, screenMirrors, screenMigration}
+var screenOrder = []screen{screenInstances, screenSnapshots, screenImages, screenIntents, screenCloudInit, screenMirrors, screenMigration}
 
 var screenLabels = map[screen]string{
 	screenInstances: "Instances",
+	screenSnapshots: "Snapshots",
 	screenImages:    "Images",
 	screenIntents:   "Intents",
 	screenCloudInit: "Cloud-Init",
@@ -69,6 +71,7 @@ type model struct {
 	statusSetAt time.Time // when status was last set
 
 	instances instancesModel
+	snapshots snapshotsModel
 	images    imagesModel
 	intents   intentsModel
 	launch    launchModel
@@ -98,6 +101,7 @@ func Run(socketPath string) error {
 		screen:         screenInstances,
 		sidebarFocused: true,
 		instances:      newInstancesModel(),
+		snapshots:      newSnapshotsModel(),
 		images:         newImagesModel(),
 		intents:        newIntentsModel(),
 		launch:         newLaunchModel(),
@@ -134,6 +138,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		contentWidth := msg.Width - sidebarWidth - sidebarGutter
 		h := contentHeight(msg.Height)
 		m.instances.setSize(contentWidth, h)
+		m.snapshots.setSize(contentWidth, h)
 		m.images.setSize(contentWidth, h)
 		m.intents.list.SetSize(contentWidth-2, h)
 		m.cloudInit.setSize(contentWidth, h)
@@ -158,6 +163,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch adm.screen {
 		case screenInstances:
 			return m.updateInstances(msg)
+		case screenSnapshots:
+			return m.updateSnapshots(msg)
 		case screenImages:
 			return m.updateImages(msg)
 		case screenIntents:
@@ -175,6 +182,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case screenInstances:
 		return m.updateInstances(msg)
+	case screenSnapshots:
+		return m.updateSnapshots(msg)
 	case screenImages:
 		return m.updateImages(msg)
 	case screenIntents:
@@ -232,6 +241,8 @@ func loadCmdForScreen(s screen, c *client.Client) tea.Cmd {
 	switch s {
 	case screenInstances:
 		return loadInstances(c)
+	case screenSnapshots:
+		return loadInstances(c)
 	case screenImages:
 		return tea.Batch(loadCachedImages(c), loadCatalog(c))
 	case screenIntents:
@@ -281,6 +292,8 @@ func (m model) screenView() string {
 	switch m.screen {
 	case screenInstances:
 		return m.instances.View()
+	case screenSnapshots:
+		return m.snapshots.View()
 	case screenImages:
 		return m.images.View()
 	case screenIntents:

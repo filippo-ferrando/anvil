@@ -45,6 +45,7 @@ func NewRootCommand() *cobra.Command {
 		newMountCommand(flags),
 		newUmountCommand(flags),
 		newPortCommand(flags),
+		newSnapshotCommand(flags),
 		newCreateDirCommand(flags),
 		newIntentCommand(flags),
 		newHostCommand(flags),

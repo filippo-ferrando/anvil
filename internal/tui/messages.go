@@ -107,6 +107,15 @@ type migrateStreamMsg struct {
 	done   bool
 }
 
+// snapshotsLoadedMsg carries one instance's snapshot list back from a
+// SnapshotService.List call. instanceName lets the handler ignore a stale
+// reply that arrives after the user has since selected a different instance.
+type snapshotsLoadedMsg struct {
+	instanceName string
+	snapshots    []*anvilv1.SnapshotInfo
+	err          error
+}
+
 // exportStreamMsg carries one event off an ExportService.Export stream —
 // shared by the Instances and Intents screens, whichever started it.
 type exportStreamMsg struct {
@@ -353,6 +362,37 @@ func removePort(c *client.Client, name string, hostPort int, protocol string) te
 			Name: name, HostPort: int32(hostPort), Protocol: protocol,
 		})
 		return actionDoneMsg{screen: screenInstances, verb: "port removed", err: err}
+	}
+}
+
+func loadSnapshots(c *client.Client, instanceName string) tea.Cmd {
+	return func() tea.Msg {
+		reply, err := c.Snapshot.List(context.Background(), &anvilv1.SnapshotListRequest{Name: instanceName})
+		if err != nil {
+			return snapshotsLoadedMsg{instanceName: instanceName, err: err}
+		}
+		return snapshotsLoadedMsg{instanceName: instanceName, snapshots: reply.GetSnapshots()}
+	}
+}
+
+func createSnapshot(c *client.Client, instanceName, snapshotName string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := c.Snapshot.Create(context.Background(), &anvilv1.SnapshotCreateRequest{Name: instanceName, SnapshotName: snapshotName})
+		return actionDoneMsg{screen: screenSnapshots, verb: "snapshot created", err: err}
+	}
+}
+
+func restoreSnapshot(c *client.Client, instanceName, snapshotName string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := c.Snapshot.Restore(context.Background(), &anvilv1.SnapshotRestoreRequest{Name: instanceName, SnapshotName: snapshotName})
+		return actionDoneMsg{screen: screenSnapshots, verb: "snapshot restored", err: err}
+	}
+}
+
+func deleteSnapshot(c *client.Client, instanceName, snapshotName string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := c.Snapshot.Delete(context.Background(), &anvilv1.SnapshotDeleteRequest{Name: instanceName, SnapshotName: snapshotName})
+		return actionDoneMsg{screen: screenSnapshots, verb: "snapshot deleted", err: err}
 	}
 }
 

@@ -22,6 +22,7 @@ type Client struct {
 	Host      anvilv1.HostServiceClient
 	Migrate   anvilv1.MigrateServiceClient
 	Export    anvilv1.ExportServiceClient
+	Snapshot  anvilv1.SnapshotServiceClient
 }
 
 // Dial connects to anvild's gRPC API over its unix socket at socketPath.
@@ -43,6 +44,7 @@ func Dial(socketPath string) (*Client, error) {
 		Host:                  anvilv1.NewHostServiceClient(conn),
 		Migrate:               anvilv1.NewMigrateServiceClient(conn),
 		Export:                anvilv1.NewExportServiceClient(conn),
+		Snapshot:              anvilv1.NewSnapshotServiceClient(conn),
 	}, nil
 }
 

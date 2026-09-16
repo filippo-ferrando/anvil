@@ -245,6 +245,25 @@ func isHostfwdRemoveSuccess(out string) bool {
 	return out == "" || strings.Contains(out, "removed")
 }
 
+// SaveVM creates or overwrites a named internal snapshot (qcow2 disk
+// state plus full VM/RAM state) via the savevm HMP command, live — unlike
+// qemu-img's offline "snapshot -c", this needs no stop. Returns the raw
+// HMP output uninterpreted: hostfwd_remove taught us success/failure
+// isn't reliably distinguishable from HMP wording alone across commands,
+// so the caller (vm.Backend) confirms the result against the disk's own
+// snapshot table instead of parsing this.
+func (c *QMPClient) SaveVM(ctx context.Context, name string) (string, error) {
+	return c.humanMonitorCommand(ctx, "savevm "+name)
+}
+
+// DeleteVMSnapshot removes a named internal snapshot via the delvm HMP
+// command, live — qemu-img can't touch a disk file a running QEMU
+// process holds an exclusive lock on. See SaveVM's doc on why the raw
+// output is returned uninterpreted.
+func (c *QMPClient) DeleteVMSnapshot(ctx context.Context, name string) (string, error) {
+	return c.humanMonitorCommand(ctx, "delvm "+name)
+}
+
 // hostfwdAddLine renders the hostfwd_add HMP command line for f on
 // netdevID. The empty host/guest addresses (the double colons) mean "any
 // host address" / "the guest's own address" — the same convention

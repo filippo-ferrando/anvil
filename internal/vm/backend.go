@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -215,6 +216,166 @@ func (b *Backend) PrepareImportedDisk(ctx context.Context, imageRef, arch, diskP
 	cmd := exec.CommandContext(ctx, "qemu-img", "rebase", "-u", "-F", "qcow2", "-b", basePath, diskPath)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("vm: rebasing imported disk: %w: %s", err, out)
+	}
+	return nil
+}
+
+// validSnapshotName restricts snapshot names to a single safe token: both
+// qemu-img's CLI args and the savevm/delvm HMP command lines this package
+// builds by string concatenation depend on a name never containing
+// whitespace or shell/HMP-significant characters.
+var validSnapshotName = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+func checkSnapshotName(name string) error {
+	if !validSnapshotName.MatchString(name) {
+		return fmt.Errorf("vm: snapshot name must be non-empty and contain only letters, digits, '_', '-', or '.' (got %q)", name)
+	}
+	return nil
+}
+
+// CreateSnapshot creates a new named QCOW2 internal snapshot of spec's
+// disk. If spec is running, it's taken live via QMP's savevm (full disk +
+// VM state, no stop needed); otherwise via qemu-img's offline "snapshot
+// -c" (disk-only). Satisfies instance.Snapshotter.
+func (b *Backend) CreateSnapshot(ctx context.Context, spec *instance.Spec, name string) error {
+	if spec.VM == nil {
+		return fmt.Errorf("vm: CreateSnapshot called with a nil VMSpec")
+	}
+	if err := checkSnapshotName(name); err != nil {
+		return err
+	}
+
+	existing, err := image.ListSnapshots(spec.VM.DiskPath)
+	if err != nil {
+		return fmt.Errorf("vm: listing %s's existing snapshots: %w", spec.Name, err)
+	}
+	for _, s := range existing {
+		if s.Name == name {
+			return fmt.Errorf("vm: %s already has a snapshot named %q — delete it first", spec.Name, name)
+		}
+	}
+
+	b.mu.Lock()
+	proc, running := b.running[spec.ID]
+	b.mu.Unlock()
+
+	if running && proc.QMP != nil {
+		if _, err := proc.QMP.SaveVM(ctx, name); err != nil {
+			return fmt.Errorf("vm: creating snapshot %q: %w", name, err)
+		}
+		return b.verifySnapshotPresence(spec, name, true, "creating")
+	}
+
+	cmd := exec.CommandContext(ctx, "qemu-img", "snapshot", "-c", name, spec.VM.DiskPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("vm: creating snapshot %q: %w: %s", name, err, out)
+	}
+	return nil
+}
+
+// RestoreSnapshot resets spec's disk back to a previously created
+// snapshot. This always resets disk content only, never a live VM/RAM
+// resume, even for a snapshot that has one (see instance.Snapshot.HasVMState):
+// qemu-img can't touch a disk file a running QEMU process holds an
+// exclusive lock on, so a running instance is stopped first and restarted
+// afterward — a plain restart, which always boots fresh from the restored disk.
+func (b *Backend) RestoreSnapshot(ctx context.Context, spec *instance.Spec, name string) error {
+	if spec.VM == nil {
+		return fmt.Errorf("vm: RestoreSnapshot called with a nil VMSpec")
+	}
+	if err := checkSnapshotName(name); err != nil {
+		return err
+	}
+
+	b.mu.Lock()
+	_, running := b.running[spec.ID]
+	b.mu.Unlock()
+
+	if running {
+		if err := b.Stop(ctx, spec, false, 30*time.Second); err != nil {
+			return fmt.Errorf("vm: stopping %s to restore snapshot %q: %w", spec.Name, name, err)
+		}
+	}
+
+	cmd := exec.CommandContext(ctx, "qemu-img", "snapshot", "-a", name, spec.VM.DiskPath)
+	out, applyErr := cmd.CombinedOutput()
+
+	if running {
+		if err := b.Start(ctx, spec); err != nil {
+			if applyErr != nil {
+				return fmt.Errorf("vm: restoring snapshot %q: %w: %s (restarting %s afterward also failed: %v)",
+					name, applyErr, out, spec.Name, err)
+			}
+			return fmt.Errorf("vm: restarting %s after restoring snapshot %q: %w", spec.Name, name, err)
+		}
+	}
+	if applyErr != nil {
+		return fmt.Errorf("vm: restoring snapshot %q: %w: %s", name, applyErr, out)
+	}
+	return nil
+}
+
+// DeleteSnapshot removes a previously created snapshot. Live if spec is
+// running (QMP's delvm), otherwise via qemu-img's offline "snapshot -d".
+func (b *Backend) DeleteSnapshot(ctx context.Context, spec *instance.Spec, name string) error {
+	if spec.VM == nil {
+		return fmt.Errorf("vm: DeleteSnapshot called with a nil VMSpec")
+	}
+	if err := checkSnapshotName(name); err != nil {
+		return err
+	}
+
+	b.mu.Lock()
+	proc, running := b.running[spec.ID]
+	b.mu.Unlock()
+
+	if running && proc.QMP != nil {
+		if _, err := proc.QMP.DeleteVMSnapshot(ctx, name); err != nil {
+			return fmt.Errorf("vm: deleting snapshot %q: %w", name, err)
+		}
+		return b.verifySnapshotPresence(spec, name, false, "deleting")
+	}
+
+	cmd := exec.CommandContext(ctx, "qemu-img", "snapshot", "-d", name, spec.VM.DiskPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("vm: deleting snapshot %q: %w: %s", name, err, out)
+	}
+	return nil
+}
+
+// ListSnapshots returns every snapshot currently recorded on spec's disk.
+func (b *Backend) ListSnapshots(ctx context.Context, spec *instance.Spec) ([]instance.Snapshot, error) {
+	if spec.VM == nil {
+		return nil, fmt.Errorf("vm: ListSnapshots called with a nil VMSpec")
+	}
+	snaps, err := image.ListSnapshots(spec.VM.DiskPath)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]instance.Snapshot, len(snaps))
+	for i, s := range snaps {
+		out[i] = instance.Snapshot{Name: s.Name, CreatedAt: s.CreatedAt, HasVMState: s.HasVMState}
+	}
+	return out, nil
+}
+
+// verifySnapshotPresence confirms a live savevm/delvm actually took
+// effect by re-reading the disk's own snapshot table, rather than trusting
+// its HMP text output — see QMPClient.SaveVM's doc for why.
+func (b *Backend) verifySnapshotPresence(spec *instance.Spec, name string, wantPresent bool, verb string) error {
+	snaps, err := image.ListSnapshots(spec.VM.DiskPath)
+	if err != nil {
+		return fmt.Errorf("vm: verifying snapshot %q after %s it: %w", name, verb, err)
+	}
+	present := false
+	for _, s := range snaps {
+		if s.Name == name {
+			present = true
+			break
+		}
+	}
+	if present != wantPresent {
+		return fmt.Errorf("vm: %s snapshot %q on %s appeared to succeed but didn't take effect", verb, name, spec.Name)
 	}
 	return nil
 }

@@ -152,3 +152,17 @@ func FormatPorts(ports []PortMapping) string {
 	}
 	return strings.Join(parts, ", ")
 }
+
+// Snapshot is one point-in-time internal QCOW2 snapshot of a VM's disk.
+type Snapshot struct {
+	Name      string
+	CreatedAt time.Time
+
+	// HasVMState is true for a snapshot taken live via QMP's savevm,
+	// which embeds full VM state (disk + RAM) alongside the disk data,
+	// and false for one taken offline via qemu-img (disk-only). Restore
+	// only ever resets the disk (see Backend.RestoreSnapshot) — a
+	// subsequent start always boots fresh, regardless of HasVMState;
+	// it's informational, not a promise of a live-resume restore.
+	HasVMState bool
+}
