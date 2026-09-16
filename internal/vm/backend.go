@@ -193,6 +193,32 @@ func (b *Backend) ExportDisk(ctx context.Context, spec *instance.Spec, destPath 
 	return nil
 }
 
+// PrepareImportedDisk ensures imageRef/arch's base image is present in this
+// host's vault (downloading it if needed) and rebases diskPath's backing
+// file onto it in place. diskPath is an imported qcow2 diff disk whose
+// backing file still points at wherever it was exported from — this is
+// what makes it adoptable on a different host. Satisfies
+// internal/export.VMImporter.
+func (b *Backend) PrepareImportedDisk(ctx context.Context, imageRef, arch, diskPath string) error {
+	catalog, err := b.EffectiveCatalog()
+	if err != nil {
+		return err
+	}
+	entry, err := catalog.Find(imageRef, arch)
+	if err != nil {
+		return err
+	}
+	basePath, err := b.Vault.Ensure(ctx, entry, nil)
+	if err != nil {
+		return fmt.Errorf("vm: preparing imported disk's base image: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, "qemu-img", "rebase", "-u", "-F", "qcow2", "-b", basePath, diskPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("vm: rebasing imported disk: %w: %s", err, out)
+	}
+	return nil
+}
+
 // buildSeed (re)builds spec's cloud-init seed ISO from its current
 // user-data, SSH keys, and mounts, overwriting v.SeedISOPath.
 func (b *Backend) buildSeed(spec *instance.Spec) error {

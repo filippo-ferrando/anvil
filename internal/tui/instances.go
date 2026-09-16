@@ -54,6 +54,8 @@ const (
 	instancesPromptUmount
 	instancesPromptExec
 	instancesPromptShellUser
+	instancesPromptExport
+	instancesPromptImport
 )
 
 // statsRefreshInterval is how often the selected running instance's live
@@ -69,6 +71,12 @@ type instancesModel struct {
 	promptTarget  *anvilv1.Instance
 	promptForm    simpleForm
 	lastShellUser string // remembered across shell/exec calls, pre-filled into the user field
+
+	exporting   bool     // an export stream is in flight, blocking other keys
+	exportLines []string // the finished (or in-flight) export's progress transcript
+
+	importing   bool     // an import stream is in flight, blocking other keys
+	importLines []string // the finished (or in-flight) import's progress transcript
 
 	detailWidth int // width of the detail panel next to the list
 	panelHeight int // shared height for both side-by-side panels
@@ -192,6 +200,36 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case exportStreamMsg:
+		if msg.line != "" {
+			m.instances.exportLines = appendProgressLine(m.instances.exportLines, msg.line)
+		}
+		if msg.err != nil {
+			m.instances.exporting = false
+			m.instances.exportLines = append(m.instances.exportLines, styleError.Render(msg.err.Error()))
+			return m, nil
+		}
+		if msg.done {
+			m.instances.exporting = false
+			return m, nil
+		}
+		return m, receiveExportEvent(msg.stream)
+
+	case importStreamMsg:
+		if msg.line != "" {
+			m.instances.importLines = appendProgressLine(m.instances.importLines, msg.line)
+		}
+		if msg.err != nil {
+			m.instances.importing = false
+			m.instances.importLines = append(m.instances.importLines, styleError.Render(msg.err.Error()))
+			return m, nil
+		}
+		if msg.done {
+			m.instances.importing = false
+			return m, loadInstances(m.client)
+		}
+		return m, receiveImportEvent(msg.stream)
+
 	case tea.KeyMsg:
 		return m.updateInstancesKey(msg)
 	}
@@ -199,6 +237,25 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.instances.exporting || m.instances.importing {
+		return m, nil // block input until the stream finishes
+	}
+	// A finished export/import's transcript stays on screen until dismissed here.
+	if len(m.instances.exportLines) > 0 {
+		switch msg.String() {
+		case "esc", "enter", "q":
+			m.instances.exportLines = nil
+		}
+		return m, nil
+	}
+	if len(m.instances.importLines) > 0 {
+		switch msg.String() {
+		case "esc", "enter", "q":
+			m.instances.importLines = nil
+		}
+		return m, nil
+	}
+
 	// The delete confirmation overlay eats every key: y=delete, p=purge, else cancel.
 	if m.instances.confirmDelete != nil {
 		inst := m.instances.confirmDelete
@@ -285,7 +342,7 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "m":
 		if inst := m.selectedInstance(); inst != nil && inst.GetVm() != nil {
 			m.instances.startPrompt(instancesPromptMount, inst, newSimpleForm("Mount", []formField{
-				textField("Host path", "absolute path on this host", ""),
+				pathField("Host path", "absolute path on this host", ""),
 				textField("Guest path", "absolute path inside the guest", ""),
 				toggleField("Read-only", "mount read-only", false),
 			}))
@@ -297,6 +354,19 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				textField("Guest path", "must match what anvil mount used", ""),
 			}))
 		}
+		return m, nil
+	case "E":
+		if inst := m.selectedInstance(); inst != nil {
+			m.instances.startPrompt(instancesPromptExport, inst, newSimpleForm("Export "+inst.GetName(), []formField{
+				pathField("Output path", "e.g. ./"+inst.GetName()+".tar.zst", inst.GetName()+".tar.zst"),
+			}))
+		}
+		return m, nil
+	case "i":
+		m.instances.startPrompt(instancesPromptImport, nil, newSimpleForm("Import bundle", []formField{
+			pathField("Bundle path", "e.g. ./bundle.tar.zst", ""),
+			textField("Rename (optional)", "renames the imported intent, or the instance", ""),
+		}))
 		return m, nil
 	}
 
@@ -373,6 +443,24 @@ func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		user := ins.promptForm.Value("As user (optional, blank = default)")
 		ins.lastShellUser = user
 		return m.shellInto(target, user)
+
+	case instancesPromptExport:
+		outputPath := ins.promptForm.Value("Output path")
+		if outputPath == "" {
+			return m, nil
+		}
+		ins.exporting = true
+		ins.exportLines = nil
+		return m, startExportStream(m.client, target.GetName(), outputPath, false)
+
+	case instancesPromptImport:
+		bundlePath := ins.promptForm.Value("Bundle path")
+		if bundlePath == "" {
+			return m, nil
+		}
+		ins.importing = true
+		ins.importLines = nil
+		return m, startImportStream(m.client, bundlePath, ins.promptForm.Value("Rename (optional)"))
 	}
 	return m, nil
 }
@@ -382,6 +470,26 @@ func (m model) selectedInstance() *anvilv1.Instance {
 }
 
 func (m instancesModel) View() string {
+	if m.exporting || len(m.exportLines) > 0 {
+		s := styleTitle.Render(" Exporting… ") + "\n\n"
+		for _, line := range m.exportLines {
+			s += line + "\n"
+		}
+		if !m.exporting {
+			s += "\n" + helpBar("esc", "dismiss")
+		}
+		return s
+	}
+	if m.importing || len(m.importLines) > 0 {
+		s := styleTitle.Render(" Importing… ") + "\n\n"
+		for _, line := range m.importLines {
+			s += line + "\n"
+		}
+		if !m.importing {
+			s += "\n" + helpBar("esc", "dismiss")
+		}
+		return s
+	}
 	if m.confirmDelete != nil {
 		return styleWarn.Render(fmt.Sprintf("Delete %q?", m.confirmDelete.GetName())) + "\n\n" +
 			helpBar("y", "delete (recoverable)", "p", "delete permanently", "any other key", "cancel")
@@ -399,7 +507,7 @@ func (m instancesModel) View() string {
 
 	help := helpBar(
 		"n", "launch", "s", "start/stop", "d", "delete", "x", "shell",
-		"e", "exec", "m", "mount", "M", "umount", "l", "logs", "r", "refresh", "esc", "back",
+		"e", "exec", "m", "mount", "M", "umount", "E", "export", "i", "import", "l", "logs", "r", "refresh", "esc", "back",
 	)
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right) + "\n" + help
 }

@@ -1940,3 +1940,159 @@ var MigrateService_ServiceDesc = grpc.ServiceDesc{
 	},
 	Metadata: "anvil/v1/anvil.proto",
 }
+
+const (
+	ExportService_Export_FullMethodName = "/anvil.v1.ExportService/Export"
+	ExportService_Import_FullMethodName = "/anvil.v1.ExportService/Import"
+)
+
+// ExportServiceClient is the client API for ExportService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// ExportService packages a single instance or a whole intent into a
+// portable tar.zst bundle, and relaunches one back from it. Unlike
+// MigrateService, both ends run against this same anvild over its own
+// unix socket — bundle_path/output_path are plain local filesystem paths.
+type ExportServiceClient interface {
+	Export(ctx context.Context, in *ExportRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExportProgress], error)
+	Import(ctx context.Context, in *ImportRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ImportProgress], error)
+}
+
+type exportServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewExportServiceClient(cc grpc.ClientConnInterface) ExportServiceClient {
+	return &exportServiceClient{cc}
+}
+
+func (c *exportServiceClient) Export(ctx context.Context, in *ExportRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExportProgress], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ExportService_ServiceDesc.Streams[0], ExportService_Export_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ExportRequest, ExportProgress]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ExportService_ExportClient = grpc.ServerStreamingClient[ExportProgress]
+
+func (c *exportServiceClient) Import(ctx context.Context, in *ImportRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ImportProgress], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ExportService_ServiceDesc.Streams[1], ExportService_Import_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ImportRequest, ImportProgress]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ExportService_ImportClient = grpc.ServerStreamingClient[ImportProgress]
+
+// ExportServiceServer is the server API for ExportService service.
+// All implementations must embed UnimplementedExportServiceServer
+// for forward compatibility.
+//
+// ExportService packages a single instance or a whole intent into a
+// portable tar.zst bundle, and relaunches one back from it. Unlike
+// MigrateService, both ends run against this same anvild over its own
+// unix socket — bundle_path/output_path are plain local filesystem paths.
+type ExportServiceServer interface {
+	Export(*ExportRequest, grpc.ServerStreamingServer[ExportProgress]) error
+	Import(*ImportRequest, grpc.ServerStreamingServer[ImportProgress]) error
+	mustEmbedUnimplementedExportServiceServer()
+}
+
+// UnimplementedExportServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedExportServiceServer struct{}
+
+func (UnimplementedExportServiceServer) Export(*ExportRequest, grpc.ServerStreamingServer[ExportProgress]) error {
+	return status.Errorf(codes.Unimplemented, "method Export not implemented")
+}
+func (UnimplementedExportServiceServer) Import(*ImportRequest, grpc.ServerStreamingServer[ImportProgress]) error {
+	return status.Errorf(codes.Unimplemented, "method Import not implemented")
+}
+func (UnimplementedExportServiceServer) mustEmbedUnimplementedExportServiceServer() {}
+func (UnimplementedExportServiceServer) testEmbeddedByValue()                       {}
+
+// UnsafeExportServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to ExportServiceServer will
+// result in compilation errors.
+type UnsafeExportServiceServer interface {
+	mustEmbedUnimplementedExportServiceServer()
+}
+
+func RegisterExportServiceServer(s grpc.ServiceRegistrar, srv ExportServiceServer) {
+	// If the following call pancis, it indicates UnimplementedExportServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&ExportService_ServiceDesc, srv)
+}
+
+func _ExportService_Export_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ExportRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ExportServiceServer).Export(m, &grpc.GenericServerStream[ExportRequest, ExportProgress]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ExportService_ExportServer = grpc.ServerStreamingServer[ExportProgress]
+
+func _ExportService_Import_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ImportRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ExportServiceServer).Import(m, &grpc.GenericServerStream[ImportRequest, ImportProgress]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ExportService_ImportServer = grpc.ServerStreamingServer[ImportProgress]
+
+// ExportService_ServiceDesc is the grpc.ServiceDesc for ExportService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var ExportService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "anvil.v1.ExportService",
+	HandlerType: (*ExportServiceServer)(nil),
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Export",
+			Handler:       _ExportService_Export_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "Import",
+			Handler:       _ExportService_Import_Handler,
+			ServerStreams: true,
+		},
+	},
+	Metadata: "anvil/v1/anvil.proto",
+}

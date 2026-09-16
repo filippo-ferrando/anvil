@@ -639,3 +639,57 @@ message IntentMigrateDone {
   repeated MigrateMemberResult members = 2;
   bool rolled_back = 3; // true if an all-or-nothing migration hit a member failure and was undone
 }
+
+// ExportService packages a single instance or a whole intent into a
+// portable tar.zst bundle, and relaunches one back from it. Unlike
+// MigrateService, both ends run against this same anvild over its own
+// unix socket — bundle_path/output_path are plain local filesystem paths.
+service ExportService {
+  rpc Export(ExportRequest) returns (stream ExportProgress);
+  rpc Import(ImportRequest) returns (stream ImportProgress);
+}
+
+message ExportRequest {
+  string name = 1;        // resolved as a single instance first, a whole intent second, unless is_intent
+  string output_path = 2; // where to write the bundle, e.g. "/home/me/bundle.tar.zst"
+
+  // is_intent skips instance resolution and looks name up as an intent
+  // only — for a caller (the TUI's Intents page) that already knows name
+  // is an intent, so an unrelated instance that happens to share the same
+  // name can't shadow it.
+  bool is_intent = 3;
+}
+
+message ExportProgress {
+  oneof event {
+    string status = 1;
+    string done = 2; // the bundle's final path
+    string error = 3;
+  }
+}
+
+message ImportRequest {
+  string bundle_path = 1;
+  string name = 2; // renames the imported intent, or the instance for a standalone bundle
+}
+
+message ImportMemberResult {
+  string role = 1;
+  string new_id = 2; // set when this member imported successfully
+  string error = 3;  // set when it didn't
+}
+
+message ImportProgress {
+  oneof event {
+    string status = 1;
+    string error = 2;
+    ImportDone done = 3;
+  }
+}
+
+// ImportDone is Import's final summary: intent_name is empty for a
+// standalone instance bundle, and members has exactly one entry.
+message ImportDone {
+  string intent_name = 1;
+  repeated ImportMemberResult members = 2;
+}

@@ -2,6 +2,9 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -45,6 +48,10 @@ type formField struct {
 	input       textinput.Model // fieldText
 	on          bool            // fieldToggle
 	Suggestions []string        // candidate values Tab can cycle through; nil disables it
+
+	// PathComplete makes Tab cycle through this field's own directory's
+	// entries instead of a fixed Suggestions list — see completePathMatches.
+	PathComplete bool
 }
 
 // textField and toggleField construct a formField of each kind.
@@ -56,8 +63,49 @@ func textField(label, hint, value string) formField {
 	return formField{Label: label, Hint: hint, Kind: fieldText, input: ti}
 }
 
+// pathField is a textField whose Tab-completion lists real filesystem
+// entries under whatever directory is currently typed, shell-style.
+func pathField(label, hint, value string) formField {
+	f := textField(label, hint, value)
+	f.PathComplete = true
+	return f
+}
+
 func toggleField(label, hint string, on bool) formField {
 	return formField{Label: label, Hint: hint, Kind: fieldToggle, on: on}
+}
+
+// completePathMatches lists dir's entries whose name starts with base (the
+// last path segment of prefix), shell-style: sorted, directories suffixed
+// with "/" so cycling into one is a single further Tab, and dotfiles
+// hidden unless base itself starts with a dot. prefix is resolved against
+// the process's own cwd, same as the field's final submitted value will be.
+func completePathMatches(prefix string) []string {
+	dir, base := filepath.Split(prefix)
+	readDir := dir
+	if readDir == "" {
+		readDir = "."
+	}
+	entries, err := os.ReadDir(readDir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, base) {
+			continue
+		}
+		if strings.HasPrefix(name, ".") && !strings.HasPrefix(base, ".") {
+			continue
+		}
+		if e.IsDir() {
+			name += "/"
+		}
+		out = append(out, dir+name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func newSimpleForm(title string, fields []formField) simpleForm {
@@ -156,7 +204,7 @@ func (f simpleForm) update(msg tea.Msg) (simpleForm, bool, bool) {
 // usual job of moving to the next field.
 func (f *simpleForm) completeCurrent() bool {
 	field := &f.fields[f.focus]
-	if field.Kind != fieldText || len(field.Suggestions) == 0 {
+	if field.Kind != fieldText || (len(field.Suggestions) == 0 && !field.PathComplete) {
 		return false
 	}
 
@@ -165,7 +213,7 @@ func (f *simpleForm) completeCurrent() bool {
 	if continuing {
 		prefix = f.tabPrefix
 	}
-	matches := filterSuggestions(field.Suggestions, prefix)
+	matches := matchesFor(field, prefix)
 	if len(matches) == 0 {
 		return false
 	}
@@ -178,6 +226,15 @@ func (f *simpleForm) completeCurrent() bool {
 	field.input.CursorEnd()
 	f.tabField, f.tabPrefix, f.tabIdx = f.focus, prefix, idx
 	return true
+}
+
+// matchesFor returns field's current candidate list for prefix: real
+// filesystem entries for a PathComplete field, its fixed Suggestions otherwise.
+func matchesFor(field *formField, prefix string) []string {
+	if field.PathComplete {
+		return completePathMatches(prefix)
+	}
+	return filterSuggestions(field.Suggestions, prefix)
 }
 
 // filterSuggestions returns options containing query, case-insensitively —
@@ -198,7 +255,7 @@ func filterSuggestions(options []string, query string) []string {
 // short "→ a, b, c  (tab to cycle)" line, so the feature is discoverable
 // without having to already know it exists.
 func suggestionHint(field formField) string {
-	matches := filterSuggestions(field.Suggestions, field.input.Value())
+	matches := matchesFor(&field, field.input.Value())
 	if len(matches) == 0 {
 		return ""
 	}

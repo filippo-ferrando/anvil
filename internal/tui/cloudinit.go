@@ -25,6 +25,7 @@ const (
 	cloudInitPromptImportRepo
 	cloudInitPromptRename
 	cloudInitPromptDelete
+	cloudInitPromptWizard
 )
 
 type cloudInitModel struct {
@@ -202,7 +203,7 @@ func (m model) updateCloudInitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		ci.prompt = cloudInitPromptImport
 		ci.promptFm = newSimpleForm("Import config", []formField{
 			textField("Name", "", ""),
-			textField("Local file path", "", ""),
+			pathField("Local file path", "", ""),
 		})
 		return m, nil
 	case "r":
@@ -223,6 +224,16 @@ func (m model) updateCloudInitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		ci.promptFm = newSimpleForm("Import from a repo (see docs/mirrors.md)", []formField{
 			textField("Manifest URL", "", ""),
 			toggleField("Force", "overwrite a name that's already in the library", false),
+		})
+		return m, nil
+	case "w":
+		ci.prompt = cloudInitPromptWizard
+		ci.promptFm = newSimpleForm("Wizard: quick-start config", []formField{
+			textField("Name", "", ""),
+			textField("Default user", "e.g. ubuntu", ""),
+			textField("SSH public key", "ssh-ed25519 AAAA...", ""),
+			textField("Packages (comma-separated)", "e.g. nginx, curl, git", ""),
+			textField("Run commands (semicolon-separated)", "e.g. systemctl enable nginx; ufw allow 80", ""),
 		})
 		return m, nil
 	case "enter", "tab":
@@ -309,6 +320,23 @@ func (m model) updateCloudInitPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		ci.importingRepo = true
 		ci.importLines = nil
 		return m, startCloudInitImportRepo(m.client, url, force)
+
+	case cloudInitPromptWizard:
+		name := ci.promptFm.Value("Name")
+		user := ci.promptFm.Value("Default user")
+		key := ci.promptFm.Value("SSH public key")
+		pkgs := ci.promptFm.Value("Packages (comma-separated)")
+		runCmds := ci.promptFm.Value("Run commands (semicolon-separated)")
+		ci.prompt = cloudInitPromptNone
+		if name == "" {
+			return m, nil
+		}
+		content, err := buildWizardCloudInit(user, key, pkgs, runCmds)
+		if err != nil {
+			m.setStatus("building wizard config: "+err.Error(), true)
+			return m, nil
+		}
+		return m, saveCloudInit(m.client, name, content)
 	}
 	return m, nil
 }
@@ -349,7 +377,7 @@ func (m cloudInitModel) View() string {
 	left := listBox.Render(lipgloss.NewStyle().Height(totalHeight).Render(m.list.View()))
 	right := editorBox.Render(styleFieldLabel.Render(editorTitle) + "\n" + m.editor.View())
 
-	help := helpBar("n", "new", "m", "import", "R", "import repo", "r", "rename",
+	help := helpBar("n", "new", "m", "import", "R", "import repo", "w", "wizard", "r", "rename",
 		"d", "delete", "e", "edit", "ctrl+s", "save", "esc", "back")
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right) + "\n" + help
 }

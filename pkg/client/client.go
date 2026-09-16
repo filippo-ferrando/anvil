@@ -21,6 +21,7 @@ type Client struct {
 	Intent    anvilv1.IntentServiceClient
 	Host      anvilv1.HostServiceClient
 	Migrate   anvilv1.MigrateServiceClient
+	Export    anvilv1.ExportServiceClient
 }
 
 // Dial connects to anvild's gRPC API over its unix socket at socketPath.
@@ -41,6 +42,7 @@ func Dial(socketPath string) (*Client, error) {
 		Intent:                anvilv1.NewIntentServiceClient(conn),
 		Host:                  anvilv1.NewHostServiceClient(conn),
 		Migrate:               anvilv1.NewMigrateServiceClient(conn),
+		Export:                anvilv1.NewExportServiceClient(conn),
 	}, nil
 }
 

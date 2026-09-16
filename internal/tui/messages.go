@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -100,6 +102,23 @@ type launchStreamMsg struct {
 
 type migrateStreamMsg struct {
 	stream anvilv1.MigrateService_MigrateClient
+	line   string
+	err    error
+	done   bool
+}
+
+// exportStreamMsg carries one event off an ExportService.Export stream —
+// shared by the Instances and Intents screens, whichever started it.
+type exportStreamMsg struct {
+	stream anvilv1.ExportService_ExportClient
+	line   string
+	err    error
+	done   bool
+}
+
+// importStreamMsg carries one event off an ExportService.Import stream.
+type importStreamMsg struct {
+	stream anvilv1.ExportService_ImportClient
 	line   string
 	err    error
 	done   bool
@@ -227,6 +246,94 @@ func umountInstance(c *client.Client, name, guestPath string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.Umount(context.Background(), &anvilv1.UmountRequest{Name: name, GuestPath: guestPath})
 		return actionDoneMsg{screen: screenInstances, verb: "unmounted", err: err}
+	}
+}
+
+// startExportStream begins `anvil export name -o outputPath`. isIntent
+// skips instance resolution and looks name up as an intent only — pass
+// true from the Intents page, which already knows name is an intent and
+// shouldn't be shadowed by an unrelated instance of the same name.
+func startExportStream(c *client.Client, name, outputPath string, isIntent bool) tea.Cmd {
+	return func() tea.Msg {
+		absOutput, err := filepath.Abs(outputPath)
+		if err != nil {
+			return exportStreamMsg{err: err, done: true}
+		}
+		stream, err := c.Export.Export(context.Background(), &anvilv1.ExportRequest{Name: name, OutputPath: absOutput, IsIntent: isIntent})
+		if err != nil {
+			return exportStreamMsg{err: err, done: true}
+		}
+		return receiveExportEvent(stream)()
+	}
+}
+
+func receiveExportEvent(stream anvilv1.ExportService_ExportClient) tea.Cmd {
+	return func() tea.Msg {
+		ev, err := stream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				return exportStreamMsg{done: true}
+			}
+			return exportStreamMsg{err: err, done: true}
+		}
+		switch e := ev.GetEvent().(type) {
+		case *anvilv1.ExportProgress_Status:
+			return exportStreamMsg{stream: stream, line: e.Status}
+		case *anvilv1.ExportProgress_Error:
+			return exportStreamMsg{err: fmt.Errorf("%s", e.Error), done: true}
+		case *anvilv1.ExportProgress_Done:
+			return exportStreamMsg{stream: stream, line: styleGood.Render("exported: " + e.Done)}
+		default:
+			return exportStreamMsg{stream: stream}
+		}
+	}
+}
+
+// startImportStream begins `anvil import bundlePath [--name renameTo]` and
+// streams its progress back.
+func startImportStream(c *client.Client, bundlePath, renameTo string) tea.Cmd {
+	return func() tea.Msg {
+		absBundle, err := filepath.Abs(bundlePath)
+		if err != nil {
+			return importStreamMsg{err: err, done: true}
+		}
+		stream, err := c.Export.Import(context.Background(), &anvilv1.ImportRequest{BundlePath: absBundle, Name: renameTo})
+		if err != nil {
+			return importStreamMsg{err: err, done: true}
+		}
+		return receiveImportEvent(stream)()
+	}
+}
+
+func receiveImportEvent(stream anvilv1.ExportService_ImportClient) tea.Cmd {
+	return func() tea.Msg {
+		ev, err := stream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				return importStreamMsg{done: true}
+			}
+			return importStreamMsg{err: err, done: true}
+		}
+		switch e := ev.GetEvent().(type) {
+		case *anvilv1.ImportProgress_Status:
+			return importStreamMsg{stream: stream, line: e.Status}
+		case *anvilv1.ImportProgress_Error:
+			return importStreamMsg{err: fmt.Errorf("%s", e.Error), done: true}
+		case *anvilv1.ImportProgress_Done:
+			done := e.Done
+			var b strings.Builder
+			if done.GetIntentName() != "" {
+				b.WriteString(styleGood.Render("imported intent " + done.GetIntentName()))
+				for _, mr := range done.GetMembers() {
+					b.WriteString("\n  " + mr.GetRole() + ": " + mr.GetNewId())
+				}
+			} else if len(done.GetMembers()) > 0 {
+				b.WriteString(styleGood.Render("imported: " + done.GetMembers()[0].GetNewId()))
+			}
+			return importStreamMsg{stream: stream, line: b.String()}
+		default:
+			return importStreamMsg{stream: stream}
+		}
 	}
 }
 

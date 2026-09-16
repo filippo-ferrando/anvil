@@ -52,6 +52,8 @@ func NewRootCommand() *cobra.Command {
 		newMigrateRollbackCommand(flags),
 		newMigrateKeyCommand(flags),
 		newMigrateGuestKeyCommand(flags),
+		newExportCommand(flags),
+		newImportCommand(flags),
 		newTuiCommand(flags),
 	)
 	return root

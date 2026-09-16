@@ -19,6 +19,7 @@ import (
 	"github.com/anvil-project/anvil/internal/container"
 	"github.com/anvil-project/anvil/internal/container/docker"
 	"github.com/anvil-project/anvil/internal/daemon"
+	"github.com/anvil-project/anvil/internal/export"
 	"github.com/anvil-project/anvil/internal/instance"
 	"github.com/anvil-project/anvil/internal/intent"
 	"github.com/anvil-project/anvil/internal/migrate"
@@ -29,14 +30,17 @@ import (
 // VMBackend is what main needs from this platform's VM backend, beyond
 // the plain instance.Backend contract instance.Manager dispatches
 // through: ListCatalog (internal/daemon.VMCatalog) for the image-catalog
-// RPCs, and ExportDisk (internal/migrate.Exporter) for migration. Built by
-// newVMBackend, implemented in platform_linux.go/platform_darwin.go —
-// exactly one of internal/vm (QEMU) or internal/vm/vz (Apple
-// Virtualization.framework) is ever compiled into a given binary.
+// RPCs, ExportDisk (internal/migrate.Exporter) for migration, and
+// PrepareImportedDisk (internal/export.VMImporter) for `anvil import`.
+// Built by newVMBackend, implemented in
+// platform_linux.go/platform_darwin.go — exactly one of internal/vm
+// (QEMU) or internal/vm/vz (Apple Virtualization.framework) is ever
+// compiled into a given binary.
 type VMBackend interface {
 	instance.Backend
 	daemon.VMCatalog
 	migrate.Exporter
+	export.VMImporter
 }
 
 func main() {
@@ -49,7 +53,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	for _, dir := range []string{config.RunDir, config.StateDir, config.CacheDir, config.PreparedImageDir(), config.CloudInitDir(), config.MigrateStagingDir()} {
+	for _, dir := range []string{config.RunDir, config.StateDir, config.CacheDir, config.PreparedImageDir(), config.CloudInitDir(), config.MigrateStagingDir(), config.ExportStagingDir()} {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return fmt.Errorf("creating %s: %w (run as root, or as the \"anvil\" system user once packaged)", dir, err)
 		}
@@ -93,6 +97,7 @@ func run() error {
 		log.Printf("anvild: reconciling intent networks: %v", err)
 	}
 	migrateMgr := migrate.NewManager(db, mgr, vmBackend, intentMgr)
+	exportMgr := export.NewManager(db, mgr, intentMgr, vmBackend)
 
 	socketPath := config.SocketPath()
 	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
@@ -113,6 +118,7 @@ func run() error {
 	anvilv1.RegisterIntentServiceServer(grpcServer, daemon.NewIntentServer(intentMgr))
 	anvilv1.RegisterHostServiceServer(grpcServer, daemon.NewHostServer(db, migrateMgr))
 	anvilv1.RegisterMigrateServiceServer(grpcServer, daemon.NewMigrateServer(migrateMgr))
+	anvilv1.RegisterExportServiceServer(grpcServer, daemon.NewExportServer(exportMgr))
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- grpcServer.Serve(lis) }()
