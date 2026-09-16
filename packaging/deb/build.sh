@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Builds anvil_<version>_<arch>.deb and anvild_<version>_<arch>.deb from
+# this checkout (the live working tree, not a git snapshot, so local
+# changes not yet committed are picked up the same way `go build` run by
+# hand would). Same two-package split as packaging/archlinux/PKGBUILD
+# (anvil: CLI+TUI, anvild: daemon+systemd unit+sysusers/tmpfiles), just a
+# different package format.
+#
+# Usage: packaging/deb/build.sh [version] [arch]
+#   version defaults to 0.1.0 (matching PKGBUILD's pkgver), arch defaults
+#   to amd64 (only x86_64/amd64 is built anywhere else in this project
+#   right now, see internal/vm/qemu.BinaryName).
+#
+# Needs: go, dpkg-deb (part of dpkg on Debian/Ubuntu). Output lands in
+# packaging/deb/ itself (gitignored).
+
+version="${1:-0.1.0}"
+arch="${2:-amd64}"
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo="$(cd "$root/../.." && pwd)"
+
+for tool in go dpkg-deb; do
+  command -v "$tool" >/dev/null || { echo "packaging/deb/build.sh: needs '$tool' on PATH" >&2; exit 1; }
+done
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+echo "==> building anvil ${version} for ${arch}"
+
+echo "==> compiling"
+( cd "$repo" && CGO_ENABLED=0 go build -trimpath -o "$work/anvil-bin" ./cmd/anvil )
+( cd "$repo" && go build -trimpath -o "$work/anvild-bin" ./cmd/anvild )
+
+render_control() {
+  # $1 = template, $2 = installed-size in KiB (dpkg wants this in the
+  # control file; computed from the staged tree just before building it)
+  sed -e "s/@VERSION@/$version/" -e "s/@ARCH@/$arch/" -e "s/@INSTALLED_SIZE@/$2/" "$1"
+}
+
+echo "==> staging anvil (CLI+TUI)"
+pkg_anvil="$work/pkg-anvil"
+install -d "$pkg_anvil/DEBIAN" "$pkg_anvil/usr/bin" \
+  "$pkg_anvil/usr/share/bash-completion/completions" \
+  "$pkg_anvil/usr/share/zsh/site-functions" \
+  "$pkg_anvil/usr/share/fish/vendor_completions.d" \
+  "$pkg_anvil/usr/share/doc/anvil"
+install -m755 "$work/anvil-bin" "$pkg_anvil/usr/bin/anvil"
+"$work/anvil-bin" completion bash > "$pkg_anvil/usr/share/bash-completion/completions/anvil"
+"$work/anvil-bin" completion zsh > "$pkg_anvil/usr/share/zsh/site-functions/_anvil"
+"$work/anvil-bin" completion fish > "$pkg_anvil/usr/share/fish/vendor_completions.d/anvil.fish"
+install -m644 "$repo/LICENSE.md" "$pkg_anvil/usr/share/doc/anvil/copyright"
+size_anvil=$(du -sk "$pkg_anvil" | cut -f1)
+render_control "$root/control-anvil.in" "$size_anvil" > "$pkg_anvil/DEBIAN/control"
+dpkg-deb --build --root-owner-group "$pkg_anvil" "$root/anvil_${version}_${arch}.deb"
+
+echo "==> staging anvild (daemon)"
+common="$repo/packaging/common"
+pkg_anvild="$work/pkg-anvild"
+install -d "$pkg_anvild/DEBIAN" "$pkg_anvild/usr/bin" \
+  "$pkg_anvild/usr/lib/anvil" \
+  "$pkg_anvild/usr/lib/systemd/system" \
+  "$pkg_anvild/usr/lib/sysusers.d" \
+  "$pkg_anvild/usr/lib/tmpfiles.d" \
+  "$pkg_anvild/usr/share/doc/anvild"
+install -m755 "$work/anvild-bin" "$pkg_anvild/usr/bin/anvild"
+install -m755 "$common/post-install.sh" "$pkg_anvild/usr/lib/anvil/post-install.sh"
+install -m644 "$common/anvild.service" "$pkg_anvild/usr/lib/systemd/system/anvild.service"
+install -m644 "$common/anvil.sysusers" "$pkg_anvild/usr/lib/sysusers.d/anvil.conf"
+install -m644 "$common/anvil.tmpfiles" "$pkg_anvild/usr/lib/tmpfiles.d/anvil.conf"
+install -m644 "$repo/LICENSE.md" "$pkg_anvild/usr/share/doc/anvild/copyright"
+install -m755 "$root/postinst-anvild" "$pkg_anvild/DEBIAN/postinst"
+
+# postrm's `purge` case needs packaging/common/purge.sh's cleanup
+# commands inlined verbatim (see postrm-anvild.in's own comment for why
+# it can't just call an installed file the way postinst does): strip
+# purge.sh's shebang, then splice its body in at the @PURGE_BODY@
+# marker with sed's `r` (read file) command, and drop the marker line.
+purge_body="$work/purge-body.sh"
+tail -n +2 "$common/purge.sh" > "$purge_body"
+sed "/^@PURGE_BODY@\$/{
+r $purge_body
+d
+}" "$root/postrm-anvild.in" > "$pkg_anvild/DEBIAN/postrm"
+chmod 755 "$pkg_anvild/DEBIAN/postrm"
+
+size_anvild=$(du -sk "$pkg_anvild" | cut -f1)
+render_control "$root/control-anvild.in" "$size_anvild" > "$pkg_anvild/DEBIAN/control"
+dpkg-deb --build --root-owner-group "$pkg_anvild" "$root/anvild_${version}_${arch}.deb"
+
+echo "==> done:"
+echo "    $root/anvil_${version}_${arch}.deb"
+echo "    $root/anvild_${version}_${arch}.deb"
+echo "==> sanity-check before shipping, e.g.:"
+echo "    dpkg-deb --info $root/anvild_${version}_${arch}.deb"
+echo "    lintian $root/anvil_${version}_${arch}.deb $root/anvild_${version}_${arch}.deb"

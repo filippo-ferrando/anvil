@@ -1,0 +1,19 @@
+#!/bin/sh
+# postinst for the anvild .deb, run by dpkg after unpacking. dpkg's
+# "configure" step covers both a fresh install and an upgrade, which is
+# fine here since every step in the shared script below is idempotent.
+#
+# The actual work is in /usr/lib/anvil/post-install.sh, shared verbatim
+# with packaging/archlinux/anvild.install and packaging/rpm's %post — see
+# packaging/common/post-install.sh, this package's build.sh installs it
+# to that same path.
+set -e
+
+case "$1" in
+  configure)
+    /usr/lib/anvil/post-install.sh
+    ;;
+esac
+
+# Removal cleanup is in postrm-anvild.in, not here — see that file.
+exit 0

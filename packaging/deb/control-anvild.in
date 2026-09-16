@@ -1,0 +1,18 @@
+Package: anvild
+Version: @VERSION@
+Section: admin
+Priority: optional
+Architecture: @ARCH@
+Depends: qemu-system-x86, qemu-utils, xorriso, openssh-client, systemd
+Recommends: docker.io | docker-ce
+Installed-Size: @INSTALLED_SIZE@
+Maintainer: filippo ferrando <ferrandodfilippo@ik.me>
+Homepage: https://git.fferrando.cc/rdfilippo/anvil
+Description: Daemon for anvil - manages QEMU VMs and Docker/Podman containers
+ anvild is the daemon anvil (the CLI/TUI) talks to over a unix socket. It
+ drives qemu-system-x86_64 processes directly (no libvirt) for VMs, and
+ Docker (Podman support planned) for containers.
+ .
+ Runs as an unprivileged "anvil" system user, created automatically on
+ install (see postinst). Not started automatically; enable it yourself
+ with systemctl enable --now anvild once installed.

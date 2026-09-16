@@ -1,4 +1,4 @@
-# Maintainer: filippo ferrando <fferrando@elemento.cloud>
+# Maintainer: filippo ferrando <ferrandodfilippo@ik.me>
 pkgbase=anvil
 pkgname=('anvil' 'anvild')
 pkgver=0.1.0
@@ -41,8 +41,18 @@ package_anvild() {
   install=anvild.install
 
   install -Dm755 "$srcdir/anvild-bin" "$pkgdir/usr/bin/anvild"
-  install -Dm644 "$startdir/anvild.service" "$pkgdir/usr/lib/systemd/system/anvild.service"
-  install -Dm644 "$startdir/anvil.sysusers" "$pkgdir/usr/lib/sysusers.d/anvil.conf"
-  install -Dm644 "$startdir/anvil.tmpfiles" "$pkgdir/usr/lib/tmpfiles.d/anvil.conf"
+  # The systemd unit, sysusers/tmpfiles configs, and post-install script
+  # are all shared verbatim across every packaging format (packaging/deb,
+  # packaging/rpm too), not duplicated per format — see packaging/common/.
+  install -Dm644 "$startdir/../common/anvild.service" "$pkgdir/usr/lib/systemd/system/anvild.service"
+  install -Dm644 "$startdir/../common/anvil.sysusers" "$pkgdir/usr/lib/sysusers.d/anvil.conf"
+  install -Dm644 "$startdir/../common/anvil.tmpfiles" "$pkgdir/usr/lib/tmpfiles.d/anvil.conf"
+  install -Dm755 "$startdir/../common/post-install.sh" "$pkgdir/usr/lib/anvil/post-install.sh"
+  # Referenced from anvild.install's pre_remove, not post_remove: pacman
+  # deletes a package's own files before running post_remove, so this
+  # script has to still be on disk when it's invoked, same reasoning
+  # packaging/deb/build.sh inlines this file's content into DEBIAN/postrm
+  # instead of shipping it as a regular file there.
+  install -Dm755 "$startdir/../common/purge.sh" "$pkgdir/usr/lib/anvil/purge.sh"
   install -Dm644 "$srcdir/anvil/LICENSE.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE.md"
 }

@@ -1,2 +1,3 @@
+# Shared verbatim across every packaging format under packaging/.
 #Type Name  ID  GECOS          Home directory
 u      anvil -   "anvil daemon" /var/lib/anvil

@@ -1,0 +1,16 @@
+Package: anvil
+Version: @VERSION@
+Section: utils
+Priority: optional
+Architecture: @ARCH@
+Depends: openssh-client
+Installed-Size: @INSTALLED_SIZE@
+Maintainer: filippo ferrando <ferrandodfilippo@ik.me>
+Homepage: https://git.fferrando.cc/rdfilippo/anvil
+Description: CLI for anvil, a Multipass-alike for cloud-init VMs and containers
+ anvil manages cloud-init VMs (via direct QEMU process management) and
+ Docker/Podman containers side by side, with grouped "intents", cold
+ migration between anvil hosts, and a terminal UI (anvil tui).
+ .
+ This package installs the anvil CLI/TUI client only; the daemon that
+ actually drives QEMU/Docker is the separate anvild package.

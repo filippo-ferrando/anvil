@@ -6,3 +6,6 @@
 /packaging/*.log
 /packaging/*.zst
 /packaging/anvil/
+/packaging/deb/*.deb
+/packaging/rpm/*.rpm
+/packaging/rpm/*.src.rpm

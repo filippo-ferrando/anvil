@@ -1,0 +1,28 @@
+[Unit]
+Description=anvil daemon (cloud-init VMs and Docker/Podman containers)
+After=network.target
+
+# Runs as the unprivileged "anvil" system user (created by anvil.sysusers,
+# in this same directory), with just enough grants for KVM and tap/bridge
+# networking; Docker group membership, if applicable, is added separately
+# by each package format's own post-install step (archlinux/anvild.install,
+# deb/postinst-anvild, rpm/anvil.spec.in's %post).
+#
+# This file (and its two siblings here) is shared verbatim across every
+# packaging format under packaging/ — never copy it, reference this one.
+[Service]
+Type=simple
+User=anvil
+Group=anvil
+SupplementaryGroups=kvm
+ExecStart=/usr/bin/anvild
+Restart=on-failure
+RestartSec=2
+
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+DeviceAllow=/dev/kvm rw
+DeviceAllow=/dev/net/tun rw
+
+[Install]
+WantedBy=multi-user.target

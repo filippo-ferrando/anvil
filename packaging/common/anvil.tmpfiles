@@ -1,3 +1,4 @@
+# Shared verbatim across every packaging format under packaging/.
 #Type Path             Mode User  Group Age Argument
 d      /run/anvil       0750 anvil anvil -
 d      /var/lib/anvil   0750 anvil anvil -

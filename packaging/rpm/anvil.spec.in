@@ -1,0 +1,120 @@
+# Two binary packages from one source, same split as
+# packaging/archlinux/PKGBUILD (pkgname=('anvil' 'anvild')) and
+# packaging/deb (anvil_*.deb / anvild_*.deb): "anvil" is the CLI+TUI
+# client, "anvild" is the daemon. @VERSION@/@RELEASE@ are substituted by
+# packaging/rpm/build.sh from its own arguments.
+Name:           anvil
+Version:        @VERSION@
+Release:        @RELEASE@%{?dist}
+Summary:        Multipass-alike for cloud-init VMs and Docker/Podman containers
+License:        Apache-2.0
+URL:            https://git.fferrando.cc/rdfilippo/anvil
+Source0:        %{name}-%{version}.tar.gz
+BuildRequires:  golang >= 1.27
+Requires:       openssh-clients
+
+%description
+anvil manages cloud-init VMs (via direct QEMU process management) and
+Docker/Podman containers side by side, with grouped "intents", cold
+migration between anvil hosts, and a terminal UI (anvil tui). This
+source package builds two binary packages: anvil (this one, the CLI/TUI
+client) and anvild (the daemon that actually drives QEMU/Docker).
+
+%package -n anvild
+Summary:        Daemon for anvil - manages QEMU VMs and Docker/Podman containers
+Requires:       qemu-img
+Requires:       qemu-system-x86
+Requires:       xorriso
+Requires:       openssh-clients
+Requires:       systemd
+Recommends:     docker-ce
+
+%description -n anvild
+anvild is the daemon anvil (the CLI/TUI) talks to over a unix socket. It
+drives qemu-system-x86_64 processes directly (no libvirt) for VMs, and
+Docker (Podman support planned) for containers.
+
+Runs as an unprivileged "anvil" system user, created automatically on
+install (see %post). Not started automatically; enable it yourself with
+systemctl enable --now anvild once installed.
+
+%prep
+%autosetup -n %{name}-%{version}
+
+%build
+CGO_ENABLED=0 go build -trimpath -mod=readonly -o anvil-bin ./cmd/anvil
+go build -trimpath -mod=readonly -o anvild-bin ./cmd/anvild
+
+%install
+install -Dm755 anvil-bin %{buildroot}%{_bindir}/anvil
+install -Dm755 anvild-bin %{buildroot}%{_bindir}/anvild
+
+# Plain redirection, not `<(...)` process substitution: rpmbuild runs
+# every scriptlet, %install included, via /bin/sh — which is dash on
+# Debian/Ubuntu (unlike Arch, where /bin/sh is bash and PKGBUILD's own
+# equivalent lines get away with `<(...)`), and dash doesn't understand
+# it at all ("Syntax error: "(" unexpected"). Same reasoning
+# packaging/deb/build.sh already uses plain redirection here too.
+./anvil-bin completion bash > anvil-completion.bash
+./anvil-bin completion zsh > anvil-completion.zsh
+./anvil-bin completion fish > anvil-completion.fish
+install -Dm644 anvil-completion.bash %{buildroot}%{_datadir}/bash-completion/completions/anvil
+install -Dm644 anvil-completion.zsh %{buildroot}%{_datadir}/zsh/site-functions/_anvil
+install -Dm644 anvil-completion.fish %{buildroot}%{_datadir}/fish/vendor_completions.d/anvil.fish
+
+# The systemd unit, sysusers/tmpfiles configs, and post-install script
+# are all shared verbatim across every packaging format (packaging/deb,
+# packaging/archlinux too), not duplicated per format — see
+# packaging/common/. They're part of this same source tarball (built by
+# packaging/rpm/build.sh from the live working tree, not a stale git
+# snapshot), so a plain relative path from the extracted source root
+# reaches them here.
+install -Dm755 packaging/common/post-install.sh %{buildroot}/usr/lib/anvil/post-install.sh
+install -Dm644 packaging/common/anvild.service %{buildroot}/usr/lib/systemd/system/anvild.service
+install -Dm644 packaging/common/anvil.sysusers %{buildroot}/usr/lib/sysusers.d/anvil.conf
+install -Dm644 packaging/common/anvil.tmpfiles %{buildroot}/usr/lib/tmpfiles.d/anvil.conf
+
+%files
+%license LICENSE.md
+%{_bindir}/anvil
+%{_datadir}/bash-completion/completions/anvil
+%{_datadir}/zsh/site-functions/_anvil
+%{_datadir}/fish/vendor_completions.d/anvil.fish
+
+%files -n anvild
+%license LICENSE.md
+%{_bindir}/anvild
+/usr/lib/anvil/post-install.sh
+/usr/lib/systemd/system/anvild.service
+/usr/lib/sysusers.d/anvil.conf
+/usr/lib/tmpfiles.d/anvil.conf
+
+# Deliberately no %preun that enables or starts the service, same
+# choice packaging/archlinux/anvild.install and packaging/deb make: left
+# to the operator on every format, not just this one.
+%post -n anvild
+/usr/lib/anvil/post-install.sh
+
+# rpm has no remove-vs-purge distinction the way dpkg does — a real
+# `rpm -e`/`dnf remove` is the only removal action there is, so this
+# fully cleans up (every VM/container record, cached image, and saved
+# cloud-init config, plus the "anvil" system user/group), guarded by
+# `$1 = 0` so an in-place upgrade (old package's %postun still runs, but
+# with $1 = 1, the new version already installed) never triggers it.
+#
+# %postun runs after rpm has already removed the old package's files,
+# so — same reasoning as packaging/deb/postrm-anvild.in — this can't
+# just call an installed /usr/lib/anvil/purge.sh the way %post does;
+# rpm keeps its own persisted copy of this scriptlet regardless of what
+# package files still exist, which is why the cleanup commands below are
+# inlined verbatim by packaging/rpm/build.sh at build time from
+# packaging/common/purge.sh. Edit that one file, not the inlined copy
+# here.
+%postun -n anvild
+if [ "$1" = 0 ]; then
+@PURGE_BODY@
+fi
+
+%changelog
+* @CHANGELOG_DATE@ filippo ferrando <ferrandodfilippo@ik.me> - @VERSION@-@RELEASE@
+- Built from the working tree by packaging/rpm/build.sh.
