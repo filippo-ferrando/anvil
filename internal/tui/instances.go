@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -56,6 +58,8 @@ const (
 	instancesPromptShellUser
 	instancesPromptExport
 	instancesPromptImport
+	instancesPromptAddPort
+	instancesPromptRemovePort
 )
 
 // statsRefreshInterval is how often the selected running instance's live
@@ -78,8 +82,9 @@ type instancesModel struct {
 	importing   bool     // an import stream is in flight, blocking other keys
 	importLines []string // the finished (or in-flight) import's progress transcript
 
-	detailWidth int // width of the detail panel next to the list
-	panelHeight int // shared height for both side-by-side panels
+	detailWidth  int // width of the detail panel next to the list
+	panelHeight  int // shared height for both side-by-side panels
+	contentWidth int // full width given to this screen, for wrapping the help bar
 
 	// Live stats for whichever instance is currently selected, see
 	// maybeRefreshStats/statsLoadedMsg. statsFor names which instance
@@ -100,6 +105,7 @@ func newInstancesModel() instancesModel {
 }
 
 func (m *instancesModel) setSize(width, height int) {
+	m.contentWidth = width
 	const gutter = 2
 	inner := width - 2*boxOverhead - gutter
 	if inner < 20 {
@@ -355,6 +361,25 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}))
 		}
 		return m, nil
+	case "p":
+		if inst := m.selectedInstance(); inst != nil {
+			m.instances.startPrompt(instancesPromptAddPort, inst, newSimpleForm("Add port forward", []formField{
+				textField("Host port", "e.g. 8080", ""),
+				textField("Guest port", "e.g. 80", ""),
+				toggleField("UDP", "use udp instead of tcp", false),
+			}))
+		}
+		return m, nil
+	case "P":
+		if inst := m.selectedInstance(); inst != nil {
+			hostPortField := textField("Host port", "e.g. 8080", "")
+			hostPortField.Suggestions = hostPortStrings(inst)
+			m.instances.startPrompt(instancesPromptRemovePort, inst, newSimpleForm("Remove port forward", []formField{
+				hostPortField,
+				toggleField("UDP", "use udp instead of tcp", false),
+			}))
+		}
+		return m, nil
 	case "E":
 		if inst := m.selectedInstance(); inst != nil {
 			m.instances.startPrompt(instancesPromptExport, inst, newSimpleForm("Export "+inst.GetName(), []formField{
@@ -461,6 +486,35 @@ func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		ins.importing = true
 		ins.importLines = nil
 		return m, startImportStream(m.client, bundlePath, ins.promptForm.Value("Rename (optional)"))
+
+	case instancesPromptAddPort:
+		hostPort, err := strconv.Atoi(ins.promptForm.Value("Host port"))
+		if err != nil {
+			m.setStatus("invalid host port: "+err.Error(), true)
+			return m, nil
+		}
+		guestPort, err := strconv.Atoi(ins.promptForm.Value("Guest port"))
+		if err != nil {
+			m.setStatus("invalid guest port: "+err.Error(), true)
+			return m, nil
+		}
+		protocol := "tcp"
+		if ins.promptForm.Bool("UDP") {
+			protocol = "udp"
+		}
+		return m, addPort(m.client, target.GetName(), hostPort, guestPort, protocol)
+
+	case instancesPromptRemovePort:
+		hostPort, err := strconv.Atoi(ins.promptForm.Value("Host port"))
+		if err != nil {
+			m.setStatus("invalid host port: "+err.Error(), true)
+			return m, nil
+		}
+		protocol := "tcp"
+		if ins.promptForm.Bool("UDP") {
+			protocol = "udp"
+		}
+		return m, removePort(m.client, target.GetName(), hostPort, protocol)
 	}
 	return m, nil
 }
@@ -505,9 +559,10 @@ func (m instancesModel) View() string {
 	left := styleBoxFocused.Render(lipgloss.NewStyle().Height(m.panelHeight).Width(m.list.Width()).Render(listBody))
 	right := styleBox.Render(lipgloss.NewStyle().Height(m.panelHeight).Width(m.detailWidth).Render(m.detailView()))
 
-	help := helpBar(
+	help := helpBarWrap(m.contentWidth,
 		"n", "launch", "s", "start/stop", "d", "delete", "x", "shell",
-		"e", "exec", "m", "mount", "M", "umount", "E", "export", "i", "import", "l", "logs", "r", "refresh", "esc", "back",
+		"e", "exec", "m", "mount", "M", "umount", "p", "add port", "P", "remove port",
+		"E", "export", "i", "import", "l", "logs", "r", "refresh", "esc", "back",
 	)
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right) + "\n" + help
 }
@@ -533,6 +588,9 @@ func (m instancesModel) detailView() string {
 	b = append(b, detailRow("Image", image))
 	if intentName := inst.GetLabels()["intent"]; intentName != "" {
 		b = append(b, detailRow("Intent", intentName+" ("+inst.GetLabels()["role"]+")"))
+	}
+	if ports := portsOf(inst); len(ports) > 0 {
+		b = append(b, detailRow("Ports", formatPorts(ports)))
 	}
 
 	if inst.GetState() != anvilv1.State_STATE_RUNNING {
@@ -596,6 +654,40 @@ func (m instancesModel) detailView() string {
 
 func detailRow(label, value string) string {
 	return styleFieldLabel.Render(fmt.Sprintf("%-8s", label)) + value
+}
+
+// portsOf returns inst's host-to-guest port forwards, VM or container alike.
+func portsOf(inst *anvilv1.Instance) []*anvilv1.PortMapping {
+	if inst.GetKind() == anvilv1.Kind_KIND_CONTAINER {
+		return inst.GetContainer().GetPorts()
+	}
+	return inst.GetVm().GetPorts()
+}
+
+// hostPortStrings returns inst's currently exposed host ports, for the
+// "Remove port forward" prompt's Suggestions — so removing one doesn't
+// require already knowing it by heart.
+func hostPortStrings(inst *anvilv1.Instance) []string {
+	ports := portsOf(inst)
+	out := make([]string, len(ports))
+	for i, p := range ports {
+		out[i] = strconv.Itoa(int(p.GetHostPort()))
+	}
+	return out
+}
+
+// formatPorts renders ports as "8080:80/tcp, 2222:22/tcp", the same shape
+// `anvil port add` takes.
+func formatPorts(ports []*anvilv1.PortMapping) string {
+	parts := make([]string, len(ports))
+	for i, p := range ports {
+		proto := p.GetProtocol()
+		if proto == "" {
+			proto = "tcp"
+		}
+		parts[i] = fmt.Sprintf("%d:%d/%s", p.GetHostPort(), p.GetGuestPort(), proto)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func stateLabel(s anvilv1.State) string {

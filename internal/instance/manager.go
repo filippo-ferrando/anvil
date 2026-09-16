@@ -265,6 +265,47 @@ func (m *Manager) Umount(ctx context.Context, name, guestPath string) error {
 	return m.registry.PutInstance(spec)
 }
 
+// AddPort adds a host-to-guest port forward to name, live if it's running.
+func (m *Manager) AddPort(ctx context.Context, name string, port PortMapping) error {
+	spec, err := m.registry.GetByName(name)
+	if err != nil {
+		return err
+	}
+	b, err := m.backendFor(spec.Kind)
+	if err != nil {
+		return err
+	}
+	pf, ok := b.(PortForwarder)
+	if !ok {
+		return fmt.Errorf("instance: %s instances don't support port forwarding changes", spec.Kind)
+	}
+	if err := pf.AddPort(ctx, spec, port); err != nil {
+		return err
+	}
+	return m.registry.PutInstance(spec)
+}
+
+// RemovePort removes a port forward previously added with AddPort,
+// identified by hostPort/protocol.
+func (m *Manager) RemovePort(ctx context.Context, name string, hostPort int, protocol string) error {
+	spec, err := m.registry.GetByName(name)
+	if err != nil {
+		return err
+	}
+	b, err := m.backendFor(spec.Kind)
+	if err != nil {
+		return err
+	}
+	pf, ok := b.(PortForwarder)
+	if !ok {
+		return fmt.Errorf("instance: %s instances don't support port forwarding changes", spec.Kind)
+	}
+	if err := pf.RemovePort(ctx, spec, hostPort, protocol); err != nil {
+		return err
+	}
+	return m.registry.PutInstance(spec)
+}
+
 func (m *Manager) Start(ctx context.Context, names []string) error {
 	specs, err := m.resolve(names)
 	if err != nil {

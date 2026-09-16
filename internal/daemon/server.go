@@ -137,6 +137,22 @@ func (s *Server) Umount(ctx context.Context, req *anvilv1.UmountRequest) (*anvil
 	return &anvilv1.UmountReply{}, nil
 }
 
+func (s *Server) AddPort(ctx context.Context, req *anvilv1.AddPortRequest) (*anvilv1.AddPortReply, error) {
+	p := req.GetPort()
+	port := instance.PortMapping{HostPort: int(p.GetHostPort()), GuestPort: int(p.GetGuestPort()), Protocol: p.GetProtocol()}
+	if err := s.Manager.AddPort(ctx, req.GetName(), port); err != nil {
+		return nil, err
+	}
+	return &anvilv1.AddPortReply{}, nil
+}
+
+func (s *Server) RemovePort(ctx context.Context, req *anvilv1.RemovePortRequest) (*anvilv1.RemovePortReply, error) {
+	if err := s.Manager.RemovePort(ctx, req.GetName(), int(req.GetHostPort()), req.GetProtocol()); err != nil {
+		return nil, err
+	}
+	return &anvilv1.RemovePortReply{}, nil
+}
+
 func (s *Server) Stats(ctx context.Context, req *anvilv1.StatsRequest) (*anvilv1.StatsReply, error) {
 	stats, err := s.Manager.Stats(ctx, req.GetName())
 	if err != nil {

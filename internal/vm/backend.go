@@ -567,6 +567,81 @@ func (b *Backend) Umount(ctx context.Context, spec *instance.Spec, guestPath str
 	return b.reconfigureAndRestartIfRunning(ctx, spec)
 }
 
+// portProtocol normalizes an empty protocol to "tcp", matching how
+// instance.PortMapping.Protocol is treated everywhere else it's consumed.
+func portProtocol(p string) string {
+	if p == "" {
+		return "tcp"
+	}
+	return p
+}
+
+// AddPort adds a host-to-guest SLIRP port forward to spec. If spec is
+// currently running, it's applied live over QMP (QEMU's hostfwd_add HMP
+// command) — no restart, unlike Mount. Otherwise it's just persisted for
+// the next Start.
+func (b *Backend) AddPort(ctx context.Context, spec *instance.Spec, port instance.PortMapping) error {
+	if spec.VM == nil {
+		return fmt.Errorf("vm: AddPort called with a nil VMSpec")
+	}
+	if spec.VM.NetworkMode == "bridge" {
+		return fmt.Errorf("vm: %s uses bridge networking — it has its own address, no host-forwarded ports apply", spec.Name)
+	}
+	proto := portProtocol(port.Protocol)
+	for _, p := range spec.VM.Ports {
+		if p.HostPort == port.HostPort && portProtocol(p.Protocol) == proto {
+			return fmt.Errorf("vm: %s already forwards host port %d/%s", spec.Name, port.HostPort, proto)
+		}
+	}
+
+	b.mu.Lock()
+	proc, running := b.running[spec.ID]
+	b.mu.Unlock()
+	if running && proc.QMP != nil {
+		if err := proc.QMP.AddHostForward(ctx, qemu.NetdevID, qemu.HostForward{
+			HostPort: port.HostPort, GuestPort: port.GuestPort, Protocol: proto,
+		}); err != nil {
+			return fmt.Errorf("vm: adding live port forward: %w", err)
+		}
+	}
+
+	spec.VM.Ports = append(spec.VM.Ports, instance.PortMapping{HostPort: port.HostPort, GuestPort: port.GuestPort, Protocol: proto})
+	return nil
+}
+
+// RemovePort removes a port forward previously added with AddPort or at
+// launch, identified by hostPort/protocol.
+func (b *Backend) RemovePort(ctx context.Context, spec *instance.Spec, hostPort int, protocol string) error {
+	if spec.VM == nil {
+		return fmt.Errorf("vm: RemovePort called with a nil VMSpec")
+	}
+	proto := portProtocol(protocol)
+
+	idx := -1
+	for i, p := range spec.VM.Ports {
+		if p.HostPort == hostPort && portProtocol(p.Protocol) == proto {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return fmt.Errorf("vm: %s has no port forward for host port %d/%s (currently exposed: %s)",
+			spec.Name, hostPort, proto, instance.FormatPorts(spec.VM.Ports))
+	}
+
+	b.mu.Lock()
+	proc, running := b.running[spec.ID]
+	b.mu.Unlock()
+	if running && proc.QMP != nil {
+		if err := proc.QMP.RemoveHostForward(ctx, qemu.NetdevID, hostPort, proto); err != nil {
+			return fmt.Errorf("vm: removing live port forward: %w", err)
+		}
+	}
+
+	spec.VM.Ports = append(spec.VM.Ports[:idx], spec.VM.Ports[idx+1:]...)
+	return nil
+}
+
 // reconfigureAndRestartIfRunning rebuilds spec's cloud-init seed and, if
 // the instance is running, restarts QEMU to pick up the mount change.
 func (b *Backend) reconfigureAndRestartIfRunning(ctx context.Context, spec *instance.Spec) error {

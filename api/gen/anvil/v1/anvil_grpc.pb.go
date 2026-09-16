@@ -19,17 +19,19 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	InstanceService_Launch_FullMethodName = "/anvil.v1.InstanceService/Launch"
-	InstanceService_List_FullMethodName   = "/anvil.v1.InstanceService/List"
-	InstanceService_Info_FullMethodName   = "/anvil.v1.InstanceService/Info"
-	InstanceService_Start_FullMethodName  = "/anvil.v1.InstanceService/Start"
-	InstanceService_Stop_FullMethodName   = "/anvil.v1.InstanceService/Stop"
-	InstanceService_Delete_FullMethodName = "/anvil.v1.InstanceService/Delete"
-	InstanceService_Purge_FullMethodName  = "/anvil.v1.InstanceService/Purge"
-	InstanceService_Logs_FullMethodName   = "/anvil.v1.InstanceService/Logs"
-	InstanceService_Mount_FullMethodName  = "/anvil.v1.InstanceService/Mount"
-	InstanceService_Umount_FullMethodName = "/anvil.v1.InstanceService/Umount"
-	InstanceService_Stats_FullMethodName  = "/anvil.v1.InstanceService/Stats"
+	InstanceService_Launch_FullMethodName     = "/anvil.v1.InstanceService/Launch"
+	InstanceService_List_FullMethodName       = "/anvil.v1.InstanceService/List"
+	InstanceService_Info_FullMethodName       = "/anvil.v1.InstanceService/Info"
+	InstanceService_Start_FullMethodName      = "/anvil.v1.InstanceService/Start"
+	InstanceService_Stop_FullMethodName       = "/anvil.v1.InstanceService/Stop"
+	InstanceService_Delete_FullMethodName     = "/anvil.v1.InstanceService/Delete"
+	InstanceService_Purge_FullMethodName      = "/anvil.v1.InstanceService/Purge"
+	InstanceService_Logs_FullMethodName       = "/anvil.v1.InstanceService/Logs"
+	InstanceService_Mount_FullMethodName      = "/anvil.v1.InstanceService/Mount"
+	InstanceService_Umount_FullMethodName     = "/anvil.v1.InstanceService/Umount"
+	InstanceService_AddPort_FullMethodName    = "/anvil.v1.InstanceService/AddPort"
+	InstanceService_RemovePort_FullMethodName = "/anvil.v1.InstanceService/RemovePort"
+	InstanceService_Stats_FullMethodName      = "/anvil.v1.InstanceService/Stats"
 )
 
 // InstanceServiceClient is the client API for InstanceService service.
@@ -48,6 +50,12 @@ type InstanceServiceClient interface {
 	Logs(ctx context.Context, in *LogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogChunk], error)
 	Mount(ctx context.Context, in *MountRequest, opts ...grpc.CallOption) (*MountReply, error)
 	Umount(ctx context.Context, in *UmountRequest, opts ...grpc.CallOption) (*UmountReply, error)
+	// AddPort/RemovePort change a running instance's host-to-guest port
+	// forwards without recreating it: a VM applies this live over QMP; a
+	// container (Docker has no live port-binding mutation) recreates its
+	// underlying container, restarting it if it was running.
+	AddPort(ctx context.Context, in *AddPortRequest, opts ...grpc.CallOption) (*AddPortReply, error)
+	RemovePort(ctx context.Context, in *RemovePortRequest, opts ...grpc.CallOption) (*RemovePortReply, error)
 	// Stats returns a live resource-usage snapshot for a running instance.
 	Stats(ctx context.Context, in *StatsRequest, opts ...grpc.CallOption) (*StatsReply, error)
 }
@@ -178,6 +186,26 @@ func (c *instanceServiceClient) Umount(ctx context.Context, in *UmountRequest, o
 	return out, nil
 }
 
+func (c *instanceServiceClient) AddPort(ctx context.Context, in *AddPortRequest, opts ...grpc.CallOption) (*AddPortReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddPortReply)
+	err := c.cc.Invoke(ctx, InstanceService_AddPort_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *instanceServiceClient) RemovePort(ctx context.Context, in *RemovePortRequest, opts ...grpc.CallOption) (*RemovePortReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemovePortReply)
+	err := c.cc.Invoke(ctx, InstanceService_RemovePort_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *instanceServiceClient) Stats(ctx context.Context, in *StatsRequest, opts ...grpc.CallOption) (*StatsReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StatsReply)
@@ -204,6 +232,12 @@ type InstanceServiceServer interface {
 	Logs(*LogsRequest, grpc.ServerStreamingServer[LogChunk]) error
 	Mount(context.Context, *MountRequest) (*MountReply, error)
 	Umount(context.Context, *UmountRequest) (*UmountReply, error)
+	// AddPort/RemovePort change a running instance's host-to-guest port
+	// forwards without recreating it: a VM applies this live over QMP; a
+	// container (Docker has no live port-binding mutation) recreates its
+	// underlying container, restarting it if it was running.
+	AddPort(context.Context, *AddPortRequest) (*AddPortReply, error)
+	RemovePort(context.Context, *RemovePortRequest) (*RemovePortReply, error)
 	// Stats returns a live resource-usage snapshot for a running instance.
 	Stats(context.Context, *StatsRequest) (*StatsReply, error)
 	mustEmbedUnimplementedInstanceServiceServer()
@@ -245,6 +279,12 @@ func (UnimplementedInstanceServiceServer) Mount(context.Context, *MountRequest) 
 }
 func (UnimplementedInstanceServiceServer) Umount(context.Context, *UmountRequest) (*UmountReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Umount not implemented")
+}
+func (UnimplementedInstanceServiceServer) AddPort(context.Context, *AddPortRequest) (*AddPortReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AddPort not implemented")
+}
+func (UnimplementedInstanceServiceServer) RemovePort(context.Context, *RemovePortRequest) (*RemovePortReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RemovePort not implemented")
 }
 func (UnimplementedInstanceServiceServer) Stats(context.Context, *StatsRequest) (*StatsReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Stats not implemented")
@@ -436,6 +476,42 @@ func _InstanceService_Umount_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InstanceService_AddPort_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddPortRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InstanceServiceServer).AddPort(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InstanceService_AddPort_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InstanceServiceServer).AddPort(ctx, req.(*AddPortRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InstanceService_RemovePort_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemovePortRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InstanceServiceServer).RemovePort(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InstanceService_RemovePort_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InstanceServiceServer).RemovePort(ctx, req.(*RemovePortRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _InstanceService_Stats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(StatsRequest)
 	if err := dec(in); err != nil {
@@ -492,6 +568,14 @@ var InstanceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Umount",
 			Handler:    _InstanceService_Umount_Handler,
+		},
+		{
+			MethodName: "AddPort",
+			Handler:    _InstanceService_AddPort_Handler,
+		},
+		{
+			MethodName: "RemovePort",
+			Handler:    _InstanceService_RemovePort_Handler,
 		},
 		{
 			MethodName: "Stats",

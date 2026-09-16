@@ -58,6 +58,15 @@ func (b *Backend) PrepareImportedDisk(ctx context.Context, imageRef, arch, diskP
 	return errNotImplemented("PrepareImportedDisk")
 }
 
+// AddPort and RemovePort satisfy instance.PortForwarder, same as internal/vm.Backend.
+func (b *Backend) AddPort(ctx context.Context, spec *instance.Spec, port instance.PortMapping) error {
+	return errNotImplemented("AddPort")
+}
+
+func (b *Backend) RemovePort(ctx context.Context, spec *instance.Spec, hostPort int, protocol string) error {
+	return errNotImplemented("RemovePort")
+}
+
 func (b *Backend) Create(ctx context.Context, spec *instance.Spec, progress func(status string)) error {
 	return errNotImplemented("Create")
 }

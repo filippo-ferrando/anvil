@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -189,6 +190,79 @@ func (c *QMPClient) QueryStatus(ctx context.Context) (QueryStatusResult, error) 
 		return QueryStatusResult{}, fmt.Errorf("qmp: decoding query-status: %w", err)
 	}
 	return res, nil
+}
+
+// humanMonitorCommand runs an arbitrary HMP command line through QMP's
+// human-monitor-command passthrough, returning its plain-text output.
+func (c *QMPClient) humanMonitorCommand(ctx context.Context, line string) (string, error) {
+	raw, err := c.Execute(ctx, "human-monitor-command", map[string]string{"command-line": line})
+	if err != nil {
+		return "", err
+	}
+	var out string
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return "", fmt.Errorf("qmp: decoding human-monitor-command output: %w", err)
+	}
+	return out, nil
+}
+
+// AddHostForward adds a live SLIRP host-to-guest port forward on netdevID
+// (see NetdevID) via the hostfwd_add HMP command — unlike a 9p mount, this
+// takes effect immediately, no VM restart needed. HMP reports a failure as
+// plain text rather than a QMP-level error, so any non-empty output here
+// is treated as one.
+func (c *QMPClient) AddHostForward(ctx context.Context, netdevID string, f HostForward) error {
+	out, err := c.humanMonitorCommand(ctx, hostfwdAddLine(netdevID, f))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(out) != "" {
+		return fmt.Errorf("qmp: hostfwd_add: %s", strings.TrimSpace(out))
+	}
+	return nil
+}
+
+// RemoveHostForward removes a live SLIRP host-to-guest port forward
+// previously added with AddHostForward, via the hostfwd_remove HMP command.
+// Unlike hostfwd_add, QEMU confirms a successful removal with plain text
+// (e.g. "host forwarding rule for tcp::7000 removed") rather than staying
+// silent, so success is recognized by that wording, not by empty output.
+func (c *QMPClient) RemoveHostForward(ctx context.Context, netdevID string, hostPort int, protocol string) error {
+	out, err := c.humanMonitorCommand(ctx, hostfwdRemoveLine(netdevID, hostPort, protocol))
+	if err != nil {
+		return err
+	}
+	out = strings.TrimSpace(out)
+	if isHostfwdRemoveSuccess(out) {
+		return nil
+	}
+	return fmt.Errorf("qmp: hostfwd_remove: %s", out)
+}
+
+// isHostfwdRemoveSuccess reports whether out — hostfwd_remove's HMP
+// output, already trimmed — indicates the rule was actually removed.
+func isHostfwdRemoveSuccess(out string) bool {
+	return out == "" || strings.Contains(out, "removed")
+}
+
+// hostfwdAddLine renders the hostfwd_add HMP command line for f on
+// netdevID. The empty host/guest addresses (the double colons) mean "any
+// host address" / "the guest's own address" — the same convention
+// buildNetdev's -netdev hostfwd= option uses.
+func hostfwdAddLine(netdevID string, f HostForward) string {
+	proto := f.Protocol
+	if proto == "" {
+		proto = "tcp"
+	}
+	return fmt.Sprintf("hostfwd_add %s %s::%d-:%d", netdevID, proto, f.HostPort, f.GuestPort)
+}
+
+// hostfwdRemoveLine renders the hostfwd_remove HMP command line.
+func hostfwdRemoveLine(netdevID string, hostPort int, protocol string) string {
+	if protocol == "" {
+		protocol = "tcp"
+	}
+	return fmt.Sprintf("hostfwd_remove %s %s::%d", netdevID, protocol, hostPort)
 }
 
 // SnapshotSave issues QMP's snapshot-save job. Not yet implemented.

@@ -97,6 +97,30 @@ func (b *Backend) Logs(ctx context.Context, spec *instance.Spec, follow bool, ta
 	return eng.Logs(ctx, spec, follow, tailLines, send)
 }
 
+func (b *Backend) AddPort(ctx context.Context, spec *instance.Spec, port instance.PortMapping) error {
+	eng, err := b.engineFor(spec)
+	if err != nil {
+		return err
+	}
+	pf, ok := eng.(instance.PortForwarder)
+	if !ok {
+		return fmt.Errorf("container: this engine doesn't support port forwarding changes")
+	}
+	return pf.AddPort(ctx, spec, port)
+}
+
+func (b *Backend) RemovePort(ctx context.Context, spec *instance.Spec, hostPort int, protocol string) error {
+	eng, err := b.engineFor(spec)
+	if err != nil {
+		return err
+	}
+	pf, ok := eng.(instance.PortForwarder)
+	if !ok {
+		return fmt.Errorf("container: this engine doesn't support port forwarding changes")
+	}
+	return pf.RemovePort(ctx, spec, hostPort, protocol)
+}
+
 func (b *Backend) Stats(ctx context.Context, spec *instance.Spec) (instance.Stats, error) {
 	eng, err := b.engineFor(spec)
 	if err != nil {

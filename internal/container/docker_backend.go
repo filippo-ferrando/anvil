@@ -117,6 +117,92 @@ func (b *DockerBackend) Create(ctx context.Context, spec *instance.Spec, progres
 	return nil
 }
 
+// AddPort adds a published port to spec's container. Docker has no live
+// port-binding mutation (HostConfig.PortBindings is fixed at container-
+// create time), so unlike a VM's live QMP hostfwd_add, this recreates the
+// underlying container — stopping and restarting it if it was running —
+// rather than requiring the caller to relaunch the whole instance.
+func (b *DockerBackend) AddPort(ctx context.Context, spec *instance.Spec, port instance.PortMapping) error {
+	if spec.Container == nil {
+		return fmt.Errorf("docker: AddPort called with a nil ContainerSpec")
+	}
+	proto := port.Protocol
+	if proto == "" {
+		proto = "tcp"
+	}
+	for _, p := range spec.Container.Ports {
+		if p.HostPort == port.HostPort && effectiveProto(p.Protocol) == proto {
+			return fmt.Errorf("docker: %s already publishes host port %d/%s", spec.Name, port.HostPort, proto)
+		}
+	}
+	spec.Container.Ports = append(spec.Container.Ports, instance.PortMapping{
+		HostPort: port.HostPort, GuestPort: port.GuestPort, Protocol: proto,
+	})
+	return b.recreate(ctx, spec)
+}
+
+// RemovePort removes a published port previously added with AddPort or at
+// launch, identified by hostPort/protocol. Recreates the container, same as AddPort.
+func (b *DockerBackend) RemovePort(ctx context.Context, spec *instance.Spec, hostPort int, protocol string) error {
+	if spec.Container == nil {
+		return fmt.Errorf("docker: RemovePort called with a nil ContainerSpec")
+	}
+	proto := protocol
+	if proto == "" {
+		proto = "tcp"
+	}
+	idx := -1
+	for i, p := range spec.Container.Ports {
+		if p.HostPort == hostPort && effectiveProto(p.Protocol) == proto {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return fmt.Errorf("docker: %s has no published port for host port %d/%s (currently exposed: %s)",
+			spec.Name, hostPort, proto, instance.FormatPorts(spec.Container.Ports))
+	}
+	spec.Container.Ports = append(spec.Container.Ports[:idx], spec.Container.Ports[idx+1:]...)
+	return b.recreate(ctx, spec)
+}
+
+func effectiveProto(p string) string {
+	if p == "" {
+		return "tcp"
+	}
+	return p
+}
+
+// recreate destroys and rebuilds spec's underlying container from its
+// current spec.Container fields, restarting it if it was running before —
+// used when a setting fixed at docker-create time (like published ports)
+// changes on an existing container.
+func (b *DockerBackend) recreate(ctx context.Context, spec *instance.Spec) error {
+	state, err := b.Status(ctx, spec)
+	if err != nil {
+		return fmt.Errorf("docker: checking %s's state before recreating it: %w", spec.Name, err)
+	}
+	wasRunning := state == instance.StateRunning
+
+	if wasRunning {
+		if err := b.Stop(ctx, spec, false, 10*time.Second); err != nil {
+			return fmt.Errorf("docker: stopping %s to recreate it: %w", spec.Name, err)
+		}
+	}
+	if err := b.Delete(ctx, spec); err != nil {
+		return fmt.Errorf("docker: removing %s's old container: %w", spec.Name, err)
+	}
+	if err := b.Create(ctx, spec, nil); err != nil {
+		return fmt.Errorf("docker: recreating %s: %w", spec.Name, err)
+	}
+	if wasRunning {
+		if err := b.Start(ctx, spec); err != nil {
+			return fmt.Errorf("docker: restarting %s after recreating it: %w", spec.Name, err)
+		}
+	}
+	return nil
+}
+
 // containerName derives a Docker container name from anvil's instance name.
 func containerName(spec *instance.Spec) string {
 	return "anvil-" + spec.Name

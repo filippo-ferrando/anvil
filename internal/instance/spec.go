@@ -1,7 +1,11 @@
 // Package instance defines anvil's core domain model shared by the VM and container backends.
 package instance
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 // Kind distinguishes the two backend types anvil manages.
 type Kind string
@@ -130,4 +134,21 @@ type PortMapping struct {
 	HostPort  int
 	GuestPort int
 	Protocol  string // "tcp" | "udp"
+}
+
+// FormatPorts renders ports as "8080:80/tcp, 2222:22/tcp" — used to list
+// an instance's currently exposed ports in a "no such port forward" error.
+func FormatPorts(ports []PortMapping) string {
+	if len(ports) == 0 {
+		return "none"
+	}
+	parts := make([]string, len(ports))
+	for i, p := range ports {
+		proto := p.Protocol
+		if proto == "" {
+			proto = "tcp"
+		}
+		parts[i] = fmt.Sprintf("%d:%d/%s", p.HostPort, p.GuestPort, proto)
+	}
+	return strings.Join(parts, ", ")
 }

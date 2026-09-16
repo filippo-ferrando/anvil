@@ -44,6 +44,7 @@ func NewRootCommand() *cobra.Command {
 		newFindCommand(flags),
 		newMountCommand(flags),
 		newUmountCommand(flags),
+		newPortCommand(flags),
 		newCreateDirCommand(flags),
 		newIntentCommand(flags),
 		newHostCommand(flags),

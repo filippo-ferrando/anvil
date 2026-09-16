@@ -35,6 +35,19 @@ type Mounter interface {
 	Umount(ctx context.Context, spec *Spec, guestPath string) error
 }
 
+// PortForwarder is implemented by a Backend that can add/remove a
+// host-to-guest port forward on an existing instance. A VM backend can
+// usually do this live, without a restart; a container engine backend
+// (Docker has no live port-binding mutation) recreates the container
+// instead — either way, the caller doesn't need to relaunch the instance.
+type PortForwarder interface {
+	AddPort(ctx context.Context, spec *Spec, port PortMapping) error
+
+	// RemovePort identifies the mapping to remove by hostPort/protocol
+	// ("tcp"/"udp"), same as the one originally passed to AddPort.
+	RemovePort(ctx context.Context, spec *Spec, hostPort int, protocol string) error
+}
+
 // Reconciler is implemented by a Backend that can re-derive an instance's live state after a restart.
 type Reconciler interface {
 	Reconcile(ctx context.Context, spec *Spec) (State, error)

@@ -17,9 +17,31 @@ service InstanceService {
   rpc Mount(MountRequest) returns (MountReply);
   rpc Umount(UmountRequest) returns (UmountReply);
 
+  // AddPort/RemovePort change a running instance's host-to-guest port
+  // forwards without recreating it: a VM applies this live over QMP; a
+  // container (Docker has no live port-binding mutation) recreates its
+  // underlying container, restarting it if it was running.
+  rpc AddPort(AddPortRequest) returns (AddPortReply);
+  rpc RemovePort(RemovePortRequest) returns (RemovePortReply);
+
   // Stats returns a live resource-usage snapshot for a running instance.
   rpc Stats(StatsRequest) returns (StatsReply);
 }
+
+message AddPortRequest {
+  string name = 1;
+  PortMapping port = 2;
+}
+
+message AddPortReply {}
+
+message RemovePortRequest {
+  string name = 1;
+  int32 host_port = 2;
+  string protocol = 3; // "tcp" | "udp", empty defaults to "tcp"
+}
+
+message RemovePortReply {}
 
 message StatsRequest {
   string name = 1;

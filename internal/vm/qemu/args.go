@@ -7,6 +7,11 @@ import (
 	"strings"
 )
 
+// NetdevID is the fixed id BuildArgs gives the VM's single netdev, both in
+// bridge and SLIRP mode — a stable target for a live hostfwd_add/
+// hostfwd_remove HMP command (see QMPClient.AddHostForward).
+const NetdevID = "net0"
+
 // Config describes everything needed to build a qemu-system-* command
 // line for one instance.
 type Config struct {
@@ -150,18 +155,18 @@ func buildMounts(mounts []Mount) []string {
 
 func buildNetdev(cfg Config) ([]string, error) {
 	if cfg.BridgeTapDevice != "" {
-		device := "virtio-net-pci,netdev=net0"
+		device := "virtio-net-pci,netdev=" + NetdevID
 		if cfg.MACAddress != "" {
 			device += ",mac=" + cfg.MACAddress
 		}
 		return []string{
-			"-netdev", fmt.Sprintf("tap,id=net0,ifname=%s,script=no,downscript=no", cfg.BridgeTapDevice),
+			"-netdev", fmt.Sprintf("tap,id=%s,ifname=%s,script=no,downscript=no", NetdevID, cfg.BridgeTapDevice),
 			"-device", device,
 		}, nil
 	}
 
 	// SLIRP is the default networking mode even with zero host-forwards.
-	netdev := "user,id=net0"
+	netdev := "user,id=" + NetdevID
 	for _, f := range cfg.SLIRPHostForwards {
 		proto := f.Protocol
 		if proto == "" {
@@ -171,6 +176,6 @@ func buildNetdev(cfg Config) ([]string, error) {
 	}
 	return []string{
 		"-netdev", netdev,
-		"-device", "virtio-net-pci,netdev=net0",
+		"-device", "virtio-net-pci,netdev=" + NetdevID,
 	}, nil
 }

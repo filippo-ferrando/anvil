@@ -337,6 +337,25 @@ func receiveImportEvent(stream anvilv1.ExportService_ImportClient) tea.Cmd {
 	}
 }
 
+func addPort(c *client.Client, name string, hostPort, guestPort int, protocol string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := c.AddPort(context.Background(), &anvilv1.AddPortRequest{
+			Name: name,
+			Port: &anvilv1.PortMapping{HostPort: int32(hostPort), GuestPort: int32(guestPort), Protocol: protocol},
+		})
+		return actionDoneMsg{screen: screenInstances, verb: "port added", err: err}
+	}
+}
+
+func removePort(c *client.Client, name string, hostPort int, protocol string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := c.RemovePort(context.Background(), &anvilv1.RemovePortRequest{
+			Name: name, HostPort: int32(hostPort), Protocol: protocol,
+		})
+		return actionDoneMsg{screen: screenInstances, verb: "port removed", err: err}
+	}
+}
+
 func loadCloudInitList(c *client.Client) tea.Cmd {
 	return func() tea.Msg {
 		reply, err := c.CloudInit.List(context.Background(), &anvilv1.CloudInitListRequest{})
