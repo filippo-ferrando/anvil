@@ -10,8 +10,9 @@
 local M = {}
 
 local IMAGES = {
-	{ id = "ubuntu-24.04", pkgmgr = "apt", user = "ubuntu" },
-	{ id = "debian-12", pkgmgr = "apt", user = "debian" },
+	{ id = "ubuntu-26.04", pkgmgr = "apt", user = "ubuntu" },
+	{ id = "almalinux-9", pkgmgr = "dns", user = "almalinux" },
+	{ id = "debian-13", pkgmgr = "apt", user = "debian" },
 	{ id = "archlinux", pkgmgr = "pacman", user = "arch" },
 	{ id = "fedora-44", pkgmgr = "dnf", user = "fedora" },
 }
@@ -116,56 +117,87 @@ local function next_name(cb)
 	end)
 end
 
-local function open_terminal(cmd, on_exit)
-	vim.cmd("botright new")
-	local win = vim.api.nvim_get_current_win()
+local WAIT_TRIES = 30
+local SPINNER_FRAMES = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
 
-	local function close_and_forward(job_id, code, event)
-		if on_exit then
-			on_exit(job_id, code, event)
-		end
-		vim.schedule(function()
-			if vim.api.nvim_win_is_valid(win) then
-				vim.api.nvim_win_close(win, true)
-			end
-		end)
-	end
-
-	vim.fn.termopen(cmd, { on_exit = close_and_forward })
-	vim.cmd("startinsert")
+local function progress_bar(pct, width)
+	width = width or 20
+	local filled = math.min(width, math.floor(pct * width + 0.5))
+	return string.rep("█", filled) .. string.rep("░", width - filled)
 end
 
-local function copy_project(name)
+-- Spinner for phases with no known duration (launch, copy). Bounded phases
+-- (SSH wait) use progress_bar instead, since we know the attempt count.
+-- Notifications are updated in place via a stable `id`: passing the previous
+-- return value as `replace` (nvim-notify style) doesn't reuse the window in
+-- Snacks' notifier, it only keys off `opts.id`.
+local function spinner_start(msg, id)
+	local frame = 0
+	local timer = (vim.uv or vim.loop).new_timer()
+	timer:start(
+		0,
+		120,
+		vim.schedule_wrap(function()
+			frame = (frame % #SPINNER_FRAMES) + 1
+			vim.notify(
+				string.format("%s %s", msg, SPINNER_FRAMES[frame]),
+				vim.log.levels.INFO,
+				{ id = id, title = "anvil" }
+			)
+		end)
+	)
+	return {
+		stop = function()
+			timer:stop()
+			timer:close()
+		end,
+	}
+end
+
+local function copy_project(name, id)
 	local root = project_root()
 	local remote_dir = project_slug()
-	vim.notify(string.format("anvil: copying %s into %s:~/%s", root, name, remote_dir))
+	local spin = spinner_start(string.format("anvil: copying project into %s:~/%s", name, remote_dir), id)
 	vim.system({ "anvil", "transfer", root, name .. ":~/" .. remote_dir }, { text = true }, function(res)
 		vim.schedule(function()
+			spin.stop()
 			if res.code == 0 then
-				vim.notify("anvil: project copied into " .. name)
+				vim.notify("anvil: " .. name .. " ready", vim.log.levels.INFO, { id = id, title = "anvil" })
 			else
-				vim.notify("anvil: copy into " .. name .. " failed: " .. (res.stderr or ""), vim.log.levels.ERROR)
+				vim.notify(
+					"anvil: copy into " .. name .. " failed: " .. (res.stderr or ""),
+					vim.log.levels.ERROR,
+					{ id = id, title = "anvil" }
+				)
 			end
 		end)
 	end)
 end
 
-local function wait_for_ssh(name, tries)
-	tries = tries or 30
+local function wait_for_ssh(name, id, attempt)
+	attempt = attempt or 1
 	vim.system({ "anvil", "exec", name, "--", "true" }, { text = true }, function(res)
 		if res.code == 0 then
 			vim.schedule(function()
-				copy_project(name)
+				copy_project(name, id)
 			end)
-		elseif tries > 1 then
+		elseif attempt < WAIT_TRIES then
+			vim.schedule(function()
+				vim.notify(
+					string.format("anvil: booting %s %s", name, progress_bar(attempt / WAIT_TRIES)),
+					vim.log.levels.INFO,
+					{ id = id, title = "anvil" }
+				)
+			end)
 			vim.defer_fn(function()
-				wait_for_ssh(name, tries - 1)
+				wait_for_ssh(name, id, attempt + 1)
 			end, 2000)
 		else
 			vim.schedule(function()
 				vim.notify(
 					"anvil: " .. name .. " never became reachable over SSH, skipping project copy",
-					vim.log.levels.WARN
+					vim.log.levels.WARN,
+					{ id = id, title = "anvil" }
 				)
 			end)
 		end
@@ -224,13 +256,22 @@ function M.create()
 							ci_path,
 						}
 
-						open_terminal(launch_cmd, function(_, code)
+						local id = "anvil:" .. name
+						local spin = spinner_start("anvil: launching " .. name, id)
+						vim.system(launch_cmd, { text = true }, function(res)
 							os.remove(ci_path)
-							if code ~= 0 then
-								vim.notify("anvil: launch failed for " .. name, vim.log.levels.ERROR)
-								return
-							end
-							wait_for_ssh(name)
+							vim.schedule(function()
+								spin.stop()
+								if res.code ~= 0 then
+									vim.notify(
+										"anvil: launch failed for " .. name .. ": " .. (res.stderr or ""),
+										vim.log.levels.ERROR,
+										{ id = id, title = "anvil" }
+									)
+									return
+								end
+								wait_for_ssh(name, id)
+							end)
 						end)
 					end)
 				end)
@@ -246,7 +287,9 @@ function M.shell()
 			return
 		end
 		local function open(name)
-			open_terminal({ "anvil", "shell", name })
+			-- Snacks defaults to a centered float whenever a `cmd` is given;
+			-- <leader>ft passes no cmd and gets the bottom split, so force it here too.
+			require("snacks").terminal({ "anvil", "shell", name }, { win = { position = "bottom" } })
 		end
 		if #names == 1 then
 			open(names[1])
@@ -326,6 +369,16 @@ return {
 			vim.keymap.set("n", "<leader>As", M.shell, { desc = "Anvil: shell into dev VM" })
 			vim.keymap.set("n", "<leader>Ap", M.purge, { desc = "Anvil: purge dev VM" })
 			vim.keymap.set("n", "<leader>Al", M.list, { desc = "Anvil: list dev VMs" })
+		end,
+	},
+	{
+		"folke/which-key.nvim",
+		optional = true,
+		opts = function(_, opts)
+			opts.spec = opts.spec or {}
+			vim.list_extend(opts.spec, {
+				{ "<leader>A", group = "anvil", icon = "🔨" },
+			})
 		end,
 	},
 }
