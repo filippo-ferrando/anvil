@@ -41,7 +41,7 @@
       "version": "13",
       "arch": "x86_64",
       "url": "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2",
-      "sha256": "b6e3a4dac69b38d55a763b1752e8fd7bb12e3948672a79fee4ef13fa53839d2f",
+      "sha256": "5b842b549629637613f1770ad749b868b08c6e16c437a5940f21178816f3d7e9",
       "min_disk_gib": 2,
       "default_user": "debian"
     },
@@ -63,7 +63,7 @@
       "version": "latest",
       "arch": "x86_64",
       "url": "https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2",
-      "sha256": "e3e688f97a71b265ce202905a504253f60f3680cf57d011a45411c43bedfa930",
+      "sha256": "",
       "min_disk_gib": 2,
       "default_user": "arch"
     },

@@ -65,6 +65,7 @@ func newTransferCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			scpArgs = append(scpArgs, "-r") // harmless for a single file, required for a directory
 			remotePrefix := fmt.Sprintf("%s@%s:", target.User, target.Host)
 			if srcIsRemote {
 				scpArgs = append(scpArgs, remotePrefix+srcPath, dstPath)
