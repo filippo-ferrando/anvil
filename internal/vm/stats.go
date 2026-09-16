@@ -1,3 +1,5 @@
+//go:build linux
+
 package vm
 
 import (
@@ -12,7 +14,6 @@ import (
 	"github.com/anvil-project/anvil/internal/config"
 	"github.com/anvil-project/anvil/internal/instance"
 	"github.com/anvil-project/anvil/internal/vm/image"
-	"github.com/anvil-project/anvil/internal/vm/network"
 )
 
 // statsSampleWindow bounds how long Stats waits between its two live
@@ -42,18 +43,15 @@ func (b *Backend) Stats(ctx context.Context, spec *instance.Spec) (instance.Stat
 	}
 	pid := proc.Pid()
 
-	tapName := ""
-	if v.NetworkMode == "bridge" {
-		tapName = network.TapName(spec.ID)
-	}
+	bridged := v.NetworkMode == "bridge"
 
 	cpu0, err := readProcCPUTicks(pid)
 	if err != nil {
 		return instance.Stats{}, fmt.Errorf("vm: reading CPU usage: %w", err)
 	}
 	var rx0, tx0 uint64
-	if tapName != "" {
-		rx0, tx0, _ = network.TapStats(tapName)
+	if bridged {
+		rx0, tx0, _ = b.Networker.Stats(spec.ID)
 	}
 	t0 := time.Now()
 
@@ -96,8 +94,8 @@ func (b *Backend) Stats(ctx context.Context, spec *instance.Spec) (instance.Stat
 		Address:        vmAddress(v),
 	}
 
-	if tapName != "" {
-		if rx1, tx1, err := network.TapStats(tapName); err == nil {
+	if bridged {
+		if rx1, tx1, err := b.Networker.Stats(spec.ID); err == nil {
 			stats.NetAvailable = true
 			if elapsed > 0 {
 				stats.NetRxBytesPerSec = float64(rx1-rx0) / elapsed

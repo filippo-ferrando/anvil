@@ -10,9 +10,18 @@ import (
 	"github.com/anvil-project/anvil/internal/container"
 	"github.com/anvil-project/anvil/internal/instance"
 	"github.com/anvil-project/anvil/internal/store"
-	"github.com/anvil-project/anvil/internal/vm"
 	"github.com/anvil-project/anvil/internal/vm/image"
 )
+
+// VMCatalog is the subset of a VM backend ImageServer needs. Deliberately
+// an interface, not the concrete *vm.Backend (internal/vm is Linux/QEMU-
+// only, gated by a //go:build tag) — this package has no platform
+// constraint of its own and must build the same way on every platform, so
+// it can't import internal/vm directly. A darwin VM backend
+// (internal/vm/vz) satisfies this the same way.
+type VMCatalog interface {
+	ListCatalog() ([]image.DistroEntry, error)
+}
 
 // ImageServer implements anvilv1.ImageServiceServer, managing the cached VM
 // base image store/catalog and the container engines' own cached images.
@@ -20,11 +29,11 @@ type ImageServer struct {
 	anvilv1.UnimplementedImageServiceServer
 	Store      *store.Store
 	Vault      *image.Vault
-	Backend    *vm.Backend
+	Backend    VMCatalog
 	Containers *container.Backend
 }
 
-func NewImageServer(s *store.Store, v *image.Vault, backend *vm.Backend, containers *container.Backend) *ImageServer {
+func NewImageServer(s *store.Store, v *image.Vault, backend VMCatalog, containers *container.Backend) *ImageServer {
 	return &ImageServer{Store: s, Vault: v, Backend: backend, Containers: containers}
 }
 

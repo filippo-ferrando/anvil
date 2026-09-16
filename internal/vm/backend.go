@@ -1,3 +1,5 @@
+//go:build linux
+
 // Package vm implements backend.Backend for VM instances: resolving an
 // image, building a disk overlay and cloud-init seed, and running QEMU.
 package vm
@@ -39,10 +41,11 @@ type Source interface {
 
 // Backend implements backend.Backend for instance.KindVM.
 type Backend struct {
-	Catalog *image.Catalog
-	Vault   *image.Vault
-	Seed    cloudinit.Builder
-	Source  Source
+	Catalog   *image.Catalog
+	Vault     *image.Vault
+	Seed      cloudinit.Builder
+	Source    Source
+	Networker Networker
 
 	mu       sync.Mutex
 	running  map[string]*qemu.Process // instance ID -> live process
@@ -53,16 +56,18 @@ var (
 	_ instance.Backend    = (*Backend)(nil)
 	_ instance.Reconciler = (*Backend)(nil)
 	_ instance.Mounter    = (*Backend)(nil)
+	_ Networker           = network.LinuxBridge{}
 )
 
 func NewBackend(catalog *image.Catalog, vault *image.Vault, source Source) *Backend {
 	return &Backend{
-		Catalog:  catalog,
-		Vault:    vault,
-		Seed:     cloudinit.NewBuilder(),
-		Source:   source,
-		running:  make(map[string]*qemu.Process),
-		starting: make(map[string]struct{}),
+		Catalog:   catalog,
+		Vault:     vault,
+		Seed:      cloudinit.NewBuilder(),
+		Source:    source,
+		Networker: network.LinuxBridge{},
+		running:   make(map[string]*qemu.Process),
+		starting:  make(map[string]struct{}),
 	}
 }
 
@@ -265,12 +270,14 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		KVM:           kvmAvailable(),
 	}
 	if v.NetworkMode == "bridge" {
-		// Intent member: attach a tap device to the intent's shared bridge.
-		tapName := network.TapName(spec.ID)
-		if err := network.CreateTap(tapName, v.BridgeInterface); err != nil {
+		// Intent member: attach to the intent's shared network via the
+		// backend's Networker (Linux tap+bridge by default — see
+		// Networker's doc for why this is swappable).
+		deviceName, err := b.Networker.Attach(spec.ID, v.BridgeInterface)
+		if err != nil {
 			return fmt.Errorf("vm: attaching to bridge %s: %w", v.BridgeInterface, err)
 		}
-		cfg.BridgeTapDevice = tapName
+		cfg.BridgeTapDevice = deviceName
 		cfg.MACAddress = macFromInstanceID(spec.ID)
 		v.SSHPort = 0
 	} else {
@@ -300,14 +307,14 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 	proc, err := qemu.Spawn(ctx, cfg, filepath.Join(dir, "qemu.log"))
 	if err != nil {
 		if cfg.BridgeTapDevice != "" {
-			_ = network.DeleteTap(cfg.BridgeTapDevice)
+			_ = b.Networker.Detach(spec.ID)
 		}
 		return fmt.Errorf("vm: spawning qemu: %w", err)
 	}
 	if err := proc.AttachQMP(ctx); err != nil {
 		_ = proc.Stop(ctx, 0)
 		if cfg.BridgeTapDevice != "" {
-			_ = network.DeleteTap(cfg.BridgeTapDevice)
+			_ = b.Networker.Detach(spec.ID)
 		}
 		return fmt.Errorf("vm: attaching QMP: %w", err)
 	}
@@ -341,9 +348,9 @@ func (b *Backend) Stop(ctx context.Context, spec *instance.Spec, force bool, tim
 	// Clean up unconditionally: the process is gone by now either way.
 	_ = proc.Close()
 	if spec.VM != nil && spec.VM.NetworkMode == "bridge" {
-		// Best-effort tap cleanup; not worth failing Stop over.
-		if err := network.DeleteTap(network.TapName(spec.ID)); err != nil {
-			log.Printf("vm: failed to delete tap device for %s: %v", spec.ID, err)
+		// Best-effort cleanup; not worth failing Stop over.
+		if err := b.Networker.Detach(spec.ID); err != nil {
+			log.Printf("vm: failed to detach network device for %s: %v", spec.ID, err)
 		}
 	}
 	removeRuntimeState(dir)

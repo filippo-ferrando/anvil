@@ -23,9 +23,21 @@ import (
 	"github.com/anvil-project/anvil/internal/intent"
 	"github.com/anvil-project/anvil/internal/migrate"
 	"github.com/anvil-project/anvil/internal/store"
-	"github.com/anvil-project/anvil/internal/vm"
 	"github.com/anvil-project/anvil/internal/vm/image"
 )
+
+// VMBackend is what main needs from this platform's VM backend, beyond
+// the plain instance.Backend contract instance.Manager dispatches
+// through: ListCatalog (internal/daemon.VMCatalog) for the image-catalog
+// RPCs, and ExportDisk (internal/migrate.Exporter) for migration. Built by
+// newVMBackend, implemented in platform_linux.go/platform_darwin.go —
+// exactly one of internal/vm (QEMU) or internal/vm/vz (Apple
+// Virtualization.framework) is ever compiled into a given binary.
+type VMBackend interface {
+	instance.Backend
+	daemon.VMCatalog
+	migrate.Exporter
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -54,7 +66,7 @@ func run() error {
 		return fmt.Errorf("loading image catalog: %w", err)
 	}
 	vault := image.NewVault(config.PreparedImageDir())
-	vmBackend := vm.NewBackend(catalog, vault, db)
+	vmBackend := newVMBackend(catalog, vault, db)
 
 	// db satisfies container.Source, used to resolve container mirrors at pull time.
 	dockerBackend := container.NewDockerBackend(docker.DefaultSocket, db)

@@ -1,14 +1,9 @@
 // Package config centralizes the fixed on-disk layout anvild uses.
+// RunDir/StateDir/CacheDir/ConfDir are OS-specific (see paths_linux.go,
+// paths_darwin.go); everything derived from them here is shared.
 package config
 
 import "path/filepath"
-
-const (
-	RunDir   = "/run/anvil"
-	StateDir = "/var/lib/anvil"
-	CacheDir = "/var/cache/anvil"
-	ConfDir  = "/etc/anvil"
-)
 
 // SocketPath is the daemon's gRPC listen address.
 func SocketPath() string { return filepath.Join(RunDir, "anvild.sock") }
