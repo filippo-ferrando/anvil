@@ -1,19 +1,5 @@
 #!/bin/sh
-# Shared post-install steps for the anvild package, run identically on
-# every packaging format after anvild's files are unpacked (a fresh
-# install or an upgrade, no distinction needed: every step here is
-# already idempotent). Installed as part of the anvild package itself
-# (at /usr/lib/anvil/post-install.sh) and invoked by each format's own
-# tiny maintainer-script hook:
-#   - packaging/archlinux/anvild.install's post_install/post_upgrade
-#   - packaging/deb/postinst-anvild
-#   - packaging/rpm/anvil.spec.in's %post -n anvild
-# Edit this one file, every format picks it up on its next build — never
-# copy these steps into a format's own hook script directly.
-#
-# Deliberately does NOT enable/start the systemd service, on any format
-# — left to the operator, same as a fresh `systemctl enable --now
-# anvild` on any other daemon you've just installed.
+
 set -e
 
 systemd-sysusers anvil.conf
