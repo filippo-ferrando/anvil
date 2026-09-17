@@ -4,6 +4,8 @@ package qemu
 
 import (
 	"fmt"
+	"io/fs"
+	"path/filepath"
 	"strings"
 )
 
@@ -68,6 +70,53 @@ func MachineType(arch string) string {
 	}
 }
 
+func OVMFPath(arch string) (string, error) {
+	if arch == "" {
+		arch = "x86_64"
+	}
+
+	var matches []string
+
+	err := filepath.WalkDir("/usr/share", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // Ignore permission denied or access errors
+		}
+
+		if d.IsDir() {
+			name := d.Name()
+			if name == "doc" || name == "fonts" || name == "icons" ||
+				name == "locale" || name == "man" || name == "zoneinfo" || name == "themes" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		name := d.Name()
+		if (strings.HasPrefix(name, "OVMF_CODE") || name == "OVMF.fd") && strings.HasSuffix(name, ".fd") {
+			matches = append(matches, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("error scanning for OVMF: %w", err)
+	}
+
+	if len(matches) == 0 {
+		return "", fmt.Errorf("could not dynamically locate any OVMF firmware (.fd) in /usr/share")
+	}
+
+	// If we are looking for x86_64, try to avoid ARM firmwares if both are installed
+	for _, m := range matches {
+		lowerPath := strings.ToLower(m)
+		if arch == "x86_64" && (strings.Contains(lowerPath, "aarch64") || strings.Contains(lowerPath, "arm")) {
+			continue
+		}
+		return m, nil
+	}
+
+	return matches[0], nil
+}
+
 // BuildArgs renders the full qemu-system-* argument list for cfg. It never
 // includes a graphical display device — anvil VMs are headless by design.
 func BuildArgs(cfg Config) ([]string, error) {
@@ -102,6 +151,15 @@ func BuildArgs(cfg Config) ([]string, error) {
 		"-qmp", fmt.Sprintf("unix:%s,server=on,wait=off", cfg.QMPSocket),
 		"-serial", serial,
 	}
+
+	OVMF, err := OVMFPath(cfg.Arch)
+	if err != nil {
+		return nil, fmt.Errorf("qemu: failed to locate OVMF firmware: %w", err)
+	}
+
+	args = append(args,
+		"-drive", fmt.Sprintf("if=pflash,format=raw,readonly=on,file=%s", OVMF),
+	)
 
 	if cfg.KVM {
 		args = append(args, "-accel", "kvm")
