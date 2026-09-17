@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -60,6 +61,21 @@ func BinaryName(arch string) string {
 	return "qemu-system-" + arch
 }
 
+// HostArch returns the running host's CPU architecture in the same naming
+// convention used for VM Arch/qemu-system-* ("x86_64", "aarch64", ...) so it
+// can be compared against a VM's Arch to decide whether KVM acceleration
+// (same-arch only) or TCG software emulation (cross-arch) applies.
+func HostArch() string {
+	switch runtime.GOARCH {
+	case "amd64":
+		return "x86_64"
+	case "arm64":
+		return "aarch64"
+	default:
+		return runtime.GOARCH
+	}
+}
+
 // MachineType returns this arch's default machine type.
 func MachineType(arch string) string {
 	switch arch {
@@ -70,12 +86,20 @@ func MachineType(arch string) string {
 	}
 }
 
+// ovmfArchHints maps a target QEMU arch to path/filename substrings that
+// identify its UEFI firmware across common packaging (edk2, OVMF, AAVMF).
+var ovmfArchHints = map[string][]string{
+	"x86_64":  {"ovmf", "x64", "amd64"},
+	"aarch64": {"aavmf", "aarch64", "arm64", "qemu_efi"},
+}
+
 func OVMFPath(arch string) (string, error) {
 	if arch == "" {
 		arch = "x86_64"
 	}
+	hints := ovmfArchHints[arch]
 
-	var matches []string
+	var candidates, matches []string
 
 	err := filepath.WalkDir("/usr/share", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -91,9 +115,21 @@ func OVMFPath(arch string) (string, error) {
 			return nil
 		}
 
-		name := d.Name()
-		if (strings.HasPrefix(name, "OVMF_CODE") || name == "OVMF.fd") && strings.HasSuffix(name, ".fd") {
-			matches = append(matches, path)
+		lower := strings.ToLower(d.Name())
+		if !strings.HasSuffix(lower, ".fd") || strings.Contains(lower, "vars") {
+			return nil
+		}
+		if !(strings.Contains(lower, "code") || lower == "ovmf.fd" || strings.Contains(lower, "qemu_efi")) {
+			return nil
+		}
+
+		candidates = append(candidates, path)
+		lowerPath := strings.ToLower(path)
+		for _, h := range hints {
+			if strings.Contains(lowerPath, h) {
+				matches = append(matches, path)
+				break
+			}
 		}
 		return nil
 	})
@@ -101,20 +137,13 @@ func OVMFPath(arch string) (string, error) {
 		return "", fmt.Errorf("error scanning for OVMF: %w", err)
 	}
 
-	if len(matches) == 0 {
-		return "", fmt.Errorf("could not dynamically locate any OVMF firmware (.fd) in /usr/share")
+	if len(matches) > 0 {
+		return matches[0], nil
 	}
-
-	// If we are looking for x86_64, try to avoid ARM firmwares if both are installed
-	for _, m := range matches {
-		lowerPath := strings.ToLower(m)
-		if arch == "x86_64" && (strings.Contains(lowerPath, "aarch64") || strings.Contains(lowerPath, "arm")) {
-			continue
-		}
-		return m, nil
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("could not dynamically locate any UEFI firmware (.fd) in /usr/share")
 	}
-
-	return matches[0], nil
+	return "", fmt.Errorf("could not locate %s UEFI firmware in /usr/share (found firmware for another arch only: %v) — install the %s edk2/OVMF firmware package", arch, candidates, arch)
 }
 
 // BuildArgs renders the full qemu-system-* argument list for cfg. It never
@@ -165,7 +194,13 @@ func BuildArgs(cfg Config) ([]string, error) {
 		args = append(args, "-accel", "kvm")
 		args = append(args, "-cpu", "host")
 	} else {
+		// "virt" (aarch64/riscv) has no 64-bit-capable default CPU under
+		// TCG — e.g. qemu-system-aarch64 defaults to the 32-bit-only
+		// cortex-a15, which silently can't execute a 64-bit guest at all.
+		// "max" is a valid model on every qemu-system-* target and is
+		// always 64-bit where the arch supports it.
 		args = append(args, "-accel", "tcg")
+		args = append(args, "-cpu", "max")
 	}
 
 	args = append(args,

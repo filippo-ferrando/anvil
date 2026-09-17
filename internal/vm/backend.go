@@ -124,6 +124,7 @@ func (b *Backend) Create(ctx context.Context, spec *instance.Spec, progress func
 	if err != nil {
 		return err
 	}
+	v.Arch = entry.Arch
 	v.DefaultUser = entry.DefaultUser
 
 	diskPath := filepath.Join(dir, "disk.qcow2")
@@ -445,16 +446,21 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		b.mu.Unlock()
 	}()
 
+	arch := v.Arch
+	if arch == "" {
+		arch = "x86_64"
+	}
+
 	dir := config.InstanceDir(spec.ID)
 	cfg := qemu.Config{
-		Arch:          v.Arch,
+		Arch:          arch,
 		CPUs:          v.CPUs,
 		MemoryMiB:     v.MemoryMiB,
 		DiskPath:      v.DiskPath,
 		SeedISOPath:   v.SeedISOPath,
 		QMPSocket:     filepath.Join(dir, "qmp.sock"),
 		SerialLogPath: filepath.Join(dir, "console.log"),
-		KVM:           kvmAvailable(),
+		KVM:           kvmAvailable() && qemu.HostArch() == arch,
 	}
 	if v.NetworkMode == "bridge" {
 		// Intent member: attach to the intent's shared network via the

@@ -293,7 +293,12 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Fetch autocomplete candidates fresh every time — fast local
 		// daemon calls, and each fills in one field's Suggestions
 		// independently of the others as it lands (see updateLaunch).
+		// tea.ClearScreen forces a full repaint: this full-screen takeover
+		// rarely renders the exact same total line count as Instances, and
+		// relying on Bubble Tea's diff-based erase-below to always catch
+		// that gap left stale content on screen.
 		return m, tea.Batch(
+			tea.ClearScreen,
 			loadIntents(m.client),
 			loadCloudInitList(m.client),
 			loadCatalog(m.client),
@@ -303,10 +308,10 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "l":
 		if inst := m.selectedInstance(); inst != nil {
 			m.screen = screenLogs
-			m.logs = newLogsModel(inst, m.width, contentHeight(m.height))
+			m.logs = newLogsModel(inst, m.width, logsViewportHeight(m.height))
 			cmd, cancel := startLogsStream(m.client, inst.GetName())
 			m.logs.cancel = cancel
-			return m, cmd
+			return m, tea.Batch(tea.ClearScreen, cmd)
 		}
 		return m, nil
 	case "r":

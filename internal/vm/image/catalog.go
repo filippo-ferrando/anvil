@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/anvil-project/anvil/data/distros"
@@ -135,11 +136,41 @@ func (c *Catalog) List() []DistroEntry {
 }
 
 // Find resolves an alias like "ubuntu-24.04" to its highest-priority entry
-// for the given arch (defaulting to "x86_64").
+// for the given arch. If arch is empty, it prefers "x86_64"; failing that,
+// an id that only exists under one arch (e.g. an aarch64-only mirror entry)
+// still resolves unambiguously without the caller having to know its arch
+// up front.
 func (c *Catalog) Find(id, arch string) (DistroEntry, error) {
-	if arch == "" {
-		arch = "x86_64"
+	if arch != "" {
+		return c.findExact(id, arch)
 	}
+	if entry, err := c.findExact(id, "x86_64"); err == nil {
+		return entry, nil
+	}
+
+	archs := map[string]bool{}
+	for i := range c.entries {
+		if c.entries[i].ID == id {
+			archs[c.entries[i].Arch] = true
+		}
+	}
+	switch len(archs) {
+	case 0:
+		return DistroEntry{}, fmt.Errorf("image: no catalog entry for %q", id)
+	case 1:
+		for a := range archs {
+			return c.findExact(id, a)
+		}
+	}
+	available := make([]string, 0, len(archs))
+	for a := range archs {
+		available = append(available, a)
+	}
+	sort.Strings(available)
+	return DistroEntry{}, fmt.Errorf("image: %q is available for multiple arches %v, specify one", id, available)
+}
+
+func (c *Catalog) findExact(id, arch string) (DistroEntry, error) {
 	var best *catalogEntry
 	for i := range c.entries {
 		e := &c.entries[i]

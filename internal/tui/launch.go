@@ -210,7 +210,7 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.instance != nil {
 				m.setStatus("launched "+msg.instance.GetName(), false)
 				m.screen = screenInstances
-				return m, loadInstances(m.client)
+				return m, tea.Batch(tea.ClearScreen, loadInstances(m.client))
 			}
 			return m, nil
 		}
@@ -323,7 +323,7 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.launch.form, submitted, cancelled = m.launch.form.update(msg)
 		if cancelled {
 			m.screen = screenInstances
-			return m, nil
+			return m, tea.ClearScreen
 		}
 		if submitted {
 			req, err := buildLaunchRequest(m.launch)

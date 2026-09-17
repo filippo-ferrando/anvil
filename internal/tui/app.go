@@ -147,7 +147,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.migration.migrateForm.SetHeight(h - 2)
 		// launch/logs are full-width takeovers, not squeezed by the sidebar.
 		m.launch.setSize(msg.Width, contentHeight(msg.Height))
-		m.logs.viewport.Width, m.logs.viewport.Height = msg.Width, contentHeight(msg.Height)-2
+		m.logs.viewport.Width, m.logs.viewport.Height = msg.Width, logsViewportHeight(msg.Height)
 		return m, nil
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
@@ -336,6 +336,19 @@ func contentHeight(termHeight int) int {
 	h := termHeight - 6
 	if h < 3 {
 		h = 3
+	}
+	return h
+}
+
+// logsViewportHeight is contentHeight minus the 3 chrome lines logsModel.View
+// wraps its viewport in (title, blank line, help bar). Keeping this in one
+// place ensures the viewport height set on open (instances.go) and on
+// resize (below) always agree — a mismatch there is what let a taller/
+// shorter frame leave stale lines on screen when toggling the Logs view.
+func logsViewportHeight(termHeight int) int {
+	h := contentHeight(termHeight) - 3
+	if h < 1 {
+		h = 1
 	}
 	return h
 }
