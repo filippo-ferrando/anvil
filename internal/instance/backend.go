@@ -35,11 +35,8 @@ type Mounter interface {
 	Umount(ctx context.Context, spec *Spec, guestPath string) error
 }
 
-// PortForwarder is implemented by a Backend that can add/remove a
-// host-to-guest port forward on an existing instance. A VM backend can
-// usually do this live, without a restart; a container engine backend
-// (Docker has no live port-binding mutation) recreates the container
-// instead — either way, the caller doesn't need to relaunch the instance.
+// PortForwarder is implemented by a Backend that can add or remove a
+// host-to-guest port forward without the caller needing to relaunch the instance.
 type PortForwarder interface {
 	AddPort(ctx context.Context, spec *Spec, port PortMapping) error
 
@@ -49,16 +46,20 @@ type PortForwarder interface {
 }
 
 // Snapshotter is implemented by a Backend that supports QCOW2 internal
-// snapshots of an instance's disk (VM only — a container engine has no
-// equivalent primitive here). Create/Delete apply live over QMP when the
-// instance is running; Restore always stops it first (see
-// vm.Backend.RestoreSnapshot's doc for why) and restarts it afterward if
-// it was running.
+// snapshots (VM only; a container has no equivalent primitive). Create/Delete work live; Restore always stops the instance first and restarts it afterward if it was running.
 type Snapshotter interface {
 	CreateSnapshot(ctx context.Context, spec *Spec, name string) error
 	RestoreSnapshot(ctx context.Context, spec *Spec, name string) error
 	DeleteSnapshot(ctx context.Context, spec *Spec, name string) error
 	ListSnapshots(ctx context.Context, spec *Spec) ([]Snapshot, error)
+}
+
+// Forker is implemented by a Backend that can create a new instance whose
+// disk starts as a copy of an existing instance's disk, preserving the same backing file (VM only). Safe to call while the source is running.
+type Forker interface {
+	// Fork copies source's disk into dest's instance directory (dest.ID
+	// is already set), finishes provisioning dest (e.g. cloud-init seed), and sets dest.VM.DiskPath on success.
+	Fork(ctx context.Context, source, dest *Spec, progress func(status string)) error
 }
 
 // Reconciler is implemented by a Backend that can re-derive an instance's live state after a restart.

@@ -57,6 +57,7 @@ var (
 	_ instance.Backend    = (*Backend)(nil)
 	_ instance.Reconciler = (*Backend)(nil)
 	_ instance.Mounter    = (*Backend)(nil)
+	_ instance.Forker     = (*Backend)(nil)
 	_ Networker           = network.LinuxBridge{}
 )
 
@@ -195,12 +196,8 @@ func (b *Backend) ExportDisk(ctx context.Context, spec *instance.Spec, destPath 
 	return nil
 }
 
-// PrepareImportedDisk ensures imageRef/arch's base image is present in this
-// host's vault (downloading it if needed) and rebases diskPath's backing
-// file onto it in place. diskPath is an imported qcow2 diff disk whose
-// backing file still points at wherever it was exported from — this is
-// what makes it adoptable on a different host. Satisfies
-// internal/export.VMImporter.
+// PrepareImportedDisk rebases an imported disk's backing file onto this
+// host's own base image, since it still points at its original export host.
 func (b *Backend) PrepareImportedDisk(ctx context.Context, imageRef, arch, diskPath string) error {
 	catalog, err := b.EffectiveCatalog()
 	if err != nil {
@@ -221,10 +218,49 @@ func (b *Backend) PrepareImportedDisk(ctx context.Context, imageRef, arch, diskP
 	return nil
 }
 
-// validSnapshotName restricts snapshot names to a single safe token: both
-// qemu-img's CLI args and the savevm/delvm HMP command lines this package
-// builds by string concatenation depend on a name never containing
-// whitespace or shell/HMP-significant characters.
+// Fork copies source's disk into dest's dir, preserving the backing-file
+// pointer via qemu-img's -U mode, so it's safe to call while source runs.
+func (b *Backend) Fork(ctx context.Context, source, dest *instance.Spec, progress func(status string)) error {
+	if source.VM == nil || dest.VM == nil {
+		return fmt.Errorf("vm: Fork called with a nil VMSpec")
+	}
+
+	backing, err := image.BackingFile(source.VM.DiskPath)
+	if err != nil {
+		return fmt.Errorf("vm: inspecting %s's disk: %w", source.Name, err)
+	}
+	if backing == "" {
+		return fmt.Errorf("vm: %s's disk has no backing file to preserve", source.Name)
+	}
+
+	dir := config.InstanceDir(dest.ID)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return fmt.Errorf("vm: creating instance dir: %w", err)
+	}
+	diskPath := filepath.Join(dir, "disk.qcow2")
+
+	if progress != nil {
+		progress("copying disk")
+	}
+	cmd := exec.CommandContext(ctx, "qemu-img", "convert",
+		"-U",
+		"-O", "qcow2",
+		"-o", "backing_file="+backing+",backing_fmt=qcow2",
+		source.VM.DiskPath, diskPath,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("vm: forking disk: %w: %s", err, out)
+	}
+	dest.VM.DiskPath = diskPath
+
+	if progress != nil {
+		progress("building cloud-init seed")
+	}
+	return b.buildSeed(dest)
+}
+
+// validSnapshotName restricts names to a safe token, since qemu-img's CLI
+// args and the savevm/delvm HMP lines are built by string concatenation.
 var validSnapshotName = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 func checkSnapshotName(name string) error {
@@ -234,10 +270,8 @@ func checkSnapshotName(name string) error {
 	return nil
 }
 
-// CreateSnapshot creates a new named QCOW2 internal snapshot of spec's
-// disk. If spec is running, it's taken live via QMP's savevm (full disk +
-// VM state, no stop needed); otherwise via qemu-img's offline "snapshot
-// -c" (disk-only). Satisfies instance.Snapshotter.
+// CreateSnapshot creates a named QCOW2 snapshot of spec's disk, live via
+// QMP's savevm if running (no stop needed), or offline via qemu-img otherwise.
 func (b *Backend) CreateSnapshot(ctx context.Context, spec *instance.Spec, name string) error {
 	if spec.VM == nil {
 		return fmt.Errorf("vm: CreateSnapshot called with a nil VMSpec")
@@ -252,7 +286,7 @@ func (b *Backend) CreateSnapshot(ctx context.Context, spec *instance.Spec, name 
 	}
 	for _, s := range existing {
 		if s.Name == name {
-			return fmt.Errorf("vm: %s already has a snapshot named %q — delete it first", spec.Name, name)
+			return fmt.Errorf("vm: %s already has a snapshot named %q; delete it first", spec.Name, name)
 		}
 	}
 
@@ -274,12 +308,8 @@ func (b *Backend) CreateSnapshot(ctx context.Context, spec *instance.Spec, name 
 	return nil
 }
 
-// RestoreSnapshot resets spec's disk back to a previously created
-// snapshot. This always resets disk content only, never a live VM/RAM
-// resume, even for a snapshot that has one (see instance.Snapshot.HasVMState):
-// qemu-img can't touch a disk file a running QEMU process holds an
-// exclusive lock on, so a running instance is stopped first and restarted
-// afterward — a plain restart, which always boots fresh from the restored disk.
+// RestoreSnapshot resets spec's disk only, never resuming a saved VM/RAM state.
+// qemu-img can't touch a disk a running QEMU holds locked, so a running instance is stopped first, then restarted.
 func (b *Backend) RestoreSnapshot(ctx context.Context, spec *instance.Spec, name string) error {
 	if spec.VM == nil {
 		return fmt.Errorf("vm: RestoreSnapshot called with a nil VMSpec")
@@ -360,9 +390,8 @@ func (b *Backend) ListSnapshots(ctx context.Context, spec *instance.Spec) ([]ins
 	return out, nil
 }
 
-// verifySnapshotPresence confirms a live savevm/delvm actually took
-// effect by re-reading the disk's own snapshot table, rather than trusting
-// its HMP text output — see QMPClient.SaveVM's doc for why.
+// verifySnapshotPresence confirms a live savevm/delvm took effect by
+// re-reading the disk's snapshot table, not trusting its HMP text output.
 func (b *Backend) verifySnapshotPresence(spec *instance.Spec, name string, wantPresent bool, verb string) error {
 	snaps, err := image.ListSnapshots(spec.VM.DiskPath)
 	if err != nil {
@@ -463,9 +492,8 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		KVM:           kvmAvailable() && qemu.HostArch() == arch,
 	}
 	if v.NetworkMode == "bridge" {
-		// Intent member: attach to the intent's shared network via the
-		// backend's Networker (Linux tap+bridge by default — see
-		// Networker's doc for why this is swappable).
+		// Attach to the intent's shared network via the backend's Networker
+		// (Linux tap+bridge by default; see Networker's doc for why it's swappable).
 		deviceName, err := b.Networker.Attach(spec.ID, v.BridgeInterface)
 		if err != nil {
 			return fmt.Errorf("vm: attaching to bridge %s: %w", v.BridgeInterface, err)
@@ -743,16 +771,14 @@ func portProtocol(p string) string {
 	return p
 }
 
-// AddPort adds a host-to-guest SLIRP port forward to spec. If spec is
-// currently running, it's applied live over QMP (QEMU's hostfwd_add HMP
-// command) — no restart, unlike Mount. Otherwise it's just persisted for
-// the next Start.
+// AddPort adds a host-to-guest SLIRP port forward to spec, applied live
+// over QMP (no restart, unlike Mount) if running, else persisted for Start.
 func (b *Backend) AddPort(ctx context.Context, spec *instance.Spec, port instance.PortMapping) error {
 	if spec.VM == nil {
 		return fmt.Errorf("vm: AddPort called with a nil VMSpec")
 	}
 	if spec.VM.NetworkMode == "bridge" {
-		return fmt.Errorf("vm: %s uses bridge networking — it has its own address, no host-forwarded ports apply", spec.Name)
+		return fmt.Errorf("vm: %s uses bridge networking; it has its own address, so no host-forwarded ports apply", spec.Name)
 	}
 	proto := portProtocol(port.Protocol)
 	for _, p := range spec.VM.Ports {

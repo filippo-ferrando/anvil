@@ -10,9 +10,8 @@ import (
 	"strings"
 )
 
-// NetdevID is the fixed id BuildArgs gives the VM's single netdev, both in
-// bridge and SLIRP mode — a stable target for a live hostfwd_add/
-// hostfwd_remove HMP command (see QMPClient.AddHostForward).
+// NetdevID is the fixed id BuildArgs gives the VM's single netdev (bridge
+// or SLIRP), used as a stable target for hostfwd_add/hostfwd_remove HMP commands.
 const NetdevID = "net0"
 
 // Config describes everything needed to build a qemu-system-* command
@@ -61,10 +60,8 @@ func BinaryName(arch string) string {
 	return "qemu-system-" + arch
 }
 
-// HostArch returns the running host's CPU architecture in the same naming
-// convention used for VM Arch/qemu-system-* ("x86_64", "aarch64", ...) so it
-// can be compared against a VM's Arch to decide whether KVM acceleration
-// (same-arch only) or TCG software emulation (cross-arch) applies.
+// HostArch returns the host's CPU arch in VM Arch's naming convention
+// ("x86_64", "aarch64"), for choosing KVM (same-arch) vs TCG (cross-arch).
 func HostArch() string {
 	switch runtime.GOARCH {
 	case "amd64":
@@ -143,11 +140,11 @@ func OVMFPath(arch string) (string, error) {
 	if len(candidates) == 0 {
 		return "", fmt.Errorf("could not dynamically locate any UEFI firmware (.fd) in /usr/share")
 	}
-	return "", fmt.Errorf("could not locate %s UEFI firmware in /usr/share (found firmware for another arch only: %v) — install the %s edk2/OVMF firmware package", arch, candidates, arch)
+	return "", fmt.Errorf("could not locate %s UEFI firmware in /usr/share (found firmware for another arch only: %v); install the %s edk2/OVMF firmware package", arch, candidates, arch)
 }
 
 // BuildArgs renders the full qemu-system-* argument list for cfg. It never
-// includes a graphical display device — anvil VMs are headless by design.
+// includes a graphical display device: anvil VMs are headless by design.
 func BuildArgs(cfg Config) ([]string, error) {
 	if cfg.DiskPath == "" {
 		return nil, fmt.Errorf("qemu: DiskPath is required")
@@ -194,11 +191,8 @@ func BuildArgs(cfg Config) ([]string, error) {
 		args = append(args, "-accel", "kvm")
 		args = append(args, "-cpu", "host")
 	} else {
-		// "virt" (aarch64/riscv) has no 64-bit-capable default CPU under
-		// TCG — e.g. qemu-system-aarch64 defaults to the 32-bit-only
-		// cortex-a15, which silently can't execute a 64-bit guest at all.
-		// "max" is a valid model on every qemu-system-* target and is
-		// always 64-bit where the arch supports it.
+		// "virt" (aarch64/riscv) defaults to a 32-bit-only CPU under TCG
+		// (e.g. cortex-a15), so use "max" instead: valid everywhere and 64-bit.
 		args = append(args, "-accel", "tcg")
 		args = append(args, "-cpu", "max")
 	}

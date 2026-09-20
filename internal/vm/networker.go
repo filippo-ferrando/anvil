@@ -2,18 +2,11 @@
 
 package vm
 
-// Networker attaches a VM instance's virtual NIC to its intent's shared
-// network and reports on it. The only implementation today is
-// internal/vm/network.LinuxBridge (Linux tap devices on a netlink
-// bridge) — this interface is what keeps Backend's disk/seed/QEMU
-// lifecycle logic independent of that Linux-specific mechanism, so a
-// future non-Linux VM backend (e.g. one built on Apple's
-// Virtualization.framework, which has no netlink/bridge equivalent)
-// could supply its own instead of reusing this one.
+// Networker attaches a VM's NIC to its shared network and reports on it.
+// It decouples Backend from LinuxBridge's netlink specifics for portability.
 type Networker interface {
-	// Attach joins instanceID's network device to the bridge/network
-	// named bridgeName, creating the device if needed, and returns the
-	// OS-level device name for qemu.Config.BridgeTapDevice.
+	// Attach joins instanceID's device to the bridge/network named
+	// bridgeName (creating it if needed) and returns the device name.
 	Attach(instanceID, bridgeName string) (deviceName string, err error)
 
 	// Detach tears down whatever Attach created for instanceID. A

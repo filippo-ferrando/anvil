@@ -23,24 +23,41 @@ func NewServer(mgr *instance.Manager, intents *intent.Manager) *Server {
 	return &Server{Manager: mgr, Intents: intents}
 }
 
+// launchProgressSender is the subset of *anvilv1.InstanceService_LaunchServer
+// and *anvilv1.InstanceService_ForkServer that sendLaunchEvent needs; both stream a LaunchProgress.
+type launchProgressSender interface {
+	Send(*anvilv1.LaunchProgress) error
+}
+
+func sendLaunchEvent(stream launchProgressSender, ev instance.LaunchEvent) {
+	switch {
+	case ev.Err != nil:
+		_ = stream.Send(&anvilv1.LaunchProgress{Event: &anvilv1.LaunchProgress_Error{Error: ev.Err.Error()}})
+	case ev.Instance != nil:
+		_ = stream.Send(&anvilv1.LaunchProgress{Event: &anvilv1.LaunchProgress_Instance{Instance: specToPB(ev.Instance)}})
+	case ev.Status != "":
+		_ = stream.Send(&anvilv1.LaunchProgress{Event: &anvilv1.LaunchProgress_Status{Status: ev.Status}})
+	}
+}
+
 func (s *Server) Launch(req *anvilv1.LaunchRequest, stream anvilv1.InstanceService_LaunchServer) error {
 	params := launchParamsFromPB(req)
-	send := func(ev instance.LaunchEvent) {
-		switch {
-		case ev.Err != nil:
-			_ = stream.Send(&anvilv1.LaunchProgress{Event: &anvilv1.LaunchProgress_Error{Error: ev.Err.Error()}})
-		case ev.Instance != nil:
-			_ = stream.Send(&anvilv1.LaunchProgress{Event: &anvilv1.LaunchProgress_Instance{Instance: specToPB(ev.Instance)}})
-		case ev.Status != "":
-			_ = stream.Send(&anvilv1.LaunchProgress{Event: &anvilv1.LaunchProgress_Status{Status: ev.Status}})
-		}
-	}
+	send := func(ev instance.LaunchEvent) { sendLaunchEvent(stream, ev) }
 	// A launch with an intent_name joins (or creates) that intent instead
 	// of producing a standalone instance.
 	if params.IntentName != "" {
 		return s.Intents.Launch(stream.Context(), params, send)
 	}
 	return s.Manager.Launch(stream.Context(), params, send)
+}
+
+func (s *Server) Fork(req *anvilv1.ForkRequest, stream anvilv1.InstanceService_ForkServer) error {
+	send := func(ev instance.LaunchEvent) { sendLaunchEvent(stream, ev) }
+	return s.Manager.Fork(stream.Context(), instance.ForkParams{
+		Source:  req.GetName(),
+		NewName: req.GetNewName(),
+		Start:   req.GetStart(),
+	}, send)
 }
 
 func (s *Server) List(ctx context.Context, req *anvilv1.ListRequest) (*anvilv1.ListReply, error) {

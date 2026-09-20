@@ -41,10 +41,8 @@ func TestHostfwdRemoveLine(t *testing.T) {
 	}
 }
 
-// TestIsHostfwdRemoveSuccess guards against treating QEMU's own success
-// confirmation ("host forwarding rule for tcp::7000 removed") as a
-// failure — the exact bug that shipped here: hostfwd_remove reports
-// success as plain text rather than staying silent like hostfwd_add does.
+// TestIsHostfwdRemoveSuccess guards against the exact bug that shipped:
+// treating QEMU's plain-text success confirmation as a failure, since hostfwd_remove reports success as text rather than staying silent like hostfwd_add.
 func TestIsHostfwdRemoveSuccess(t *testing.T) {
 	cases := []struct {
 		out  string

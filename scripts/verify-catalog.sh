@@ -48,7 +48,7 @@ for i in $(seq 0 $((count - 1))); do
   size=$(stat -c%s "$dest" 2>/dev/null || stat -f%z "$dest")
 
   if [[ "$content_type" == text/html* ]]; then
-    echo "FAIL: got HTTP 200 but Content-Type is $content_type — this URL is almost"
+    echo "FAIL: got HTTP 200 but Content-Type is $content_type. This URL is almost"
     echo "      certainly a directory listing page, not a direct file. Find the exact"
     echo "      filename and point the manifest at that instead."
     fail=1
@@ -57,7 +57,7 @@ for i in $(seq 0 $((count - 1))); do
   fi
   if [[ "$size" -lt "$min_size_bytes" ]]; then
     echo "FAIL: only got ${size} bytes, way too small for a real cloud image"
-    echo "      (got Content-Type: ${content_type:-<none>}) — same likely cause as above."
+    echo "      (got Content-Type: ${content_type:-<none>}); same likely cause as above."
     fail=1
     echo
     continue

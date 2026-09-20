@@ -11,7 +11,7 @@ import (
 
 func TestReadProcCPUTicksOnRealProcess(t *testing.T) {
 	// Burn a bit of real CPU so utime/stime is guaranteed non-zero, then
-	// read this test binary's own /proc entry — a real process, no mocking.
+	// read this test binary's own /proc entry: a real process, no mocking.
 	sum := 0
 	for i := 0; i < 100_000_000; i++ {
 		sum += i

@@ -1,12 +1,7 @@
 //go:build darwin
 
 // Package vz will implement instance.Backend for VM instances on Apple
-// Silicon, using Apple's Virtualization.framework (via github.com/Code-Hex/vz)
-// instead of QEMU. Not implemented yet — see the project plan's "Apple
-// Virtualization.framework (vz) VM backend" section for the design; this
-// file exists so cmd/anvild has something to build against on darwin and
-// to prove out the //go:build linux/darwin split between this package and
-// internal/vm (the QEMU backend, Linux-only).
+// Silicon via Virtualization.framework, instead of QEMU. Not implemented yet.
 package vz
 
 import (
@@ -52,8 +47,7 @@ func (b *Backend) ExportDisk(ctx context.Context, spec *instance.Spec, destPath 
 }
 
 // PrepareImportedDisk ensures imageRef/arch's base image is present and
-// rebases diskPath's backing file onto it. Satisfies internal/export.VMImporter,
-// same as internal/vm.Backend.
+// rebases diskPath's backing file onto it. Satisfies internal/export.VMImporter.
 func (b *Backend) PrepareImportedDisk(ctx context.Context, imageRef, arch, diskPath string) error {
 	return errNotImplemented("PrepareImportedDisk")
 }
@@ -83,6 +77,11 @@ func (b *Backend) DeleteSnapshot(ctx context.Context, spec *instance.Spec, name 
 
 func (b *Backend) ListSnapshots(ctx context.Context, spec *instance.Spec) ([]instance.Snapshot, error) {
 	return nil, errNotImplemented("ListSnapshots")
+}
+
+// Fork satisfies instance.Forker, same as internal/vm.Backend.
+func (b *Backend) Fork(ctx context.Context, source, dest *instance.Spec, progress func(status string)) error {
+	return errNotImplemented("Fork")
 }
 
 func (b *Backend) Create(ctx context.Context, spec *instance.Spec, progress func(status string)) error {

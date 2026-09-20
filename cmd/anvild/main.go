@@ -27,15 +27,8 @@ import (
 	"github.com/anvil-project/anvil/internal/vm/image"
 )
 
-// VMBackend is what main needs from this platform's VM backend, beyond
-// the plain instance.Backend contract instance.Manager dispatches
-// through: ListCatalog (internal/daemon.VMCatalog) for the image-catalog
-// RPCs, ExportDisk (internal/migrate.Exporter) for migration, and
-// PrepareImportedDisk (internal/export.VMImporter) for `anvil import`.
-// Built by newVMBackend, implemented in
-// platform_linux.go/platform_darwin.go — exactly one of internal/vm
-// (QEMU) or internal/vm/vz (Apple Virtualization.framework) is ever
-// compiled into a given binary.
+// VMBackend is what main needs from this platform's VM backend beyond the
+// plain instance.Backend contract: image-catalog listing, migration export, and import support.
 type VMBackend interface {
 	instance.Backend
 	daemon.VMCatalog
@@ -89,10 +82,8 @@ func run() error {
 	}
 
 	intentMgr := intent.NewManager(db, mgr, dockerNetworker)
-	// Best-effort: catches any intent network left behind by a deletion
-	// path that didn't clean up after itself (see intent.Manager.Remove
-	// and ReconcileNetworks' own doc comments), or by anything else that
-	// could desync the store from the engine's actual state.
+	// Best-effort: catches any intent network left behind by a deletion path
+	// that didn't clean up, or anything else that could desync the store from actual state.
 	if err := intentMgr.ReconcileNetworks(ctx); err != nil {
 		log.Printf("anvild: reconciling intent networks: %v", err)
 	}
@@ -138,7 +129,7 @@ func run() error {
 		select {
 		case <-stopped:
 		case <-time.After(10 * time.Second):
-			log.Print("anvild: graceful shutdown timed out (an RPC — e.g. `logs --follow` — was still in flight), forcing stop")
+			log.Print("anvild: graceful shutdown timed out (an RPC, e.g. `logs --follow`, was still in flight), forcing stop")
 			grpcServer.Stop()
 		}
 		return nil

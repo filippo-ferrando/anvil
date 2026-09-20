@@ -206,11 +206,8 @@ func (c *QMPClient) humanMonitorCommand(ctx context.Context, line string) (strin
 	return out, nil
 }
 
-// AddHostForward adds a live SLIRP host-to-guest port forward on netdevID
-// (see NetdevID) via the hostfwd_add HMP command — unlike a 9p mount, this
-// takes effect immediately, no VM restart needed. HMP reports a failure as
-// plain text rather than a QMP-level error, so any non-empty output here
-// is treated as one.
+// AddHostForward adds a live SLIRP host-to-guest port forward via hostfwd_add.
+// HMP reports failure as plain text, not a QMP error, so non-empty output here means failure.
 func (c *QMPClient) AddHostForward(ctx context.Context, netdevID string, f HostForward) error {
 	out, err := c.humanMonitorCommand(ctx, hostfwdAddLine(netdevID, f))
 	if err != nil {
@@ -222,11 +219,8 @@ func (c *QMPClient) AddHostForward(ctx context.Context, netdevID string, f HostF
 	return nil
 }
 
-// RemoveHostForward removes a live SLIRP host-to-guest port forward
-// previously added with AddHostForward, via the hostfwd_remove HMP command.
-// Unlike hostfwd_add, QEMU confirms a successful removal with plain text
-// (e.g. "host forwarding rule for tcp::7000 removed") rather than staying
-// silent, so success is recognized by that wording, not by empty output.
+// RemoveHostForward removes a forward added by AddHostForward, via hostfwd_remove.
+// Unlike hostfwd_add, success is confirmed by wording like "...removed", not by empty output.
 func (c *QMPClient) RemoveHostForward(ctx context.Context, netdevID string, hostPort int, protocol string) error {
 	out, err := c.humanMonitorCommand(ctx, hostfwdRemoveLine(netdevID, hostPort, protocol))
 	if err != nil {
@@ -239,35 +233,26 @@ func (c *QMPClient) RemoveHostForward(ctx context.Context, netdevID string, host
 	return fmt.Errorf("qmp: hostfwd_remove: %s", out)
 }
 
-// isHostfwdRemoveSuccess reports whether out — hostfwd_remove's HMP
-// output, already trimmed — indicates the rule was actually removed.
+// isHostfwdRemoveSuccess reports whether out (hostfwd_remove's already-trimmed
+// HMP output) indicates the rule was actually removed.
 func isHostfwdRemoveSuccess(out string) bool {
 	return out == "" || strings.Contains(out, "removed")
 }
 
-// SaveVM creates or overwrites a named internal snapshot (qcow2 disk
-// state plus full VM/RAM state) via the savevm HMP command, live — unlike
-// qemu-img's offline "snapshot -c", this needs no stop. Returns the raw
-// HMP output uninterpreted: hostfwd_remove taught us success/failure
-// isn't reliably distinguishable from HMP wording alone across commands,
-// so the caller (vm.Backend) confirms the result against the disk's own
-// snapshot table instead of parsing this.
+// SaveVM creates or overwrites a named live internal snapshot via the savevm HMP command.
+// Returns raw output uninterpreted since HMP wording isn't reliably parseable; the caller verifies via the disk's own snapshot table instead.
 func (c *QMPClient) SaveVM(ctx context.Context, name string) (string, error) {
 	return c.humanMonitorCommand(ctx, "savevm "+name)
 }
 
-// DeleteVMSnapshot removes a named internal snapshot via the delvm HMP
-// command, live — qemu-img can't touch a disk file a running QEMU
-// process holds an exclusive lock on. See SaveVM's doc on why the raw
-// output is returned uninterpreted.
+// DeleteVMSnapshot removes a named internal snapshot via delvm, live (qemu-img
+// can't touch a disk file a running QEMU process holds locked). See SaveVM's doc on the raw output.
 func (c *QMPClient) DeleteVMSnapshot(ctx context.Context, name string) (string, error) {
 	return c.humanMonitorCommand(ctx, "delvm "+name)
 }
 
-// hostfwdAddLine renders the hostfwd_add HMP command line for f on
-// netdevID. The empty host/guest addresses (the double colons) mean "any
-// host address" / "the guest's own address" — the same convention
-// buildNetdev's -netdev hostfwd= option uses.
+// hostfwdAddLine renders the hostfwd_add HMP command line for f on netdevID.
+// The empty host/guest addresses (::) mean "any host" / "the guest's own address", the same convention buildNetdev's hostfwd= option uses.
 func hostfwdAddLine(netdevID string, f HostForward) string {
 	proto := f.Protocol
 	if proto == "" {

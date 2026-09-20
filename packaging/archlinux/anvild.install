@@ -1,6 +1,6 @@
 # The actual work is in /usr/lib/anvil/post-install.sh and
 # /usr/lib/anvil/purge.sh, shared verbatim with packaging/deb and
-# packaging/rpm — see packaging/common/, PKGBUILD installs both to these
+# packaging/rpm (see packaging/common/). PKGBUILD installs both to these
 # same paths. post_install and post_upgrade both just run the first one:
 # every step in it is already idempotent, so there's nothing install-only
 # or upgrade-only left to say here.
@@ -15,7 +15,7 @@ post_upgrade() {
 
 # pacman has no separate "remove but keep data" mode the way dpkg's
 # plain `apt remove` does (only dpkg has that distinction, handled there
-# via the purge-vs-remove split instead) — every `pacman -R anvild` is
+# via the purge-vs-remove split instead); every `pacman -R anvild` is
 # already a full removal, so this fully cleans up: stops the service,
 # deletes every directory anvild wrote to (cached images, instance
 # disks, the bbolt registry, the saved cloud-init library, migration
@@ -24,7 +24,7 @@ post_upgrade() {
 #
 # pre_remove, not post_remove: pacman deletes a package's own files
 # *before* running post_remove, and purge.sh is one of anvild's own
-# files (/usr/lib/anvil/purge.sh) — by post_remove time it would already
+# files (/usr/lib/anvil/purge.sh); by post_remove time it would already
 # be gone. pre_remove runs while the package's files, including this
 # one, are still on disk.
 pre_remove() {

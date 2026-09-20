@@ -117,11 +117,8 @@ func (b *DockerBackend) Create(ctx context.Context, spec *instance.Spec, progres
 	return nil
 }
 
-// AddPort adds a published port to spec's container. Docker has no live
-// port-binding mutation (HostConfig.PortBindings is fixed at container-
-// create time), so unlike a VM's live QMP hostfwd_add, this recreates the
-// underlying container — stopping and restarting it if it was running —
-// rather than requiring the caller to relaunch the whole instance.
+// AddPort adds a published port to spec's container. Docker fixes port
+// bindings at container-create time, so this recreates the whole container (restarting it if it was running) instead of just relaunching the instance.
 func (b *DockerBackend) AddPort(ctx context.Context, spec *instance.Spec, port instance.PortMapping) error {
 	if spec.Container == nil {
 		return fmt.Errorf("docker: AddPort called with a nil ContainerSpec")
@@ -173,10 +170,8 @@ func effectiveProto(p string) string {
 	return p
 }
 
-// recreate destroys and rebuilds spec's underlying container from its
-// current spec.Container fields, restarting it if it was running before —
-// used when a setting fixed at docker-create time (like published ports)
-// changes on an existing container.
+// recreate destroys and rebuilds spec's underlying container from its current fields, restarting it if it was running.
+// Used when a setting fixed at docker-create time (like published ports) changes on an existing container.
 func (b *DockerBackend) recreate(ctx context.Context, spec *instance.Spec) error {
 	state, err := b.Status(ctx, spec)
 	if err != nil {
@@ -203,7 +198,6 @@ func (b *DockerBackend) recreate(ctx context.Context, spec *instance.Spec) error
 	return nil
 }
 
-// containerName derives a Docker container name from anvil's instance name.
 func containerName(spec *instance.Spec) string {
 	return "anvil-" + spec.Name
 }
@@ -300,10 +294,8 @@ const statsSampleWindow = 200 * time.Millisecond
 
 var _ instance.StatsProvider = (*DockerBackend)(nil)
 
-// Stats samples the container's live resource usage: CPU comes from
-// Docker's own cpu_stats/precpu_stats pairing on the second sample;
-// network/disk-IO throughput are computed from the delta between two
-// samples statsSampleWindow apart.
+// Stats samples the container's live resource usage: CPU comes from Docker's
+// own cpu_stats/precpu_stats pairing on the second sample; network and disk-IO throughput are computed from the delta between two samples statsSampleWindow apart.
 func (b *DockerBackend) Stats(ctx context.Context, spec *instance.Spec) (instance.Stats, error) {
 	if spec.Container == nil {
 		return instance.Stats{}, fmt.Errorf("docker: Stats called with a nil ContainerSpec")

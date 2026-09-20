@@ -50,7 +50,7 @@ install -Dm755 anvil-bin %{buildroot}%{_bindir}/anvil
 install -Dm755 anvild-bin %{buildroot}%{_bindir}/anvild
 
 # Plain redirection, not `<(...)` process substitution: rpmbuild runs
-# every scriptlet, %install included, via /bin/sh — which is dash on
+# every scriptlet, %install included, via /bin/sh, which is dash on
 # Debian/Ubuntu (unlike Arch, where /bin/sh is bash and PKGBUILD's own
 # equivalent lines get away with `<(...)`), and dash doesn't understand
 # it at all ("Syntax error: "(" unexpected"). Same reasoning
@@ -64,8 +64,8 @@ install -Dm644 anvil-completion.fish %{buildroot}%{_datadir}/fish/vendor_complet
 
 # The systemd unit, sysusers/tmpfiles configs, and post-install script
 # are all shared verbatim across every packaging format (packaging/deb,
-# packaging/archlinux too), not duplicated per format — see
-# packaging/common/. They're part of this same source tarball (built by
+# packaging/archlinux too), not duplicated per format (see
+# packaging/common/). They're part of this same source tarball (built by
 # packaging/rpm/build.sh from the live working tree, not a stale git
 # snapshot), so a plain relative path from the extracted source root
 # reaches them here.
@@ -95,7 +95,7 @@ install -Dm644 packaging/common/anvil.tmpfiles %{buildroot}/usr/lib/tmpfiles.d/a
 %post -n anvild
 /usr/lib/anvil/post-install.sh
 
-# rpm has no remove-vs-purge distinction the way dpkg does — a real
+# rpm has no remove-vs-purge distinction the way dpkg does: a real
 # `rpm -e`/`dnf remove` is the only removal action there is, so this
 # fully cleans up (every VM/container record, cached image, and saved
 # cloud-init config, plus the "anvil" system user/group), guarded by
@@ -103,7 +103,7 @@ install -Dm644 packaging/common/anvil.tmpfiles %{buildroot}/usr/lib/tmpfiles.d/a
 # with $1 = 1, the new version already installed) never triggers it.
 #
 # %postun runs after rpm has already removed the old package's files,
-# so — same reasoning as packaging/deb/postrm-anvild.in — this can't
+# so, for the same reasoning as packaging/deb/postrm-anvild.in, this can't
 # just call an installed /usr/lib/anvil/purge.sh the way %post does;
 # rpm keeps its own persisted copy of this scriptlet regardless of what
 # package files still exist, which is why the cleanup commands below are

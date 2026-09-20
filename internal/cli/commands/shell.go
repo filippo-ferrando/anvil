@@ -25,7 +25,6 @@ func newShellCommand(flags *globalFlags) *cobra.Command {
 			}
 
 			if inst.GetContainer() != nil {
-				// Warn when VM-only flags are set for a container instance.
 				if cmd.Flags().Changed("user") || cmd.Flags().Changed("identity") {
 					fmt.Fprintln(os.Stderr, "anvil: --user/--identity have no effect on a container instance, ignoring")
 				}

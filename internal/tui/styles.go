@@ -47,7 +47,7 @@ var (
 )
 
 // helpItems renders each key/action pair the way helpBar always has,
-// without joining them onto a line — shared by helpBar and helpBarWrap.
+// without joining them onto a line; shared by helpBar and helpBarWrap.
 func helpItems(pairs ...string) []string {
 	var b []string
 	for i := 0; i+1 < len(pairs); i += 2 {
@@ -71,8 +71,7 @@ func helpBar(pairs ...string) string {
 }
 
 // helpBarWrap is helpBar, wrapped onto as many lines as it takes to keep
-// each one within width — for a screen with enough keybindings that a
-// single line would run past the terminal's edge.
+// each one within width, for a screen with enough keybindings that a single line would run past the terminal's edge.
 func helpBarWrap(width int, pairs ...string) string {
 	if width <= 0 {
 		return helpBar(pairs...)

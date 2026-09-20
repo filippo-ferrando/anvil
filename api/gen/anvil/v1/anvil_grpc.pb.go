@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	InstanceService_Launch_FullMethodName     = "/anvil.v1.InstanceService/Launch"
+	InstanceService_Fork_FullMethodName       = "/anvil.v1.InstanceService/Fork"
 	InstanceService_List_FullMethodName       = "/anvil.v1.InstanceService/List"
 	InstanceService_Info_FullMethodName       = "/anvil.v1.InstanceService/Info"
 	InstanceService_Start_FullMethodName      = "/anvil.v1.InstanceService/Start"
@@ -41,6 +42,9 @@ const (
 // InstanceService manages the lifecycle of VM and container instances.
 type InstanceServiceClient interface {
 	Launch(ctx context.Context, in *LaunchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LaunchProgress], error)
+	// Fork creates a new instance whose disk starts as a copy of an existing
+	// instance's disk, preserving the same backing file. Safe to call while the source is running; VM instances only.
+	Fork(ctx context.Context, in *ForkRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LaunchProgress], error)
 	List(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListReply, error)
 	Info(ctx context.Context, in *InfoRequest, opts ...grpc.CallOption) (*InfoReply, error)
 	Start(ctx context.Context, in *StartRequest, opts ...grpc.CallOption) (*StartReply, error)
@@ -50,10 +54,8 @@ type InstanceServiceClient interface {
 	Logs(ctx context.Context, in *LogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogChunk], error)
 	Mount(ctx context.Context, in *MountRequest, opts ...grpc.CallOption) (*MountReply, error)
 	Umount(ctx context.Context, in *UmountRequest, opts ...grpc.CallOption) (*UmountReply, error)
-	// AddPort/RemovePort change a running instance's host-to-guest port
-	// forwards without recreating it: a VM applies this live over QMP; a
-	// container (Docker has no live port-binding mutation) recreates its
-	// underlying container, restarting it if it was running.
+	// AddPort/RemovePort change a running instance's port forwards without recreating it: a VM applies this live over QMP.
+	// A container recreates its underlying container instead (Docker has no live port-binding mutation), restarting it if it was running.
 	AddPort(ctx context.Context, in *AddPortRequest, opts ...grpc.CallOption) (*AddPortReply, error)
 	RemovePort(ctx context.Context, in *RemovePortRequest, opts ...grpc.CallOption) (*RemovePortReply, error)
 	// Stats returns a live resource-usage snapshot for a running instance.
@@ -86,6 +88,25 @@ func (c *instanceServiceClient) Launch(ctx context.Context, in *LaunchRequest, o
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type InstanceService_LaunchClient = grpc.ServerStreamingClient[LaunchProgress]
+
+func (c *instanceServiceClient) Fork(ctx context.Context, in *ForkRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LaunchProgress], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &InstanceService_ServiceDesc.Streams[1], InstanceService_Fork_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ForkRequest, LaunchProgress]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type InstanceService_ForkClient = grpc.ServerStreamingClient[LaunchProgress]
 
 func (c *instanceServiceClient) List(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -149,7 +170,7 @@ func (c *instanceServiceClient) Purge(ctx context.Context, in *PurgeRequest, opt
 
 func (c *instanceServiceClient) Logs(ctx context.Context, in *LogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &InstanceService_ServiceDesc.Streams[1], InstanceService_Logs_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &InstanceService_ServiceDesc.Streams[2], InstanceService_Logs_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -223,6 +244,9 @@ func (c *instanceServiceClient) Stats(ctx context.Context, in *StatsRequest, opt
 // InstanceService manages the lifecycle of VM and container instances.
 type InstanceServiceServer interface {
 	Launch(*LaunchRequest, grpc.ServerStreamingServer[LaunchProgress]) error
+	// Fork creates a new instance whose disk starts as a copy of an existing
+	// instance's disk, preserving the same backing file. Safe to call while the source is running; VM instances only.
+	Fork(*ForkRequest, grpc.ServerStreamingServer[LaunchProgress]) error
 	List(context.Context, *ListRequest) (*ListReply, error)
 	Info(context.Context, *InfoRequest) (*InfoReply, error)
 	Start(context.Context, *StartRequest) (*StartReply, error)
@@ -232,10 +256,8 @@ type InstanceServiceServer interface {
 	Logs(*LogsRequest, grpc.ServerStreamingServer[LogChunk]) error
 	Mount(context.Context, *MountRequest) (*MountReply, error)
 	Umount(context.Context, *UmountRequest) (*UmountReply, error)
-	// AddPort/RemovePort change a running instance's host-to-guest port
-	// forwards without recreating it: a VM applies this live over QMP; a
-	// container (Docker has no live port-binding mutation) recreates its
-	// underlying container, restarting it if it was running.
+	// AddPort/RemovePort change a running instance's port forwards without recreating it: a VM applies this live over QMP.
+	// A container recreates its underlying container instead (Docker has no live port-binding mutation), restarting it if it was running.
 	AddPort(context.Context, *AddPortRequest) (*AddPortReply, error)
 	RemovePort(context.Context, *RemovePortRequest) (*RemovePortReply, error)
 	// Stats returns a live resource-usage snapshot for a running instance.
@@ -252,6 +274,9 @@ type UnimplementedInstanceServiceServer struct{}
 
 func (UnimplementedInstanceServiceServer) Launch(*LaunchRequest, grpc.ServerStreamingServer[LaunchProgress]) error {
 	return status.Errorf(codes.Unimplemented, "method Launch not implemented")
+}
+func (UnimplementedInstanceServiceServer) Fork(*ForkRequest, grpc.ServerStreamingServer[LaunchProgress]) error {
+	return status.Errorf(codes.Unimplemented, "method Fork not implemented")
 }
 func (UnimplementedInstanceServiceServer) List(context.Context, *ListRequest) (*ListReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method List not implemented")
@@ -320,6 +345,17 @@ func _InstanceService_Launch_Handler(srv interface{}, stream grpc.ServerStream) 
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type InstanceService_LaunchServer = grpc.ServerStreamingServer[LaunchProgress]
+
+func _InstanceService_Fork_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ForkRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(InstanceServiceServer).Fork(m, &grpc.GenericServerStream[ForkRequest, LaunchProgress]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type InstanceService_ForkServer = grpc.ServerStreamingServer[LaunchProgress]
 
 func _InstanceService_List_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListRequest)
@@ -586,6 +622,11 @@ var InstanceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Launch",
 			Handler:       _InstanceService_Launch_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "Fork",
+			Handler:       _InstanceService_Fork_Handler,
 			ServerStreams: true,
 		},
 		{
@@ -1397,8 +1438,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // IntentService manages named groups of VM/container instances. Members are
-// created via InstanceService.Launch(intent_name, role); this service just
-// reads and manages the group afterward.
+// created via InstanceService.Launch(intent_name, role); this service only reads and manages the group afterward.
 type IntentServiceClient interface {
 	List(ctx context.Context, in *IntentListRequest, opts ...grpc.CallOption) (*IntentListReply, error)
 	Info(ctx context.Context, in *IntentInfoRequest, opts ...grpc.CallOption) (*IntentInfoReply, error)
@@ -1459,8 +1499,7 @@ func (c *intentServiceClient) Delete(ctx context.Context, in *IntentDeleteReques
 // for forward compatibility.
 //
 // IntentService manages named groups of VM/container instances. Members are
-// created via InstanceService.Launch(intent_name, role); this service just
-// reads and manages the group afterward.
+// created via InstanceService.Launch(intent_name, role); this service only reads and manages the group afterward.
 type IntentServiceServer interface {
 	List(context.Context, *IntentListRequest) (*IntentListReply, error)
 	Info(context.Context, *IntentInfoRequest) (*IntentInfoReply, error)
@@ -2034,10 +2073,8 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// ExportService packages a single instance or a whole intent into a
-// portable tar.zst bundle, and relaunches one back from it. Unlike
-// MigrateService, both ends run against this same anvild over its own
-// unix socket — bundle_path/output_path are plain local filesystem paths.
+// ExportService packages a single instance or a whole intent into a portable tar.zst bundle, and relaunches one back from it.
+// Unlike MigrateService, both ends run against this same anvild, so bundle_path/output_path are plain local filesystem paths.
 type ExportServiceClient interface {
 	Export(ctx context.Context, in *ExportRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExportProgress], error)
 	Import(ctx context.Context, in *ImportRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ImportProgress], error)
@@ -2093,10 +2130,8 @@ type ExportService_ImportClient = grpc.ServerStreamingClient[ImportProgress]
 // All implementations must embed UnimplementedExportServiceServer
 // for forward compatibility.
 //
-// ExportService packages a single instance or a whole intent into a
-// portable tar.zst bundle, and relaunches one back from it. Unlike
-// MigrateService, both ends run against this same anvild over its own
-// unix socket — bundle_path/output_path are plain local filesystem paths.
+// ExportService packages a single instance or a whole intent into a portable tar.zst bundle, and relaunches one back from it.
+// Unlike MigrateService, both ends run against this same anvild, so bundle_path/output_path are plain local filesystem paths.
 type ExportServiceServer interface {
 	Export(*ExportRequest, grpc.ServerStreamingServer[ExportProgress]) error
 	Import(*ImportRequest, grpc.ServerStreamingServer[ImportProgress]) error
@@ -2192,12 +2227,8 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// SnapshotService manages QCOW2 internal snapshots of a VM's disk — a
-// point-in-time checkpoint you can restore back to later, in place.
-// Container instances don't support this (no equivalent primitive).
-// Create/Delete apply live over QMP when the instance is running, no stop
-// needed; Restore always stops it first and restarts it afterward if it
-// was running (see internal/vm.Backend.RestoreSnapshot's doc for why).
+// SnapshotService manages QCOW2 internal snapshots of a VM's disk, a point-in-time checkpoint you can restore back to later in place. VM only.
+// Create/Delete apply live over QMP; Restore stops the instance first and restarts it afterward if it was running.
 type SnapshotServiceClient interface {
 	Create(ctx context.Context, in *SnapshotCreateRequest, opts ...grpc.CallOption) (*SnapshotCreateReply, error)
 	Restore(ctx context.Context, in *SnapshotRestoreRequest, opts ...grpc.CallOption) (*SnapshotRestoreReply, error)
@@ -2257,12 +2288,8 @@ func (c *snapshotServiceClient) List(ctx context.Context, in *SnapshotListReques
 // All implementations must embed UnimplementedSnapshotServiceServer
 // for forward compatibility.
 //
-// SnapshotService manages QCOW2 internal snapshots of a VM's disk — a
-// point-in-time checkpoint you can restore back to later, in place.
-// Container instances don't support this (no equivalent primitive).
-// Create/Delete apply live over QMP when the instance is running, no stop
-// needed; Restore always stops it first and restarts it afterward if it
-// was running (see internal/vm.Backend.RestoreSnapshot's doc for why).
+// SnapshotService manages QCOW2 internal snapshots of a VM's disk, a point-in-time checkpoint you can restore back to later in place. VM only.
+// Create/Delete apply live over QMP; Restore stops the instance first and restarts it afterward if it was running.
 type SnapshotServiceServer interface {
 	Create(context.Context, *SnapshotCreateRequest) (*SnapshotCreateReply, error)
 	Restore(context.Context, *SnapshotRestoreRequest) (*SnapshotRestoreReply, error)

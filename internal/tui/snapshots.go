@@ -32,8 +32,7 @@ const (
 )
 
 // snapshotsModel is the Snapshots page: a VM instance list on the left,
-// that instance's own QCOW2 snapshots on the right. Containers don't
-// appear here — they have no equivalent primitive (see instance.Snapshotter).
+// that instance's own QCOW2 snapshots on the right. Containers don't appear here; they have no equivalent primitive (see instance.Snapshotter).
 type snapshotsModel struct {
 	instances list.Model
 	snaps     list.Model
@@ -287,7 +286,7 @@ func (m snapshotsModel) View() string {
 	if m.loading {
 		snapsBody = styleSubtitle.Render("loading…")
 	} else if m.selectedInstance() != nil && len(m.snaps.Items()) == 0 {
-		snapsBody = styleSubtitle.Render("no snapshots yet — press n to create one")
+		snapsBody = styleSubtitle.Render("no snapshots yet: press n to create one")
 	} else if m.selectedInstance() == nil {
 		snapsBody = styleSubtitle.Render("no VM instances yet")
 	}

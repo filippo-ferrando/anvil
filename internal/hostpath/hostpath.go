@@ -33,7 +33,7 @@ func Hint(path string) string {
 	clean := filepath.Clean(path)
 	var b strings.Builder
 	b.WriteString("\nthe \"anvil\" system user needs real access to this path, not just you")
-	b.WriteString(" — try:\n")
+	b.WriteString(". Try:\n")
 	for _, dir := range Ancestors(clean) {
 		fmt.Fprintf(&b, "  setfacl -m u:%s:x %s\n", AnvilUser, dir)
 	}

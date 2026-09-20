@@ -16,7 +16,7 @@ set -euo pipefail
 #
 # The source tarball is built from the live working tree (via `git
 # ls-files`, so it respects .gitignore and skips anything currently
-# deleted-but-still-tracked), not `git archive HEAD` — this repo can
+# deleted-but-still-tracked), not `git archive HEAD`: this repo can
 # have real uncommitted work in it (new files not yet `git add`ed, local
 # edits to tracked ones), and a build from HEAD alone would silently
 # ship a stale source tree instead. Same reasoning packaging/deb/build.sh
@@ -66,7 +66,7 @@ echo "==> rpmbuild"
 # --nodeps: rpmbuild checks BuildRequires/Requires against the *local*
 # rpm package database, which doesn't exist at all on a non-RPM host
 # (this script's own CI usage builds on Ubuntu, which has no rpm db to
-# check against, regardless of whether e.g. Go is actually installed —
+# check against, regardless of whether e.g. Go is actually installed;
 # it came from actions/setup-go, not an rpm-tracked package). This only
 # skips rpmbuild's own local check on this host; the Requires:/
 # BuildRequires: lines are still baked into the resulting .rpm's

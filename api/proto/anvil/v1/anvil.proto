@@ -7,6 +7,11 @@ option go_package = "github.com/anvil-project/anvil/api/gen/anvil/v1;anvilv1";
 // InstanceService manages the lifecycle of VM and container instances.
 service InstanceService {
   rpc Launch(LaunchRequest) returns (stream LaunchProgress);
+
+  // Fork creates a new instance whose disk starts as a copy of an existing
+  // instance's disk, preserving the same backing file. Safe to call while the source is running; VM instances only.
+  rpc Fork(ForkRequest) returns (stream LaunchProgress);
+
   rpc List(ListRequest) returns (ListReply);
   rpc Info(InfoRequest) returns (InfoReply);
   rpc Start(StartRequest) returns (StartReply);
@@ -17,10 +22,8 @@ service InstanceService {
   rpc Mount(MountRequest) returns (MountReply);
   rpc Umount(UmountRequest) returns (UmountReply);
 
-  // AddPort/RemovePort change a running instance's host-to-guest port
-  // forwards without recreating it: a VM applies this live over QMP; a
-  // container (Docker has no live port-binding mutation) recreates its
-  // underlying container, restarting it if it was running.
+  // AddPort/RemovePort change a running instance's port forwards without recreating it: a VM applies this live over QMP.
+  // A container recreates its underlying container instead (Docker has no live port-binding mutation), restarting it if it was running.
   rpc AddPort(AddPortRequest) returns (AddPortReply);
   rpc RemovePort(RemovePortRequest) returns (RemovePortReply);
 
@@ -210,6 +213,12 @@ message LaunchProgress {
     Instance instance = 3; // final event on success
     string error = 4;
   }
+}
+
+message ForkRequest {
+  string name = 1;     // source instance name
+  string new_name = 2; // name for the forked instance
+  bool start = 3;      // start the forked instance immediately after creating it
 }
 
 message ListRequest {
@@ -422,7 +431,7 @@ message ImageListReply {
 
 // CatalogEntry is one fetchable distro image.
 message CatalogEntry {
-  string id = 1;      // e.g. "ubuntu-24.04" — what `anvil launch --kind vm <id>` takes
+  string id = 1;      // e.g. "ubuntu-24.04": what `anvil launch --kind vm <id>` takes
   string name = 2;    // e.g. "Ubuntu 24.04 LTS"
   string distro = 3;
   string version = 4;
@@ -440,10 +449,10 @@ message CatalogReply {
 message ImageDeleteRequest {
   string id = 1;
   string arch = 2; // optional; only needed if id is ambiguous across architectures
-  bool force = 3;  // delete even if ref_count > 0 — will break those instances' disks
+  bool force = 3;  // delete even if ref_count > 0, which will break those instances' disks
 }
 
-// ContainerImage is one image cached by a container engine — a separate
+// ContainerImage is one image cached by a container engine, a separate
 // inventory from CachedImage's VM disk images above.
 message ContainerImage {
   string id = 1;
@@ -486,8 +495,7 @@ message UmountRequest {
 message UmountReply {}
 
 // IntentService manages named groups of VM/container instances. Members are
-// created via InstanceService.Launch(intent_name, role); this service just
-// reads and manages the group afterward.
+// created via InstanceService.Launch(intent_name, role); this service only reads and manages the group afterward.
 service IntentService {
   rpc List(IntentListRequest) returns (IntentListReply);
   rpc Info(IntentInfoRequest) returns (IntentInfoReply);
@@ -662,10 +670,8 @@ message IntentMigrateDone {
   bool rolled_back = 3; // true if an all-or-nothing migration hit a member failure and was undone
 }
 
-// ExportService packages a single instance or a whole intent into a
-// portable tar.zst bundle, and relaunches one back from it. Unlike
-// MigrateService, both ends run against this same anvild over its own
-// unix socket — bundle_path/output_path are plain local filesystem paths.
+// ExportService packages a single instance or a whole intent into a portable tar.zst bundle, and relaunches one back from it.
+// Unlike MigrateService, both ends run against this same anvild, so bundle_path/output_path are plain local filesystem paths.
 service ExportService {
   rpc Export(ExportRequest) returns (stream ExportProgress);
   rpc Import(ImportRequest) returns (stream ImportProgress);
@@ -675,10 +681,8 @@ message ExportRequest {
   string name = 1;        // resolved as a single instance first, a whole intent second, unless is_intent
   string output_path = 2; // where to write the bundle, e.g. "/home/me/bundle.tar.zst"
 
-  // is_intent skips instance resolution and looks name up as an intent
-  // only — for a caller (the TUI's Intents page) that already knows name
-  // is an intent, so an unrelated instance that happens to share the same
-  // name can't shadow it.
+  // is_intent skips instance resolution and looks name up as an intent only.
+  // Lets a caller that already knows name is an intent (the TUI's Intents page) avoid being shadowed by an unrelated instance of the same name.
   bool is_intent = 3;
 }
 
@@ -716,12 +720,8 @@ message ImportDone {
   repeated ImportMemberResult members = 2;
 }
 
-// SnapshotService manages QCOW2 internal snapshots of a VM's disk — a
-// point-in-time checkpoint you can restore back to later, in place.
-// Container instances don't support this (no equivalent primitive).
-// Create/Delete apply live over QMP when the instance is running, no stop
-// needed; Restore always stops it first and restarts it afterward if it
-// was running (see internal/vm.Backend.RestoreSnapshot's doc for why).
+// SnapshotService manages QCOW2 internal snapshots of a VM's disk, a point-in-time checkpoint you can restore back to later in place. VM only.
+// Create/Delete apply live over QMP; Restore stops the instance first and restarts it afterward if it was running.
 service SnapshotService {
   rpc Create(SnapshotCreateRequest) returns (SnapshotCreateReply);
   rpc Restore(SnapshotRestoreRequest) returns (SnapshotRestoreReply);
@@ -758,10 +758,8 @@ message SnapshotInfo {
   string name = 1;
   int64 created_at_unix = 2;
 
-  // has_vm_state is true for a snapshot taken live (embeds full VM
-  // state alongside the disk data) and false for a disk-only one — see
-  // instance.Snapshot.HasVMState. Informational only: restore always
-  // resets disk content only, regardless of this field.
+  // has_vm_state is true for a snapshot taken live (embeds VM state alongside the disk data), false for disk-only.
+  // Informational only: restore always resets disk content regardless of this field.
   bool has_vm_state = 3;
 }
 

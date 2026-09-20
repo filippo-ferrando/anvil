@@ -9,7 +9,7 @@ After=network.target
 # deb/postinst-anvild, rpm/anvil.spec.in's %post).
 #
 # This file (and its two siblings here) is shared verbatim across every
-# packaging format under packaging/ — never copy it, reference this one.
+# packaging format under packaging/. Never copy it, reference this one.
 [Service]
 Type=simple
 User=anvil

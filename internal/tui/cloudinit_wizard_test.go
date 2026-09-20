@@ -53,10 +53,8 @@ func TestBuildWizardCloudInit(t *testing.T) {
 		}
 	})
 
-	// A value containing YAML-significant characters (colon, quotes, a
-	// leading dash) must round-trip as literal text, not corrupt the
-	// document's structure — the bug in the original hand-concatenated
-	// string-building version of this wizard.
+	// A value containing YAML-significant characters (colon, quotes, a leading dash) must round-trip as literal
+	// text, not corrupt the document; this was the bug in the original hand-concatenated string-building version.
 	t.Run("special characters in values don't corrupt the document", func(t *testing.T) {
 		user := `ubuntu: "evil"`
 		key := "ssh-ed25519 AAAA... - not a list item"

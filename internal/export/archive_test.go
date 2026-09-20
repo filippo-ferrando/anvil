@@ -9,9 +9,8 @@ import (
 	"testing"
 )
 
-// TestWriteExtractTarZstRoundTrip builds a real bundle (manifest bytes, a
-// single file, and a directory tree) and confirms extractTarZst recovers
-// it byte-for-byte.
+// TestWriteExtractTarZstRoundTrip builds a real bundle (manifest, a file, and a directory tree)
+// and confirms extractTarZst recovers it byte-for-byte.
 func TestWriteExtractTarZstRoundTrip(t *testing.T) {
 	if _, err := exec.LookPath("zstd"); err != nil {
 		t.Skip("zstd not installed, skipping")

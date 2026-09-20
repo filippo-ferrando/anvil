@@ -21,8 +21,7 @@ type instancesLoadedMsg struct {
 }
 
 // statsLoadedMsg carries one instance's live resource-usage snapshot back
-// from a Stats RPC call — name lets the handler ignore a stale reply that
-// arrives after the user has since selected a different instance.
+// from a Stats RPC call. name lets the handler ignore a stale reply that arrives after the user selects a different instance.
 type statsLoadedMsg struct {
 	name  string
 	stats *anvilv1.InstanceStats
@@ -30,7 +29,7 @@ type statsLoadedMsg struct {
 }
 
 type actionDoneMsg struct {
-	verb string // "started" / "stopped" / "deleted" — for the status line
+	verb string // "started" / "stopped" / "deleted": for the status line
 
 	// screen is which screen's action produced this message, regardless of
 	// which screen the user is currently viewing.
@@ -100,6 +99,16 @@ type launchStreamMsg struct {
 	done     bool
 }
 
+// forkStreamMsg carries one event off the Fork streaming RPC, plus the
+// stream itself to chain the next receive. done marks the terminal event.
+type forkStreamMsg struct {
+	stream   anvilv1.InstanceService_ForkClient
+	status   string
+	instance *anvilv1.Instance
+	err      error
+	done     bool
+}
+
 type migrateStreamMsg struct {
 	stream anvilv1.MigrateService_MigrateClient
 	line   string
@@ -108,15 +117,14 @@ type migrateStreamMsg struct {
 }
 
 // snapshotsLoadedMsg carries one instance's snapshot list back from a
-// SnapshotService.List call. instanceName lets the handler ignore a stale
-// reply that arrives after the user has since selected a different instance.
+// SnapshotService.List call. instanceName lets the handler ignore a stale reply after the user selects a different instance.
 type snapshotsLoadedMsg struct {
 	instanceName string
 	snapshots    []*anvilv1.SnapshotInfo
 	err          error
 }
 
-// exportStreamMsg carries one event off an ExportService.Export stream —
+// exportStreamMsg carries one event off an ExportService.Export stream,
 // shared by the Instances and Intents screens, whichever started it.
 type exportStreamMsg struct {
 	stream anvilv1.ExportService_ExportClient
@@ -159,9 +167,8 @@ func loadInstances(c *client.Client) tea.Cmd {
 	}
 }
 
-// loadStats fetches name's live resource-usage snapshot. The RPC itself
-// takes ~200ms (the daemon samples twice to compute a rate), which is fine
-// for a periodic poll but would visibly stutter the UI if called inline.
+// loadStats fetches name's live resource-usage snapshot. The RPC takes
+// ~200ms (the daemon samples twice for a rate): fine for a periodic poll but would stutter the UI if called inline.
 func loadStats(c *client.Client, name string) tea.Cmd {
 	return func() tea.Msg {
 		reply, err := c.Stats(context.Background(), &anvilv1.StatsRequest{Name: name})
@@ -259,9 +266,7 @@ func umountInstance(c *client.Client, name, guestPath string) tea.Cmd {
 }
 
 // startExportStream begins `anvil export name -o outputPath`. isIntent
-// skips instance resolution and looks name up as an intent only — pass
-// true from the Intents page, which already knows name is an intent and
-// shouldn't be shadowed by an unrelated instance of the same name.
+// skips instance resolution and looks name up as an intent only, for a caller (the Intents page) that already knows name is an intent.
 func startExportStream(c *client.Client, name, outputPath string, isIntent bool) tea.Cmd {
 	return func() tea.Msg {
 		absOutput, err := filepath.Abs(outputPath)
@@ -342,6 +347,40 @@ func receiveImportEvent(stream anvilv1.ExportService_ImportClient) tea.Cmd {
 			return importStreamMsg{stream: stream, line: b.String()}
 		default:
 			return importStreamMsg{stream: stream}
+		}
+	}
+}
+
+// startForkStream begins `anvil fork sourceName newName [--start]` and
+// streams its progress back.
+func startForkStream(c *client.Client, sourceName, newName string, start bool) tea.Cmd {
+	return func() tea.Msg {
+		stream, err := c.Fork(context.Background(), &anvilv1.ForkRequest{Name: sourceName, NewName: newName, Start: start})
+		if err != nil {
+			return forkStreamMsg{err: err, done: true}
+		}
+		return receiveForkEvent(stream)()
+	}
+}
+
+func receiveForkEvent(stream anvilv1.InstanceService_ForkClient) tea.Cmd {
+	return func() tea.Msg {
+		ev, err := stream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				return forkStreamMsg{done: true}
+			}
+			return forkStreamMsg{err: err, done: true}
+		}
+		switch e := ev.GetEvent().(type) {
+		case *anvilv1.LaunchProgress_Status:
+			return forkStreamMsg{stream: stream, status: e.Status}
+		case *anvilv1.LaunchProgress_Error:
+			return forkStreamMsg{err: fmt.Errorf("%s", e.Error), done: true}
+		case *anvilv1.LaunchProgress_Instance:
+			return forkStreamMsg{stream: stream, instance: e.Instance, done: true}
+		default:
+			return forkStreamMsg{stream: stream}
 		}
 	}
 }

@@ -13,9 +13,8 @@ import (
 	"github.com/anvil-project/anvil/pkg/client"
 )
 
-// cloudInitNameField is the VM-only field naming a saved library entry —
-// shared between newLaunchModel/launchFields and buildLaunchRequest so
-// the two can't drift out of sync.
+// cloudInitNameField is the VM-only field naming a saved library entry.
+// It's shared between newLaunchModel/launchFields and buildLaunchRequest so they can't drift out of sync.
 const cloudInitNameField = "Cloud-init name (optional)"
 
 type launchModel struct {
@@ -24,10 +23,8 @@ type launchModel struct {
 	launching     bool
 	progressLines []string
 
-	// Ad hoc cloud-init editing (VM only, ctrl+e): overrideSet distinguishes
-	// "never opened the editor" from "opened it and saved empty content",
-	// since an empty override is still a deliberate choice to send no
-	// cloud-init at all rather than "use the name field instead".
+	// Ad hoc cloud-init editing (VM only, ctrl+e): distinguishes "never
+	// opened the editor" from "opened it and saved empty content", since an empty override is still a deliberate choice.
 	editingCloudInit    bool
 	loadingCloudInit    bool
 	cloudInitEditor     textarea.Model
@@ -48,9 +45,8 @@ type launchSuggestions struct {
 	roles           []string // roles already in use across every intent's members
 }
 
-// imagesFor returns the Image-field candidates relevant to kind — a VM's
-// image ref and a container's image ref come from entirely different
-// namespaces (a vault catalog id vs. a Docker repo:tag).
+// imagesFor returns the Image-field candidates relevant to kind: a VM's
+// image ref and a container's image ref come from different namespaces (a vault catalog id vs. a Docker repo:tag).
 func (s launchSuggestions) imagesFor(kind string) []string {
 	if kind == "container" {
 		return s.containerImages
@@ -68,21 +64,18 @@ func newLaunchModel() launchModel {
 	}
 }
 
-// setSize sizes both the form and the cloud-init editor. It must be called
-// not just on a real terminal resize but every time a fresh launchModel
-// replaces the old one (entering the Launch screen via "n") — a brand new
-// textarea.Model starts at a zero-sized viewport.New(0,0) and stays that
-// way, looking tiny, until something calls SetWidth/SetHeight on it.
+// setSize must run on a real terminal resize and every time a fresh
+// launchModel replaces the old one: a new textarea.Model starts zero-sized and stays tiny until this calls SetWidth/SetHeight on it.
 func (m *launchModel) setSize(width, height int) {
 	m.form.SetHeight(height - 2)
 	m.cloudInitEditor.SetWidth(width - 4)
 	m.cloudInitEditor.SetHeight(height - 2)
 }
 
-// launchTitle is the form's title bar, mentioning ctrl+e only for a VM —
-// it's a no-op for a container, which has no cloud-init concept at all.
+// launchTitle is the form's title bar. It mentions ctrl+e only for a VM;
+// a container has no cloud-init concept, so the hint would be a no-op there.
 func launchTitle(kind string) string {
-	title := "Launch  —  ctrl+k: switch vm/container"
+	title := "Launch (ctrl+k: switch vm/container)"
 	if kind == "vm" {
 		title += ", ctrl+e: edit cloud-init"
 	}
@@ -90,9 +83,7 @@ func launchTitle(kind string) string {
 }
 
 // launchFields builds the field set for kind, carrying over values (keyed
-// by label) from whatever form the user was previously looking at — so
-// switching kind with ctrl+k doesn't throw away shared fields like Name
-// or Image, it just shows/hides the ones that don't apply to the other kind.
+// by label) so switching kind with ctrl+k doesn't lose shared fields like Name or Image, it just shows/hides what doesn't apply.
 func launchFields(kind string, values map[string]string) []formField {
 	v := func(label, fallback string) string {
 		if s, ok := values[label]; ok && s != "" {
@@ -111,7 +102,7 @@ func launchFields(kind string, values map[string]string) []formField {
 	if kind == "vm" {
 		fields = append(fields,
 			textField("Disk GiB", "", v("Disk GiB", "8")),
-			textField(cloudInitNameField, "a saved library entry — or ctrl+e to edit ad hoc for just this launch", v(cloudInitNameField, "")),
+			textField(cloudInitNameField, "a saved library entry, or ctrl+e to edit ad hoc for just this launch", v(cloudInitNameField, "")),
 		)
 	} else {
 		fields = append(fields,
@@ -129,9 +120,7 @@ func launchFields(kind string, values map[string]string) []formField {
 }
 
 // applySuggestions pushes m.suggest's current candidate lists into the
-// already-built fields in place, without reconstructing them — a
-// reconstruction (as launchFields would do) would cost the user's
-// in-progress typing and focus every time another load reply lands.
+// already-built fields in place: reconstructing them via launchFields instead would cost the user's in-progress typing and focus on every load reply.
 func (m *launchModel) applySuggestions() {
 	m.setFieldSuggestions("Image", m.suggest.imagesFor(m.kind))
 	m.setFieldSuggestions("Intent name (optional)", m.suggest.intents)
@@ -148,8 +137,7 @@ func (m *launchModel) setFieldSuggestions(label string, options []string) {
 }
 
 // collectRoles gathers the distinct, non-empty roles already used across
-// every intent's members, so a new instance joining a fleet can reuse an
-// existing role name (e.g. always "web") instead of typing a near-duplicate.
+// every intent's members, so a new instance can reuse an existing role name instead of typing a near-duplicate.
 func collectRoles(intents []*anvilv1.Intent) []string {
 	seen := make(map[string]bool)
 	var roles []string
@@ -164,9 +152,8 @@ func collectRoles(intents []*anvilv1.Intent) []string {
 	return roles
 }
 
-// mergeUnique appends add's not-already-present entries to existing —
-// vmImages is filled by two independent loads (catalog + cached) that can
-// land in either order, so neither may clobber what the other already set.
+// mergeUnique appends add's not-already-present entries to existing.
+// vmImages is filled by two independent loads (catalog + cached) that can land in either order, so neither may clobber what the other set.
 func mergeUnique(existing, add []string) []string {
 	seen := make(map[string]bool, len(existing))
 	out := append([]string(nil), existing...)
@@ -230,7 +217,7 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.launch.cloudInitEditor.Focus()
 		return m, nil
 
-	// The four loads fired when Launch was entered — each fills in one
+	// The four loads fired when Launch was entered each fill in one
 	// slice of autocomplete candidates as its RPC comes back, independently.
 	case intentsLoadedMsg:
 		if msg.err == nil {
@@ -286,7 +273,7 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if m.launch.launching {
-			return m, nil // one thing at a time — ignore input mid-launch
+			return m, nil // one thing at a time: ignore input mid-launch
 		}
 
 		if m.launch.editingCloudInit {
@@ -307,11 +294,8 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.launch.form.focus >= len(m.launch.form.fields) {
 				m.launch.form.focus = 0
 			}
-			// The new fields are freshly constructed textinput.Models,
-			// none of them actually focused yet even though View() will
-			// render whichever index m.focus points at as if it were —
-			// without this, the form looks focused but silently eats
-			// keystrokes until the user tabs away and back.
+			// The new fields are freshly constructed textinput.Models, none
+			// actually focused yet even though View() renders as if one were: without this the form silently eats keystrokes until tab away and back.
 			m.launch.form.focusCurrent()
 			return m, nil
 		}
@@ -340,9 +324,8 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// startEditingLaunchCloudInit opens the ad hoc cloud-init editor, seeding
-// it from (in priority order) an override already saved this session, the
-// named saved config if one's set, or an empty template.
+// startEditingLaunchCloudInit opens the ad hoc cloud-init editor, seeding it
+// from (in priority order) a session override, the named saved config, or an empty template.
 func (m model) startEditingLaunchCloudInit() (tea.Model, tea.Cmd) {
 	m.launch.editingCloudInit = true
 	if m.launch.cloudInitOverrideOK {
@@ -376,7 +359,7 @@ func (m model) updateLaunchCloudInitEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 		return m, nil
 	}
 	if m.launch.loadingCloudInit {
-		return m, nil // still fetching — ignore typing until it lands
+		return m, nil // still fetching: ignore typing until it lands
 	}
 	var cmd tea.Cmd
 	m.launch.cloudInitEditor, cmd = m.launch.cloudInitEditor.Update(msg)
@@ -479,9 +462,8 @@ func buildLaunchRequest(m launchModel) (*anvilv1.LaunchRequest, error) {
 		SshPublicKeys: []string{pub},
 		Ports:         ports,
 	}
-	// The ad hoc editor, when used, always wins over the saved-library
-	// name — editing is meant as "just for this launch", so it shouldn't
-	// silently lose to whatever's still sitting in the name field.
+	// The ad hoc editor, when used, always wins over the saved-library name:
+	// editing is meant as "just for this launch" and shouldn't silently lose to whatever's still in the name field.
 	if m.cloudInitOverrideOK {
 		req.Vm.CloudInitUserData = m.cloudInitOverride
 	} else {

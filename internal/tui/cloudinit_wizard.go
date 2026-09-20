@@ -6,14 +6,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// buildWizardCloudInit renders a #cloud-config document for the cloud-init
-// page's "w" quick-start wizard: an optional default user (with an optional
-// SSH key and passwordless sudo), a package list, and a runcmd list. Values
-// are run through yaml.Marshal rather than string-concatenated, so a colon,
-// quote, or dash typed into a name/key/package/command can't corrupt the
-// document. packagesCSV is comma-separated (package names never contain a
-// comma); runCmdsSemi is semicolon-separated instead, since a shell command
-// commonly contains commas of its own (e.g. install flags/arguments).
+// buildWizardCloudInit renders a #cloud-config document for the wizard's quick-start fields, using yaml.Marshal
+// (not string concatenation) so values can't corrupt the document. packagesCSV is comma-separated; runCmdsSemi is semicolon-separated since shell commands often contain commas of their own.
 func buildWizardCloudInit(user, sshKey, packagesCSV, runCmdsSemi string) (string, error) {
 	doc := map[string]any{}
 
@@ -45,9 +39,8 @@ func buildWizardCloudInit(user, sshKey, packagesCSV, runCmdsSemi string) (string
 	return "#cloud-config\n" + string(data), nil
 }
 
-// splitNonEmpty splits s on sep, trims each piece, and drops empty ones —
-// so a trailing separator or stray extra whitespace doesn't produce a
-// blank list entry.
+// splitNonEmpty splits s on sep, trims each piece, and drops empty entries,
+// so a trailing separator or stray whitespace doesn't produce a blank list entry.
 func splitNonEmpty(s, sep string) []string {
 	var out []string
 	for _, p := range strings.Split(s, sep) {

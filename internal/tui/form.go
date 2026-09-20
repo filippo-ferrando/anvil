@@ -12,10 +12,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// simpleForm is a shared form component: Tab/Shift+Tab between fields,
-// Enter or a submit key to confirm, Esc to cancel. A text field can also
-// list Suggestions, which Tab cycles through bash-style instead of moving
-// focus (see completeCurrent).
+// simpleForm is a shared form component: Tab/Shift+Tab between fields, Enter or a submit key to confirm, Esc to
+// cancel. A text field can also list Suggestions, which Tab cycles through bash-style instead of moving focus.
 type simpleForm struct {
 	title     string
 	fields    []formField
@@ -23,11 +21,8 @@ type simpleForm struct {
 	errMsg    string
 	maxHeight int // 0 means unconstrained; set via SetHeight
 
-	// Tab-completion cycling state: tabField is the field index currently
-	// mid-cycle (-1 when not completing), tabPrefix is what the user had
-	// actually typed before the first Tab press, and tabIdx is which match
-	// is currently showing — both needed so a second Tab advances to the
-	// *next* match instead of re-filtering against the already-completed text.
+	// Tab-completion cycling state: tabField is the field mid-cycle (-1 when idle), tabPrefix is what the user
+	// typed before the first Tab, and tabIdx is the current match index, so a second Tab advances instead of re-filtering.
 	tabField  int
 	tabPrefix string
 	tabIdx    int
@@ -50,7 +45,7 @@ type formField struct {
 	Suggestions []string        // candidate values Tab can cycle through; nil disables it
 
 	// PathComplete makes Tab cycle through this field's own directory's
-	// entries instead of a fixed Suggestions list — see completePathMatches.
+	// entries instead of a fixed Suggestions list; see completePathMatches.
 	PathComplete bool
 }
 
@@ -75,11 +70,8 @@ func toggleField(label, hint string, on bool) formField {
 	return formField{Label: label, Hint: hint, Kind: fieldToggle, on: on}
 }
 
-// completePathMatches lists dir's entries whose name starts with base (the
-// last path segment of prefix), shell-style: sorted, directories suffixed
-// with "/" so cycling into one is a single further Tab, and dotfiles
-// hidden unless base itself starts with a dot. prefix is resolved against
-// the process's own cwd, same as the field's final submitted value will be.
+// completePathMatches lists dir's entries whose name starts with base (prefix's last path segment), shell-style:
+// sorted, directories suffixed with "/", dotfiles hidden unless base starts with a dot, resolved against the process's cwd.
 func completePathMatches(prefix string) []string {
 	dir, base := filepath.Split(prefix)
 	readDir := dir
@@ -146,8 +138,7 @@ func (f simpleForm) update(msg tea.Msg) (simpleForm, bool, bool) {
 		return f, false, false
 	}
 
-	// Any key other than Tab itself ends a completion cycle — the next Tab
-	// (if any) starts a fresh one from whatever's in the field then.
+	// Any key other than Tab ends a completion cycle; the next Tab starts a fresh one from the field's current content.
 	if keyMsg.String() != "tab" {
 		f.tabField = -1
 	}
@@ -196,12 +187,8 @@ func (f simpleForm) update(msg tea.Msg) (simpleForm, bool, bool) {
 	return f, false, false
 }
 
-// completeCurrent tab-cycles the focused field's text through its
-// Suggestions that contain what the user actually typed (case-insensitive),
-// bash-menu-complete style: each further Tab press (without any other key
-// in between) advances to the next match instead of re-filtering. Returns
-// false when there's nothing to complete, so the caller falls back to Tab's
-// usual job of moving to the next field.
+// completeCurrent tab-cycles the focused field through its Suggestions matching what the user typed
+// (case-insensitive), bash-menu-complete style. Returns false when there's nothing to complete, so the caller falls back to moving focus.
 func (f *simpleForm) completeCurrent() bool {
 	field := &f.fields[f.focus]
 	if field.Kind != fieldText || (len(field.Suggestions) == 0 && !field.PathComplete) {
@@ -237,9 +224,8 @@ func matchesFor(field *formField, prefix string) []string {
 	return filterSuggestions(field.Suggestions, prefix)
 }
 
-// filterSuggestions returns options containing query, case-insensitively —
-// an empty query matches everything, so Tab on a blank field cycles through
-// the full candidate list to let the user browse it.
+// filterSuggestions returns options containing query, case-insensitively. An empty query matches everything,
+// so Tab on a blank field cycles through the full candidate list.
 func filterSuggestions(options []string, query string) []string {
 	q := strings.ToLower(strings.TrimSpace(query))
 	var out []string
@@ -251,9 +237,8 @@ func filterSuggestions(options []string, query string) []string {
 	return out
 }
 
-// suggestionHint renders the focused field's matching Suggestions as a
-// short "→ a, b, c  (tab to cycle)" line, so the feature is discoverable
-// without having to already know it exists.
+// suggestionHint renders the focused field's matching Suggestions as a short "→ a, b, c  (tab to cycle)" line,
+// so the feature is discoverable without already knowing it exists.
 func suggestionHint(field formField) string {
 	matches := matchesFor(&field, field.input.Value())
 	if len(matches) == 0 {

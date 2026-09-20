@@ -17,11 +17,8 @@ import (
 
 type instanceItem struct{ inst *anvilv1.Instance }
 
-// stateGlyph is a plain (uncolored) marker: list items are re-styled
-// wholesale by bubbles' own list.DefaultDelegate when selected, and an
-// embedded ANSI reset from a colored inner Render() would cut that
-// styling off partway through the line — see stateDot, used only in the
-// detail panel, which this package fully renders itself instead.
+// stateGlyph is a plain, uncolored marker: bubbles' list.DefaultDelegate re-styles selected items wholesale, and an
+// embedded ANSI reset from a colored Render() would cut that off mid-line. See stateDot, used only in the detail panel.
 func stateGlyph(s anvilv1.State) string {
 	switch s {
 	case anvilv1.State_STATE_RUNNING:
@@ -60,10 +57,10 @@ const (
 	instancesPromptImport
 	instancesPromptAddPort
 	instancesPromptRemovePort
+	instancesPromptFork
 )
 
-// statsRefreshInterval is how often the selected running instance's live
-// stats are re-polled — see maybeRefreshStats.
+// statsRefreshInterval is how often the selected running instance's live stats are re-polled; see maybeRefreshStats.
 const statsRefreshInterval = 2 * time.Second
 
 type instancesModel struct {
@@ -82,14 +79,15 @@ type instancesModel struct {
 	importing   bool     // an import stream is in flight, blocking other keys
 	importLines []string // the finished (or in-flight) import's progress transcript
 
+	forking   bool     // a fork stream is in flight, blocking other keys
+	forkLines []string // the finished (or in-flight) fork's progress transcript
+
 	detailWidth  int // width of the detail panel next to the list
 	panelHeight  int // shared height for both side-by-side panels
 	contentWidth int // full width given to this screen, for wrapping the help bar
 
-	// Live stats for whichever instance is currently selected, see
-	// maybeRefreshStats/statsLoadedMsg. statsFor names which instance
-	// stats/statsErr belong to, so a reply that arrives after the
-	// selection has since moved on is never shown against the wrong row.
+	// Live stats for whichever instance is selected; see maybeRefreshStats/statsLoadedMsg. statsFor names which
+	// instance stats/statsErr belong to, so a stale reply is never shown against the wrong row.
 	stats          *anvilv1.InstanceStats
 	statsFor       string
 	statsErr       string
@@ -148,9 +146,8 @@ func (ins *instancesModel) selected() *anvilv1.Instance {
 	return item.inst
 }
 
-// maybeRefreshStats returns a Cmd to (re)fetch the selected running
-// instance's live stats, if one is due — nil otherwise (nothing selected,
-// selection isn't running, or the last fetch is still fresh).
+// maybeRefreshStats returns a Cmd to (re)fetch the selected running instance's live stats, if one is due.
+// Returns nil otherwise: nothing selected, selection isn't running, or the last fetch is still fresh.
 func (ins *instancesModel) maybeRefreshStats(c *client.Client) tea.Cmd {
 	inst := ins.selected()
 	if inst == nil || inst.GetState() != anvilv1.State_STATE_RUNNING {
@@ -236,6 +233,24 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, receiveImportEvent(msg.stream)
 
+	case forkStreamMsg:
+		if msg.status != "" {
+			m.instances.forkLines = appendProgressLine(m.instances.forkLines, msg.status)
+		}
+		if msg.err != nil {
+			m.instances.forking = false
+			m.instances.forkLines = append(m.instances.forkLines, styleError.Render(msg.err.Error()))
+			return m, nil
+		}
+		if msg.done {
+			m.instances.forking = false
+			if msg.instance != nil {
+				m.instances.forkLines = append(m.instances.forkLines, styleGood.Render("forked: "+msg.instance.GetName()))
+			}
+			return m, loadInstances(m.client)
+		}
+		return m, receiveForkEvent(msg.stream)
+
 	case tea.KeyMsg:
 		return m.updateInstancesKey(msg)
 	}
@@ -243,10 +258,10 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.instances.exporting || m.instances.importing {
+	if m.instances.exporting || m.instances.importing || m.instances.forking {
 		return m, nil // block input until the stream finishes
 	}
-	// A finished export/import's transcript stays on screen until dismissed here.
+	// A finished export/import/fork's transcript stays on screen until dismissed here.
 	if len(m.instances.exportLines) > 0 {
 		switch msg.String() {
 		case "esc", "enter", "q":
@@ -258,6 +273,13 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "esc", "enter", "q":
 			m.instances.importLines = nil
+		}
+		return m, nil
+	}
+	if len(m.instances.forkLines) > 0 {
+		switch msg.String() {
+		case "esc", "enter", "q":
+			m.instances.forkLines = nil
 		}
 		return m, nil
 	}
@@ -290,13 +312,8 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.screen = screenLaunch
 		m.launch = newLaunchModel()
 		m.launch.setSize(m.width, contentHeight(m.height))
-		// Fetch autocomplete candidates fresh every time — fast local
-		// daemon calls, and each fills in one field's Suggestions
-		// independently of the others as it lands (see updateLaunch).
-		// tea.ClearScreen forces a full repaint: this full-screen takeover
-		// rarely renders the exact same total line count as Instances, and
-		// relying on Bubble Tea's diff-based erase-below to always catch
-		// that gap left stale content on screen.
+		// Fetch fresh autocomplete candidates each time since they're fast local calls, each filling its own field's
+		// Suggestions as it lands. tea.ClearScreen avoids stale content since this takeover's line count differs from Instances.
 		return m, tea.Batch(
 			tea.ClearScreen,
 			loadIntents(m.client),
@@ -328,6 +345,14 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "d":
 		if inst := m.selectedInstance(); inst != nil {
 			m.instances.confirmDelete = inst
+		}
+		return m, nil
+	case "f":
+		if inst := m.selectedInstance(); inst != nil && inst.GetVm() != nil {
+			m.instances.startPrompt(instancesPromptFork, inst, newSimpleForm("Fork "+inst.GetName(), []formField{
+				textField("New name", "name for the forked instance", ""),
+				toggleField("Start immediately", "start the fork right after creating it", false),
+			}))
 		}
 		return m, nil
 	case "x":
@@ -407,10 +432,8 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.instances.list, cmd = m.instances.list.Update(msg)
 	if inst := m.instances.selected(); inst != nil && inst.GetName() != prevName {
-		// Selection moved: drop the old instance's stats immediately
-		// instead of leaving them on screen against the new selection,
-		// and kick off a fresh fetch right away rather than waiting for
-		// the next 1s tick.
+		// Selection moved: drop the old stats immediately instead of leaving them shown against the new
+		// selection, and kick off a fresh fetch right away instead of waiting for the next 1s tick.
 		m.instances.stats, m.instances.statsErr, m.instances.statsFor = nil, "", ""
 		if inst.GetState() == anvilv1.State_STATE_RUNNING {
 			m.instances.statsFetchedAt = time.Now()
@@ -509,6 +532,15 @@ func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, addPort(m.client, target.GetName(), hostPort, guestPort, protocol)
 
+	case instancesPromptFork:
+		newName := ins.promptForm.Value("New name")
+		if newName == "" {
+			return m, nil
+		}
+		ins.forking = true
+		ins.forkLines = nil
+		return m, startForkStream(m.client, target.GetName(), newName, ins.promptForm.Bool("Start immediately"))
+
 	case instancesPromptRemovePort:
 		hostPort, err := strconv.Atoi(ins.promptForm.Value("Host port"))
 		if err != nil {
@@ -549,6 +581,16 @@ func (m instancesModel) View() string {
 		}
 		return s
 	}
+	if m.forking || len(m.forkLines) > 0 {
+		s := styleTitle.Render(" Forking… ") + "\n\n"
+		for _, line := range m.forkLines {
+			s += line + "\n"
+		}
+		if !m.forking {
+			s += "\n" + helpBar("esc", "dismiss")
+		}
+		return s
+	}
 	if m.confirmDelete != nil {
 		return styleWarn.Render(fmt.Sprintf("Delete %q?", m.confirmDelete.GetName())) + "\n\n" +
 			helpBar("y", "delete (recoverable)", "p", "delete permanently", "any other key", "cancel")
@@ -565,7 +607,7 @@ func (m instancesModel) View() string {
 	right := styleBox.Render(lipgloss.NewStyle().Height(m.panelHeight).Width(m.detailWidth).Render(m.detailView()))
 
 	help := helpBarWrap(m.contentWidth,
-		"n", "launch", "s", "start/stop", "d", "delete", "x", "shell",
+		"n", "launch", "s", "start/stop", "d", "delete", "f", "fork", "x", "shell",
 		"e", "exec", "m", "mount", "M", "umount", "p", "add port", "P", "remove port",
 		"E", "export", "i", "import", "l", "logs", "r", "refresh", "esc", "back",
 	)
@@ -577,7 +619,7 @@ func (m instancesModel) View() string {
 func (m instancesModel) detailView() string {
 	inst := m.selected()
 	if inst == nil {
-		return styleSubtitle.Render("no instances yet — press n to launch one")
+		return styleSubtitle.Render("no instances yet: press n to launch one")
 	}
 
 	kind, image := "VM", inst.GetVm().GetImageRef()
@@ -599,7 +641,7 @@ func (m instancesModel) detailView() string {
 	}
 
 	if inst.GetState() != anvilv1.State_STATE_RUNNING {
-		b = append(b, "", styleSubtitle.Render("not running — no live stats"))
+		b = append(b, "", styleSubtitle.Render("not running: no live stats"))
 		return lipgloss.JoinVertical(lipgloss.Left, b...)
 	}
 
@@ -669,9 +711,8 @@ func portsOf(inst *anvilv1.Instance) []*anvilv1.PortMapping {
 	return inst.GetVm().GetPorts()
 }
 
-// hostPortStrings returns inst's currently exposed host ports, for the
-// "Remove port forward" prompt's Suggestions — so removing one doesn't
-// require already knowing it by heart.
+// hostPortStrings returns inst's currently exposed host ports, for the "Remove port forward" prompt's
+// Suggestions, so removing one doesn't require already knowing it by heart.
 func hostPortStrings(inst *anvilv1.Instance) []string {
 	ports := portsOf(inst)
 	out := make([]string, len(ports))

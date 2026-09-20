@@ -209,7 +209,7 @@ func (m *Manager) Migrate(ctx context.Context, p Params, progress func(status st
 			// A member of an intent must migrate as part of the whole
 			// intent, not as a standalone instance.
 			return Result{}, fmt.Errorf(
-				"migrate: %q is a member of intent %q — migrate the whole intent (`anvil migrate %s --to ...`) "+
+				"migrate: %q is a member of intent %q; migrate the whole intent (`anvil migrate %s --to ...`) "+
 					"so its network config carries over correctly, not the member by its own instance name",
 				p.Name, intentName, intentName)
 		}

@@ -1,10 +1,7 @@
 //go:build linux
 
 // Package network is the Linux-specific implementation of vm.Networker:
-// tap devices attached to an existing Linux bridge, via netlink. A future
-// non-Linux VM backend (e.g. one built on Apple's Virtualization.framework)
-// would supply its own vm.Networker instead of using this package, since
-// Linux netlink taps and bridges have no macOS equivalent.
+// tap devices on an existing Linux bridge via netlink, with no macOS equivalent.
 package network
 
 import (
@@ -59,10 +56,8 @@ func (LinuxBridge) Detach(instanceID string) error {
 	return netlink.LinkDel(link)
 }
 
-// Stats returns instanceID's tap device's cumulative byte counters as
-// seen from the host: rxBytes is what the guest has sent (host receives
-// it on the tap), txBytes is what the guest has received (host sent it
-// onto the tap).
+// Stats returns instanceID's tap device's byte counters: rxBytes is what
+// the guest sent (host receives it on the tap), txBytes is what it received.
 func (LinuxBridge) Stats(instanceID string) (rxBytes, txBytes uint64, err error) {
 	tapName := TapName(instanceID)
 	link, err := netlink.LinkByName(tapName)

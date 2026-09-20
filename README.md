@@ -65,6 +65,11 @@ Docker API" possible without a platform abstraction layer getting in the way.
   manages for you, *zero* flags, *zero* setup
 - `anvil mount` shares a host directory into the guest over 9p
 - live progress on downloads instead of a silent terminal
+- `anvil snapshot` takes point-in-time QCOW2 checkpoints of a VM's disk and restores back
+  to them later, live if the VM is running
+- `anvil fork` clones a VM into a new instance by copying its disk, keeping the same
+  backing image so the fork only stores its own deltas. Safe to run on a running source
+  VM: it stays up, untouched, the whole time
 
 **Containers**, talking to Docker's real HTTP API directly (Podman backend is on the
 way, tracked separately, see [limitations](#status--limitations)):
@@ -156,16 +161,16 @@ version runs the daemon as an unprivileged system user instead, see [Install](#i
 ## The TUI
 
 `anvil tui` gives you a sidebar-driven view over Instances, Images, Intents, Cloud-Init,
-Mirrors, and Migration — the exact same gRPC API the CLI uses (`anvil stats <name>` is the
+Mirrors, and Migration, the exact same gRPC API the CLI uses (`anvil stats <name>` is the
 CLI's own window into the same data). Shell/exec sessions hand the real terminal off to
 `ssh`/`docker exec` and back, logs stream live, and launch progress redraws in place
 instead of scrolling your terminal into oblivion.
 
 Select an instance on the Instances screen and its detail panel shows a live CPU/memory
-gauge, disk usage (or I/O rate for a container), network throughput, uptime, and address —
+gauge, disk usage (or I/O rate for a container), network throughput, uptime, and address,
 sampled straight from the process itself (`/proc` + the tap device for a VM, Docker's own
 stats endpoint for a container), refreshed every couple of seconds, no guest agent
-required.
+required. From the same screen, `f` forks the selected VM and `E`/`i` export/import it.
 
 ## How it's built
 

@@ -52,7 +52,7 @@ func EnsureDefault() (string, error) {
 
 	if err := os.Link(tmp, path); err != nil {
 		if os.IsExist(err) {
-			// Someone else generated it first — use theirs, discard ours.
+			// Someone else generated it first: use theirs, discard ours.
 			return path, nil
 		}
 		return "", fmt.Errorf("installing anvil's SSH key: %w", err)

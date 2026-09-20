@@ -13,7 +13,7 @@ func newSnapshotCommand(flags *globalFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "snapshot",
 		Short: "Create, restore, delete, or list QCOW2 internal snapshots of a VM's disk",
-		Long: "Manage QCOW2 internal snapshots of a VM's disk — point-in-time checkpoints " +
+		Long: "Manage QCOW2 internal snapshots of a VM's disk: point-in-time checkpoints " +
 			"you can restore back to later, in place. Create/delete apply live if the VM " +
 			"is running, no stop needed; restore always stops the VM first (a plain " +
 			"restart afterward, always booting fresh from the restored disk) since a " +
@@ -50,7 +50,7 @@ func newSnapshotRestoreCommand(flags *globalFlags) *cobra.Command {
 		Use:   "restore <instance> <snapshot-name>",
 		Short: "Reset an instance's disk back to a previously created snapshot",
 		Long: "Reset an instance's disk back to a previously created snapshot. Stops the " +
-			"instance first if it's running, and restarts it afterward — always a fresh " +
+			"instance first if it's running, and restarts it afterward: always a fresh " +
 			"boot from the restored disk, not a live resume of that snapshot's saved " +
 			"state even if it has one (see `anvil snapshot list`'s VM-state column).",
 		Args: cobra.ExactArgs(2),

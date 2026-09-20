@@ -50,8 +50,7 @@ type Networker interface {
 }
 
 // networkNamePrefix is what ensureNetwork names every network it creates
-// ("anvil-" + the owning intent's ID) — ReconcileNetworks uses this to
-// recognize which of the engine's networks are anvil's to manage.
+// ("anvil-" + the owning intent's ID); ReconcileNetworks uses it to recognize anvil's own networks.
 const networkNamePrefix = "anvil-"
 
 type Manager struct {
@@ -77,8 +76,6 @@ const maxSubnetAttempts = 5
 func (m *Manager) ensureNetwork(ctx context.Context, it *store.Intent, pinned *instance.PinnedNetwork) error {
 	if it.Network != nil {
 		if pinned != nil && (it.Network.Subnet != pinned.Subnet || it.Network.Gateway != pinned.Gateway) {
-			// The existing network doesn't match the pinned network this
-			// migrated member needs.
 			return fmt.Errorf("intent: %q already has a network (%s) that doesn't match the pinned one (%s) this migrated member needs",
 				it.Name, it.Network.Subnet, pinned.Subnet)
 		}
@@ -292,13 +289,8 @@ func (m *Manager) Info(name string) (store.Intent, error) {
 	return m.Store.GetIntentByName(name)
 }
 
-// Remove ungroups member (matched by instance ID or role) from name
-// without deleting the underlying instance. If this leaves the intent
-// with no members left, its shared network (if any) is torn down too,
-// best-effort — this is what catches every member being deleted
-// individually (`anvil delete`, `anvil purge`, migration) instead of via
-// `anvil intent delete`, which previously left the network (and its
-// bridge interface) orphaned on the host forever.
+// Remove ungroups member (by ID or role) from name without deleting the instance. If that leaves
+// no members, the shared network is torn down too, best-effort, since members are often deleted individually.
 func (m *Manager) Remove(ctx context.Context, name, member string) (store.Intent, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -377,13 +369,8 @@ func (m *Manager) Delete(ctx context.Context, name string, purgeMembers bool) (s
 	return it, nil
 }
 
-// ReconcileNetworks removes any engine network that looks anvil-created
-// (see networkNamePrefix) but doesn't belong to any intent currently in
-// the store. Call once at daemon startup, alongside instance
-// reconciliation: this is what actually recovers from an orphaned network
-// left behind by any means — a bug, a crash mid-operation, or the store
-// simply not agreeing with the engine's own state anymore — rather than
-// relying on every single deletion path getting cleanup exactly right.
+// ReconcileNetworks removes any engine network that looks anvil-created (see networkNamePrefix) but
+// isn't referenced by any intent in the store. Call once at daemon startup to recover from drift.
 func (m *Manager) ReconcileNetworks(ctx context.Context) error {
 	if m.Networker == nil {
 		return nil

@@ -1,6 +1,5 @@
 // Package config centralizes the fixed on-disk layout anvild uses.
-// RunDir/StateDir/CacheDir/ConfDir are OS-specific (see paths_linux.go,
-// paths_darwin.go); everything derived from them here is shared.
+// RunDir/StateDir/CacheDir/ConfDir are OS-specific; everything derived from them here is shared.
 package config
 
 import (

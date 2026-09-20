@@ -26,9 +26,8 @@ const clockTicksPerSec = 100
 
 var _ instance.StatsProvider = (*Backend)(nil)
 
-// Stats samples spec's live resource usage: CPU and (for a bridged VM)
-// network throughput are computed from two short samples taken statsSampleWindow
-// apart; memory and disk space are single point-in-time reads.
+// Stats samples spec's live resource usage: CPU and (bridged) network
+// throughput from two samples statsSampleWindow apart; memory/disk from single reads.
 func (b *Backend) Stats(ctx context.Context, spec *instance.Spec) (instance.Stats, error) {
 	if spec.VM == nil {
 		return instance.Stats{}, fmt.Errorf("vm: Stats called with a nil VMSpec")

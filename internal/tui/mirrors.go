@@ -46,7 +46,7 @@ func newMirrorsModel() mirrorsModel {
 }
 
 func newMirrorAddForm() simpleForm {
-	return newSimpleForm("Add mirror  —  ctrl+k: switch vm/container", []formField{
+	return newSimpleForm("Add mirror (ctrl+k: switch vm/container)", []formField{
 		textField("Name", "", ""),
 		textField("Manifest URL (vm only)", "", ""),
 		textField("Registry (container only)", "host[:port]", ""),

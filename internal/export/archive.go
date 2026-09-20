@@ -11,9 +11,8 @@ import (
 	"path/filepath"
 )
 
-// zstdBin locates the zstd CLI, used to compress/decompress bundles —
-// consistent with this codebase shelling out to qemu-img/ssh-keygen/setfacl
-// rather than vendoring a compression library.
+// zstdBin locates the zstd CLI, used to compress/decompress bundles. This is consistent with the
+// codebase shelling out to qemu-img/ssh-keygen/setfacl instead of vendoring a compression library.
 func zstdBin() (string, error) {
 	path, err := exec.LookPath("zstd")
 	if err != nil {
@@ -93,9 +92,8 @@ func extractTarZst(ctx context.Context, bundlePath, destDir string) error {
 	return waitErr
 }
 
-// extractAll writes every entry in tr under destDir. Entry names are
-// cleaned against a leading "/" first, so a maliciously crafted bundle
-// can't escape destDir with a "../" path.
+// extractAll writes every entry in tr under destDir, cleaning a leading "/" from entry names so a
+// maliciously crafted "../" path can't escape destDir.
 func extractAll(tr *tar.Reader, destDir string) error {
 	for {
 		hdr, err := tr.Next()
@@ -193,8 +191,8 @@ func addDirToTar(tw *tar.Writer, archivePrefix, srcDir string) error {
 			return tw.WriteHeader(hdr)
 		}
 		if !info.Mode().IsRegular() {
-			// ponytail: skips symlinks/sockets/devices inside a bind-mounted
-			// volume; add real handling if a bundle ever needs one.
+			// Skips symlinks/sockets/devices inside a bind-mounted volume;
+			// add real handling if a bundle ever needs one.
 			return nil
 		}
 		return addFileToTar(tw, name, path)

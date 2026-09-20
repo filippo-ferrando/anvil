@@ -18,8 +18,8 @@ func newLogsCommand(flags *globalFlags) *cobra.Command {
 		Use:   "logs <name>",
 		Short: "Show an instance's log output",
 		Long: "Show an instance's log output. For a VM this is boot/console output (what " +
-			"cloud-init prints while it runs), not application logs from inside the guest OS — " +
-			"see `anvil shell`/`anvil exec` for that. Once M3 lands, a container's logs are its " +
+			"cloud-init prints while it runs), not application logs from inside the guest OS. " +
+			"See `anvil shell`/`anvil exec` for that. Once M3 lands, a container's logs are its " +
 			"actual stdout/stderr instead.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

@@ -74,10 +74,8 @@ const (
 	imagesModeContainer
 )
 
-// imagesModel is the Images screen: a VM window (cached base images
-// alongside the catalog of what can be downloaded) and a separate
-// container window (images cached by the configured container engine),
-// switched between with v/c.
+// imagesModel is the Images screen: a VM window (cached images plus the catalog of what can be downloaded)
+// and a container window (images cached by the configured engine), switched between with v/c.
 type imagesModel struct {
 	mode imagesMode
 

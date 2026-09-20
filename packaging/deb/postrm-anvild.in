@@ -3,7 +3,7 @@
 # (action "remove"), this does nothing beyond letting dpkg remove
 # anvild's own files, matching Debian's own policy that a plain remove
 # is reversible. Only `apt purge anvild` / `apt remove --purge anvild`
-# (action "purge") actually deletes anvild's data — every VM/container
+# (action "purge") actually deletes anvild's data: every VM/container
 # record, cached image, and saved cloud-init config, plus the "anvil"
 # system user/group. Requested explicitly: deleting anvild should leave
 # nothing behind, but a plain `apt remove` staying non-destructive is
@@ -14,7 +14,7 @@
 # it's already deleted the package's own regular files, so unlike
 # postinst-anvild (which just calls the installed
 # /usr/lib/anvil/post-install.sh), this can't reference a regular
-# installed file the same way — dpkg keeps its own persisted copy of
+# installed file the same way: dpkg keeps its own persisted copy of
 # THIS script regardless of what package files still exist, which is
 # exactly why the actual cleanup commands are inlined below, verbatim,
 # by packaging/deb/build.sh at build time from

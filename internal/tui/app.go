@@ -68,7 +68,7 @@ type model struct {
 
 	status      string // one-line, transient: last action's result or error
 	statusBad   bool
-	statusSetAt time.Time // when status was last set
+	statusSetAt time.Time
 
 	instances instancesModel
 	snapshots snapshotsModel
@@ -340,11 +340,8 @@ func contentHeight(termHeight int) int {
 	return h
 }
 
-// logsViewportHeight is contentHeight minus the 3 chrome lines logsModel.View
-// wraps its viewport in (title, blank line, help bar). Keeping this in one
-// place ensures the viewport height set on open (instances.go) and on
-// resize (below) always agree — a mismatch there is what let a taller/
-// shorter frame leave stale lines on screen when toggling the Logs view.
+// logsViewportHeight is contentHeight minus the 3 chrome lines logsModel.View wraps its viewport in (title, blank line, help bar).
+// Keeping this logic here keeps the on-open (instances.go) and on-resize heights in sync; disagreement here left stale lines when toggling Logs.
 func logsViewportHeight(termHeight int) int {
 	h := contentHeight(termHeight) - 3
 	if h < 1 {

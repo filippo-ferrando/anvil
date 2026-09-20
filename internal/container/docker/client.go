@@ -152,7 +152,6 @@ type createContainerResponse struct {
 	Warnings []string `json:"Warnings"`
 }
 
-// CreateContainerParams holds the parameters needed to create a container.
 type CreateContainerParams struct {
 	Name        string
 	Image       string
@@ -224,9 +223,8 @@ func (c *Client) ListImages(ctx context.Context) ([]ImageSummary, error) {
 	}
 	images := make([]ImageSummary, len(out))
 	for i, im := range out {
-		// A "<none>" RepoTags entry means untagged, same as `docker
-		// images` itself filters out — leave it as an empty slice
-		// instead, so a caller doesn't have to know that convention.
+		// A "<none>" RepoTags entry means untagged, same as `docker images` filters out.
+		// Leave it as an empty slice instead, so callers don't need to know that convention.
 		tags := im.RepoTags
 		if len(tags) == 1 && tags[0] == "<none>:<none>" {
 			tags = nil
@@ -529,8 +527,8 @@ func (c *Client) Inspect(ctx context.Context, id string) (Inspection, error) {
 	return Inspection{Running: out.State.Running, StartedAt: startedAt, Address: addr}, nil
 }
 
-// StatsSnapshot is id's cumulative resource-usage counters at one instant —
-// two snapshots taken a short time apart let a caller compute live rates.
+// StatsSnapshot is id's cumulative resource-usage counters at one instant.
+// Two snapshots taken a short time apart let a caller compute live rates.
 type StatsSnapshot struct {
 	At time.Time
 
@@ -572,11 +570,8 @@ type dockerStatsResponse struct {
 	} `json:"blkio_stats"`
 }
 
-// Stats returns id's current resource-usage counters, a single HTTP
-// round trip (Docker's own "stream=false" mode still populates a valid
-// cpu_stats snapshot, just not the historical precpu_stats pairing this
-// package uses for a rate — see docker/backend Stats callers, which take
-// two of these a short time apart instead).
+// Stats returns id's current resource-usage counters in a single HTTP round trip. Docker's "stream=false" mode gives a valid
+// cpu_stats snapshot but not the historical precpu_stats pairing, so callers take two of these apart to compute a rate.
 func (c *Client) Stats(ctx context.Context, id string) (StatsSnapshot, error) {
 	resp, err := c.do(ctx, http.MethodGet, "/containers/"+id+"/stats?stream=false", nil)
 	if err != nil {

@@ -27,6 +27,7 @@ func NewRootCommand() *cobra.Command {
 
 	root.AddCommand(
 		newLaunchCommand(flags),
+		newForkCommand(flags),
 		newListCommand(flags),
 		newInfoCommand(flags),
 		newStatsCommand(flags),

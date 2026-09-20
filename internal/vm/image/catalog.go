@@ -135,11 +135,8 @@ func (c *Catalog) List() []DistroEntry {
 	return out
 }
 
-// Find resolves an alias like "ubuntu-24.04" to its highest-priority entry
-// for the given arch. If arch is empty, it prefers "x86_64"; failing that,
-// an id that only exists under one arch (e.g. an aarch64-only mirror entry)
-// still resolves unambiguously without the caller having to know its arch
-// up front.
+// Find resolves an alias like "ubuntu-24.04" to its highest-priority entry for
+// the given arch; empty arch prefers "x86_64", falling back to a single-arch match otherwise.
 func (c *Catalog) Find(id, arch string) (DistroEntry, error) {
 	if arch != "" {
 		return c.findExact(id, arch)

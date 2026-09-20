@@ -15,7 +15,7 @@ func newMountCommand(flags *globalFlags) *cobra.Command {
 		Use:   "mount <host-path> <name>:<guest-path>",
 		Short: "Share a host directory into a VM (via 9p)",
 		Long: "Share a host directory into a VM, over 9p. If the instance is currently " +
-			"running, this restarts its guest OS to attach the share — there's no way to " +
+			"running, this restarts its guest OS to attach the share. There's no way to " +
 			"hot-plug a 9p share into a live QEMU instance (checked against a real QEMU " +
 			"build, not assumed). The instance's disk is untouched, but anything running " +
 			"inside it is interrupted, same as a reboot.",

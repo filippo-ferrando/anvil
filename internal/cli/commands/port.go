@@ -24,7 +24,7 @@ func newPortAddCommand(flags *globalFlags) *cobra.Command {
 		Use:   "add <name> <host>:<guest>[/tcp|udp]",
 		Short: "Add a host-to-guest port forward, without recreating the instance",
 		Long: "Add a host-to-guest port forward to an instance. On a SLIRP VM this takes " +
-			"effect immediately over QMP if it's running — no restart. On a container, " +
+			"effect immediately over QMP if it's running; no restart needed. On a container, " +
 			"Docker has no live port-binding mutation, so this recreates the underlying " +
 			"container instead, restarting it if it was running, rather than making you " +
 			"relaunch the whole instance yourself. Bridge-networked VMs have their own " +

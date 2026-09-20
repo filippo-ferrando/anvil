@@ -136,7 +136,7 @@ type PortMapping struct {
 	Protocol  string // "tcp" | "udp"
 }
 
-// FormatPorts renders ports as "8080:80/tcp, 2222:22/tcp" — used to list
+// FormatPorts renders ports as "8080:80/tcp, 2222:22/tcp", used to list
 // an instance's currently exposed ports in a "no such port forward" error.
 func FormatPorts(ports []PortMapping) string {
 	if len(ports) == 0 {
@@ -158,11 +158,7 @@ type Snapshot struct {
 	Name      string
 	CreatedAt time.Time
 
-	// HasVMState is true for a snapshot taken live via QMP's savevm,
-	// which embeds full VM state (disk + RAM) alongside the disk data,
-	// and false for one taken offline via qemu-img (disk-only). Restore
-	// only ever resets the disk (see Backend.RestoreSnapshot) — a
-	// subsequent start always boots fresh, regardless of HasVMState;
-	// it's informational, not a promise of a live-resume restore.
+	// HasVMState is true for a live QMP snapshot (embeds RAM, not just disk)
+	// and false for an offline one. Restore only ever resets the disk, so a restart after it always boots fresh regardless of this flag.
 	HasVMState bool
 }

@@ -33,7 +33,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 		b, err := m.backendFor(spec.Kind)
 		if err != nil {
-			continue // no backend registered for this kind (yet) — leave state as-is
+			continue // no backend registered for this kind (yet); leave state as-is
 		}
 		reconciler, ok := b.(Reconciler)
 		if !ok {
@@ -164,6 +164,109 @@ func (m *Manager) Launch(ctx context.Context, params LaunchParams, progress func
 
 	progress(LaunchEvent{Instance: spec})
 	return nil
+}
+
+// ForkParams is Manager.Fork's input.
+type ForkParams struct {
+	Source  string // source instance's name
+	NewName string
+	Start   bool // start the forked instance immediately after creating it
+}
+
+// Fork creates a new instance named params.NewName whose disk starts as a
+// copy of params.Source's disk, carrying over its VM config but not its network identity: the fork always starts as a standalone SLIRP instance.
+func (m *Manager) Fork(ctx context.Context, params ForkParams, progress func(LaunchEvent)) error {
+	source, err := m.registry.GetByName(params.Source)
+	if err != nil {
+		progress(LaunchEvent{Err: err})
+		return err
+	}
+
+	b, err := m.backendFor(source.Kind)
+	if err != nil {
+		progress(LaunchEvent{Err: err})
+		return err
+	}
+	forker, ok := b.(Forker)
+	if !ok {
+		err := fmt.Errorf("instance: %s instances don't support fork", source.Kind)
+		progress(LaunchEvent{Err: err})
+		return err
+	}
+
+	if _, err := m.registry.GetByName(params.NewName); err == nil {
+		err := fmt.Errorf("instance: name %q is already in use", params.NewName)
+		progress(LaunchEvent{Err: err})
+		return err
+	} else if !errors.Is(err, ErrNotFound) {
+		progress(LaunchEvent{Err: err})
+		return err
+	}
+
+	labels := make(map[string]string, len(source.Labels))
+	for k, v := range source.Labels {
+		labels[k] = v
+	}
+
+	dest := &Spec{
+		ID:        ulid.Make().String(),
+		Name:      params.NewName,
+		Kind:      source.Kind,
+		State:     StateStarting,
+		CreatedAt: time.Now(),
+		Labels:    labels,
+		VM:        cloneVMSpecForFork(source.VM),
+	}
+
+	progress(LaunchEvent{Status: "forking disk"})
+	if err := forker.Fork(ctx, source, dest, func(status string) { progress(LaunchEvent{Status: status}) }); err != nil {
+		progress(LaunchEvent{Err: err})
+		return err
+	}
+
+	if params.Start {
+		progress(LaunchEvent{Status: "starting"})
+		if err := b.Start(ctx, dest); err != nil {
+			if delErr := b.Delete(ctx, dest); delErr != nil {
+				log.Printf("instance: rolling back failed start of fork %s (%s): %v", dest.Name, dest.ID, delErr)
+			}
+			progress(LaunchEvent{Err: err})
+			return err
+		}
+		dest.State = StateRunning
+	} else {
+		dest.State = StateStopped
+	}
+
+	if err := m.registry.PutInstance(dest); err != nil {
+		if delErr := b.Delete(ctx, dest); delErr != nil {
+			log.Printf("instance: rolling back fork %s (%s) after registry write failure: %v", dest.Name, dest.ID, delErr)
+		}
+		progress(LaunchEvent{Err: err})
+		return err
+	}
+
+	progress(LaunchEvent{Instance: dest})
+	return nil
+}
+
+// cloneVMSpecForFork deep-copies v's configuration for a new forked
+// instance, clearing fields the backend/network populate fresh (disk/seed paths, SSH port, bridge/intent addressing).
+func cloneVMSpecForFork(v *VMSpec) *VMSpec {
+	clone := *v
+	clone.NetworkMode = "slirp"
+	clone.SSHPublicKeys = append([]string(nil), v.SSHPublicKeys...)
+	clone.Ports = append([]PortMapping(nil), v.Ports...)
+	clone.Mounts = append([]Mount(nil), v.Mounts...)
+	clone.DiskPath = ""
+	clone.SeedISOPath = ""
+	clone.SSHPort = 0
+	clone.BridgeInterface = ""
+	clone.StaticIP = ""
+	clone.Gateway = ""
+	clone.ExtraHosts = nil
+	clone.SourceDiskPath = ""
+	return &clone
 }
 
 func (m *Manager) List(kindFilter Kind) ([]*Spec, error) {
@@ -412,8 +515,7 @@ func (m *Manager) Stop(ctx context.Context, names []string, force bool, timeout 
 }
 
 // Delete tears down each named instance's backend resources, keeping the
-// registry record (as StateDeleted) unless purge is true. Every name is
-// attempted even if an earlier one fails.
+// registry record (as StateDeleted) unless purge is true; every name is attempted even if an earlier one fails.
 func (m *Manager) Delete(ctx context.Context, names []string, purge bool) error {
 	specs, err := m.resolve(names)
 	if err != nil {

@@ -56,15 +56,13 @@ type ExportParams struct {
 	Name       string // resolved as a single instance first, a whole intent second, unless IsIntent
 	OutputPath string
 
-	// IsIntent skips instance resolution and looks Name up as an intent
-	// only — for a caller that already knows Name is an intent, so an
-	// unrelated instance that happens to share the same name can't shadow it.
+	// IsIntent skips instance resolution and looks Name up as an intent only. Use it when the caller
+	// already knows Name is an intent, so an unrelated instance with the same name can't shadow it.
 	IsIntent bool
 }
 
-// Export packages p.Name into a tar.zst bundle at p.OutputPath. Every
-// member is stopped for a consistent disk/volume snapshot, then resumed to
-// whatever state it was in before, even on failure.
+// Export packages p.Name into a tar.zst bundle at p.OutputPath. Every member is stopped for a
+// consistent snapshot, then resumed to its prior state, even on failure.
 func (m *Manager) Export(ctx context.Context, p ExportParams, progress func(status string)) error {
 	if p.Name == "" {
 		return fmt.Errorf("export: a name is required")
@@ -197,10 +195,8 @@ func (m *Manager) Export(ctx context.Context, p ExportParams, progress func(stat
 	return nil
 }
 
-// resolveCloudInit returns v's effective cloud-init user-data as literal
-// content, resolving a named library entry if that's what v uses — the
-// bundle always carries the content itself, never just a name the target
-// host's library might not have.
+// resolveCloudInit returns v's effective cloud-init user-data as literal content, resolving a named
+// library entry if v uses one, so the bundle carries the content itself rather than a name the target might lack.
 func (m *Manager) resolveCloudInit(v *instance.VMSpec) string {
 	if v.CloudInitName == "" {
 		return v.CloudInitUserData
@@ -212,11 +208,8 @@ func (m *Manager) resolveCloudInit(v *instance.VMSpec) string {
 	return rec.Content
 }
 
-// resolveExportTargets looks up name as a single instance first, a whole
-// intent second, same as migrate.Manager.Migrate — unless isIntent, which
-// skips straight to the intent lookup so an unrelated instance that
-// happens to share the same name can't shadow it (the TUI's Intents page
-// already knows name is an intent; it never means to hit this ambiguity).
+// resolveExportTargets looks up name as a single instance first, a whole intent second (same as
+// migrate.Manager.Migrate), unless isIntent skips straight to the intent lookup so a same-named instance can't shadow it.
 func (m *Manager) resolveExportTargets(name string, isIntent bool) (Manifest, []*instance.Spec, error) {
 	if isIntent {
 		return m.resolveIntentTarget(name)
@@ -229,7 +222,7 @@ func (m *Manager) resolveExportTargets(name string, isIntent bool) (Manifest, []
 	if len(specs) > 0 {
 		if intentName := specs[0].Labels[instance.IntentLabel]; intentName != "" {
 			return Manifest{}, nil, fmt.Errorf(
-				"export: %q is a member of intent %q — export the whole intent (`anvil export %s`), not the member by its own instance name",
+				"export: %q is a member of intent %q; export the whole intent (`anvil export %s`), not the member by its own instance name",
 				name, intentName, intentName)
 		}
 		return Manifest{}, specs, nil
@@ -430,9 +423,8 @@ func (m *Manager) fillLaunchParams(ctx context.Context, params *instance.LaunchP
 	return nil
 }
 
-// moveDir relocates src to dst, falling back to a recursive copy when a
-// plain rename can't cross filesystems (src and dst can live under
-// different XDG dirs) — same idiom as internal/vm.Backend.adoptMigratedDisk.
+// moveDir relocates src to dst, falling back to a recursive copy when a plain rename can't cross
+// filesystems (src and dst can live under different XDG dirs); same idiom as internal/vm.Backend.adoptMigratedDisk.
 func moveDir(src, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
 		return err

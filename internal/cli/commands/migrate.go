@@ -29,7 +29,7 @@ func newMigrateCommand(flags *globalFlags) *cobra.Command {
 		Long: "Move a single instance, or a whole intent as one group, to a different anvil " +
 			"host over SSH (see `anvil host`). name is looked up as a single instance first, " +
 			"a whole intent second. Default mode is destructive: copies to the target, " +
-			"confirms it actually landed, then deletes the source — never deletes first. " +
+			"confirms it actually landed, then deletes the source. It never deletes first. " +
 			"`--copy` skips that last step. For an intent, default mode is also " +
 			"all-or-nothing: the first member that fails to migrate rolls back whatever " +
 			"already landed on the target and leaves every source member untouched; " +
@@ -141,7 +141,7 @@ func injectGuestKeys(ctx context.Context, c *client.Client, name, to string) err
 
 	for _, inst := range vms {
 		if inst.GetState() != anvilv1.State_STATE_RUNNING {
-			fmt.Fprintf(os.Stderr, "anvil: %s isn't running, skipping guest-key setup — add the target's key to it manually if needed\n", inst.GetName())
+			fmt.Fprintf(os.Stderr, "anvil: %s isn't running, skipping guest-key setup. Add the target's key to it manually if needed\n", inst.GetName())
 			continue
 		}
 		target, err := resolveSSHTarget(inst, "")

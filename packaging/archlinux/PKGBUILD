@@ -43,7 +43,7 @@ package_anvild() {
   install -Dm755 "$srcdir/anvild-bin" "$pkgdir/usr/bin/anvild"
   # The systemd unit, sysusers/tmpfiles configs, and post-install script
   # are all shared verbatim across every packaging format (packaging/deb,
-  # packaging/rpm too), not duplicated per format — see packaging/common/.
+  # packaging/rpm too), not duplicated per format (see packaging/common/).
   install -Dm644 "$startdir/../common/anvild.service" "$pkgdir/usr/lib/systemd/system/anvild.service"
   install -Dm644 "$startdir/../common/anvil.sysusers" "$pkgdir/usr/lib/sysusers.d/anvil.conf"
   install -Dm644 "$startdir/../common/anvil.tmpfiles" "$pkgdir/usr/lib/tmpfiles.d/anvil.conf"

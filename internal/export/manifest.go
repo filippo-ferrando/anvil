@@ -1,6 +1,5 @@
-// Package export implements `anvil export`/`anvil import`: packaging a
-// single instance or a whole intent into a portable tar.zst bundle, and
-// relaunching one back from it.
+// Package export implements `anvil export`/`anvil import`: packaging a single instance or a whole
+// intent into a portable tar.zst bundle, and relaunching one back from it.
 package export
 
 // Manifest is a bundle's manifest.json: everything needed to relaunch every
@@ -44,18 +43,15 @@ type VM struct {
 	MemoryMiB int64
 	DiskGiB   int64
 
-	// CloudInitContent is the resolved cloud-init user-data, whether the
-	// source used a raw ad hoc config or a named library entry — either
-	// way, import always relaunches with it as ad hoc user-data, so the
-	// bundle is self-contained and doesn't depend on the target's library.
+	// CloudInitContent is the resolved cloud-init user-data, whether the source used a raw config or a
+	// named library entry; import always relaunches with it as ad hoc data so the bundle is self-contained.
 	CloudInitContent string
 
 	SSHPublicKeys []string
 	Ports         []PortMapping
 
-	// DiskFile is this member's qcow2 diff disk's path inside the bundle
-	// (relative to the archive root), backed by its original base image —
-	// not flattened, unlike `anvil migrate`'s export.
+	// DiskFile is this member's qcow2 diff disk's path inside the bundle (relative to the archive root),
+	// backed by its original base image, not flattened unlike `anvil migrate`'s export.
 	DiskFile string
 }
 

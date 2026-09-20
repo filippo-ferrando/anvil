@@ -146,16 +146,13 @@ type Snapshot struct {
 	Name      string
 	CreatedAt time.Time
 
-	// HasVMState is true when the snapshot embeds full VM state (RAM),
-	// as QMP's savevm does; false for a disk-only snapshot (qemu-img
-	// snapshot -c, or nothing beyond that ever written into it).
+	// HasVMState is true when the snapshot embeds full VM state (RAM), as QMP's
+	// savevm does; false for a disk-only snapshot (e.g. qemu-img snapshot -c).
 	HasVMState bool
 }
 
-// ListSnapshots returns every internal snapshot recorded in path's own
-// qcow2 metadata, oldest first. Like BackingFile/DiskUsage, this works
-// against a disk a running QEMU process holds a write lock on (qemu-img
-// info -U opens it read-only in shared mode).
+// ListSnapshots returns every internal snapshot recorded in path's own qcow2
+// metadata, oldest first. Works even while a running QEMU process holds a write lock on the disk (qemu-img info -U opens it read-only).
 func ListSnapshots(path string) ([]Snapshot, error) {
 	info, err := qemuImgInspect(path)
 	if err != nil {

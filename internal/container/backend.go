@@ -133,7 +133,7 @@ func (b *Backend) Stats(ctx context.Context, spec *instance.Spec) (instance.Stat
 	return sp.Stats(ctx, spec)
 }
 
-// ImageInfo is one image cached by a container engine — a separate
+// ImageInfo is one image cached by a container engine: a separate
 // inventory from the VM image vault (internal/vm/image.Vault).
 type ImageInfo struct {
 	ID        string
@@ -156,8 +156,7 @@ type ImageDeleter interface {
 }
 
 // ListImages returns every image cached by every configured engine.
-// An engine that isn't configured, or doesn't implement ImageLister,
-// simply contributes nothing rather than failing the whole call.
+// An engine that can't list images just contributes nothing, rather than failing the whole call.
 func (b *Backend) ListImages(ctx context.Context) ([]ImageInfo, error) {
 	var all []ImageInfo
 	for _, eng := range []instance.Backend{b.Docker, b.Podman} {

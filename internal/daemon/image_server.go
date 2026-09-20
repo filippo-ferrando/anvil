@@ -13,12 +13,8 @@ import (
 	"github.com/anvil-project/anvil/internal/vm/image"
 )
 
-// VMCatalog is the subset of a VM backend ImageServer needs. Deliberately
-// an interface, not the concrete *vm.Backend (internal/vm is Linux/QEMU-
-// only, gated by a //go:build tag) — this package has no platform
-// constraint of its own and must build the same way on every platform, so
-// it can't import internal/vm directly. A darwin VM backend
-// (internal/vm/vz) satisfies this the same way.
+// VMCatalog is the subset of a VM backend ImageServer needs, kept as an
+// interface because internal/vm is Linux/QEMU-only and this package must build on every platform.
 type VMCatalog interface {
 	ListCatalog() ([]image.DistroEntry, error)
 }

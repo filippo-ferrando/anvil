@@ -178,7 +178,7 @@ file server.
    anvil fetches `distros.json` immediately, validates every entry (rejects the whole
    manifest if `schema_version` isn't `1`, or if any entry is missing `id`/`url`), and
    caches the parsed result. If this succeeds, `anvil find` shows `my-distro-1.0`
-   right away — you don't need to already have the qcow2 downloaded, only the manifest
+   right away: you don't need to already have the qcow2 downloaded, only the manifest
    needs to be reachable at add-time.
 
 6. **Launch from it** like any other catalog entry:

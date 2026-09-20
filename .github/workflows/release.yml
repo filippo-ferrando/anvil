@@ -1,18 +1,3 @@
-# Builds Arch/.deb/.rpm packages for a tagged release and publishes all
-# three as assets on a GitHub/Forgejo release. Written as a standard
-# GitHub Actions workflow — Forgejo Actions reads the same YAML from the
-# same .github/workflows/ path — but two of the actions below
-# (softprops/action-gh-release, and any action here in general) only
-# resolve if this instance's runner is configured to fetch actions from
-# github.com (Forgejo's DEFAULT_ACTIONS_URL setting) rather than only
-# from a local/code.forgejo.org mirror. If actions don't resolve on your
-# runner, point DEFAULT_ACTIONS_URL at github or mirror these specific
-# actions locally.
-#
-# Trigger: pushing a tag like v1.0.0. The "v" is stripped to get the
-# actual package version (v1.0.0 -> 1.0.0), computed once in the
-# `version` job and reused everywhere else, so there's one place that
-# owns "how does a tag become a package version," not three.
 name: Release packages
 
 on:
@@ -21,7 +6,7 @@ on:
       - "v*.*.*"
 
 permissions:
-  contents: write # the release job creates a release and uploads assets
+  contents: write
 
 jobs:
   version:
@@ -35,30 +20,17 @@ jobs:
   build-arch:
     needs: version
     runs-on: ubuntu-latest
-    # makepkg only exists on Arch, and only builds `pacman`-managed
-    # packages, so this job's steps all run inside an Arch container
-    # rather than directly on the ubuntu-latest host (unlike the deb/rpm
-    # jobs below, which only need one extra package on top of Ubuntu).
+
     container:
       image: archlinux:latest
     steps:
-      # nodejs first, before any `uses:` step: a bare archlinux image has
-      # no Node.js, and every JS-based action below (checkout, later
-      # upload-artifact) runs *inside this container* — unlike a job
-      # without `container:`, where the runner supplies its own bundled
-      # Node on the host and this would never come up. Without this,
-      # actions/checkout itself fails with "node: executable file not
-      # found in $PATH" before it can even fetch the repo.
       - name: Install build tools
         run: pacman -Syu --noconfirm --needed base-devel go git nodejs
 
       - uses: actions/checkout@v7
 
       - name: Create a non-root build user
-        # makepkg refuses to run as root (root inside this container is
-        # the default and only user otherwise), and the checkout above
-        # is root-owned, so it needs to hand off to a real user before
-        # makepkg will do anything.
+
         run: |
           useradd -m builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
@@ -68,19 +40,7 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
-          # PKGBUILD's own `source=` clones from the real
-          # git.fferrando.cc remote (correct for a normal local/manual
-          # build: "give me whatever's newest"), which is exactly wrong
-          # for a tag-triggered release build — it would build whatever
-          # the default branch happens to be at the moment CI runs, not
-          # this exact tag, if the two have ever diverged. So this
-          # renders a CI-only copy of PKGBUILD that clones from the
-          # already-checked-out local working tree instead (a plain
-          # `git+file://` source, no ref pinned — HEAD of that local
-          # checkout already *is* this tag, since that's what
-          # actions/checkout just checked out), and sets pkgver to match
-          # the tag. The real packaging/archlinux/PKGBUILD checked into
-          # the repo is untouched.
+
           cat > /tmp/build-arch.sh <<SCRIPT
           set -euo pipefail
           # package_anvild() reads \$startdir/../common/..., so the
@@ -123,8 +83,7 @@ jobs:
       - name: Build anvil + anvild .deb packages
         env:
           VERSION: ${{ needs.version.outputs.version }}
-        # dpkg-deb ships with every Ubuntu image already (part of dpkg
-        # itself), nothing extra to install here.
+
         run: packaging/deb/build.sh "$VERSION"
 
       - name: Collect artifacts
@@ -149,13 +108,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Install rpmbuild
-        # Debian/Ubuntu's "rpm" package bundles rpmbuild, unlike the
-        # split rpm-build/rpm packages on Fedora/RHEL. GitHub-hosted
-        # ubuntu-latest runs as a non-root user with passwordless sudo;
-        # Forgejo/act_runner's ubuntu-latest image runs job containers
-        # as root directly, with no sudo installed at all (root doesn't
-        # need it) — so this only reaches for sudo when it isn't
-        # already root, rather than assuming either environment.
+
         run: |
           if [ "$(id -u)" = "0" ]; then
             apt-get update
@@ -188,20 +141,12 @@ jobs:
       - uses: actions/download-artifact@v3
         with:
           path: dist
-          # v3 has no merge-multiple (that's a v4-only input, harmless
-          # to just not pass it) — downloading all artifacts with v3
-          # always creates one subdirectory per artifact name
-          # (dist/arch-packages/, dist/deb-packages/, dist/rpm-packages/),
-          # so the release step's glob below has to be recursive.
 
       - name: Publish release
         uses: softprops/action-gh-release@v3
         with:
           files: dist/**/*
           fail_on_unmatched_files: true
-          # The three build jobs' retention-days: 1 above only governs
-          # the intermediate CI artifacts fetched into dist/ just now,
-          # not these — release assets persist normally, same as any
-          # other release, until someone deletes the release itself.
+
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
