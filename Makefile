@@ -1,10 +1,14 @@
 .PHONY: proto tui-deps build test vet fmt clean
 
+GOBIN := $(shell go env GOPATH)/bin
+
 # Regenerates api/gen/anvil/v1 from api/proto/anvil/v1/anvil.proto.
 proto:
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.34.2
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
 	protoc \
+		--plugin=protoc-gen-go=$(GOBIN)/protoc-gen-go \
+		--plugin=protoc-gen-go-grpc=$(GOBIN)/protoc-gen-go-grpc \
 		--go_out=api/gen --go_opt=paths=source_relative \
 		--go-grpc_out=api/gen --go-grpc_opt=paths=source_relative \
 		--proto_path=api/proto \
