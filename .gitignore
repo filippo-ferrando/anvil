@@ -1,5 +1,6 @@
 /anvil
 /anvild
+/man
 *.qcow2
 *.iso
 /data/distros/*.tmp

@@ -1,0 +1,80 @@
+.nh
+.TH "ANVILD" "8" "Sep 2026" "Anvil" "Anvil Manual"
+
+.SH NAME
+anvild \- daemon that drives QEMU VMs and Docker/Podman containers for anvil
+
+.SH SYNOPSIS
+\fBanvild\fP
+
+.SH DESCRIPTION
+anvild is the daemon behind \fBanvil\fR(1) and \fBanvil tui\fR. It owns every
+instance's lifecycle, the image vault, and the on-disk registry, and exposes
+all of it over gRPC on a unix socket; the CLI and TUI are dumb clients that
+just build a request and send it over that socket.
+
+It drives QEMU processes directly over QMP for VMs (no libvirt) and talks to
+Docker's real HTTP API for containers (no SDK). It takes no command-line
+flags or subcommands; its on-disk layout is fixed and its runtime behavior is
+controlled entirely through the requests it receives over the socket.
+
+On startup it creates its run, state, and cache directories if missing,
+opens its registry, reconciles instance and intent-network state against
+what's actually running, and starts listening. It shuts down gracefully on
+\fBSIGINT\fR or \fBSIGTERM\fR, waiting up to 10 seconds for in-flight RPCs
+(such as \fBanvil logs --follow\fR) to finish before forcing a stop.
+
+.SH FILES
+.PP
+\fB/run/anvil/anvild.sock\fP
+.RS 4
+The gRPC unix socket the CLI and TUI connect to. Created mode 0660, group
+\fBanvil\fR, so any member of that group can reach the daemon without root.
+.RE
+.PP
+\fB/var/lib/anvil/anvil.db\fP
+.RS 4
+bbolt registry: instances, intents, images, mirrors, hosts, and the saved
+cloud-init library.
+.RE
+.PP
+\fB/var/lib/anvil/instances/\fP
+.RS 4
+Per-instance mutable state that doesn't belong in the registry (VM disks,
+container volumes).
+.RE
+.PP
+\fB/var/lib/anvil/.ssh/id_ed25519\fP
+.RS 4
+Passwordless ed25519 keypair anvild uses as the SSH client identity for
+\fBanvil migrate\fR. Generated once on install; the matching public key has
+to be added to \fB~/.ssh/authorized_keys\fR on any host used as a migration
+target.
+.RE
+.PP
+\fB/var/cache/anvil/images/prepared/\fP
+.RS 4
+Downloaded and checksum-verified base VM images.
+.RE
+.PP
+\fB/etc/anvil/\fP
+.RS 4
+Reserved for daemon configuration; unused today.
+.RE
+
+.SH RUNNING
+anvild is meant to run under systemd as the unprivileged \fBanvil\fR system
+user, not root; the packaged \fBanvild.service\fR unit grants it just enough
+capabilities for KVM and tap/bridge networking. It isn't started
+automatically on install:
+.PP
+.RS 4
+\fBsystemctl enable --now anvild\fP
+.RE
+.PP
+Access control is unix group membership plus socket reachability: adding a
+user to the \fBanvil\fR group is what grants it the ability to talk to
+anvild, there are no accounts, no portal, and no password.
+
+.SH SEE ALSO
+\fBanvil\fR(1), \fBanvil-migrate\fR(1), \fBsystemctl\fR(1)

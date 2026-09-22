@@ -17,8 +17,13 @@ type globalFlags struct {
 func NewRootCommand() *cobra.Command {
 	flags := &globalFlags{}
 	root := &cobra.Command{
-		Use:          "anvil",
-		Short:        "Manage cloud-init VMs and Docker/Podman containers",
+		Use:   "anvil",
+		Short: "Manage cloud-init VMs and Docker/Podman containers",
+		Long: `Anvil manages cloud-init VMs (via direct QEMU process management, no libvirt)
+and Docker containers (via the real Docker API, no SDK) side by side, with
+grouped "intents", cold migration between anvil hosts, and a terminal UI
+(anvil tui). This CLI talks to anvild, the daemon that does the actual work,
+over a unix socket.`,
 		SilenceUsage: true,
 		// The caller prints the returned error itself, so cobra shouldn't print its own.
 		SilenceErrors: true,
@@ -59,6 +64,7 @@ func NewRootCommand() *cobra.Command {
 		newImportCommand(flags),
 		newTuiCommand(flags),
 	)
+	root.AddCommand(newManCommand(root))
 	return root
 }
 
