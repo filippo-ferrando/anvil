@@ -172,6 +172,13 @@ sampled straight from the process itself (`/proc` + the tap device for a VM, Doc
 stats endpoint for a container), refreshed every couple of seconds, no guest agent
 required. From the same screen, `f` forks the selected VM and `E`/`i` export/import it.
 
+### A sneak peek at the TUI
+
+![instances](docs/screenshots/instances.png)
+![vm logs](docs/screenshots/instances_logs.png)
+![images](docs/screenshots/images.png)
+![cloud-init](docs/screenshots/cloud_inits.png)
+
 ## How it's built
 
 ```
