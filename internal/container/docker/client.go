@@ -127,6 +127,8 @@ type hostConfig struct {
 	NetworkMode  string                   `json:"NetworkMode,omitempty"`
 	// ExtraHosts holds static /etc/hosts entries, each formatted "host:ip".
 	ExtraHosts []string `json:"ExtraHosts,omitempty"`
+	Dns        []string `json:"Dns,omitempty"`
+	DnsSearch  []string `json:"DnsSearch,omitempty"`
 }
 
 type endpointSettings struct {
@@ -166,6 +168,11 @@ type CreateContainerParams struct {
 	// on its network. ExtraHosts adds static "host:ip" entries for peers.
 	NetworkAlias string
 	ExtraHosts   map[string]string
+
+	// DNSServers/DNSSearch are used by the engine's own resolver for any
+	// name it can't answer itself.
+	DNSServers []string
+	DNSSearch  []string
 }
 
 type VolumeMount struct {
@@ -368,7 +375,7 @@ func (c *Client) CreateContainer(ctx context.Context, p CreateContainerParams) (
 		Image:      p.Image,
 		Entrypoint: p.Entrypoint,
 		Cmd:        p.Cmd,
-		HostConfig: hostConfig{NetworkMode: p.NetworkMode},
+		HostConfig: hostConfig{NetworkMode: p.NetworkMode, Dns: p.DNSServers, DnsSearch: p.DNSSearch},
 	}
 	for k, v := range p.Env {
 		req.Env = append(req.Env, fmt.Sprintf("%s=%s", k, v))

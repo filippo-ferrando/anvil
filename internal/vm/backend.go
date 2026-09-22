@@ -991,7 +991,7 @@ func bridgeNetworkConfig(v *instance.VMSpec, mac string) string {
 	if v.NetworkMode != "bridge" || v.StaticIP == "" {
 		return ""
 	}
-	return fmt.Sprintf(`network:
+	cfg := fmt.Sprintf(`network:
   version: 2
   ethernets:
     anvil0:
@@ -1001,6 +1001,13 @@ func bridgeNetworkConfig(v *instance.VMSpec, mac string) string {
       addresses: [%s]
       gateway4: %s
 `, mac, v.StaticIP, v.Gateway)
+	if len(v.DNSServers) > 0 {
+		cfg += fmt.Sprintf("      nameservers:\n        addresses: [%s]\n", strings.Join(v.DNSServers, ", "))
+		if len(v.DNSSearch) > 0 {
+			cfg += fmt.Sprintf("        search: [%s]\n", strings.Join(v.DNSSearch, ", "))
+		}
+	}
+	return cfg
 }
 
 // macFromInstanceID derives a deterministic MAC address from id, within

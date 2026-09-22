@@ -19,18 +19,23 @@ func NewIntentServer(mgr *intent.Manager) *IntentServer {
 	return &IntentServer{Manager: mgr}
 }
 
-func intentMemberToPB(m store.IntentMember) *anvilv1.IntentMember {
-	return &anvilv1.IntentMember{
+func intentMemberToPB(it store.Intent, m store.IntentMember) *anvilv1.IntentMember {
+	pb := &anvilv1.IntentMember{
 		InstanceId: m.InstanceID,
 		Role:       m.Role,
 		Kind:       kindToPB(m.Kind),
+		Ip:         m.IP,
 	}
+	if it.Network != nil {
+		pb.DnsName = intent.MemberDNSName(it.Name, m.Role)
+	}
+	return pb
 }
 
 func intentToPB(it store.Intent) *anvilv1.Intent {
 	pb := &anvilv1.Intent{Id: it.ID, Name: it.Name}
 	for _, m := range it.Members {
-		pb.Members = append(pb.Members, intentMemberToPB(m))
+		pb.Members = append(pb.Members, intentMemberToPB(it, m))
 	}
 	if it.Network != nil {
 		pb.Network = &anvilv1.IntentNetwork{
@@ -39,6 +44,8 @@ func intentToPB(it store.Intent) *anvilv1.Intent {
 			Subnet:            it.Network.Subnet,
 			Gateway:           it.Network.Gateway,
 			DockerIpRange:     it.Network.DockerIPRange,
+			DnsDomain:         intent.Domain(it.Name),
+			DnsServer:         it.Network.Gateway,
 		}
 	}
 	return pb

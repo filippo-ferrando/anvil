@@ -8,6 +8,8 @@ arch=('x86_64')
 url="https://git.fferrando.cc/rdfilippo/anvil"
 license=('Apache-2.0')
 makedepends=('go' 'git')
+# makepkg.conf enables "debug" by default, which adds an unwanted anvil-debug package.
+options=('!debug')
 source=("anvil::git+https://git.fferrando.cc/rdfilippo/anvil.git")
 sha256sums=('SKIP') # VCS source, no fixed download to checksum
 

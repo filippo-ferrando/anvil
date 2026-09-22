@@ -3,6 +3,8 @@
 # packaging/deb (anvil_*.deb / anvild_*.deb): "anvil" is the CLI+TUI
 # client, "anvild" is the daemon. @VERSION@/@RELEASE@ are substituted by
 # packaging/rpm/build.sh from its own arguments.
+# No -debuginfo/-debugsource subpackages, only anvil and anvild are shipped.
+%global debug_package %{nil}
 Name:           anvil
 Version:        @VERSION@
 Release:        @RELEASE@%{?dist}

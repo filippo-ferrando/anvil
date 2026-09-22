@@ -93,6 +93,8 @@ func (b *DockerBackend) Create(ctx context.Context, spec *instance.Spec, progres
 		NetworkMode:  c.NetworkMode,
 		NetworkAlias: c.NetworkAlias,
 		ExtraHosts:   c.ExtraHosts,
+		DNSServers:   c.DNSServers,
+		DNSSearch:    c.DNSSearch,
 	}
 	for _, v := range c.Volumes {
 		params.Volumes = append(params.Volumes, docker.VolumeMount{

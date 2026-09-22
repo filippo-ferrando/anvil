@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"io"
 	"strings"
 	"text/tabwriter"
 
@@ -219,17 +220,28 @@ func newIntentInfoCommand(flags *globalFlags) *cobra.Command {
 			if net := it.GetNetwork(); net != nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "Network:\t%s (bridge %s, subnet %s)\n",
 					net.GetEngineNetworkName(), net.GetBridgeInterface(), net.GetSubnet())
+				if net.GetDnsDomain() != "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "DNS:\t%s (server %s)\n", net.GetDnsDomain(), net.GetDnsServer())
+				}
 			} else {
 				fmt.Fprintln(cmd.OutOrStdout(), "Network:\tnone yet")
 			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "ROLE\tKIND\tINSTANCE ID")
-			for _, m := range it.GetMembers() {
-				fmt.Fprintf(tw, "%s\t%s\t%s\n", m.GetRole(), kindLabel(m.GetKind()), m.GetInstanceId())
-			}
-			return tw.Flush()
+			printIntentMembers(cmd.OutOrStdout(), it.GetMembers())
+			return nil
 		},
 	}
+}
+
+// printIntentMembers prints one row per member, with "-" for a missing
+// address or DNS name.
+func printIntentMembers(w io.Writer, members []*anvilv1.IntentMember) {
+	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "ROLE\tKIND\tIP\tDNS NAME\tINSTANCE ID")
+	for _, m := range members {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", m.GetRole(), kindLabel(m.GetKind()),
+			orDash(m.GetIp()), orDash(m.GetDnsName()), m.GetInstanceId())
+	}
+	tw.Flush()
 }
 
 func newIntentRemoveCommand(flags *globalFlags) *cobra.Command {

@@ -265,6 +265,8 @@ func cloneVMSpecForFork(v *VMSpec) *VMSpec {
 	clone.StaticIP = ""
 	clone.Gateway = ""
 	clone.ExtraHosts = nil
+	clone.DNSServers = nil
+	clone.DNSSearch = nil
 	clone.SourceDiskPath = ""
 	return &clone
 }

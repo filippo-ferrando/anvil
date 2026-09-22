@@ -283,8 +283,11 @@ func (m intentsModel) View() string {
 	}
 	if m.showingInfo != nil {
 		var lines []string
+		if n := m.showingInfo.GetNetwork(); n != nil && n.GetDnsDomain() != "" {
+			lines = append(lines, fmt.Sprintf("  DNS zone %s, server %s", n.GetDnsDomain(), n.GetDnsServer()), "")
+		}
 		for _, mem := range m.showingInfo.GetMembers() {
-			lines = append(lines, fmt.Sprintf("  %s  (%s)", mem.GetRole(), kindLabel(mem.GetKind())))
+			lines = append(lines, memberLine(mem))
 		}
 		body := "(no members)"
 		if len(lines) > 0 {
@@ -294,6 +297,19 @@ func (m intentsModel) View() string {
 			helpBar("any key", "back")
 	}
 	return m.list.View() + "\n" + helpBar("i", "members", "x", "remove", "E", "export", "I", "import", "r", "refresh", "esc", "back")
+}
+
+// memberLine renders one member as "role (kind)", plus its address and
+// DNS name when it has them.
+func memberLine(mem *anvilv1.IntentMember) string {
+	line := fmt.Sprintf("  %s  (%s)", mem.GetRole(), kindLabel(mem.GetKind()))
+	if mem.GetIp() != "" {
+		line += "  " + mem.GetIp()
+	}
+	if mem.GetDnsName() != "" {
+		line += "  " + mem.GetDnsName()
+	}
+	return line
 }
 
 func kindLabel(k anvilv1.Kind) string {

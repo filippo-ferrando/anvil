@@ -270,3 +270,36 @@ func TestCheckSnapshotName(t *testing.T) {
 		}
 	}
 }
+
+func TestBridgeNetworkConfigNameservers(t *testing.T) {
+	v := &instance.VMSpec{
+		NetworkMode: "bridge",
+		StaticIP:    "10.55.201.2/24",
+		Gateway:     "10.55.201.1",
+		DNSServers:  []string{"10.55.201.1"},
+		DNSSearch:   []string{"myapp.anvil"},
+	}
+	cfg := bridgeNetworkConfig(v, "52:54:00:aa:bb:cc")
+	var doc struct {
+		Network struct {
+			Ethernets map[string]struct {
+				Nameservers struct {
+					Addresses []string `yaml:"addresses"`
+					Search    []string `yaml:"search"`
+				} `yaml:"nameservers"`
+			} `yaml:"ethernets"`
+		} `yaml:"network"`
+	}
+	if err := yaml.Unmarshal([]byte(cfg), &doc); err != nil {
+		t.Fatalf("network-config isn't valid YAML: %v\n%s", err, cfg)
+	}
+	ns := doc.Network.Ethernets["anvil0"].Nameservers
+	if len(ns.Addresses) != 1 || ns.Addresses[0] != "10.55.201.1" || len(ns.Search) != 1 || ns.Search[0] != "myapp.anvil" {
+		t.Errorf("unexpected nameservers %+v in\n%s", ns, cfg)
+	}
+
+	v.DNSServers, v.DNSSearch = nil, nil
+	if strings.Contains(bridgeNetworkConfig(v, "52:54:00:aa:bb:cc"), "nameservers") {
+		t.Error("expected no nameservers block without DNS servers")
+	}
+}

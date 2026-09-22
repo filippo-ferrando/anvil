@@ -6,12 +6,15 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/netip"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/oklog/ulid/v2"
 
 	"github.com/anvil-project/anvil/internal/instance"
+	"github.com/anvil-project/anvil/internal/intent/dns"
 	"github.com/anvil-project/anvil/internal/intent/ipam"
 	"github.com/anvil-project/anvil/internal/store"
 )
@@ -53,14 +56,26 @@ type Networker interface {
 // ("anvil-" + the owning intent's ID); ReconcileNetworks uses it to recognize anvil's own networks.
 const networkNamePrefix = "anvil-"
 
+// DNS is told to reload its zones whenever an intent's members or
+// network change. A nil DNS means members only get static hosts entries.
+type DNS interface {
+	Refresh(ctx context.Context) error
+}
+
 type Manager struct {
 	Store     Store
 	Instances Instances
 	Networker Networker
+	DNS       DNS
 
 	// mu serializes Launch/Remove/Delete's read-modify-write sequence
 	// against an intent's Store record.
 	mu sync.Mutex
+
+	// pending is an intent whose first member is still launching, not yet
+	// in the Store, so its zone is served before that member boots.
+	pendingMu sync.Mutex
+	pending   *store.Intent
 }
 
 func NewManager(s Store, instances Instances, networker Networker) *Manager {
@@ -201,6 +216,9 @@ func (m *Manager) Launch(ctx context.Context, params instance.LaunchParams, prog
 		progress(instance.LaunchEvent{Err: err})
 		return err
 	}
+	m.setPending(&it)
+	defer m.setPending(nil)
+	m.refreshDNS(ctx)
 
 	role := params.Role
 	if role == "" {
@@ -222,6 +240,10 @@ func (m *Manager) Launch(ctx context.Context, params instance.LaunchParams, prog
 			launchParams.Container.NetworkMode = it.Network.EngineNetworkName
 			launchParams.Container.NetworkAlias = role
 			launchParams.Container.ExtraHosts = vmHostsFor(it.Members)
+			if m.DNS != nil {
+				launchParams.Container.DNSServers = []string{it.Network.Gateway}
+				launchParams.Container.DNSSearch = []string{Domain(it.Name)}
+			}
 		case launchParams.VM != nil:
 			// A migrated member reuses its original address instead of
 			// getting the next one in sequence.
@@ -239,6 +261,10 @@ func (m *Manager) Launch(ctx context.Context, params instance.LaunchParams, prog
 			launchParams.VM.StaticIP = ip
 			launchParams.VM.Gateway = it.Network.Gateway
 			launchParams.VM.ExtraHosts = hostsFor(it.Members)
+			if m.DNS != nil {
+				launchParams.VM.DNSServers = []string{it.Network.Gateway}
+				launchParams.VM.DNSSearch = []string{Domain(it.Name)}
+			}
 		}
 	}
 
@@ -278,7 +304,12 @@ func (m *Manager) Launch(ctx context.Context, params instance.LaunchParams, prog
 	}
 
 	it.Members = append(it.Members, store.IntentMember{InstanceID: launched.ID, Role: role, Kind: launched.Kind, IP: memberIP})
-	return m.Store.PutIntent(it)
+	if err := m.Store.PutIntent(it); err != nil {
+		return err
+	}
+	m.setPending(nil)
+	m.refreshDNS(ctx)
+	return nil
 }
 
 func (m *Manager) List() ([]store.Intent, error) {
@@ -327,6 +358,7 @@ func (m *Manager) Remove(ctx context.Context, name, member string) (store.Intent
 	if err := m.Store.PutIntent(it); err != nil {
 		return store.Intent{}, err
 	}
+	m.refreshDNS(ctx)
 	return it, nil
 }
 
@@ -366,6 +398,7 @@ func (m *Manager) Delete(ctx context.Context, name string, purgeMembers bool) (s
 	if err := m.Store.DeleteIntentByID(it.ID); err != nil {
 		return store.Intent{}, err
 	}
+	m.refreshDNS(ctx)
 	return it, nil
 }
 
@@ -400,4 +433,120 @@ func (m *Manager) ReconcileNetworks(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// Domain returns the DNS zone an intent's members live in, e.g. "myapp.anvil".
+func Domain(intentName string) string {
+	return dns.Domain(intentName)
+}
+
+// MemberDNSName returns the fully qualified name a member resolves as,
+// e.g. "db.myapp.anvil".
+func MemberDNSName(intentName, role string) string {
+	return dns.Label(role) + "." + Domain(intentName)
+}
+
+func (m *Manager) setPending(it *store.Intent) {
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	if it == nil {
+		m.pending = nil
+		return
+	}
+	cp := *it
+	m.pending = &cp
+}
+
+// refreshDNS reloads the DNS server's zones; a failure only means a
+// zone is served late, so it is logged, not returned.
+func (m *Manager) refreshDNS(ctx context.Context) {
+	if m.DNS == nil {
+		return
+	}
+	if err := m.DNS.Refresh(ctx); err != nil {
+		log.Printf("intent: refreshing DNS: %v", err)
+	}
+}
+
+// containerLookupTimeout bounds each live address lookup in DNSZones.
+const containerLookupTimeout = 2 * time.Second
+
+// DNSZones returns one zone per intent with a network, for dns.Server.
+// Container addresses are re-read from the engine, since a restart can change them.
+func (m *Manager) DNSZones(ctx context.Context) ([]dns.Zone, error) {
+	intents, err := m.Store.ListIntents()
+	if err != nil {
+		return nil, err
+	}
+	m.pendingMu.Lock()
+	if m.pending != nil {
+		found := false
+		for _, it := range intents {
+			if it.ID == m.pending.ID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			intents = append(intents, *m.pending)
+		}
+	}
+	m.pendingMu.Unlock()
+
+	var zones []dns.Zone
+	for _, it := range intents {
+		if z, ok := m.zoneFor(ctx, it); ok {
+			zones = append(zones, z)
+		}
+	}
+	return zones, nil
+}
+
+type nameAddr struct {
+	label string
+	addr  netip.Addr
+}
+
+func (m *Manager) zoneFor(ctx context.Context, it store.Intent) (dns.Zone, bool) {
+	if it.Network == nil {
+		return dns.Zone{}, false
+	}
+	gw, err := netip.ParseAddr(it.Network.Gateway)
+	if err != nil {
+		return dns.Zone{}, false
+	}
+	subnet, _ := netip.ParsePrefix(it.Network.Subnet)
+	z := dns.Zone{Domain: Domain(it.Name), Listen: gw, Subnet: subnet, Records: map[string]netip.Addr{}}
+
+	// Roles are added first so an instance name never shadows a role.
+	var aliases []nameAddr
+	for _, mem := range it.Members {
+		ip := mem.IP
+		spec, specErr := m.Instances.GetByID(mem.InstanceID)
+		if specErr == nil && mem.Kind == instance.KindContainer && spec.Container != nil && m.Networker != nil {
+			lookupCtx, cancel := context.WithTimeout(ctx, containerLookupTimeout)
+			if live, err := m.Networker.ContainerAddress(lookupCtx, it.Network.EngineNetworkName, spec.Container.ContainerID); err == nil && live != "" {
+				ip = live
+			}
+			cancel()
+		}
+		addr, err := netip.ParseAddr(stripCIDR(ip))
+		if err != nil {
+			continue
+		}
+		if label := dns.Label(mem.Role); label != "" {
+			if _, taken := z.Records[label]; !taken {
+				z.Records[label] = addr
+			}
+		}
+		if specErr == nil {
+			aliases = append(aliases, nameAddr{dns.Label(spec.Name), addr})
+		}
+	}
+	for _, a := range aliases {
+		if _, taken := z.Records[a.label]; a.label != "" && !taken {
+			z.Records[a.label] = a.addr
+		}
+	}
+	return z, true
 }

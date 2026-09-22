@@ -84,6 +84,11 @@ type VMSpec struct {
 	// ExtraHosts is every other intent member's role -> IP known at launch time.
 	ExtraHosts map[string]string
 
+	// DNSServers/DNSSearch point the guest at its intent's DNS server, so
+	// members added later still resolve by name.
+	DNSServers []string
+	DNSSearch  []string
+
 	// SourceDiskPath, if set, makes Create adopt this disk directly instead
 	// of resolving the image catalog (used by migration).
 	SourceDiskPath string
@@ -122,6 +127,8 @@ type ContainerSpec struct {
 	// intent member; meaningless otherwise.
 	NetworkAlias string
 	ExtraHosts   map[string]string
+	DNSServers   []string
+	DNSSearch    []string
 }
 
 type VolumeMount struct {

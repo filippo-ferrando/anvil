@@ -63,6 +63,8 @@ jobs:
         run: |
           mkdir -p out
           cp /tmp/pkgroot/archlinux/*.pkg.tar.zst out/
+          # Guard: debug packages are never part of a release.
+          rm -f out/*-debug-* out/*-debuginfo-* out/*-debugsource-*
 
       - uses: actions/upload-artifact@v3
         with:
@@ -127,6 +129,8 @@ jobs:
         run: |
           mkdir -p out
           cp packaging/rpm/*.rpm out/
+          # Guard: debug packages are never part of a release.
+          rm -f out/*-debug-* out/*-debuginfo-* out/*-debugsource-*
 
       - uses: actions/upload-artifact@v3
         with:

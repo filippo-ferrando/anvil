@@ -105,6 +105,31 @@ func TestCreateContainerNetworkAliasAndExtraHosts(t *testing.T) {
 	}
 }
 
+func TestCreateContainerDNS(t *testing.T) {
+	var gotBody createContainerRequest
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(createContainerResponse{ID: "abc123"})
+	}))
+
+	_, err := c.CreateContainer(t.Context(), CreateContainerParams{
+		Image:       "nginx:latest",
+		NetworkMode: "anvil-myapp",
+		DNSServers:  []string{"10.55.201.1"},
+		DNSSearch:   []string{"myapp.anvil"},
+	})
+	if err != nil {
+		t.Fatalf("CreateContainer: %v", err)
+	}
+	if len(gotBody.HostConfig.Dns) != 1 || gotBody.HostConfig.Dns[0] != "10.55.201.1" {
+		t.Errorf("expected Dns [10.55.201.1], got %v", gotBody.HostConfig.Dns)
+	}
+	if len(gotBody.HostConfig.DnsSearch) != 1 || gotBody.HostConfig.DnsSearch[0] != "myapp.anvil" {
+		t.Errorf("expected DnsSearch [myapp.anvil], got %v", gotBody.HostConfig.DnsSearch)
+	}
+}
+
 func TestCreateContainerNoNetworkAliasWithoutNetworkMode(t *testing.T) {
 	// NetworkingConfig should stay nil when NetworkMode isn't set.
 	var gotBody createContainerRequest

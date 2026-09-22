@@ -507,6 +507,8 @@ message IntentMember {
   string instance_id = 1;
   string role = 2;
   Kind kind = 3;
+  string ip = 4;       // address on the intent's network, empty without one
+  string dns_name = 5; // e.g. "db.myapp.anvil", resolvable by every other member
 }
 
 message Intent {
@@ -523,6 +525,8 @@ message IntentNetwork {
   string subnet = 3;              // CIDR, e.g. "10.55.201.0/24"
   string gateway = 4;
   string docker_ip_range = 5; // CIDR sub-range reserved for the engine's own IPAM
+  string dns_domain = 6;      // zone members are named in, e.g. "myapp.anvil"
+  string dns_server = 7;      // address members send DNS queries to
 }
 
 message IntentListRequest {}

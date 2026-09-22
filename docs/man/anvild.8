@@ -20,7 +20,11 @@ controlled entirely through the requests it receives over the socket.
 
 On startup it creates its run, state, and cache directories if missing,
 opens its registry, reconciles instance and intent-network state against
-what's actually running, and starts listening. It shuts down gracefully on
+what's actually running, and starts listening. For every intent with a
+shared network it also serves DNS on port 53 of that network's gateway
+address, answering \fI<role>\fR.\fI<intent>\fR.anvil for each member and
+forwarding other names to the resolvers in \fB/etc/resolv.conf\fR. Binding
+port 53 needs \fBCAP_NET_BIND_SERVICE\fR. It shuts down gracefully on
 \fBSIGINT\fR or \fBSIGTERM\fR, waiting up to 10 seconds for in-flight RPCs
 (such as \fBanvil logs --follow\fR) to finish before forcing a stop.
 

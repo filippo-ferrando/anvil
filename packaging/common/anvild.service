@@ -19,8 +19,8 @@ ExecStart=/usr/bin/anvild
 Restart=on-failure
 RestartSec=2
 
-AmbientCapabilities=CAP_NET_ADMIN
-CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 DeviceAllow=/dev/kvm rw
 DeviceAllow=/dev/net/tun rw
 

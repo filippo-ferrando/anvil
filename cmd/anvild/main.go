@@ -22,6 +22,7 @@ import (
 	"github.com/anvil-project/anvil/internal/export"
 	"github.com/anvil-project/anvil/internal/instance"
 	"github.com/anvil-project/anvil/internal/intent"
+	"github.com/anvil-project/anvil/internal/intent/dns"
 	"github.com/anvil-project/anvil/internal/migrate"
 	"github.com/anvil-project/anvil/internal/store"
 	"github.com/anvil-project/anvil/internal/vm/image"
@@ -87,6 +88,12 @@ func run() error {
 	if err := intentMgr.ReconcileNetworks(ctx); err != nil {
 		log.Printf("anvild: reconciling intent networks: %v", err)
 	}
+
+	// Serves "<role>.<intent>.anvil" on each intent's gateway. The periodic
+	// refresh retries binds (e.g. a bridge not up yet) and picks up new container addresses.
+	dnsServer := dns.NewServer(intentMgr.DNSZones)
+	intentMgr.DNS = dnsServer
+	go dnsServer.Run(ctx, 30*time.Second)
 	migrateMgr := migrate.NewManager(db, mgr, vmBackend, intentMgr)
 	exportMgr := export.NewManager(db, mgr, intentMgr, vmBackend)
 

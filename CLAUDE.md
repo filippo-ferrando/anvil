@@ -71,6 +71,7 @@ internal/
   container/docker/   Docker backend
   container/podman/   empty package, Podman backend not implemented yet (see PLAN.md)
   intent/        grouping VMs/containers together, shared per-intent bridge network + IPAM
+  intent/dns/    per-intent DNS server on each intent's gateway ("<role>.<intent>.anvil")
   migrate/       SSH-driven cross-host migration
   store/         bbolt-backed registry (instances, intents, images, mirrors, hosts, cloud-init)
   cli/commands/  cobra commands (one file per command/command group)
