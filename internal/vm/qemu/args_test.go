@@ -184,3 +184,55 @@ func TestBuildArgsKVMvsTCG(t *testing.T) {
 		t.Errorf("expected tcg fallback")
 	}
 }
+
+func TestBuildArgsDiskTuning(t *testing.T) {
+	cases := []struct {
+		name    string
+		tuning  DiskTuning
+		want    []string
+		wantNot []string
+	}{
+		{"defaults", DiskTuning{}, []string{"discard=unmap,detect-zeroes=unmap"}, []string{"cache=none", "aio="}},
+		{"direct io_uring", DiskTuning{DirectIO: true, AIO: "io_uring"}, []string{"cache=none,aio=io_uring"}, nil},
+		{"native needs direct", DiskTuning{AIO: "native"}, nil, []string{"aio=native"}},
+		{"direct native", DiskTuning{DirectIO: true, AIO: "native"}, []string{"cache=none,aio=native"}, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			args, err := BuildArgs(Config{DiskPath: "/d", QMPSocket: "/q", Disk: c.tuning})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			joined := strings.Join(args, " ")
+			for _, w := range c.want {
+				if !strings.Contains(joined, w) {
+					t.Errorf("expected %q in args, got: %s", w, joined)
+				}
+			}
+			for _, w := range c.wantNot {
+				if strings.Contains(joined, w) {
+					t.Errorf("expected no %q in args, got: %s", w, joined)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildArgsDiskUsesIOThread(t *testing.T) {
+	args, err := BuildArgs(Config{DiskPath: "/d", QMPSocket: "/q"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		"-object iothread,id=io0",
+		"if=none,id=disk0,file=/d,format=qcow2",
+		"-device virtio-blk-pci,drive=disk0,iothread=io0",
+		"-device virtio-rng-pci,rng=rng0",
+		"-device virtio-balloon-pci,free-page-reporting=on",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("expected %q in args, got: %s", want, joined)
+		}
+	}
+}

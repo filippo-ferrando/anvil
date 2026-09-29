@@ -33,6 +33,7 @@ const (
 	InstanceService_AddPort_FullMethodName    = "/anvil.v1.InstanceService/AddPort"
 	InstanceService_RemovePort_FullMethodName = "/anvil.v1.InstanceService/RemovePort"
 	InstanceService_Stats_FullMethodName      = "/anvil.v1.InstanceService/Stats"
+	InstanceService_Watch_FullMethodName      = "/anvil.v1.InstanceService/Watch"
 )
 
 // InstanceServiceClient is the client API for InstanceService service.
@@ -60,6 +61,9 @@ type InstanceServiceClient interface {
 	RemovePort(ctx context.Context, in *RemovePortRequest, opts ...grpc.CallOption) (*RemovePortReply, error)
 	// Stats returns a live resource-usage snapshot for a running instance.
 	Stats(ctx context.Context, in *StatsRequest, opts ...grpc.CallOption) (*StatsReply, error)
+	// Watch streams instance changes (create, state/config change, delete) as they happen.
+	// Events are change hints: a client that falls far behind may miss some.
+	Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchEvent], error)
 }
 
 type instanceServiceClient struct {
@@ -237,6 +241,25 @@ func (c *instanceServiceClient) Stats(ctx context.Context, in *StatsRequest, opt
 	return out, nil
 }
 
+func (c *instanceServiceClient) Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &InstanceService_ServiceDesc.Streams[3], InstanceService_Watch_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchRequest, WatchEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type InstanceService_WatchClient = grpc.ServerStreamingClient[WatchEvent]
+
 // InstanceServiceServer is the server API for InstanceService service.
 // All implementations must embed UnimplementedInstanceServiceServer
 // for forward compatibility.
@@ -262,6 +285,9 @@ type InstanceServiceServer interface {
 	RemovePort(context.Context, *RemovePortRequest) (*RemovePortReply, error)
 	// Stats returns a live resource-usage snapshot for a running instance.
 	Stats(context.Context, *StatsRequest) (*StatsReply, error)
+	// Watch streams instance changes (create, state/config change, delete) as they happen.
+	// Events are change hints: a client that falls far behind may miss some.
+	Watch(*WatchRequest, grpc.ServerStreamingServer[WatchEvent]) error
 	mustEmbedUnimplementedInstanceServiceServer()
 }
 
@@ -313,6 +339,9 @@ func (UnimplementedInstanceServiceServer) RemovePort(context.Context, *RemovePor
 }
 func (UnimplementedInstanceServiceServer) Stats(context.Context, *StatsRequest) (*StatsReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Stats not implemented")
+}
+func (UnimplementedInstanceServiceServer) Watch(*WatchRequest, grpc.ServerStreamingServer[WatchEvent]) error {
+	return status.Errorf(codes.Unimplemented, "method Watch not implemented")
 }
 func (UnimplementedInstanceServiceServer) mustEmbedUnimplementedInstanceServiceServer() {}
 func (UnimplementedInstanceServiceServer) testEmbeddedByValue()                         {}
@@ -566,6 +595,17 @@ func _InstanceService_Stats_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InstanceService_Watch_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(InstanceServiceServer).Watch(m, &grpc.GenericServerStream[WatchRequest, WatchEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type InstanceService_WatchServer = grpc.ServerStreamingServer[WatchEvent]
+
 // InstanceService_ServiceDesc is the grpc.ServiceDesc for InstanceService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -632,6 +672,11 @@ var InstanceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Logs",
 			Handler:       _InstanceService_Logs_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "Watch",
+			Handler:       _InstanceService_Watch_Handler,
 			ServerStreams: true,
 		},
 	},
@@ -1168,6 +1213,7 @@ const (
 	ImageService_Catalog_FullMethodName              = "/anvil.v1.ImageService/Catalog"
 	ImageService_ListContainerImages_FullMethodName  = "/anvil.v1.ImageService/ListContainerImages"
 	ImageService_DeleteContainerImage_FullMethodName = "/anvil.v1.ImageService/DeleteContainerImage"
+	ImageService_Checksum_FullMethodName             = "/anvil.v1.ImageService/Checksum"
 )
 
 // ImageServiceClient is the client API for ImageService service.
@@ -1184,6 +1230,9 @@ type ImageServiceClient interface {
 	// (Docker today), separate from the VM image cache above.
 	ListContainerImages(ctx context.Context, in *ContainerImageListRequest, opts ...grpc.CallOption) (*ContainerImageListReply, error)
 	DeleteContainerImage(ctx context.Context, in *ContainerImageDeleteRequest, opts ...grpc.CallOption) (*ContainerImageDeleteReply, error)
+	// Checksum returns the SHA256 of a cached base image, without downloading it.
+	// Migration uses it to decide if only a disk delta needs to be sent.
+	Checksum(ctx context.Context, in *ImageChecksumRequest, opts ...grpc.CallOption) (*ImageChecksumReply, error)
 }
 
 type imageServiceClient struct {
@@ -1244,6 +1293,16 @@ func (c *imageServiceClient) DeleteContainerImage(ctx context.Context, in *Conta
 	return out, nil
 }
 
+func (c *imageServiceClient) Checksum(ctx context.Context, in *ImageChecksumRequest, opts ...grpc.CallOption) (*ImageChecksumReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ImageChecksumReply)
+	err := c.cc.Invoke(ctx, ImageService_Checksum_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ImageServiceServer is the server API for ImageService service.
 // All implementations must embed UnimplementedImageServiceServer
 // for forward compatibility.
@@ -1258,6 +1317,9 @@ type ImageServiceServer interface {
 	// (Docker today), separate from the VM image cache above.
 	ListContainerImages(context.Context, *ContainerImageListRequest) (*ContainerImageListReply, error)
 	DeleteContainerImage(context.Context, *ContainerImageDeleteRequest) (*ContainerImageDeleteReply, error)
+	// Checksum returns the SHA256 of a cached base image, without downloading it.
+	// Migration uses it to decide if only a disk delta needs to be sent.
+	Checksum(context.Context, *ImageChecksumRequest) (*ImageChecksumReply, error)
 	mustEmbedUnimplementedImageServiceServer()
 }
 
@@ -1282,6 +1344,9 @@ func (UnimplementedImageServiceServer) ListContainerImages(context.Context, *Con
 }
 func (UnimplementedImageServiceServer) DeleteContainerImage(context.Context, *ContainerImageDeleteRequest) (*ContainerImageDeleteReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteContainerImage not implemented")
+}
+func (UnimplementedImageServiceServer) Checksum(context.Context, *ImageChecksumRequest) (*ImageChecksumReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Checksum not implemented")
 }
 func (UnimplementedImageServiceServer) mustEmbedUnimplementedImageServiceServer() {}
 func (UnimplementedImageServiceServer) testEmbeddedByValue()                      {}
@@ -1394,6 +1459,24 @@ func _ImageService_DeleteContainerImage_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ImageService_Checksum_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ImageChecksumRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ImageServiceServer).Checksum(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ImageService_Checksum_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ImageServiceServer).Checksum(ctx, req.(*ImageChecksumRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ImageService_ServiceDesc is the grpc.ServiceDesc for ImageService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1420,6 +1503,10 @@ var ImageService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteContainerImage",
 			Handler:    _ImageService_DeleteContainerImage_Handler,
+		},
+		{
+			MethodName: "Checksum",
+			Handler:    _ImageService_Checksum_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

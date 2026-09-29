@@ -98,12 +98,13 @@ func launchRequestFromPayload(pl payload.Payload) (*anvilv1.LaunchRequest, error
 		}
 		req.Kind = anvilv1.Kind_KIND_VM
 		req.Vm = &anvilv1.VMSpec{
-			ImageRef:       pl.VM.ImageRef,
-			Arch:           pl.VM.Arch,
-			Cpus:           pl.VM.CPUs,
-			MemoryMib:      pl.VM.MemoryMiB,
-			DefaultUser:    pl.VM.DefaultUser,
-			SourceDiskPath: pl.VM.RemoteDiskPath,
+			ImageRef:             pl.VM.ImageRef,
+			Arch:                 pl.VM.Arch,
+			Cpus:                 pl.VM.CPUs,
+			MemoryMib:            pl.VM.MemoryMiB,
+			DefaultUser:          pl.VM.DefaultUser,
+			SourceDiskPath:       pl.VM.RemoteDiskPath,
+			SourceDiskBaseSha256: pl.VM.BaseSHA256,
 		}
 
 	case "container":

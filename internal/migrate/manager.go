@@ -44,6 +44,13 @@ type Exporter interface {
 	ExportDisk(ctx context.Context, spec *instance.Spec, destPath string) error
 }
 
+// DeltaExporter is an optional Exporter extension that writes only the parts of
+// a VM's disk that differ from its base image.
+type DeltaExporter interface {
+	BaseImageChecksum(spec *instance.Spec) (string, error)
+	ExportDiskDelta(ctx context.Context, spec *instance.Spec, destPath string) error
+}
+
 // IntentCleanup removes a migrated member from its source intent's
 // membership list once deleted. A nil IntentCleanup skips this.
 type IntentCleanup interface {
@@ -459,8 +466,9 @@ func rollbackRemote(ctx context.Context, t target, names []string) error {
 	return err
 }
 
-// buildVMPayload flattens spec's disk, ships it to t, and fills in pl.VM
-// with everything anvil migrate-import needs to relaunch it.
+// buildVMPayload ships spec's disk to t and fills in pl.VM with everything
+// anvil migrate-import needs to relaunch it. If t already caches the same base
+// image, only the delta on top of it is sent; otherwise the disk is flattened.
 func (m *Manager) buildVMPayload(ctx context.Context, spec *instance.Spec, t target, pl *payload.Payload, progress func(status string)) error {
 	stagingDir := config.MigrateStagingDir()
 	if err := os.MkdirAll(stagingDir, 0o750); err != nil {
@@ -469,13 +477,17 @@ func (m *Manager) buildVMPayload(ctx context.Context, spec *instance.Spec, t tar
 	localPath := filepath.Join(stagingDir, spec.ID+".qcow2")
 	defer os.Remove(localPath)
 
-	progress("flattening disk")
-	if err := m.Exporter.ExportDisk(ctx, spec, localPath); err != nil {
-		return fmt.Errorf("migrate: exporting disk: %w", err)
+	caps := probeRemote(ctx, t, spec.VM.ImageRef, spec.VM.Arch)
+	baseSHA := m.exportDiskDelta(ctx, spec, caps, localPath, progress)
+	if baseSHA == "" {
+		progress("flattening disk")
+		if err := m.Exporter.ExportDisk(ctx, spec, localPath); err != nil {
+			return fmt.Errorf("migrate: exporting disk: %w", err)
+		}
 	}
 
-	remotePath := "/tmp/anvil-migrate-" + spec.ID + ".qcow2"
-	if err := scpUpload(ctx, t, localPath, remotePath, progress); err != nil {
+	remotePath := remoteStagingDir + "/anvil-migrate-" + spec.ID + ".qcow2"
+	if err := uploadDisk(ctx, t, localPath, remotePath, caps, progress); err != nil {
 		return err
 	}
 
@@ -486,8 +498,29 @@ func (m *Manager) buildVMPayload(ctx context.Context, spec *instance.Spec, t tar
 		MemoryMiB:      spec.VM.MemoryMiB,
 		DefaultUser:    spec.VM.DefaultUser,
 		RemoteDiskPath: remotePath,
+		BaseSHA256:     baseSHA,
 	}
 	return nil
+}
+
+// exportDiskDelta writes spec's disk delta to localPath when t caches the exact
+// same base image, returning that base's SHA256, or "" if a full disk must be sent.
+func (m *Manager) exportDiskDelta(ctx context.Context, spec *instance.Spec, caps remoteCaps, localPath string, progress func(status string)) string {
+	de, ok := m.Exporter.(DeltaExporter)
+	if !ok || caps.baseSHA == "" {
+		return ""
+	}
+	sum, err := de.BaseImageChecksum(spec)
+	if err != nil || sum != caps.baseSHA {
+		return ""
+	}
+	progress("target has the same base image, exporting only the disk changes")
+	if err := de.ExportDiskDelta(ctx, spec, localPath); err != nil {
+		log.Printf("migrate: exporting %s's disk delta, falling back to a full disk: %v", spec.Name, err)
+		_ = os.Remove(localPath)
+		return ""
+	}
+	return sum
 }
 
 // buildContainerPayload fills in pl.Container from spec; the target

@@ -79,6 +79,8 @@ type model struct {
 	cloudInit cloudInitModel
 	mirrors   mirrorsModel
 	migration migrationModel
+
+	watchReloadPending bool // a reload triggered by a Watch event is already scheduled
 }
 
 // Run dials socketPath and blocks running the TUI until the user quits or an error occurs.
@@ -115,9 +117,9 @@ func Run(socketPath string) error {
 	return err
 }
 
-// Init loads the Instances screen and starts the status-clearing tick.
+// Init loads the Instances screen, starts the status-clearing tick and subscribes to instance changes.
 func (m model) Init() tea.Cmd {
-	return tea.Batch(loadInstances(m.client), tickCmd())
+	return tea.Batch(loadInstances(m.client), tickCmd(), startWatch(m.client))
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -133,6 +135,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, tea.Batch(cmds...)
+	case watchEventMsg:
+		if msg.err != nil {
+			// Daemon restarted or too old for Watch: try again later, the TUI still works without it.
+			return m, tea.Tick(watchRetryInterval, func(time.Time) tea.Msg { return watchRetryMsg{} })
+		}
+		cmds := []tea.Cmd{recvWatch(msg.stream)}
+		if !m.watchReloadPending {
+			// Bursts of events (a launch changes state several times) collapse into one reload.
+			m.watchReloadPending = true
+			cmds = append(cmds, tea.Tick(watchReloadDelay, func(time.Time) tea.Msg { return watchReloadMsg{} }))
+		}
+		return m, tea.Batch(cmds...)
+	case watchRetryMsg:
+		return m, startWatch(m.client)
+	case watchReloadMsg:
+		m.watchReloadPending = false
+		switch m.screen {
+		case screenInstances, screenSnapshots, screenIntents:
+			return m, loadCmdForScreen(m.screen, m.client)
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		contentWidth := msg.Width - sidebarWidth - sidebarGutter

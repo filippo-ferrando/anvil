@@ -2,10 +2,14 @@ package image
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestOverlayForUsesExistingPreparedImage(t *testing.T) {
@@ -253,5 +257,41 @@ func TestBackingFile(t *testing.T) {
 	}
 	if backing != v.preparedPath(entry) {
 		t.Errorf("expected backing file %q, got %q", v.preparedPath(entry), backing)
+	}
+}
+
+func TestFileChecksumUsesSidecar(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "base.qcow2")
+	if err := os.WriteFile(path, []byte("base image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	want := sha256.Sum256([]byte("base image"))
+	got, err := FileChecksum(path)
+	if err != nil {
+		t.Fatalf("FileChecksum: %v", err)
+	}
+	if got != hex.EncodeToString(want[:]) {
+		t.Fatalf("got %s, want %x", got, want)
+	}
+	if _, err := os.Stat(path + checksumSuffix); err != nil {
+		t.Fatalf("expected a sidecar file: %v", err)
+	}
+
+	// A fresh sidecar is trusted as-is, without rehashing the image.
+	fake := strings.Repeat("a", 64)
+	if err := os.WriteFile(path+checksumSuffix, []byte(fake), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := FileChecksum(path); got != fake {
+		t.Errorf("expected the sidecar value %s, got %s", fake, got)
+	}
+
+	// A sidecar older than the image is stale and gets replaced.
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(path+checksumSuffix, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := FileChecksum(path); got != hex.EncodeToString(want[:]) {
+		t.Errorf("expected a rehash after the sidecar went stale, got %s", got)
 	}
 }

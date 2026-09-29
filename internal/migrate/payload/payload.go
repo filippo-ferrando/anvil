@@ -29,7 +29,8 @@ type IntentNetwork struct {
 }
 
 // VM mirrors the subset of instance.VMSpec a migrated relaunch needs.
-// RemoteDiskPath is where the flattened disk was scp'd to on the target.
+// RemoteDiskPath is where the disk was uploaded to on the target. BaseSHA256, when
+// set, marks that disk as a delta on top of the base image with this checksum.
 type VM struct {
 	ImageRef       string // display/record purposes only on the target
 	Arch           string
@@ -37,6 +38,7 @@ type VM struct {
 	MemoryMiB      int64
 	DefaultUser    string
 	RemoteDiskPath string
+	BaseSHA256     string
 }
 
 // Container mirrors the subset of instance.ContainerSpec a migrated

@@ -114,7 +114,7 @@ func (b *Backend) Create(ctx context.Context, spec *instance.Spec, progress func
 	}
 
 	if v.SourceDiskPath != "" {
-		return b.adoptMigratedDisk(spec, dir, progress)
+		return b.adoptMigratedDisk(ctx, spec, dir, progress)
 	}
 
 	catalog, err := b.EffectiveCatalog()
@@ -141,11 +141,20 @@ func (b *Backend) Create(ctx context.Context, spec *instance.Spec, progress func
 }
 
 // adoptMigratedDisk moves v.SourceDiskPath into place as this instance's
-// disk.qcow2, skipping catalog lookup, overlay creation, and reseeding.
-func (b *Backend) adoptMigratedDisk(spec *instance.Spec, dir string, progress func(status string)) error {
+// disk.qcow2, skipping overlay creation and reseeding. A delta disk is rebased onto the local base.
+func (b *Backend) adoptMigratedDisk(ctx context.Context, spec *instance.Spec, dir string, progress func(status string)) error {
 	v := spec.VM
 	if progress != nil {
 		progress("adopting migrated disk")
+	}
+
+	// Check the base before touching the disk, so a mismatch leaves it where it was.
+	var basePath string
+	if v.SourceDiskBaseSHA256 != "" {
+		var err error
+		if basePath, err = b.matchingLocalBase(v); err != nil {
+			return err
+		}
 	}
 
 	diskPath := filepath.Join(dir, "disk.qcow2")
@@ -158,7 +167,43 @@ func (b *Backend) adoptMigratedDisk(spec *instance.Spec, dir string, progress fu
 	}
 	v.DiskPath = diskPath
 	v.SourceDiskPath = ""
+
+	if basePath != "" {
+		if progress != nil {
+			progress("rebasing migrated disk onto the local base image")
+		}
+		cmd := exec.CommandContext(ctx, "qemu-img", "rebase", "-u", "-F", "qcow2", "-b", basePath, diskPath)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("vm: rebasing migrated disk: %w: %s", err, out)
+		}
+		v.SourceDiskBaseSHA256 = ""
+	}
 	return nil
+}
+
+// matchingLocalBase returns this host's cached copy of v's base image, after
+// checking it is byte-identical to the one the migrated delta was made against.
+func (b *Backend) matchingLocalBase(v *instance.VMSpec) (string, error) {
+	catalog, err := b.EffectiveCatalog()
+	if err != nil {
+		return "", err
+	}
+	entry, err := catalog.Find(v.ImageRef, v.Arch)
+	if err != nil {
+		return "", fmt.Errorf("vm: resolving base image of migrated disk: %w", err)
+	}
+	basePath, ok := b.Vault.CachedPath(entry)
+	if !ok {
+		return "", fmt.Errorf("vm: migrated disk needs base image %s (%s), which isn't cached here", entry.ID, entry.Arch)
+	}
+	sum, err := image.FileChecksum(basePath)
+	if err != nil {
+		return "", fmt.Errorf("vm: hashing base image %s: %w", basePath, err)
+	}
+	if sum != v.SourceDiskBaseSHA256 {
+		return "", fmt.Errorf("vm: local base image %s differs from the source's (sha256 %s, want %s)", entry.ID, sum, v.SourceDiskBaseSHA256)
+	}
+	return basePath, nil
 }
 
 // copyFile copies src to dst; used as os.Rename's cross-filesystem fallback.
@@ -192,6 +237,44 @@ func (b *Backend) ExportDisk(ctx context.Context, spec *instance.Spec, destPath 
 	cmd := exec.CommandContext(ctx, "qemu-img", "convert", "-O", "qcow2", spec.VM.DiskPath, destPath)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("vm: exporting disk: %w: %s", err, out)
+	}
+	return nil
+}
+
+// BaseImageChecksum returns the SHA256 of the base image spec's disk is an overlay on.
+func (b *Backend) BaseImageChecksum(spec *instance.Spec) (string, error) {
+	if spec.VM == nil {
+		return "", fmt.Errorf("vm: BaseImageChecksum called with a nil VMSpec")
+	}
+	backing, err := image.BackingFile(spec.VM.DiskPath)
+	if err != nil {
+		return "", fmt.Errorf("vm: inspecting %s's disk: %w", spec.Name, err)
+	}
+	if backing == "" {
+		return "", fmt.Errorf("vm: %s's disk has no base image", spec.Name)
+	}
+	return image.FileChecksum(backing)
+}
+
+// ExportDiskDelta writes only the parts of spec's disk that differ from its base
+// image to destPath. spec's VM must be stopped.
+func (b *Backend) ExportDiskDelta(ctx context.Context, spec *instance.Spec, destPath string) error {
+	if spec.VM == nil {
+		return fmt.Errorf("vm: ExportDiskDelta called with a nil VMSpec")
+	}
+	backing, err := image.BackingFile(spec.VM.DiskPath)
+	if err != nil {
+		return fmt.Errorf("vm: inspecting %s's disk: %w", spec.Name, err)
+	}
+	if backing == "" {
+		return fmt.Errorf("vm: %s's disk has no base image", spec.Name)
+	}
+	if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
+		return fmt.Errorf("vm: creating export destination dir: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, "qemu-img", "convert", "-O", "qcow2", "-B", backing, "-F", "qcow2", spec.VM.DiskPath, destPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("vm: exporting disk delta: %w: %s", err, out)
 	}
 	return nil
 }
@@ -490,6 +573,7 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		QMPSocket:     filepath.Join(dir, "qmp.sock"),
 		SerialLogPath: filepath.Join(dir, "console.log"),
 		KVM:           kvmAvailable() && qemu.HostArch() == arch,
+		Disk:          qemu.ProbeDiskTuning(ctx, v.DiskPath),
 	}
 	if v.NetworkMode == "bridge" {
 		// Attach to the intent's shared network via the backend's Networker
@@ -1022,13 +1106,37 @@ func kvmAvailable() bool {
 	return err == nil
 }
 
+// recentPorts remembers ports allocateFreePort handed out lately, so VMs started
+// in parallel never get the same port before QEMU has bound it.
+var (
+	recentPortsMu sync.Mutex
+	recentPorts   = map[int]time.Time{}
+)
+
+const recentPortTTL = time.Minute
+
 // allocateFreePort asks the OS for an ephemeral port by briefly binding
 // to port 0, reading back what was assigned, then releasing it.
 func allocateFreePort() (int, error) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return 0, err
+	recentPortsMu.Lock()
+	defer recentPortsMu.Unlock()
+	now := time.Now()
+	for p, at := range recentPorts {
+		if now.Sub(at) > recentPortTTL {
+			delete(recentPorts, p)
+		}
 	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port, nil
+	for range 16 {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return 0, err
+		}
+		port := l.Addr().(*net.TCPAddr).Port
+		l.Close()
+		if _, taken := recentPorts[port]; !taken {
+			recentPorts[port] = now
+			return port, nil
+		}
+	}
+	return 0, fmt.Errorf("vm: no free port found")
 }

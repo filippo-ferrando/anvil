@@ -30,6 +30,13 @@ func (v *Vault) preparedPath(entry DistroEntry) string {
 	return filepath.Join(v.PreparedDir, entry.ID+"-"+entry.Arch+".qcow2")
 }
 
+// CachedPath returns where entry's base image is cached, and whether it is there yet.
+func (v *Vault) CachedPath(entry DistroEntry) (string, bool) {
+	path := v.preparedPath(entry)
+	_, err := os.Stat(path)
+	return path, err == nil
+}
+
 // Ensure downloads entry's base image into the vault if not already
 // present, and returns its local path. progress is forwarded to Downloader.Fetch.
 func (v *Vault) Ensure(ctx context.Context, entry DistroEntry, progress func(status string)) (string, error) {
@@ -236,5 +243,37 @@ func (v *Vault) Delete(path string) error {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("image: deleting %s: %w", path, err)
 	}
+	_ = os.Remove(path + checksumSuffix)
 	return nil
+}
+
+// checksumSuffix names the sidecar file that caches a base image's SHA256.
+const checksumSuffix = ".sha256"
+
+// FileChecksum returns path's hex SHA256, reusing the "<path>.sha256" sidecar
+// while it is newer than path, and writing it otherwise.
+func FileChecksum(path string) (string, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	sidecar := path + checksumSuffix
+	if si, err := os.Stat(sidecar); err == nil && !si.ModTime().Before(fi.ModTime()) {
+		if data, err := os.ReadFile(sidecar); err == nil {
+			if sum := strings.TrimSpace(string(data)); len(sum) == 64 {
+				return sum, nil
+			}
+		}
+	}
+	sum, err := fileSHA256(path)
+	if err != nil {
+		return "", err
+	}
+	writeChecksumSidecar(path, sum)
+	return sum, nil
+}
+
+// writeChecksumSidecar is best effort: a missing sidecar only costs a rehash later.
+func writeChecksumSidecar(path, sum string) {
+	_ = os.WriteFile(path+checksumSuffix, []byte(sum+"\n"), 0o640)
 }

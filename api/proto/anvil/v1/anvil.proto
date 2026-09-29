@@ -29,6 +29,25 @@ service InstanceService {
 
   // Stats returns a live resource-usage snapshot for a running instance.
   rpc Stats(StatsRequest) returns (StatsReply);
+
+  // Watch streams instance changes (create, state/config change, delete) as they happen.
+  // Events are change hints: a client that falls far behind may miss some.
+  rpc Watch(WatchRequest) returns (stream WatchEvent);
+}
+
+message WatchRequest {
+  bool include_existing = 1; // first send one UPDATED event per existing instance
+}
+
+enum WatchEventType {
+  WATCH_EVENT_TYPE_UNSPECIFIED = 0;
+  WATCH_EVENT_TYPE_UPDATED = 1;
+  WATCH_EVENT_TYPE_DELETED = 2;
+}
+
+message WatchEvent {
+  WatchEventType type = 1;
+  Instance instance = 2; // for DELETED only id, name and kind are set
 }
 
 message AddPortRequest {
@@ -128,6 +147,10 @@ message VMSpec {
 
   // Set only when relaunching a migrated instance: adopts this disk directly, skipping cloud-init.
   string source_disk_path = 18;
+
+  // Set with source_disk_path when that disk is only a delta on top of the base image with
+  // this SHA256; the daemon rebases it onto its own identical copy of that base.
+  string source_disk_base_sha256 = 19;
 }
 
 // Mount is one host directory shared into a VM's guest over 9p.
@@ -413,6 +436,20 @@ service ImageService {
   // (Docker today), separate from the VM image cache above.
   rpc ListContainerImages(ContainerImageListRequest) returns (ContainerImageListReply);
   rpc DeleteContainerImage(ContainerImageDeleteRequest) returns (ContainerImageDeleteReply);
+
+  // Checksum returns the SHA256 of a cached base image, without downloading it.
+  // Migration uses it to decide if only a disk delta needs to be sent.
+  rpc Checksum(ImageChecksumRequest) returns (ImageChecksumReply);
+}
+
+message ImageChecksumRequest {
+  string id = 1;   // catalog id, e.g. "ubuntu-24.04"
+  string arch = 2; // defaults to "x86_64"
+}
+
+message ImageChecksumReply {
+  bool cached = 1;    // false if this host has no copy of the image yet
+  string sha256 = 2;  // hex, set when cached is true
 }
 
 message CachedImage {

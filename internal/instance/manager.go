@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -14,10 +15,12 @@ import (
 type Manager struct {
 	registry Registry
 	backends map[Kind]Backend
+	events   *broadcaster
 }
 
 func NewManager(registry Registry, backends map[Kind]Backend) *Manager {
-	return &Manager{registry: registry, backends: backends}
+	events := &broadcaster{}
+	return &Manager{registry: notifyingRegistry{Registry: registry, events: events}, backends: backends, events: events}
 }
 
 // Reconcile re-derives the live state of every running/starting instance from its backend.
@@ -268,6 +271,7 @@ func cloneVMSpecForFork(v *VMSpec) *VMSpec {
 	clone.DNSServers = nil
 	clone.DNSSearch = nil
 	clone.SourceDiskPath = ""
+	clone.SourceDiskBaseSHA256 = ""
 	return &clone
 }
 
@@ -474,12 +478,34 @@ func (m *Manager) ListSnapshots(ctx context.Context, name string) ([]Snapshot, e
 	return sn.ListSnapshots(ctx, spec)
 }
 
+// maxParallelOps caps how many instances Start/Stop drive at the same time.
+const maxParallelOps = 4
+
+// forEachParallel runs fn on every spec with at most maxParallelOps at once.
+// Every spec is attempted even if an earlier one fails; errors are joined.
+func forEachParallel(specs []*Spec, fn func(*Spec) error) error {
+	errs := make([]error, len(specs))
+	sem := make(chan struct{}, maxParallelOps)
+	var wg sync.WaitGroup
+	for i, spec := range specs {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			errs[i] = fn(spec)
+		}()
+	}
+	wg.Wait()
+	return errors.Join(errs...)
+}
+
 func (m *Manager) Start(ctx context.Context, names []string) error {
 	specs, err := m.resolve(names)
 	if err != nil {
 		return err
 	}
-	for _, spec := range specs {
+	return forEachParallel(specs, func(spec *Spec) error {
 		b, err := m.backendFor(spec.Kind)
 		if err != nil {
 			return err
@@ -488,11 +514,8 @@ func (m *Manager) Start(ctx context.Context, names []string) error {
 			return fmt.Errorf("instance: starting %s: %w", spec.Name, err)
 		}
 		spec.State = StateRunning
-		if err := m.registry.PutInstance(spec); err != nil {
-			return err
-		}
-	}
-	return nil
+		return m.registry.PutInstance(spec)
+	})
 }
 
 func (m *Manager) Stop(ctx context.Context, names []string, force bool, timeout time.Duration) error {
@@ -500,7 +523,7 @@ func (m *Manager) Stop(ctx context.Context, names []string, force bool, timeout 
 	if err != nil {
 		return err
 	}
-	for _, spec := range specs {
+	return forEachParallel(specs, func(spec *Spec) error {
 		b, err := m.backendFor(spec.Kind)
 		if err != nil {
 			return err
@@ -509,11 +532,8 @@ func (m *Manager) Stop(ctx context.Context, names []string, force bool, timeout 
 			return fmt.Errorf("instance: stopping %s: %w", spec.Name, err)
 		}
 		spec.State = StateStopped
-		if err := m.registry.PutInstance(spec); err != nil {
-			return err
-		}
-	}
-	return nil
+		return m.registry.PutInstance(spec)
+	})
 }
 
 // Delete tears down each named instance's backend resources, keeping the

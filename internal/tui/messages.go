@@ -6,6 +6,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -155,6 +156,39 @@ type cloudInitImportStreamMsg struct {
 	result *anvilv1.CloudInitImportResult
 	err    error
 	done   bool
+}
+
+const (
+	watchReloadDelay   = 200 * time.Millisecond
+	watchRetryInterval = 5 * time.Second
+)
+
+// watchEventMsg is one event off InstanceService.Watch; err is set once the stream broke.
+type watchEventMsg struct {
+	stream anvilv1.InstanceService_WatchClient
+	err    error
+}
+
+type watchRetryMsg struct{}
+
+// watchReloadMsg asks the active screen to reload after a burst of Watch events.
+type watchReloadMsg struct{}
+
+func startWatch(c *client.Client) tea.Cmd {
+	return func() tea.Msg {
+		stream, err := c.Watch(context.Background(), &anvilv1.WatchRequest{})
+		if err != nil {
+			return watchEventMsg{err: err}
+		}
+		return recvWatch(stream)()
+	}
+}
+
+func recvWatch(stream anvilv1.InstanceService_WatchClient) tea.Cmd {
+	return func() tea.Msg {
+		_, err := stream.Recv()
+		return watchEventMsg{stream: stream, err: err}
+	}
 }
 
 func loadInstances(c *client.Client) tea.Cmd {

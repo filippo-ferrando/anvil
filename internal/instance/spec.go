@@ -92,6 +92,10 @@ type VMSpec struct {
 	// SourceDiskPath, if set, makes Create adopt this disk directly instead
 	// of resolving the image catalog (used by migration).
 	SourceDiskPath string
+
+	// SourceDiskBaseSHA256, if set, marks SourceDiskPath as a delta on top of
+	// the base image with this checksum, to be rebased onto the local copy.
+	SourceDiskBaseSHA256 string
 }
 
 // Mount is one host directory shared into the guest over 9p.

@@ -177,3 +177,40 @@ func (s *Server) Stats(ctx context.Context, req *anvilv1.StatsRequest) (*anvilv1
 	}
 	return &anvilv1.StatsReply{Stats: statsToPB(stats)}, nil
 }
+
+func (s *Server) Watch(req *anvilv1.WatchRequest, stream anvilv1.InstanceService_WatchServer) error {
+	// Subscribe before listing, so no change between the two is lost.
+	events, cancel := s.Manager.Subscribe()
+	defer cancel()
+
+	if req.GetIncludeExisting() {
+		specs, err := s.Manager.List("")
+		if err != nil {
+			return err
+		}
+		for _, spec := range specs {
+			if err := stream.Send(&anvilv1.WatchEvent{Type: anvilv1.WatchEventType_WATCH_EVENT_TYPE_UPDATED, Instance: specToPB(spec)}); err != nil {
+				return err
+			}
+		}
+	}
+
+	for {
+		select {
+		case <-stream.Context().Done():
+			return nil
+		case ev := <-events:
+			if err := stream.Send(watchEventToPB(ev)); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func watchEventToPB(ev instance.Event) *anvilv1.WatchEvent {
+	t := anvilv1.WatchEventType_WATCH_EVENT_TYPE_UPDATED
+	if ev.Type == instance.EventDeleted {
+		t = anvilv1.WatchEventType_WATCH_EVENT_TYPE_DELETED
+	}
+	return &anvilv1.WatchEvent{Type: t, Instance: specToPB(ev.Spec)}
+}

@@ -55,17 +55,18 @@ func vmSpecFromPB(v *anvilv1.VMSpec) *instance.VMSpec {
 		return nil
 	}
 	spec := &instance.VMSpec{
-		ImageRef:          v.GetImageRef(),
-		Arch:              v.GetArch(),
-		CPUs:              int(v.GetCpus()),
-		MemoryMiB:         v.GetMemoryMib(),
-		DiskGiB:           v.GetDiskGib(),
-		CloudInitUserData: v.GetCloudInitUserData(),
-		CloudInitName:     v.GetCloudInitName(),
-		NetworkMode:       v.GetNetworkMode(),
-		SSHPublicKeys:     v.GetSshPublicKeys(),
-		DefaultUser:       v.GetDefaultUser(),
-		SourceDiskPath:    v.GetSourceDiskPath(),
+		ImageRef:             v.GetImageRef(),
+		Arch:                 v.GetArch(),
+		CPUs:                 int(v.GetCpus()),
+		MemoryMiB:            v.GetMemoryMib(),
+		DiskGiB:              v.GetDiskGib(),
+		CloudInitUserData:    v.GetCloudInitUserData(),
+		CloudInitName:        v.GetCloudInitName(),
+		NetworkMode:          v.GetNetworkMode(),
+		SSHPublicKeys:        v.GetSshPublicKeys(),
+		DefaultUser:          v.GetDefaultUser(),
+		SourceDiskPath:       v.GetSourceDiskPath(),
+		SourceDiskBaseSHA256: v.GetSourceDiskBaseSha256(),
 	}
 	for _, p := range v.GetPorts() {
 		spec.Ports = append(spec.Ports, instance.PortMapping{
@@ -82,22 +83,23 @@ func vmSpecToPB(v *instance.VMSpec) *anvilv1.VMSpec {
 		return nil
 	}
 	pb := &anvilv1.VMSpec{
-		ImageRef:          v.ImageRef,
-		Arch:              v.Arch,
-		Cpus:              int32(v.CPUs),
-		MemoryMib:         v.MemoryMiB,
-		DiskGib:           v.DiskGiB,
-		CloudInitUserData: v.CloudInitUserData,
-		CloudInitName:     v.CloudInitName,
-		NetworkMode:       v.NetworkMode,
-		SshPublicKeys:     v.SSHPublicKeys,
-		SshPort:           int32(v.SSHPort),
-		DefaultUser:       v.DefaultUser,
-		BridgeInterface:   v.BridgeInterface,
-		StaticIp:          v.StaticIP,
-		Gateway:           v.Gateway,
-		ExtraHosts:        v.ExtraHosts,
-		SourceDiskPath:    v.SourceDiskPath,
+		ImageRef:             v.ImageRef,
+		Arch:                 v.Arch,
+		Cpus:                 int32(v.CPUs),
+		MemoryMib:            v.MemoryMiB,
+		DiskGib:              v.DiskGiB,
+		CloudInitUserData:    v.CloudInitUserData,
+		CloudInitName:        v.CloudInitName,
+		NetworkMode:          v.NetworkMode,
+		SshPublicKeys:        v.SSHPublicKeys,
+		SshPort:              int32(v.SSHPort),
+		DefaultUser:          v.DefaultUser,
+		BridgeInterface:      v.BridgeInterface,
+		StaticIp:             v.StaticIP,
+		Gateway:              v.Gateway,
+		ExtraHosts:           v.ExtraHosts,
+		SourceDiskPath:       v.SourceDiskPath,
+		SourceDiskBaseSha256: v.SourceDiskBaseSHA256,
 	}
 	for _, m := range v.Mounts {
 		pb.Mounts = append(pb.Mounts, &anvilv1.Mount{

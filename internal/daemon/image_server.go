@@ -171,3 +171,25 @@ func samePath(a, b string) bool {
 	}
 	return ra == rb
 }
+
+func (s *ImageServer) Checksum(ctx context.Context, req *anvilv1.ImageChecksumRequest) (*anvilv1.ImageChecksumReply, error) {
+	arch := req.GetArch()
+	if arch == "" {
+		arch = "x86_64"
+	}
+	cached, err := s.Vault.List()
+	if err != nil {
+		return nil, err
+	}
+	for _, img := range cached {
+		if img.ID != req.GetId() || img.Arch != arch {
+			continue
+		}
+		sum, err := image.FileChecksum(img.Path)
+		if err != nil {
+			return nil, fmt.Errorf("image: hashing %s: %w", img.Path, err)
+		}
+		return &anvilv1.ImageChecksumReply{Cached: true, Sha256: sum}, nil
+	}
+	return &anvilv1.ImageChecksumReply{}, nil
+}

@@ -17,7 +17,7 @@ func newImageCommand(flags *globalFlags) *cobra.Command {
 	}
 	cmd.AddCommand(
 		newImageListCommand(flags), newImageDeleteCommand(flags),
-		newImageContainersCommand(flags),
+		newImageChecksumCommand(flags), newImageContainersCommand(flags),
 	)
 	return cmd
 }
@@ -80,6 +80,35 @@ func newImageDeleteCommand(flags *globalFlags) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&arch, "arch", "", "architecture, if the id is ambiguous across more than one")
 	cmd.Flags().BoolVar(&force, "force", false, "delete even if an instance's disk still depends on it (this will break that instance)")
+	return cmd
+}
+
+func newImageChecksumCommand(flags *globalFlags) *cobra.Command {
+	var arch string
+	cmd := &cobra.Command{
+		Use:   "checksum <id>",
+		Short: "Print the SHA256 of a cached VM base image",
+		Long: "Print the SHA256 of a cached VM base image. Fails if the image isn't cached " +
+			"on this host; it is never downloaded by this command.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := dial(flags)
+			if err != nil {
+				return err
+			}
+			defer c.Close()
+			reply, err := c.Image.Checksum(cmd.Context(), &anvilv1.ImageChecksumRequest{Id: args[0], Arch: arch})
+			if err != nil {
+				return err
+			}
+			if !reply.GetCached() {
+				return fmt.Errorf("image %q is not cached on this host", args[0])
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), reply.GetSha256())
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&arch, "arch", "", "image architecture (default x86_64)")
 	return cmd
 }
 

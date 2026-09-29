@@ -25,6 +25,7 @@ type Config struct {
 	QMPSocket     string
 	SerialLogPath string // guest console captured here; empty discards it
 	KVM           bool   // false falls back to -accel tcg
+	Disk          DiskTuning
 
 	// Networking: exactly one of these is expected to be set by the caller.
 	SLIRPHostForwards []HostForward // -netdev user,hostfwd=...
@@ -197,13 +198,18 @@ func BuildArgs(cfg Config) ([]string, error) {
 		args = append(args, "-cpu", "max")
 	}
 
+	// The main disk gets its own iothread so disk I/O doesn't wait on the main QEMU loop.
+	// discard/detect-zeroes let guest TRIM (fstrim) shrink the qcow2 file again.
 	args = append(args,
-		"-drive", fmt.Sprintf("if=virtio,file=%s,format=qcow2", cfg.DiskPath),
+		"-object", "iothread,id=io0",
+		"-drive", fmt.Sprintf("if=none,id=disk0,file=%s,format=qcow2,discard=unmap,detect-zeroes=unmap%s", cfg.DiskPath, cfg.Disk.driveOpts()),
+		"-device", "virtio-blk-pci,drive=disk0,iothread=io0",
 	)
 
 	if cfg.SeedISOPath != "" {
 		args = append(args,
-			"-drive", fmt.Sprintf("if=virtio,file=%s,format=raw,readonly=on", cfg.SeedISOPath),
+			"-drive", fmt.Sprintf("if=none,id=seed0,file=%s,format=raw,readonly=on", cfg.SeedISOPath),
+			"-device", "virtio-blk-pci,drive=seed0",
 		)
 	}
 
@@ -214,6 +220,14 @@ func BuildArgs(cfg Config) ([]string, error) {
 	args = append(args, netdevArgs...)
 
 	args = append(args, buildMounts(cfg.Mounts)...)
+
+	// virtio-rng avoids a stalled first boot waiting on guest entropy; the balloon's
+	// free page reporting hands memory the guest has freed back to the host.
+	args = append(args,
+		"-object", "rng-random,id=rng0,filename=/dev/urandom",
+		"-device", "virtio-rng-pci,rng=rng0",
+		"-device", "virtio-balloon-pci,free-page-reporting=on",
+	)
 
 	return args, nil
 }

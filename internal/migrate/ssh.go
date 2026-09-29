@@ -5,11 +5,9 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/anvil-project/anvil/internal/config"
 )
@@ -70,57 +68,6 @@ func commonArgs(t target, portFlag string) []string {
 	return args
 }
 
-// scpUpload copies localPath to t's remotePath, sending progress a
-// heartbeat status line every 5 seconds while the transfer runs.
-func scpUpload(ctx context.Context, t target, localPath, remotePath string, progress func(status string)) error {
-	scpBin, err := exec.LookPath("scp")
-	if err != nil {
-		return fmt.Errorf("migrate: scp not found on PATH")
-	}
-	var sizeNote string
-	if info, err := os.Stat(localPath); err == nil {
-		sizeNote = fmt.Sprintf(" (%s)", humanBytes(info.Size()))
-	}
-
-	if progress != nil {
-		progress("uploading disk to target" + sizeNote)
-	}
-
-	args := commonArgs(t, "-P")
-	args = append(args, localPath, fmt.Sprintf("%s@%s:%s", t.User, t.Host, remotePath))
-
-	var stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, scpBin, args...)
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("migrate: scp to %s@%s: %w", t.User, t.Host, err)
-	}
-
-	done := make(chan struct{})
-	if progress != nil {
-		go func() {
-			ticker := time.NewTicker(5 * time.Second)
-			defer ticker.Stop()
-			start := time.Now()
-			for {
-				select {
-				case <-done:
-					return
-				case <-ticker.C:
-					progress(fmt.Sprintf("uploading disk to target%s: still running after %s",
-						sizeNote, time.Since(start).Round(time.Second)))
-				}
-			}
-		}()
-	}
-	err = cmd.Wait()
-	close(done)
-	if err != nil {
-		return fmt.Errorf("migrate: scp to %s@%s: %w: %s", t.User, t.Host, err, stderr.String())
-	}
-	return nil
-}
-
 // humanBytes renders n as a short, human-readable size (KiB/MiB/...).
 func humanBytes(n int64) string {
 	const unit = 1024
@@ -135,18 +82,26 @@ func humanBytes(n int64) string {
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
-// sshRun runs remoteCommand on t, piping stdin to it and returning
-// everything it wrote to stdout.
-func sshRun(ctx context.Context, t target, remoteCommand string, stdin io.Reader) (string, error) {
+// sshCommand builds the ssh invocation running remoteCommand on t. A variable
+// so tests can run the remote side locally instead.
+var sshCommand = func(ctx context.Context, t target, remoteCommand string) (*exec.Cmd, error) {
 	sshBin, err := exec.LookPath("ssh")
 	if err != nil {
-		return "", fmt.Errorf("migrate: ssh not found on PATH")
+		return nil, fmt.Errorf("migrate: ssh not found on PATH")
 	}
 	args := commonArgs(t, "-p")
 	args = append(args, fmt.Sprintf("%s@%s", t.User, t.Host), remoteCommand)
+	return exec.CommandContext(ctx, sshBin, args...), nil
+}
 
+// sshRun runs remoteCommand on t, piping stdin to it and returning
+// everything it wrote to stdout.
+func sshRun(ctx context.Context, t target, remoteCommand string, stdin io.Reader) (string, error) {
+	cmd, err := sshCommand(ctx, t, remoteCommand)
+	if err != nil {
+		return "", err
+	}
 	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, sshBin, args...)
 	cmd.Stdin = stdin
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -154,4 +109,14 @@ func sshRun(ctx context.Context, t target, remoteCommand string, stdin io.Reader
 		return stdout.String(), fmt.Errorf("migrate: ssh to %s@%s: %w: %s", t.User, t.Host, err, stderr.String())
 	}
 	return stdout.String(), nil
+}
+
+// shQuote single-quotes s for a POSIX shell.
+func shQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+}
+
+// remoteSh wraps script so it runs under sh, whatever the remote user's login shell is.
+func remoteSh(script string) string {
+	return "sh -c " + shQuote(script)
 }

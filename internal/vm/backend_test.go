@@ -303,3 +303,17 @@ func TestBridgeNetworkConfigNameservers(t *testing.T) {
 		t.Error("expected no nameservers block without DNS servers")
 	}
 }
+
+func TestAllocateFreePortUniqueAcrossCalls(t *testing.T) {
+	seen := map[int]bool{}
+	for range 50 {
+		p, err := allocateFreePort()
+		if err != nil {
+			t.Fatalf("allocateFreePort: %v", err)
+		}
+		if seen[p] {
+			t.Fatalf("port %d handed out twice", p)
+		}
+		seen[p] = true
+	}
+}
