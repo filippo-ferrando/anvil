@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"io"
+	"strings"
 	"text/tabwriter"
 
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
@@ -65,10 +66,39 @@ func humanBytes(n int64) string {
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
+// instanceIP returns inst's main address for display: a bridged VM's static IP
+// (reachable from the host), else the guest agent's first report, else "-".
+func instanceIP(inst *anvilv1.Instance) string {
+	if ip := inst.GetVm().GetStaticIp(); ip != "" {
+		ip, _, _ = strings.Cut(ip, "/")
+		return ip
+	}
+	if ips := inst.GetGuest().GetIpAddresses(); len(ips) > 0 {
+		ip, _, _ := strings.Cut(ips[0], "/")
+		return ip
+	}
+	return "-"
+}
+
+func cloudInitLabel(s anvilv1.CloudInitStatus) string {
+	switch s {
+	case anvilv1.CloudInitStatus_CLOUD_INIT_STATUS_RUNNING:
+		return "running"
+	case anvilv1.CloudInitStatus_CLOUD_INIT_STATUS_DONE:
+		return "done"
+	case anvilv1.CloudInitStatus_CLOUD_INIT_STATUS_ERROR:
+		return "error"
+	case anvilv1.CloudInitStatus_CLOUD_INIT_STATUS_DISABLED:
+		return "disabled"
+	default:
+		return "unknown"
+	}
+}
+
 // printInstanceTable prints instances as a tab-aligned table to w.
 func printInstanceTable(w io.Writer, instances []*anvilv1.Instance) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tKIND\tENGINE\tSTATE\tIMAGE")
+	fmt.Fprintln(tw, "NAME\tKIND\tENGINE\tSTATE\tIP\tIMAGE")
 	for _, inst := range instances {
 		image := ""
 		engine := "-"
@@ -78,7 +108,7 @@ func printInstanceTable(w io.Writer, instances []*anvilv1.Instance) {
 			image = c.GetImageRef()
 			engine = engineLabel(c.GetEngine())
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", inst.GetName(), kindLabel(inst.GetKind()), engine, stateLabel(inst.GetState()), image)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", inst.GetName(), kindLabel(inst.GetKind()), engine, stateLabel(inst.GetState()), instanceIP(inst), image)
 	}
 	tw.Flush()
 }

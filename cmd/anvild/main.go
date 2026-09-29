@@ -68,6 +68,8 @@ func run() error {
 
 	// db satisfies container.Source, used to resolve container mirrors at pull time.
 	dockerBackend := container.NewDockerBackend(docker.DefaultSocket, db)
+	dockerBackend.Registry = db // maps Docker's exit events back to instances
+	defer dockerBackend.Close()
 	containerBackend := container.NewBackend(dockerBackend)
 
 	// A separate docker.Client instance from the one inside dockerBackend.

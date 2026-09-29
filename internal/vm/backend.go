@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -24,7 +25,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/anvil-project/anvil/internal/config"
-	"github.com/anvil-project/anvil/internal/hostpath"
 	"github.com/anvil-project/anvil/internal/instance"
 	"github.com/anvil-project/anvil/internal/store"
 	"github.com/anvil-project/anvil/internal/vm/cloudinit"
@@ -51,6 +51,15 @@ type Backend struct {
 	mu       sync.Mutex
 	running  map[string]*qemu.Process // instance ID -> live process
 	starting map[string]struct{}      // instance ID -> in-progress Start call
+
+	guestMu   sync.Mutex
+	guests    map[string]*guestState // instance ID -> guest agent poller and last report
+	guestHook func(instanceID string)
+
+	// Guarded by mu, like running.
+	virtiofs map[string]map[string]*qemu.Virtiofsd // instance ID -> mount tag -> its virtiofsd
+	stopping map[string]struct{}                   // instance ID -> Stop in progress, so its exit isn't reported
+	exitHook func(instanceID string, state instance.State)
 }
 
 var (
@@ -70,6 +79,9 @@ func NewBackend(catalog *image.Catalog, vault *image.Vault, source Source) *Back
 		Networker: network.LinuxBridge{},
 		running:   make(map[string]*qemu.Process),
 		starting:  make(map[string]struct{}),
+		guests:    make(map[string]*guestState),
+		virtiofs:  make(map[string]map[string]*qemu.Virtiofsd),
+		stopping:  make(map[string]struct{}),
 	}
 }
 
@@ -511,13 +523,19 @@ func (b *Backend) buildSeed(spec *instance.Spec) error {
 	if err != nil {
 		return fmt.Errorf("vm: preparing cloud-init user-data: %w", err)
 	}
-	userData, err = mergeMounts(userData, v.Mounts)
+	userData, err = mergeMounts(userData, v.Mounts, v.Generation)
 	if err != nil {
 		return fmt.Errorf("vm: preparing cloud-init user-data: %w", err)
 	}
 	userData, err = mergeExtraHosts(userData, v.ExtraHosts)
 	if err != nil {
 		return fmt.Errorf("vm: preparing cloud-init user-data: %w", err)
+	}
+	if !v.NoGuestAgent {
+		userData, err = mergeGuestAgent(userData)
+		if err != nil {
+			return fmt.Errorf("vm: preparing cloud-init user-data: %w", err)
+		}
 	}
 
 	// Bumping Generation into instance-id forces cloud-init to treat a
@@ -562,6 +580,9 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 	if arch == "" {
 		arch = "x86_64"
 	}
+	if err := b.upgradeLegacyMounts(spec); err != nil {
+		return err
+	}
 
 	dir := config.InstanceDir(spec.ID)
 	cfg := qemu.Config{
@@ -574,6 +595,8 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		SerialLogPath: filepath.Join(dir, "console.log"),
 		KVM:           kvmAvailable() && qemu.HostArch() == arch,
 		Disk:          qemu.ProbeDiskTuning(ctx, v.DiskPath),
+
+		GuestAgentSocket: guestAgentSocket(spec.ID),
 	}
 	if v.NetworkMode == "bridge" {
 		// Attach to the intent's shared network via the backend's Networker
@@ -605,12 +628,18 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		v.SSHPort = sshPort
 	}
 
-	for _, m := range v.Mounts {
-		cfg.Mounts = append(cfg.Mounts, qemu.Mount{HostPath: m.HostPath, Tag: m.Tag, ReadOnly: m.ReadOnly})
+	mounts, err := b.startVirtiofsds(spec)
+	if err != nil {
+		if cfg.BridgeTapDevice != "" {
+			_ = b.Networker.Detach(spec.ID)
+		}
+		return err
 	}
+	cfg.Mounts = mounts
 
 	proc, err := qemu.Spawn(ctx, cfg, filepath.Join(dir, "qemu.log"))
 	if err != nil {
+		b.killVirtiofsds(spec.ID)
 		if cfg.BridgeTapDevice != "" {
 			_ = b.Networker.Detach(spec.ID)
 		}
@@ -618,6 +647,7 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 	}
 	if err := proc.AttachQMP(ctx); err != nil {
 		_ = proc.Stop(ctx, 0)
+		b.killVirtiofsds(spec.ID)
 		if cfg.BridgeTapDevice != "" {
 			_ = b.Networker.Detach(spec.ID)
 		}
@@ -630,39 +660,58 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 	b.mu.Lock()
 	b.running[spec.ID] = proc
 	b.mu.Unlock()
+	b.watchGuest(spec, proc)
+	go b.watchExit(spec.ID, v.NetworkMode, proc)
 	return nil
 }
+
+// minACPITimeout is how long ACPI still gets after a guest agent shutdown request ran out of time.
+const minACPITimeout = 5 * time.Second
 
 func (b *Backend) Stop(ctx context.Context, spec *instance.Spec, force bool, timeout time.Duration) error {
 	dir := config.InstanceDir(spec.ID)
 
 	b.mu.Lock()
 	proc, ok := b.running[spec.ID]
+	if ok {
+		b.stopping[spec.ID] = struct{}{}
+	}
 	b.mu.Unlock()
 	if !ok {
 		// Not tracked as running in this daemon process.
 		removeRuntimeState(dir)
 		return nil
 	}
+	defer func() {
+		b.mu.Lock()
+		delete(b.stopping, spec.ID)
+		b.mu.Unlock()
+	}()
 
-	stopTimeout := timeout
-	if force {
-		stopTimeout = 0
-	}
-	stopErr := proc.Stop(ctx, stopTimeout)
-	// Clean up unconditionally: the process is gone by now either way.
-	_ = proc.Close()
-	if spec.VM != nil && spec.VM.NetworkMode == "bridge" {
-		// Best-effort cleanup; not worth failing Stop over.
-		if err := b.Networker.Detach(spec.ID); err != nil {
-			log.Printf("vm: failed to detach network device for %s: %v", spec.ID, err)
+	guest, _ := b.GuestInfo(spec)
+	b.unwatchGuest(spec.ID)
+
+	// A connected guest agent is tried before ACPI: it doesn't depend on the guest
+	// handling the power button event. ACPI and then a hard stop remain as fallbacks.
+	var stopErr error
+	start := time.Now()
+	graceful := !force && timeout > 0
+	if !graceful || !guest.AgentConnected || !b.agentShutdown(ctx, spec.ID, proc, timeout) {
+		stopTimeout := timeout - time.Since(start)
+		if stopTimeout < minACPITimeout && timeout >= minACPITimeout {
+			stopTimeout = minACPITimeout
 		}
+		if !graceful {
+			stopTimeout = 0
+		}
+		stopErr = proc.Stop(ctx, stopTimeout)
 	}
-	removeRuntimeState(dir)
-
-	b.mu.Lock()
-	delete(b.running, spec.ID)
-	b.mu.Unlock()
+	// Clean up unconditionally: the process is gone by now either way.
+	networkMode := ""
+	if spec.VM != nil {
+		networkMode = spec.VM.NetworkMode
+	}
+	b.releaseStopped(spec.ID, networkMode, proc)
 
 	if stopErr != nil {
 		return fmt.Errorf("vm: stopping instance %s: %w", spec.ID, stopErr)
@@ -701,6 +750,8 @@ func (b *Backend) Reconcile(ctx context.Context, spec *instance.Spec) (instance.
 		// The process is alive but uncontrollable over QMP; report it as an error state.
 		return instance.StateError, fmt.Errorf("vm: reconciled pid %d is alive but QMP is unreachable at %s: %w", rt.Pid, rt.QMPSocket, err)
 	}
+	b.watchGuest(spec, proc)
+	go b.watchExit(spec.ID, spec.VM.NetworkMode, proc)
 	return instance.StateRunning, nil
 }
 
@@ -789,63 +840,6 @@ func (b *Backend) Logs(ctx context.Context, spec *instance.Spec, follow bool, ta
 	}
 }
 
-// Mount shares hostPath into spec's guest at guestPath over 9p, adding a
-// new mount and rebuilding the cloud-init seed.
-func (b *Backend) Mount(ctx context.Context, spec *instance.Spec, hostPath, guestPath string, readOnly bool) error {
-	if spec.VM == nil {
-		return fmt.Errorf("vm: Mount called with a nil VMSpec")
-	}
-	v := spec.VM
-
-	for _, m := range v.Mounts {
-		if m.GuestPath == guestPath {
-			return fmt.Errorf("vm: %s already has a mount at %s", spec.Name, guestPath)
-		}
-	}
-	if info, err := os.Stat(hostPath); err != nil {
-		if os.IsPermission(err) {
-			return fmt.Errorf("vm: host path %s: %w%s", hostPath, err, hostpath.Hint(hostPath))
-		}
-		return fmt.Errorf("vm: host path %s: %w", hostPath, err)
-	} else if !info.IsDir() {
-		return fmt.Errorf("vm: host path %s is not a directory", hostPath)
-	}
-
-	tag := fmt.Sprintf("mount%d", v.NextMountIndex)
-	v.NextMountIndex++
-	v.Mounts = append(v.Mounts, instance.Mount{
-		HostPath:  hostPath,
-		GuestPath: guestPath,
-		Tag:       tag,
-		ReadOnly:  readOnly,
-	})
-
-	return b.reconfigureAndRestartIfRunning(ctx, spec)
-}
-
-// Umount removes a mount previously added with Mount, identified by its
-// guest path.
-func (b *Backend) Umount(ctx context.Context, spec *instance.Spec, guestPath string) error {
-	if spec.VM == nil {
-		return fmt.Errorf("vm: Umount called with a nil VMSpec")
-	}
-	v := spec.VM
-
-	idx := -1
-	for i, m := range v.Mounts {
-		if m.GuestPath == guestPath {
-			idx = i
-			break
-		}
-	}
-	if idx == -1 {
-		return fmt.Errorf("vm: %s has no mount at %s", spec.Name, guestPath)
-	}
-	v.Mounts = append(v.Mounts[:idx], v.Mounts[idx+1:]...)
-
-	return b.reconfigureAndRestartIfRunning(ctx, spec)
-}
-
 // portProtocol normalizes an empty protocol to "tcp", matching how
 // instance.PortMapping.Protocol is treated everywhere else it's consumed.
 func portProtocol(p string) string {
@@ -923,6 +917,7 @@ func (b *Backend) RemovePort(ctx context.Context, spec *instance.Spec, hostPort 
 // the instance is running, restarts QEMU to pick up the mount change.
 func (b *Backend) reconfigureAndRestartIfRunning(ctx context.Context, spec *instance.Spec) error {
 	spec.VM.Generation++
+	spec.VM.MountFS = mountFSVirtiofs // the rebuilt seed rewrites the guest's fstab for virtiofs
 	if err := b.buildSeed(spec); err != nil {
 		return err
 	}
@@ -990,47 +985,6 @@ func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// mergeMounts adds mounts' fstab-shaped entries to existing's top-level
-// "mounts" list, plus a bootcmd per mount to create its mountpoint first.
-func mergeMounts(existing string, mounts []instance.Mount) (string, error) {
-	if len(mounts) == 0 {
-		return existing, nil
-	}
-
-	body := strings.TrimPrefix(existing, "#cloud-config\n")
-	doc := map[string]any{}
-	if strings.TrimSpace(body) != "" {
-		if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
-			return "", fmt.Errorf("parsing existing cloud-init user-data: %w", err)
-		}
-	}
-	if doc == nil {
-		doc = map[string]any{}
-	}
-
-	existingMounts, _ := doc["mounts"].([]any)
-	existingBootcmd, _ := doc["bootcmd"].([]any)
-	var newBootcmd []any
-	for _, m := range mounts {
-		rw := "rw"
-		if m.ReadOnly {
-			rw = "ro"
-		}
-		// nofail avoids hanging boot on a removed 9p device.
-		opts := fmt.Sprintf("trans=virtio,version=9p2000.L,%s,nofail", rw)
-		existingMounts = append(existingMounts, []any{m.Tag, m.GuestPath, "9p", opts, "0", "0"})
-		newBootcmd = append(newBootcmd, fmt.Sprintf("mkdir -p %s", shQuote(m.GuestPath)))
-	}
-	doc["mounts"] = existingMounts
-	doc["bootcmd"] = append(newBootcmd, existingBootcmd...)
-
-	out, err := yaml.Marshal(doc)
-	if err != nil {
-		return "", fmt.Errorf("re-encoding cloud-init user-data: %w", err)
-	}
-	return "#cloud-config\n" + string(out), nil
-}
-
 // mergeExtraHosts adds one /etc/hosts entry per host via idempotent
 // bootcmd lines, sorted by name for deterministic output.
 func mergeExtraHosts(existing string, hosts map[string]string) (string, error) {
@@ -1061,6 +1015,65 @@ func mergeExtraHosts(existing string, hosts map[string]string) (string, error) {
 		existingBootcmd = append(existingBootcmd, fmt.Sprintf(`grep -qxF %s /etc/hosts || echo %s >> /etc/hosts`, quoted, quoted))
 	}
 	doc["bootcmd"] = existingBootcmd
+
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return "", fmt.Errorf("re-encoding cloud-init user-data: %w", err)
+	}
+	return "#cloud-config\n" + string(out), nil
+}
+
+// parseCloudConfig decodes a "#cloud-config" user-data document; empty input gives an empty map.
+func parseCloudConfig(userData string) (map[string]any, error) {
+	body := strings.TrimPrefix(userData, "#cloud-config\n")
+	doc := map[string]any{}
+	if strings.TrimSpace(body) != "" {
+		if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
+			return nil, fmt.Errorf("parsing existing cloud-init user-data: %w", err)
+		}
+	}
+	if doc == nil {
+		doc = map[string]any{}
+	}
+	return doc, nil
+}
+
+func encodeCloudConfig(doc map[string]any) (string, error) {
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return "", fmt.Errorf("re-encoding cloud-init user-data: %w", err)
+	}
+	return "#cloud-config\n" + string(out), nil
+}
+
+// guestAgentPackage is the qemu-guest-agent package name, the same on every catalog distro.
+const guestAgentPackage = "qemu-guest-agent"
+
+// guestAgentStartCmd starts the agent right after install: the udev rule that normally starts it
+// only fires on boot. The OpenRC branch covers Alpine.
+const guestAgentStartCmd = "(systemctl enable qemu-guest-agent 2>/dev/null; systemctl start qemu-guest-agent) || " +
+	"(rc-update add qemu-guest-agent default && rc-service qemu-guest-agent start) || true"
+
+// mergeGuestAgent adds qemu-guest-agent to existing's "packages" and a runcmd that starts it.
+func mergeGuestAgent(existing string) (string, error) {
+	body := strings.TrimPrefix(existing, "#cloud-config\n")
+	doc := map[string]any{}
+	if strings.TrimSpace(body) != "" {
+		if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
+			return "", fmt.Errorf("parsing existing cloud-init user-data: %w", err)
+		}
+	}
+	if doc == nil {
+		doc = map[string]any{}
+	}
+
+	packages, _ := doc["packages"].([]any)
+	if !slices.Contains(packages, any(guestAgentPackage)) {
+		packages = append(packages, guestAgentPackage)
+	}
+	doc["packages"] = packages
+	runcmd, _ := doc["runcmd"].([]any)
+	doc["runcmd"] = append(runcmd, guestAgentStartCmd)
 
 	out, err := yaml.Marshal(doc)
 	if err != nil {

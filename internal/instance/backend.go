@@ -96,6 +96,43 @@ type StatsProvider interface {
 	Stats(ctx context.Context, spec *Spec) (Stats, error)
 }
 
+// CloudInitStatus is the guest's first-boot setup progress as cloud-init reports it.
+type CloudInitStatus string
+
+const (
+	CloudInitUnknown  CloudInitStatus = ""
+	CloudInitRunning  CloudInitStatus = "running"
+	CloudInitDone     CloudInitStatus = "done"
+	CloudInitError    CloudInitStatus = "error"
+	CloudInitDisabled CloudInitStatus = "disabled" // no datasource, e.g. a migrated disk
+)
+
+// GuestInfo is what an instance's guest agent reports about the running guest.
+type GuestInfo struct {
+	AgentConnected bool
+	IPAddresses    []string // CIDR form, loopback and link-local left out
+	CloudInit      CloudInitStatus
+}
+
+// GuestInspector is implemented by a Backend that tracks the guest OS through an agent (VM only).
+// GuestInfo reads a cache and never blocks; the hook runs whenever that cache changes.
+type GuestInspector interface {
+	GuestInfo(spec *Spec) (GuestInfo, bool)
+	SetGuestChangeHook(hook func(instanceID string))
+}
+
+// ReadyWaiter is implemented by a Backend whose instances do setup work after starting
+// (cloud-init for a VM). WaitReady blocks until that work finished, or failed.
+type ReadyWaiter interface {
+	WaitReady(ctx context.Context, spec *Spec, progress func(status string)) error
+}
+
+// ExitNotifier is implemented by a Backend that notices an instance changing state without
+// anvil asking: stopping (guest poweroff, crash) or, for a container, being started again from outside.
+type ExitNotifier interface {
+	SetExitHook(hook func(instanceID string, state State))
+}
+
 // Registry is the persistence contract Manager needs.
 type Registry interface {
 	PutInstance(spec *Spec) error

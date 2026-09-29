@@ -477,6 +477,7 @@ type ContainerState struct {
 	Status    string `json:"Status"` // "created" | "running" | "paused" | "restarting" | "removing" | "exited" | "dead"
 	Running   bool   `json:"Running"`
 	StartedAt string `json:"StartedAt"` // RFC3339Nano; zero-value time string when never started
+	ExitCode  int    `json:"ExitCode"`  // the last exit's status, meaningful once exited
 }
 
 type networkSettings struct {
@@ -677,5 +678,45 @@ func demuxLogs(r io.Reader, send func([]byte) error) error {
 		if err := send(payload); err != nil {
 			return err
 		}
+	}
+}
+
+// Event is one entry of Docker's /events stream.
+type Event struct {
+	Type   string `json:"Type"`   // e.g. "container"
+	Action string `json:"Action"` // e.g. "die", "start"
+	Actor  struct {
+		ID         string            `json:"ID"`
+		Attributes map[string]string `json:"Attributes"` // "die" carries "exitCode"
+	} `json:"Actor"`
+	Time int64 `json:"time"`
+}
+
+// Events streams Docker events matching filters (e.g. {"type": ["container"]}) to onEvent
+// until ctx ends or the connection breaks. It always returns a non-nil error.
+func (c *Client) Events(ctx context.Context, filters map[string][]string, onEvent func(Event)) error {
+	path := "/events"
+	if len(filters) > 0 {
+		data, err := json.Marshal(filters)
+		if err != nil {
+			return fmt.Errorf("docker: encoding event filters: %w", err)
+		}
+		path += "?filters=" + url.QueryEscape(string(data))
+	}
+	resp, err := c.do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("docker: watching events: %w", statusError(resp))
+	}
+	dec := json.NewDecoder(resp.Body)
+	for {
+		var ev Event
+		if err := dec.Decode(&ev); err != nil {
+			return fmt.Errorf("docker: event stream ended: %w", err)
+		}
+		onEvent(ev)
 	}
 }

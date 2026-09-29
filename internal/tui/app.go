@@ -181,6 +181,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Replies to long-running requests go to the screen that made them, even after the user moved on.
+	switch msg.(type) {
+	case waitStreamMsg:
+		return m.updateInstances(msg)
+	case imageChecksumMsg:
+		return m.updateImages(msg)
+	}
+
 	// Dispatch actionDoneMsg to the screen that originated the action, not necessarily m.screen.
 	if adm, ok := msg.(actionDoneMsg); ok {
 		switch adm.screen {

@@ -40,7 +40,7 @@ package_anvil() {
 
 package_anvild() {
   pkgdesc="Daemon for anvil - manages QEMU VMs and Docker/Podman containers"
-  depends=('qemu-base' 'xorriso' 'openssh')
+  depends=('qemu-base' 'xorriso' 'openssh' 'virtiofsd')
   optdepends=(
     'docker: run containers via Docker'
     'podman: run containers via Podman (backend not implemented yet)'

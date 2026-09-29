@@ -66,7 +66,8 @@ func (b *broadcaster) publish(ev Event) {
 // notifyingRegistry publishes an Event after every successful write.
 type notifyingRegistry struct {
 	Registry
-	events *broadcaster
+	events   *broadcaster
+	decorate func(*Spec) *Spec // adds live fields (guest info) before publishing
 }
 
 func (r notifyingRegistry) PutInstance(spec *Spec) error {
@@ -75,6 +76,9 @@ func (r notifyingRegistry) PutInstance(spec *Spec) error {
 	}
 	// Read the record back so subscribers never share memory with the caller's spec.
 	if fresh, err := r.Registry.GetByID(spec.ID); err == nil {
+		if r.decorate != nil {
+			fresh = r.decorate(fresh)
+		}
 		r.events.publish(Event{Type: EventUpdated, Spec: fresh})
 	}
 	return nil

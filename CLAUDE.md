@@ -32,7 +32,8 @@ and is `//go:build linux`, self-skips if `qemu-system-x86_64`/`qemu-img` aren't 
 `PATH`). Don't "fix" a skip like that by removing the tool-presence check.
 
 Building from source needs Go 1.27+, `protoc`, and (Linux) `qemu-system-x86_64`,
-`qemu-img`, `xorriso` on `PATH`.
+`qemu-img`, `xorriso` on `PATH`, plus `virtiofsd` (looked up on `PATH` and in
+`/usr/lib`, `/usr/libexec`).
 
 ## Architecture
 

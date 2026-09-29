@@ -3,7 +3,7 @@ Version: @VERSION@
 Section: admin
 Priority: optional
 Architecture: @ARCH@
-Depends: qemu-system-x86, qemu-utils, xorriso, openssh-client, systemd
+Depends: qemu-system-x86, qemu-utils, xorriso, virtiofsd, openssh-client, systemd
 Recommends: docker.io | docker-ce
 Installed-Size: @INSTALLED_SIZE@
 Maintainer: filippo ferrando <ferrandodfilippo@ik.me>

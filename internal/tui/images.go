@@ -11,7 +11,10 @@ import (
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 )
 
-type cachedImageItem struct{ image *anvilv1.CachedImage }
+type cachedImageItem struct {
+	image  *anvilv1.CachedImage
+	sha256 string // filled in once asked for with "h"
+}
 
 func (i cachedImageItem) FilterValue() string { return i.image.GetId() }
 func (i cachedImageItem) Title() string       { return i.image.GetId() }
@@ -20,7 +23,11 @@ func (i cachedImageItem) Description() string {
 	if n := i.image.GetRefCount(); n > 0 {
 		inUse = fmt.Sprintf("in use by %d instance(s)", n)
 	}
-	return fmt.Sprintf("%s  •  %s  •  %s", i.image.GetArch(), humanBytesTUI(i.image.GetSizeBytes()), inUse)
+	desc := fmt.Sprintf("%s  •  %s  •  %s", i.image.GetArch(), humanBytesTUI(i.image.GetSizeBytes()), inUse)
+	if i.sha256 != "" {
+		desc += "  •  sha256 " + i.sha256[:12] + "…"
+	}
+	return desc
 }
 
 type catalogItem struct{ entry *anvilv1.CatalogEntry }
@@ -168,6 +175,20 @@ func (m model) updateImages(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.images.containerImages.SetItems(items)
 		return m, nil
 
+	case imageChecksumMsg:
+		if msg.err != nil {
+			m.setStatus("checksum: "+msg.err.Error(), true)
+			return m, nil
+		}
+		for i, it := range m.images.cached.Items() {
+			if item, ok := it.(cachedImageItem); ok && item.image.GetId() == msg.id && item.image.GetArch() == msg.arch {
+				item.sha256 = msg.sum
+				m.images.cached.SetItem(i, item)
+			}
+		}
+		m.setStatus(fmt.Sprintf("%s (%s) sha256 %s", msg.id, msg.arch, msg.sum), false)
+		return m, nil
+
 	case actionDoneMsg:
 		if msg.err != nil {
 			m.setStatus("image "+msg.verb+": "+msg.err.Error(), true)
@@ -231,6 +252,14 @@ func (m model) updateImagesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, loadContainerImages(m.client)
 		}
 		return m, tea.Batch(loadCachedImages(m.client), loadCatalog(m.client))
+	case "h":
+		if im.mode == imagesModeVM && !im.focusCatalog {
+			if item, ok := im.cached.SelectedItem().(cachedImageItem); ok {
+				m.setStatus("hashing "+item.image.GetId()+"…", false)
+				return m, loadImageChecksum(m.client, item.image.GetId(), item.image.GetArch())
+			}
+		}
+		return m, nil
 	case "x":
 		switch {
 		case im.mode == imagesModeContainer:
@@ -290,7 +319,7 @@ func (m imagesModel) View() string {
 	right := catalogBox.Render(pin.Render(m.catalog.View()))
 
 	help := helpBar("v", "VM images", "c", "container images", "tab", "switch panel",
-		"x", "delete cached", "r", "refresh", "esc", "back")
+		"h", "checksum", "x", "delete cached", "r", "refresh", "esc", "back")
 	return tabs + "\n" + lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right) + "\n" + help
 }
 

@@ -275,3 +275,100 @@ func (c *QMPClient) SnapshotSave(ctx context.Context, name string, timeout time.
 }
 
 func (c *QMPClient) Close() error { return c.conn.Close() }
+
+// AddVirtiofs hot-plugs a vhost-user-fs-pci device for tag, connected to the
+// virtiofsd listening on socketPath, onto the first free hot-plug port.
+func (c *QMPClient) AddVirtiofs(ctx context.Context, tag, socketPath string) error {
+	chardev := VirtiofsChardevID(tag)
+	_, err := c.Execute(ctx, "chardev-add", map[string]any{
+		"id": chardev,
+		"backend": map[string]any{
+			"type": "socket",
+			"data": map[string]any{
+				"addr":   map[string]any{"type": "unix", "data": map[string]string{"path": socketPath}},
+				"server": false,
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("qmp: adding chardev for %s: %w", tag, err)
+	}
+
+	var lastErr error
+	for i := range HotplugPorts {
+		_, err := c.Execute(ctx, "device_add", map[string]any{
+			"driver":     "vhost-user-fs-pci",
+			"id":         VirtiofsDeviceID(tag),
+			"chardev":    chardev,
+			"tag":        tag,
+			"queue-size": 1024,
+			"bus":        HotplugPortID(i),
+		})
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !isPortTaken(err) {
+			break
+		}
+	}
+	_, _ = c.Execute(ctx, "chardev-remove", map[string]string{"id": chardev})
+	return fmt.Errorf("qmp: hot-plugging virtiofs device %s: %w", tag, lastErr)
+}
+
+// isPortTaken reports whether device_add failed only because the chosen root port already holds a device.
+func isPortTaken(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "occupied") || strings.Contains(msg, "in use") || strings.Contains(msg, "not available")
+}
+
+// RemoveVirtiofs unplugs tag's device and drops its chardev. The guest must release the
+// device first (PCIe hot-unplug waits for the guest), so this polls until it is gone.
+func (c *QMPClient) RemoveVirtiofs(ctx context.Context, tag string, timeout time.Duration) error {
+	id := VirtiofsDeviceID(tag)
+	if _, err := c.Execute(ctx, "device_del", map[string]string{"id": id}); err != nil {
+		return fmt.Errorf("qmp: unplugging %s: %w", tag, err)
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		present, err := c.hasPeripheral(ctx, id)
+		if err != nil {
+			return err
+		}
+		if !present {
+			break
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("qmp: guest never released virtiofs device %s", tag)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	if _, err := c.Execute(ctx, "chardev-remove", map[string]string{"id": VirtiofsChardevID(tag)}); err != nil {
+		return fmt.Errorf("qmp: removing chardev for %s: %w", tag, err)
+	}
+	return nil
+}
+
+// hasPeripheral reports whether a device with this id is still attached.
+func (c *QMPClient) hasPeripheral(ctx context.Context, id string) (bool, error) {
+	raw, err := c.Execute(ctx, "qom-list", map[string]string{"path": "/machine/peripheral"})
+	if err != nil {
+		return false, fmt.Errorf("qmp: listing devices: %w", err)
+	}
+	var props []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &props); err != nil {
+		return false, fmt.Errorf("qmp: decoding qom-list: %w", err)
+	}
+	for _, p := range props {
+		if p.Name == id {
+			return true, nil
+		}
+	}
+	return false, nil
+}

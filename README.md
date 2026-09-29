@@ -63,7 +63,8 @@ Docker API" possible without a platform abstraction layer getting in the way.
   edit, and reuse (`anvil cloud-init`)
 - `anvil shell` / `anvil exec` / `anvil transfer` over real SSH, using a keypair Anvil
   manages for you, *zero* flags, *zero* setup
-- `anvil mount` shares a host directory into the guest over 9p
+- `anvil mount` shares a host directory into the guest over virtiofs, live when the
+  guest agent is connected
 - live progress on downloads instead of a silent terminal
 - `anvil snapshot` takes point-in-time QCOW2 checkpoints of a VM's disk and restores back
   to them later, live if the VM is running
@@ -137,7 +138,8 @@ the daemon as a proper systemd service running under its own unprivileged `anvil
 ### From source
 
 You'll need Go 1.27+, `protoc`, and `qemu-system-x86_64`,
-`qemu-img`, and `xorriso` on your `PATH`.
+`qemu-img`, and `xorriso` on your `PATH`, plus `virtiofsd` (for `anvil mount`; it's
+usually installed outside `PATH`, e.g. `/usr/lib/virtiofsd`).
 
 ```
 make proto          # regenerate api/gen/anvil/v1 from the .proto file

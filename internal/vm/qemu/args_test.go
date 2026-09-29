@@ -3,6 +3,7 @@
 package qemu
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -127,9 +128,10 @@ func TestBuildArgsMounts(t *testing.T) {
 	args, err := BuildArgs(Config{
 		DiskPath:  "/d",
 		QMPSocket: "/q",
+		MemoryMiB: 2048,
 		Mounts: []Mount{
-			{HostPath: "/home/me/project", Tag: "mount0"},
-			{HostPath: "/home/me/readonly-stuff", Tag: "mount1", ReadOnly: true},
+			{Tag: "mount0", SocketPath: "/run/x/fs-mount0.sock"},
+			{Tag: "mount3", SocketPath: "/run/x/fs-mount3.sock"},
 		},
 	})
 	if err != nil {
@@ -138,10 +140,13 @@ func TestBuildArgsMounts(t *testing.T) {
 	joined := strings.Join(args, " ")
 
 	for _, want := range []string{
-		"-fsdev local,id=fsdev0,path=/home/me/project,security_model=mapped-xattr",
-		"-device virtio-9p-pci,fsdev=fsdev0,mount_tag=mount0",
-		"-fsdev local,id=fsdev1,path=/home/me/readonly-stuff,security_model=mapped-xattr,readonly=on",
-		"-device virtio-9p-pci,fsdev=fsdev1,mount_tag=mount1",
+		"-machine q35,memory-backend=mem0",
+		"-object memory-backend-memfd,id=mem0,size=2048M,share=on",
+		"-device pcie-root-port,id=hp0,chassis=1",
+		"-device pcie-root-port,id=hp7,chassis=8",
+		"-chardev socket,id=fsc-mount0,path=/run/x/fs-mount0.sock",
+		"-device vhost-user-fs-pci,id=fs-mount0,chardev=fsc-mount0,tag=mount0,queue-size=1024,bus=hp0",
+		"-device vhost-user-fs-pci,id=fs-mount3,chardev=fsc-mount3,tag=mount3,queue-size=1024,bus=hp1",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("expected %q in args, got: %s", want, joined)
@@ -149,13 +154,27 @@ func TestBuildArgsMounts(t *testing.T) {
 	}
 }
 
-func TestBuildArgsNoMountsMeansNoFsdev(t *testing.T) {
+func TestBuildArgsTooManyMounts(t *testing.T) {
+	mounts := make([]Mount, HotplugPorts+1)
+	for i := range mounts {
+		mounts[i] = Mount{Tag: fmt.Sprintf("mount%d", i), SocketPath: "/s"}
+	}
+	if _, err := BuildArgs(Config{DiskPath: "/d", QMPSocket: "/q", Mounts: mounts}); err == nil {
+		t.Error("expected an error with more mounts than hot-plug ports")
+	}
+}
+
+func TestBuildArgsNoMountsMeansNoVirtiofsDevice(t *testing.T) {
 	args, err := BuildArgs(Config{DiskPath: "/d", QMPSocket: "/q"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if strings.Contains(strings.Join(args, " "), "-fsdev") {
-		t.Error("expected no -fsdev args when Mounts is empty")
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "vhost-user-fs-pci") {
+		t.Error("expected no virtiofs device when Mounts is empty")
+	}
+	if !strings.Contains(joined, "pcie-root-port,id=hp0") {
+		t.Error("expected hot-plug ports even without mounts, so a mount can be added live")
 	}
 }
 
@@ -230,6 +249,30 @@ func TestBuildArgsDiskUsesIOThread(t *testing.T) {
 		"-device virtio-blk-pci,drive=disk0,iothread=io0",
 		"-device virtio-rng-pci,rng=rng0",
 		"-device virtio-balloon-pci,free-page-reporting=on",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("expected %q in args, got: %s", want, joined)
+		}
+	}
+}
+
+func TestBuildArgsGuestAgent(t *testing.T) {
+	without, err := BuildArgs(Config{DiskPath: "/d", QMPSocket: "/q"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(without, " "), "virtserialport") {
+		t.Error("expected no guest agent channel when GuestAgentSocket is unset")
+	}
+	with, err := BuildArgs(Config{DiskPath: "/d", QMPSocket: "/q", GuestAgentSocket: "/run/x/qga.sock"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(with, " ")
+	for _, want := range []string{
+		"-chardev socket,id=qga0,path=/run/x/qga.sock,server=on,wait=off",
+		"-device virtio-serial-pci,id=vserial0",
+		"-device virtserialport,bus=vserial0.0,chardev=qga0,name=org.qemu.guest_agent.0",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("expected %q in args, got: %s", want, joined)

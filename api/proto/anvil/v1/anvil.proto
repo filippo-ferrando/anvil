@@ -33,6 +33,15 @@ service InstanceService {
   // Watch streams instance changes (create, state/config change, delete) as they happen.
   // Events are change hints: a client that falls far behind may miss some.
   rpc Watch(WatchRequest) returns (stream WatchEvent);
+
+  // WaitReady streams progress until a running instance's first-boot setup (cloud-init
+  // for a VM) finished. Ends with an Instance event, or an Error one on failure or timeout.
+  rpc WaitReady(WaitReadyRequest) returns (stream LaunchProgress);
+}
+
+message WaitReadyRequest {
+  string name = 1;
+  int32 timeout_seconds = 2; // defaults to 900
 }
 
 message WatchRequest {
@@ -131,7 +140,7 @@ message VMSpec {
   int32 ssh_port = 10;
   string default_user = 11;
 
-  // Host directories shared into the guest via 9p, managed by InstanceService.Mount/Umount.
+  // Host directories shared into the guest via virtiofs, managed by InstanceService.Mount/Umount.
   repeated Mount mounts = 12;
 
   // Daemon-populated when this VM joins an intent's bridge network.
@@ -151,13 +160,17 @@ message VMSpec {
   // Set with source_disk_path when that disk is only a delta on top of the base image with
   // this SHA256; the daemon rebases it onto its own identical copy of that base.
   string source_disk_base_sha256 = 19;
+
+  // Skips installing qemu-guest-agent through cloud-init. Without it, IP reporting,
+  // agent shutdown and precise cloud-init status aren't available.
+  bool no_guest_agent = 20;
 }
 
-// Mount is one host directory shared into a VM's guest over 9p.
+// Mount is one host directory shared into a VM's guest over virtiofs.
 message Mount {
   string host_path = 1;
   string guest_path = 2;
-  string tag = 3; // internal 9p mount_tag, assigned automatically
+  string tag = 3; // internal virtiofs tag, assigned automatically
   bool read_only = 4;
 }
 
@@ -206,6 +219,24 @@ message Instance {
   map<string, string> labels = 6;
   VMSpec vm = 7;
   ContainerSpec container = 8;
+
+  // Daemon-populated, live: what the guest agent last reported. Unset when unknown.
+  GuestInfo guest = 9;
+}
+
+enum CloudInitStatus {
+  CLOUD_INIT_STATUS_UNSPECIFIED = 0; // unknown, e.g. no guest agent yet
+  CLOUD_INIT_STATUS_RUNNING = 1;
+  CLOUD_INIT_STATUS_DONE = 2;
+  CLOUD_INIT_STATUS_ERROR = 3;
+  CLOUD_INIT_STATUS_DISABLED = 4; // nothing to do this boot, e.g. a migrated disk
+}
+
+// GuestInfo is what a VM's qemu-guest-agent reports about the running guest.
+message GuestInfo {
+  bool agent_connected = 1;
+  repeated string ip_addresses = 2; // CIDR form, loopback and link-local left out
+  CloudInitStatus cloud_init = 3;
 }
 
 message LaunchRequest {
@@ -227,6 +258,11 @@ message LaunchRequest {
   string pinned_gateway = 9;
   string pinned_docker_ip_range = 10;
   string pinned_static_ip = 11;
+
+  // wait keeps the stream open after the instance started, until its first-boot setup
+  // (cloud-init for a VM) finished. wait_timeout_seconds defaults to 900.
+  bool wait = 12;
+  int32 wait_timeout_seconds = 13;
 }
 
 message LaunchProgress {

@@ -27,6 +27,7 @@ Summary:        Daemon for anvil - manages QEMU VMs and Docker/Podman containers
 Requires:       qemu-img
 Requires:       qemu-system-x86
 Requires:       xorriso
+Requires:       virtiofsd
 Requires:       openssh-clients
 Requires:       systemd
 Recommends:     docker-ce

@@ -35,8 +35,11 @@ type Config struct {
 	// instead of letting QEMU pick one. Empty for SLIRP.
 	MACAddress string
 
-	// Mounts are 9p host-directory shares.
+	// Mounts are virtiofs host-directory shares, each served by its own virtiofsd.
 	Mounts []Mount
+
+	// GuestAgentSocket, when set, exposes a virtio-serial channel for qemu-guest-agent on this unix socket.
+	GuestAgentSocket string
 }
 
 type HostForward struct {
@@ -45,13 +48,24 @@ type HostForward struct {
 	Protocol  string // "tcp" | "udp", defaults to "tcp" if empty
 }
 
-// Mount is one host directory to share into the guest via 9p
-// (virtio-9p-pci + a "local" fsdev backend).
+// Mount is one virtiofs share: a vhost-user-fs-pci device talking to the virtiofsd
+// already listening on SocketPath. Read-only is enforced by that virtiofsd.
 type Mount struct {
-	HostPath string
-	Tag      string // 9p mount_tag; guest-side `mount -t 9p -o trans=virtio` uses this, not the host path
-	ReadOnly bool
+	Tag        string // virtiofs tag; the guest mounts it with `mount -t virtiofs <tag> <path>`
+	SocketPath string
 }
+
+// HotplugPorts is how many PCIe root ports each VM gets for virtiofs devices, which caps
+// its mounts. Every mount sits on its own port, so any of them can be unplugged live.
+const HotplugPorts = 8
+
+// HotplugPortID names the i-th root port, as used for a device's "bus" property.
+func HotplugPortID(i int) string { return fmt.Sprintf("hp%d", i) }
+
+// VirtiofsDeviceID and VirtiofsChardevID name one mount's QEMU objects, so a
+// hot-plugged device and a boot-time one can be removed the same way.
+func VirtiofsDeviceID(tag string) string  { return "fs-" + tag }
+func VirtiofsChardevID(tag string) string { return "fsc-" + tag }
 
 // BinaryName returns the qemu-system-* binary for the given arch.
 func BinaryName(arch string) string {
@@ -168,13 +182,20 @@ func BuildArgs(cfg Config) ([]string, error) {
 		serial = "file:" + cfg.SerialLogPath
 	}
 
+	if len(cfg.Mounts) > HotplugPorts {
+		return nil, fmt.Errorf("qemu: at most %d mounts per VM, got %d", HotplugPorts, len(cfg.Mounts))
+	}
+
+	// Guest RAM is a shared memfd: vhost-user devices (virtiofsd) must map it, and it has
+	// to be shared from boot for a mount to be hot-plugged later.
 	args := []string{
 		"-name", "anvil-instance",
-		"-machine", MachineType(cfg.Arch),
+		"-machine", MachineType(cfg.Arch) + ",memory-backend=mem0",
 		"-nographic",
 		"-nodefaults",
 		"-smp", fmt.Sprintf("%d", cpus),
 		"-m", fmt.Sprintf("%d", mem),
+		"-object", fmt.Sprintf("memory-backend-memfd,id=mem0,size=%dM,share=on", mem),
 		"-qmp", fmt.Sprintf("unix:%s,server=on,wait=off", cfg.QMPSocket),
 		"-serial", serial,
 	}
@@ -221,6 +242,14 @@ func BuildArgs(cfg Config) ([]string, error) {
 
 	args = append(args, buildMounts(cfg.Mounts)...)
 
+	if cfg.GuestAgentSocket != "" {
+		args = append(args,
+			"-chardev", fmt.Sprintf("socket,id=qga0,path=%s,server=on,wait=off", escapeQEMUOpt(cfg.GuestAgentSocket)),
+			"-device", "virtio-serial-pci,id=vserial0",
+			"-device", "virtserialport,bus=vserial0.0,chardev=qga0,name="+GuestAgentChannel,
+		)
+	}
+
 	// virtio-rng avoids a stalled first boot waiting on guest entropy; the balloon's
 	// free page reporting hands memory the guest has freed back to the host.
 	args = append(args,
@@ -238,17 +267,17 @@ func escapeQEMUOpt(v string) string {
 	return strings.ReplaceAll(v, ",", ",,")
 }
 
+// buildMounts adds the hot-plug root ports, then puts each boot-time mount on its own port.
 func buildMounts(mounts []Mount) []string {
 	var args []string
+	for i := range HotplugPorts {
+		args = append(args, "-device", fmt.Sprintf("pcie-root-port,id=%s,chassis=%d", HotplugPortID(i), i+1))
+	}
 	for i, m := range mounts {
-		fsdevID := fmt.Sprintf("fsdev%d", i)
-		opts := fmt.Sprintf("local,id=%s,path=%s,security_model=mapped-xattr", fsdevID, escapeQEMUOpt(m.HostPath))
-		if m.ReadOnly {
-			opts += ",readonly=on"
-		}
 		args = append(args,
-			"-fsdev", opts,
-			"-device", fmt.Sprintf("virtio-9p-pci,fsdev=%s,mount_tag=%s", fsdevID, m.Tag),
+			"-chardev", fmt.Sprintf("socket,id=%s,path=%s", VirtiofsChardevID(m.Tag), escapeQEMUOpt(m.SocketPath)),
+			"-device", fmt.Sprintf("vhost-user-fs-pci,id=%s,chardev=%s,tag=%s,queue-size=1024,bus=%s",
+				VirtiofsDeviceID(m.Tag), VirtiofsChardevID(m.Tag), m.Tag, HotplugPortID(i)),
 		)
 	}
 	return args

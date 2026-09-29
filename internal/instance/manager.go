@@ -20,7 +20,11 @@ type Manager struct {
 
 func NewManager(registry Registry, backends map[Kind]Backend) *Manager {
 	events := &broadcaster{}
-	return &Manager{registry: notifyingRegistry{Registry: registry, events: events}, backends: backends, events: events}
+	m := &Manager{backends: backends, events: events}
+	m.registry = notifyingRegistry{Registry: registry, events: events, decorate: m.withGuest}
+	m.hookGuestChanges()
+	m.hookExits()
+	return m
 }
 
 // Reconcile re-derives the live state of every running/starting instance from its backend.
@@ -276,7 +280,8 @@ func cloneVMSpecForFork(v *VMSpec) *VMSpec {
 }
 
 func (m *Manager) List(kindFilter Kind) ([]*Spec, error) {
-	return m.registry.List(kindFilter)
+	specs, err := m.registry.List(kindFilter)
+	return m.withGuests(specs), err
 }
 
 // resolve looks up each name, tolerating a mix of names in the input.
@@ -296,12 +301,14 @@ func (m *Manager) resolve(names []string) ([]*Spec, error) {
 }
 
 func (m *Manager) Info(names []string) ([]*Spec, error) {
-	return m.resolve(names)
+	specs, err := m.resolve(names)
+	return m.withGuests(specs), err
 }
 
 // GetByID looks up a single instance by ID.
 func (m *Manager) GetByID(id string) (*Spec, error) {
-	return m.registry.GetByID(id)
+	spec, err := m.registry.GetByID(id)
+	return m.withGuest(spec), err
 }
 
 // Stats returns name's current resource-usage snapshot.

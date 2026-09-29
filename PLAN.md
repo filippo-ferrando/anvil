@@ -4,7 +4,7 @@
 
 Working today: QEMU VMs over QMP, Docker containers over the real HTTP API, intents with
 a shared bridge network and per-intent DNS, SSH-driven migration, export/import bundles,
-snapshots, fork, port forwards, 9p mounts, cloud-init library and repo import, VM and
+snapshots, fork, port forwards, virtiofs mounts, cloud-init library and repo import, VM and
 container mirrors, man pages, shell completions and the TUI.
 
 ### Recently done
@@ -32,6 +32,36 @@ container mirrors, man pages, shell completions and the TUI.
 - **Instance change stream.** `InstanceService.Watch` streams instance changes. `anvil watch`
   prints them, and the TUI refreshes the Instances, Snapshots and Intents screens on its own,
   so changes made from the CLI or by a migration show up without a manual reload.
+- **qemu-guest-agent integration.** Every VM gets a virtio-serial channel for the agent,
+  and cloud-init installs and starts `qemu-guest-agent` (`--no-guest-agent` skips it).
+  - **Guest IPs**: a per-VM poller asks the agent for addresses; they show in `anvil list`,
+    `anvil info`, the TUI detail panel, and `Watch` events.
+  - **Clean shutdown**: `anvil stop` asks the agent to power off first, then falls back to
+    ACPI and finally a hard stop, all within the same timeout.
+  - **`anvil launch --wait` / `anvil wait`**: block until cloud-init is done, read through the
+    agent (`cloud-init status`, or `result.json` where guest-exec is blocked), or from the
+    serial console when there is no agent. Cloud-init errors make the command fail.
+- **virtiofs mounts, live.** 9p is gone: each mount is served by its own `virtiofsd`
+  (namespace sandbox, falling back to none) on a `vhost-user-fs-pci` device. Guest RAM is a
+  shared memfd and every VM has 8 PCIe root ports, so with a connected guest agent
+  `anvil mount`/`umount` hot-plug the device and mount it in the guest, no restart. Without
+  the agent (or when guest-exec is blocked) the old path runs: rebuild the seed and restart.
+  A generation-guarded bootcmd keeps the guest's fstab in line, and VMs with 9p mounts are
+  moved to virtiofs on their next start. `virtiofsd` is now a package dependency.
+- **VMs that exit on their own.** A guest poweroff, crash or kill no longer leaves the
+  instance shown as running: the backend notices the QEMU exit, frees the tap device,
+  virtiofsd processes and runtime state, and records `stopped` (exit status 0) or `error`
+  (anything else), which also emits a `Watch` event.
+- **Containers that change state outside anvil.** The Docker backend follows dockerd's
+  `/events` stream: a container that dies without anvil stopping it is recorded `stopped`
+  (exit 0, or SIGINT/SIGTERM from an outside `docker stop`) or `error` (crash, SIGKILL,
+  OOM), and one started again from outside goes back to `running`. Exits missed while
+  dockerd was unreachable are caught up on reconnect.
+- **TUI coverage.** Everything above is reachable from the TUI: guest agent/IP/cloud-init
+  in the detail panel and list rows, launch toggles for the agent and `--wait`, `w` to
+  wait for cloud-init on a running VM (esc stops waiting), live mounts with the current
+  mounts listed and suggested by umount, image checksums with `h` on the Images screen,
+  and state changes (including outside exits) showing up on their own through `Watch`.
 
 ## Container engines
 
@@ -54,40 +84,25 @@ A few things are blocked on this landing:
 
 ## VM features
 
-### qemu-guest-agent integration
+### Consistent fork of a running VM
 
-Attach a `virtio-serial` channel for `qemu-guest-agent` and install the agent through
-cloud-init. This enables several features at once:
-
-- `guest-fsfreeze-freeze`/`thaw` around live snapshots and fork. Today a live snapshot is
-  only as safe as a sudden power loss.
-- Reliable guest IP reporting, also for bridge-mode VMs.
-- A clean shutdown path that doesn't depend on ACPI, with the current escalation as fallback.
-- `anvil launch --wait`, blocking until `cloud-init status` reports done.
-
-### Detect VMs that exit on their own
-
-A guest `poweroff` or a QEMU crash doesn't update the registry: the instance still shows as
-running until something re-reads its state. The `exited` channel in `qemu.Process` could
-mark the instance stopped (or errored) right away, which also emits a `Watch` event.
+`anvil fork` copies the disk of a running VM with `qemu-img convert -U`, which can catch
+writes halfway. Now that the guest agent exists, `guest-fsfreeze-freeze`/`thaw` around the
+copy (or a short-lived QMP blockdev snapshot) would make it consistent. Live snapshots use
+`savevm`, which pauses the VM and saves its memory, so they don't need this.
 
 ### Autostart and restart policy
 
 After a host reboot, `Reconcile` works out each instance's state again but doesn't start
 anything. A per-instance or per-intent `--autostart` flag and a `restart=on-failure`
-policy would cover long-running services. Needs the exit detection above.
+policy would cover long-running services. Exit detection already reports a crash as
+`error` and a guest poweroff as `stopped`, which is what a restart policy would act on.
 
 ### Resize after creation
 
 `anvil set <name> --cpus/--memory/--disk`. The disk is only sized at create time today
 (`Vault.OverlayFor`). CPU and memory can change while stopped. The disk can grow online
 with QMP `block_resize`, with cloud-init `growpart` handling the guest side.
-
-### virtiofs mounts without a reboot
-
-`anvil mount` currently restarts the guest to attach a 9p share. `virtiofsd` with
-`vhost-user-fs-pci` is much faster than 9p, and on q35 with a PCIe root port it may be
-hot-plugged with `device_add`. Needs a check of guest kernel support across the catalog.
 
 ### Scheduled snapshots
 

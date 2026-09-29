@@ -110,6 +110,22 @@ type forkStreamMsg struct {
 	done     bool
 }
 
+// waitStreamMsg carries one event off the WaitReady streaming RPC, like forkStreamMsg.
+type waitStreamMsg struct {
+	stream   anvilv1.InstanceService_WaitReadyClient
+	status   string
+	instance *anvilv1.Instance
+	err      error
+	done     bool
+}
+
+// imageChecksumMsg is the reply to a checksum request for one cached VM image.
+type imageChecksumMsg struct {
+	id, arch string
+	sum      string
+	err      error
+}
+
 type migrateStreamMsg struct {
 	stream anvilv1.MigrateService_MigrateClient
 	line   string
@@ -382,6 +398,49 @@ func receiveImportEvent(stream anvilv1.ExportService_ImportClient) tea.Cmd {
 		default:
 			return importStreamMsg{stream: stream}
 		}
+	}
+}
+
+// startWaitStream begins `anvil wait name`; ctx lets the user give up with esc.
+func startWaitStream(ctx context.Context, c *client.Client, name string) tea.Cmd {
+	return func() tea.Msg {
+		stream, err := c.WaitReady(ctx, &anvilv1.WaitReadyRequest{Name: name})
+		if err != nil {
+			return waitStreamMsg{err: err, done: true}
+		}
+		return receiveWaitEvent(stream)()
+	}
+}
+
+func receiveWaitEvent(stream anvilv1.InstanceService_WaitReadyClient) tea.Cmd {
+	return func() tea.Msg {
+		ev, err := stream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				return waitStreamMsg{done: true}
+			}
+			return waitStreamMsg{err: err, done: true}
+		}
+		switch e := ev.GetEvent().(type) {
+		case *anvilv1.LaunchProgress_Status:
+			return waitStreamMsg{stream: stream, status: e.Status}
+		case *anvilv1.LaunchProgress_Error:
+			return waitStreamMsg{err: fmt.Errorf("%s", e.Error), done: true}
+		case *anvilv1.LaunchProgress_Instance:
+			return waitStreamMsg{stream: stream, instance: e.Instance, done: true}
+		default:
+			return waitStreamMsg{stream: stream}
+		}
+	}
+}
+
+func loadImageChecksum(c *client.Client, id, arch string) tea.Cmd {
+	return func() tea.Msg {
+		reply, err := c.Image.Checksum(context.Background(), &anvilv1.ImageChecksumRequest{Id: id, Arch: arch})
+		if err == nil && !reply.GetCached() {
+			err = fmt.Errorf("%s is not cached on this host", id)
+		}
+		return imageChecksumMsg{id: id, arch: arch, sum: reply.GetSha256(), err: err}
 	}
 }
 

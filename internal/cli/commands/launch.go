@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -33,6 +34,9 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 		role          string
 		fromDisk      string
 		defaultUser   string
+		wait          bool
+		waitTimeout   time.Duration
+		noGuestAgent  bool
 	)
 
 	cmd := &cobra.Command{
@@ -79,6 +83,12 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 			if defaultUser != "" && kind != anvilv1.Kind_KIND_VM {
 				return fmt.Errorf("--default-user only applies to --kind vm")
 			}
+			if noGuestAgent && kind != anvilv1.Kind_KIND_VM {
+				return fmt.Errorf("--no-guest-agent only applies to --kind vm")
+			}
+			if wait && noStart {
+				return fmt.Errorf("--wait and --no-start are mutually exclusive")
+			}
 
 			req := &anvilv1.LaunchRequest{
 				Name:       name,
@@ -86,6 +96,9 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 				NoStart:    noStart,
 				IntentName: intentName,
 				Role:       role,
+
+				Wait:               wait,
+				WaitTimeoutSeconds: int32(waitTimeout.Seconds()),
 			}
 
 			switch kind {
@@ -120,6 +133,7 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 					Ports:             ports,
 					SourceDiskPath:    fromDisk,
 					DefaultUser:       defaultUser,
+					NoGuestAgent:      noGuestAgent,
 				}
 
 			case anvilv1.Kind_KIND_CONTAINER:
@@ -187,6 +201,9 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 	cmd.Flags().StringVar(&intentName, "intent", "", "join this instance to an intent (created automatically if it doesn't exist yet), see `anvil intent`")
 	cmd.Flags().StringVar(&role, "role", "", "label this instance's role within --intent (defaults to its own name)")
 	cmd.Flags().StringVar(&fromDisk, "from-disk", "", "use this already-prepared qcow2 file as the VM's own disk directly, skipping the image catalog and cloud-init entirely (internal, used by `anvil migrate`)")
+	cmd.Flags().BoolVar(&wait, "wait", false, "block until the instance finished its first-boot setup (cloud-init for a VM); fails if cloud-init reports errors")
+	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 15*time.Minute, "give up on --wait after this long")
+	cmd.Flags().BoolVar(&noGuestAgent, "no-guest-agent", false, "don't install qemu-guest-agent through cloud-init (VM only); disables guest IP reporting and agent shutdown")
 	cmd.Flags().StringVar(&defaultUser, "default-user", "", "override the SSH login user normally read from the image catalog (VM only, mainly for internal use by `anvil migrate`)")
 	return cmd
 }
@@ -200,6 +217,11 @@ type launchProgressStream interface {
 // streamLaunchProgress prints each LaunchProgress event as it arrives. On a real
 // terminal, consecutive updates sharing the same key redraw in place instead of each getting its own line.
 func streamLaunchProgress(out io.Writer, stream launchProgressStream) error {
+	return streamProgress(out, stream, "Launched")
+}
+
+// streamProgress is streamLaunchProgress with the final line's verb ("Launched", "Ready") chosen by the caller.
+func streamProgress(out io.Writer, stream launchProgressStream, verb string) error {
 	term := isTerminalWriter(out)
 	var lastKey string
 	haveLine := false
@@ -246,7 +268,10 @@ func streamLaunchProgress(out io.Writer, stream launchProgressStream) error {
 			return fmt.Errorf("%s", e.Error)
 		case *anvilv1.LaunchProgress_Instance:
 			finalizeLine()
-			fmt.Fprintf(out, "Launched %q (%s)\n", e.Instance.GetName(), e.Instance.GetId())
+			fmt.Fprintf(out, "%s %q (%s)\n", verb, e.Instance.GetName(), e.Instance.GetId())
+			if ips := e.Instance.GetGuest().GetIpAddresses(); len(ips) > 0 {
+				fmt.Fprintf(out, "IP: %s\n", strings.Join(ips, ", "))
+			}
 		}
 	}
 }

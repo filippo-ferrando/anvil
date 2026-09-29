@@ -67,6 +67,7 @@ func vmSpecFromPB(v *anvilv1.VMSpec) *instance.VMSpec {
 		DefaultUser:          v.GetDefaultUser(),
 		SourceDiskPath:       v.GetSourceDiskPath(),
 		SourceDiskBaseSHA256: v.GetSourceDiskBaseSha256(),
+		NoGuestAgent:         v.GetNoGuestAgent(),
 	}
 	for _, p := range v.GetPorts() {
 		spec.Ports = append(spec.Ports, instance.PortMapping{
@@ -100,6 +101,7 @@ func vmSpecToPB(v *instance.VMSpec) *anvilv1.VMSpec {
 		ExtraHosts:           v.ExtraHosts,
 		SourceDiskPath:       v.SourceDiskPath,
 		SourceDiskBaseSha256: v.SourceDiskBaseSHA256,
+		NoGuestAgent:         v.NoGuestAgent,
 	}
 	for _, m := range v.Mounts {
 		pb.Mounts = append(pb.Mounts, &anvilv1.Mount{
@@ -212,6 +214,33 @@ func specToPB(s *instance.Spec) *anvilv1.Instance {
 		Labels:        s.Labels,
 		Vm:            vmSpecToPB(s.VM),
 		Container:     containerSpecToPB(s.Container),
+		Guest:         guestInfoToPB(s.Guest),
+	}
+}
+
+func guestInfoToPB(g *instance.GuestInfo) *anvilv1.GuestInfo {
+	if g == nil {
+		return nil
+	}
+	return &anvilv1.GuestInfo{
+		AgentConnected: g.AgentConnected,
+		IpAddresses:    g.IPAddresses,
+		CloudInit:      cloudInitStatusToPB(g.CloudInit),
+	}
+}
+
+func cloudInitStatusToPB(s instance.CloudInitStatus) anvilv1.CloudInitStatus {
+	switch s {
+	case instance.CloudInitRunning:
+		return anvilv1.CloudInitStatus_CLOUD_INIT_STATUS_RUNNING
+	case instance.CloudInitDone:
+		return anvilv1.CloudInitStatus_CLOUD_INIT_STATUS_DONE
+	case instance.CloudInitError:
+		return anvilv1.CloudInitStatus_CLOUD_INIT_STATUS_ERROR
+	case instance.CloudInitDisabled:
+		return anvilv1.CloudInitStatus_CLOUD_INIT_STATUS_DISABLED
+	default:
+		return anvilv1.CloudInitStatus_CLOUD_INIT_STATUS_UNSPECIFIED
 	}
 }
 

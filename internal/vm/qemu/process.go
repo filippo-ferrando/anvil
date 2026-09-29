@@ -104,6 +104,20 @@ func (p *Process) pollLiveness() {
 	}
 }
 
+// ExitedCleanly reports whether the exited process ended with status 0, as QEMU does after
+// a guest poweroff or a QMP quit. A reattached process's status is unknown and counts as clean.
+func (p *Process) ExitedCleanly() bool {
+	if p.cmd == nil || p.cmd.ProcessState == nil {
+		return true
+	}
+	return p.cmd.ProcessState.Success()
+}
+
+// Exited is closed once the process is gone.
+func (p *Process) Exited() <-chan struct{} {
+	return p.exited
+}
+
 // Pid returns the qemu-system-* process ID, or 0 if it isn't running.
 func (p *Process) Pid() int {
 	return p.pid

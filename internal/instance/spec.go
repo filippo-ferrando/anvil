@@ -44,6 +44,9 @@ type Spec struct {
 
 	VM        *VMSpec
 	Container *ContainerSpec
+
+	// Guest is live, never persisted: what the guest agent last reported (VM only, nil if unknown).
+	Guest *GuestInfo
 }
 
 type VMSpec struct {
@@ -75,6 +78,10 @@ type VMSpec struct {
 	NextMountIndex int
 	Generation     int
 
+	// MountFS is "virtiofs" once the guest's fstab was written for virtiofs; empty for
+	// VMs whose mounts date from 9p, which get their fstab rewritten on the next start.
+	MountFS string
+
 	// BridgeInterface/StaticIP/Gateway are populated by internal/intent.Manager
 	// when this VM joins an intent; meaningless otherwise.
 	BridgeInterface string
@@ -96,9 +103,12 @@ type VMSpec struct {
 	// SourceDiskBaseSHA256, if set, marks SourceDiskPath as a delta on top of
 	// the base image with this checksum, to be rebased onto the local copy.
 	SourceDiskBaseSHA256 string
+
+	// NoGuestAgent skips installing qemu-guest-agent through cloud-init.
+	NoGuestAgent bool
 }
 
-// Mount is one host directory shared into the guest over 9p.
+// Mount is one host directory shared into the guest over virtiofs.
 type Mount struct {
 	HostPath  string
 	GuestPath string

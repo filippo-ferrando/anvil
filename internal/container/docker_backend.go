@@ -19,8 +19,11 @@ type Source interface {
 
 // DockerBackend implements instance.Backend against a real Docker daemon.
 type DockerBackend struct {
-	Client *docker.Client
-	Source Source // nil is fine, just means no mirrors ever get applied
+	Client   *docker.Client
+	Source   Source         // nil is fine, just means no mirrors ever get applied
+	Registry InstanceLister // nil disables exit detection
+
+	exits exitWatch
 }
 
 var (
@@ -211,6 +214,7 @@ func (b *DockerBackend) Start(ctx context.Context, spec *instance.Spec) error {
 	if spec.Container.ContainerID == "" {
 		return fmt.Errorf("docker: %s has no container ID yet (Create must run first)", spec.Name)
 	}
+	b.clearExpectedExit(spec.Container.ContainerID)
 	if err := b.Client.StartContainer(ctx, spec.Container.ContainerID); err != nil {
 		return fmt.Errorf("docker: starting %s: %w", spec.Name, err)
 	}
@@ -228,6 +232,7 @@ func (b *DockerBackend) Stop(ctx context.Context, spec *instance.Spec, force boo
 	if force {
 		timeoutSeconds = 0
 	}
+	b.expectExit(spec.Container.ContainerID)
 	if err := b.Client.StopContainer(ctx, spec.Container.ContainerID, timeoutSeconds); err != nil {
 		return fmt.Errorf("docker: stopping %s: %w", spec.Name, err)
 	}
@@ -242,6 +247,7 @@ func (b *DockerBackend) Delete(ctx context.Context, spec *instance.Spec) error {
 	if spec.Container.ContainerID == "" {
 		return nil
 	}
+	b.expectExit(spec.Container.ContainerID)
 	if err := b.Client.RemoveContainer(ctx, spec.Container.ContainerID, true); err != nil {
 		return fmt.Errorf("docker: removing %s: %w", spec.Name, err)
 	}

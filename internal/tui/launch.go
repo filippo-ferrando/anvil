@@ -17,6 +17,12 @@ import (
 // It's shared between newLaunchModel/launchFields and buildLaunchRequest so they can't drift out of sync.
 const cloudInitNameField = "Cloud-init name (optional)"
 
+// VM-only toggles, shared the same way as cloudInitNameField.
+const (
+	guestAgentField = "Guest agent"
+	waitField       = "Wait for cloud-init"
+)
+
 type launchModel struct {
 	kind          string // "vm" | "container"
 	form          simpleForm
@@ -103,6 +109,8 @@ func launchFields(kind string, values map[string]string) []formField {
 		fields = append(fields,
 			textField("Disk GiB", "", v("Disk GiB", "8")),
 			textField(cloudInitNameField, "a saved library entry, or ctrl+e to edit ad hoc for just this launch", v(cloudInitNameField, "")),
+			toggleField(guestAgentField, "install qemu-guest-agent: guest IPs, clean shutdown, cloud-init status", true),
+			toggleField(waitField, "keep the progress view open until cloud-init finished", false),
 		)
 	} else {
 		fields = append(fields,
@@ -461,7 +469,9 @@ func buildLaunchRequest(m launchModel) (*anvilv1.LaunchRequest, error) {
 		DiskGib:       diskGiB,
 		SshPublicKeys: []string{pub},
 		Ports:         ports,
+		NoGuestAgent:  !form.Bool(guestAgentField),
 	}
+	req.Wait = form.Bool(waitField)
 	// The ad hoc editor, when used, always wins over the saved-library name:
 	// editing is meant as "just for this launch" and shouldn't silently lose to whatever's still in the name field.
 	if m.cloudInitOverrideOK {

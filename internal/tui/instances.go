@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -10,6 +11,8 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 	"github.com/anvil-project/anvil/pkg/client"
@@ -41,7 +44,25 @@ func (i instanceItem) Description() string {
 	if i.inst.GetKind() == anvilv1.Kind_KIND_CONTAINER {
 		kind, image = "container", i.inst.GetContainer().GetImageRef()
 	}
-	return fmt.Sprintf("%s  •  %s  •  %s", kind, stateLabel(i.inst.GetState()), image)
+	desc := fmt.Sprintf("%s  •  %s  •  %s", kind, stateLabel(i.inst.GetState()), image)
+	if ip := instanceIPTUI(i.inst); ip != "" {
+		desc += "  •  " + ip
+	}
+	return desc
+}
+
+// instanceIPTUI is the address shown in the list: a bridged VM's static IP (reachable from
+// the host), else the guest agent's first report, else nothing.
+func instanceIPTUI(inst *anvilv1.Instance) string {
+	if ip := inst.GetVm().GetStaticIp(); ip != "" {
+		ip, _, _ = strings.Cut(ip, "/")
+		return ip
+	}
+	if ips := inst.GetGuest().GetIpAddresses(); len(ips) > 0 {
+		ip, _, _ := strings.Cut(ips[0], "/")
+		return ip
+	}
+	return ""
 }
 
 // instancesPrompt identifies which overlay form, if any, is showing over the instances list.
@@ -81,6 +102,10 @@ type instancesModel struct {
 
 	forking   bool     // a fork stream is in flight, blocking other keys
 	forkLines []string // the finished (or in-flight) fork's progress transcript
+
+	waiting    bool               // a WaitReady stream is in flight; only esc (cancel) works
+	waitLines  []string           // the finished (or in-flight) wait's progress transcript
+	waitCancel context.CancelFunc // ends the in-flight wait
 
 	detailWidth  int // width of the detail panel next to the list
 	panelHeight  int // shared height for both side-by-side panels
@@ -251,6 +276,32 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, receiveForkEvent(msg.stream)
 
+	case waitStreamMsg:
+		if msg.status != "" {
+			m.instances.waitLines = appendProgressLine(m.instances.waitLines, msg.status)
+		}
+		if msg.done {
+			m.instances.waiting = false
+			if m.instances.waitCancel != nil {
+				m.instances.waitCancel()
+				m.instances.waitCancel = nil
+			}
+			switch {
+			case msg.err != nil && status.Code(msg.err) == codes.Canceled:
+				m.instances.waitLines = append(m.instances.waitLines, styleSubtitle.Render("stopped waiting (the VM keeps running)"))
+			case msg.err != nil:
+				m.instances.waitLines = append(m.instances.waitLines, styleError.Render(msg.err.Error()))
+			case msg.instance != nil:
+				line := "ready: " + msg.instance.GetName()
+				if ips := msg.instance.GetGuest().GetIpAddresses(); len(ips) > 0 {
+					line += " (" + strings.Join(ips, ", ") + ")"
+				}
+				m.instances.waitLines = append(m.instances.waitLines, styleGood.Render(line))
+			}
+			return m, loadInstances(m.client)
+		}
+		return m, receiveWaitEvent(msg.stream)
+
 	case tea.KeyMsg:
 		return m.updateInstancesKey(msg)
 	}
@@ -258,6 +309,19 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.instances.waiting {
+		if msg.String() == "esc" && m.instances.waitCancel != nil {
+			m.instances.waitCancel()
+		}
+		return m, nil
+	}
+	if len(m.instances.waitLines) > 0 {
+		switch msg.String() {
+		case "esc", "enter", "q":
+			m.instances.waitLines = nil
+		}
+		return m, nil
+	}
 	if m.instances.exporting || m.instances.importing || m.instances.forking {
 		return m, nil // block input until the stream finishes
 	}
@@ -386,9 +450,20 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "M":
 		if inst := m.selectedInstance(); inst != nil && inst.GetVm() != nil {
-			m.instances.startPrompt(instancesPromptUmount, inst, newSimpleForm("Umount", []formField{
-				textField("Guest path", "must match what anvil mount used", ""),
-			}))
+			guestPath := textField("Guest path", "must match what anvil mount used", "")
+			for _, mt := range inst.GetVm().GetMounts() {
+				guestPath.Suggestions = append(guestPath.Suggestions, mt.GetGuestPath())
+			}
+			m.instances.startPrompt(instancesPromptUmount, inst, newSimpleForm("Umount", []formField{guestPath}))
+		}
+		return m, nil
+	case "w":
+		if inst := m.selectedInstance(); inst != nil && inst.GetState() == anvilv1.State_STATE_RUNNING {
+			ctx, cancel := context.WithCancel(context.Background())
+			m.instances.waiting = true
+			m.instances.waitLines = nil
+			m.instances.waitCancel = cancel
+			return m, startWaitStream(ctx, m.client, inst.GetName())
 		}
 		return m, nil
 	case "p":
@@ -581,6 +656,18 @@ func (m instancesModel) View() string {
 		}
 		return s
 	}
+	if m.waiting || len(m.waitLines) > 0 {
+		s := styleTitle.Render(" Waiting for first-boot setup… ") + "\n\n"
+		for _, line := range m.waitLines {
+			s += line + "\n"
+		}
+		if m.waiting {
+			s += "\n" + helpBar("esc", "stop waiting")
+		} else {
+			s += "\n" + helpBar("esc", "dismiss")
+		}
+		return s
+	}
 	if m.forking || len(m.forkLines) > 0 {
 		s := styleTitle.Render(" Forking… ") + "\n\n"
 		for _, line := range m.forkLines {
@@ -608,7 +695,7 @@ func (m instancesModel) View() string {
 
 	help := helpBarWrap(m.contentWidth,
 		"n", "launch", "s", "start/stop", "d", "delete", "f", "fork", "x", "shell",
-		"e", "exec", "m", "mount", "M", "umount", "p", "add port", "P", "remove port",
+		"e", "exec", "w", "wait for cloud-init", "m", "mount", "M", "umount", "p", "add port", "P", "remove port",
 		"E", "export", "i", "import", "l", "logs", "r", "refresh", "esc", "back",
 	)
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right) + "\n" + help
@@ -639,6 +726,13 @@ func (m instancesModel) detailView() string {
 	if ports := portsOf(inst); len(ports) > 0 {
 		b = append(b, detailRow("Ports", formatPorts(ports)))
 	}
+	for _, mt := range inst.GetVm().GetMounts() {
+		line := mt.GetGuestPath() + " ← " + mt.GetHostPath()
+		if mt.GetReadOnly() {
+			line += " (ro)"
+		}
+		b = append(b, detailRow("Mount", line))
+	}
 
 	if inst.GetState() != anvilv1.State_STATE_RUNNING {
 		b = append(b, "", styleSubtitle.Render("not running: no live stats"))
@@ -664,6 +758,7 @@ func (m instancesModel) detailView() string {
 	}
 	b = append(b, detailRow("Address", address))
 	b = append(b, detailRow("Uptime", humanDuration(stats.GetUptimeSeconds())))
+	b = append(b, guestRows(inst)...)
 	b = append(b, "")
 
 	barWidth := m.detailWidth - boxOverhead - 14
@@ -697,6 +792,40 @@ func (m instancesModel) detailView() string {
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, b...)
+}
+
+// guestRows renders what a running VM's guest agent reports; nothing for a container.
+func guestRows(inst *anvilv1.Instance) []string {
+	if inst.GetKind() != anvilv1.Kind_KIND_VM {
+		return nil
+	}
+	g := inst.GetGuest()
+	agent := styleSubtitle.Render("not connected")
+	if g.GetAgentConnected() {
+		agent = "connected"
+	} else if inst.GetVm().GetNoGuestAgent() {
+		agent = styleSubtitle.Render("disabled")
+	}
+	rows := []string{detailRow("Agent", agent), detailRow("Init", cloudInitText(g.GetCloudInit()))}
+	for _, ip := range g.GetIpAddresses() {
+		rows = append(rows, detailRow("Guest IP", ip))
+	}
+	return rows
+}
+
+func cloudInitText(s anvilv1.CloudInitStatus) string {
+	switch s {
+	case anvilv1.CloudInitStatus_CLOUD_INIT_STATUS_RUNNING:
+		return "running"
+	case anvilv1.CloudInitStatus_CLOUD_INIT_STATUS_DONE:
+		return "done"
+	case anvilv1.CloudInitStatus_CLOUD_INIT_STATUS_ERROR:
+		return styleError.Render("error (see logs)")
+	case anvilv1.CloudInitStatus_CLOUD_INIT_STATUS_DISABLED:
+		return "disabled"
+	default:
+		return styleSubtitle.Render("unknown")
+	}
 }
 
 func detailRow(label, value string) string {

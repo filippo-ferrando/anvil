@@ -22,6 +22,25 @@ func printExtraHosts(w io.Writer, hosts map[string]string) {
 	}
 }
 
+// printGuestInfo prints what the guest agent reports, for a running VM.
+func printGuestInfo(w io.Writer, inst *anvilv1.Instance) {
+	if inst.GetState() != anvilv1.State_STATE_RUNNING {
+		return
+	}
+	g := inst.GetGuest()
+	agent := "not connected"
+	if g.GetAgentConnected() {
+		agent = "connected"
+	} else if inst.GetVm().GetNoGuestAgent() {
+		agent = "disabled (--no-guest-agent)"
+	}
+	fmt.Fprintf(w, "Guest agent:\t%s\n", agent)
+	fmt.Fprintf(w, "Cloud-init:\t%s\n", cloudInitLabel(g.GetCloudInit()))
+	for _, ip := range g.GetIpAddresses() {
+		fmt.Fprintf(w, "IP:\t%s\n", ip)
+	}
+}
+
 func newInfoCommand(flags *globalFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:   "info <name>...",
@@ -69,6 +88,7 @@ func newInfoCommand(flags *globalFlags) *cobra.Command {
 						fmt.Fprintf(cmd.OutOrStdout(), "Mount:\t%s -> %s (%s)\n", m.GetHostPath(), m.GetGuestPath(), mode)
 					}
 					printExtraHosts(cmd.OutOrStdout(), vmSpec.GetExtraHosts())
+					printGuestInfo(cmd.OutOrStdout(), inst)
 				}
 				if containerSpec := inst.GetContainer(); containerSpec != nil {
 					fmt.Fprintf(cmd.OutOrStdout(), "Image:\t%s\n", containerSpec.GetImageRef())

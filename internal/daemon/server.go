@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"time"
 
@@ -40,15 +41,62 @@ func sendLaunchEvent(stream launchProgressSender, ev instance.LaunchEvent) {
 	}
 }
 
+// defaultWaitTimeout bounds launch --wait and WaitReady when the request sets no timeout.
+const defaultWaitTimeout = 15 * time.Minute
+
 func (s *Server) Launch(req *anvilv1.LaunchRequest, stream anvilv1.InstanceService_LaunchServer) error {
 	params := launchParamsFromPB(req)
-	send := func(ev instance.LaunchEvent) { sendLaunchEvent(stream, ev) }
+	ctx := stream.Context()
+	wait := req.GetWait() && !params.NoStart
+
+	// With wait, the final Instance event is held back until the guest is ready.
+	var launched *instance.Spec
+	send := func(ev instance.LaunchEvent) {
+		if wait && ev.Instance != nil {
+			launched = ev.Instance
+			return
+		}
+		sendLaunchEvent(stream, ev)
+	}
 	// A launch with an intent_name joins (or creates) that intent instead
 	// of producing a standalone instance.
+	var err error
 	if params.IntentName != "" {
-		return s.Intents.Launch(stream.Context(), params, send)
+		err = s.Intents.Launch(ctx, params, send)
+	} else {
+		err = s.Manager.Launch(ctx, params, send)
 	}
-	return s.Manager.Launch(stream.Context(), params, send)
+	if err != nil || !wait || launched == nil {
+		return err
+	}
+	return s.waitReady(ctx, launched.Name, req.GetWaitTimeoutSeconds(), stream)
+}
+
+func (s *Server) WaitReady(req *anvilv1.WaitReadyRequest, stream anvilv1.InstanceService_WaitReadyServer) error {
+	return s.waitReady(stream.Context(), req.GetName(), req.GetTimeoutSeconds(), stream)
+}
+
+// waitReady streams wait progress for name, then its fresh record or the error.
+func (s *Server) waitReady(ctx context.Context, name string, timeoutSeconds int32, stream launchProgressSender) error {
+	timeout := time.Duration(timeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = defaultWaitTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	progress := func(status string) { sendLaunchEvent(stream, instance.LaunchEvent{Status: status}) }
+	if err := s.Manager.WaitReady(ctx, name, progress); err != nil {
+		sendLaunchEvent(stream, instance.LaunchEvent{Err: err})
+		return nil // reported in-band, like a failed launch
+	}
+	specs, err := s.Manager.Info([]string{name})
+	if err != nil || len(specs) == 0 {
+		sendLaunchEvent(stream, instance.LaunchEvent{Err: fmt.Errorf("instance: reading %s after waiting: %v", name, err)})
+		return nil
+	}
+	sendLaunchEvent(stream, instance.LaunchEvent{Instance: specs[0]})
+	return nil
 }
 
 func (s *Server) Fork(req *anvilv1.ForkRequest, stream anvilv1.InstanceService_ForkServer) error {

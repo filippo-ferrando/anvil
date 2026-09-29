@@ -656,3 +656,26 @@ func writeFrame(w http.ResponseWriter, streamType byte, payload string) {
 		f.Flush()
 	}
 }
+
+func TestEventsStreamsUntilClosed(t *testing.T) {
+	var gotQuery string
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query().Get("filters")
+		w.WriteHeader(http.StatusOK)
+		enc := json.NewEncoder(w)
+		_ = enc.Encode(map[string]any{"Type": "container", "Action": "die", "Actor": map[string]any{"ID": "abc", "Attributes": map[string]string{"exitCode": "137"}}})
+		_ = enc.Encode(map[string]any{"Type": "container", "Action": "start", "Actor": map[string]any{"ID": "def"}})
+	}))
+
+	var got []Event
+	err := c.Events(t.Context(), map[string][]string{"type": {"container"}}, func(ev Event) { got = append(got, ev) })
+	if err == nil {
+		t.Fatal("expected an error once the stream ends")
+	}
+	if len(got) != 2 || got[0].Action != "die" || got[0].Actor.ID != "abc" || got[0].Actor.Attributes["exitCode"] != "137" || got[1].Action != "start" {
+		t.Errorf("unexpected events: %+v", got)
+	}
+	if gotQuery != `{"type":["container"]}` {
+		t.Errorf("unexpected filters query %q", gotQuery)
+	}
+}

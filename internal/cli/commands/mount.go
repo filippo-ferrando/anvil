@@ -13,12 +13,12 @@ func newMountCommand(flags *globalFlags) *cobra.Command {
 	var readOnly bool
 	cmd := &cobra.Command{
 		Use:   "mount <host-path> <name>:<guest-path>",
-		Short: "Share a host directory into a VM (via 9p)",
-		Long: "Share a host directory into a VM, over 9p. If the instance is currently " +
-			"running, this restarts its guest OS to attach the share. There's no way to " +
-			"hot-plug a 9p share into a live QEMU instance (checked against a real QEMU " +
-			"build, not assumed). The instance's disk is untouched, but anything running " +
-			"inside it is interrupted, same as a reboot.",
+		Short: "Share a host directory into a VM (via virtiofs)",
+		Long: "Share a host directory into a VM, over virtiofs (needs virtiofsd on the host). " +
+			"On a running VM whose guest agent is connected, the share is hot-plugged and " +
+			"mounted live. Without the agent, the guest OS restarts to attach it: the disk is " +
+			"untouched, but anything running inside is interrupted, same as a reboot. " +
+			"A VM holds at most 8 mounts.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			hostPath := args[0]
@@ -53,8 +53,9 @@ func newUmountCommand(flags *globalFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:   "umount <name>:<guest-path>",
 		Short: "Remove a mount added with `anvil mount`",
-		Long: "Remove a mount added with `anvil mount`. Like `anvil mount`, this restarts " +
-			"the guest OS if the instance is currently running.",
+		Long: "Remove a mount added with `anvil mount`. Like `anvil mount`, this happens live " +
+			"when the guest agent is connected (it fails if the mount is still in use inside " +
+			"the guest), and restarts a running guest OS otherwise.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name, guestPath, ok := splitInstanceRef(args[0])

@@ -34,6 +34,7 @@ const (
 	InstanceService_RemovePort_FullMethodName = "/anvil.v1.InstanceService/RemovePort"
 	InstanceService_Stats_FullMethodName      = "/anvil.v1.InstanceService/Stats"
 	InstanceService_Watch_FullMethodName      = "/anvil.v1.InstanceService/Watch"
+	InstanceService_WaitReady_FullMethodName  = "/anvil.v1.InstanceService/WaitReady"
 )
 
 // InstanceServiceClient is the client API for InstanceService service.
@@ -64,6 +65,9 @@ type InstanceServiceClient interface {
 	// Watch streams instance changes (create, state/config change, delete) as they happen.
 	// Events are change hints: a client that falls far behind may miss some.
 	Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchEvent], error)
+	// WaitReady streams progress until a running instance's first-boot setup (cloud-init
+	// for a VM) finished. Ends with an Instance event, or an Error one on failure or timeout.
+	WaitReady(ctx context.Context, in *WaitReadyRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LaunchProgress], error)
 }
 
 type instanceServiceClient struct {
@@ -260,6 +264,25 @@ func (c *instanceServiceClient) Watch(ctx context.Context, in *WatchRequest, opt
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type InstanceService_WatchClient = grpc.ServerStreamingClient[WatchEvent]
 
+func (c *instanceServiceClient) WaitReady(ctx context.Context, in *WaitReadyRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LaunchProgress], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &InstanceService_ServiceDesc.Streams[4], InstanceService_WaitReady_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WaitReadyRequest, LaunchProgress]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type InstanceService_WaitReadyClient = grpc.ServerStreamingClient[LaunchProgress]
+
 // InstanceServiceServer is the server API for InstanceService service.
 // All implementations must embed UnimplementedInstanceServiceServer
 // for forward compatibility.
@@ -288,6 +311,9 @@ type InstanceServiceServer interface {
 	// Watch streams instance changes (create, state/config change, delete) as they happen.
 	// Events are change hints: a client that falls far behind may miss some.
 	Watch(*WatchRequest, grpc.ServerStreamingServer[WatchEvent]) error
+	// WaitReady streams progress until a running instance's first-boot setup (cloud-init
+	// for a VM) finished. Ends with an Instance event, or an Error one on failure or timeout.
+	WaitReady(*WaitReadyRequest, grpc.ServerStreamingServer[LaunchProgress]) error
 	mustEmbedUnimplementedInstanceServiceServer()
 }
 
@@ -342,6 +368,9 @@ func (UnimplementedInstanceServiceServer) Stats(context.Context, *StatsRequest) 
 }
 func (UnimplementedInstanceServiceServer) Watch(*WatchRequest, grpc.ServerStreamingServer[WatchEvent]) error {
 	return status.Errorf(codes.Unimplemented, "method Watch not implemented")
+}
+func (UnimplementedInstanceServiceServer) WaitReady(*WaitReadyRequest, grpc.ServerStreamingServer[LaunchProgress]) error {
+	return status.Errorf(codes.Unimplemented, "method WaitReady not implemented")
 }
 func (UnimplementedInstanceServiceServer) mustEmbedUnimplementedInstanceServiceServer() {}
 func (UnimplementedInstanceServiceServer) testEmbeddedByValue()                         {}
@@ -606,6 +635,17 @@ func _InstanceService_Watch_Handler(srv interface{}, stream grpc.ServerStream) e
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type InstanceService_WatchServer = grpc.ServerStreamingServer[WatchEvent]
 
+func _InstanceService_WaitReady_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WaitReadyRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(InstanceServiceServer).WaitReady(m, &grpc.GenericServerStream[WaitReadyRequest, LaunchProgress]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type InstanceService_WaitReadyServer = grpc.ServerStreamingServer[LaunchProgress]
+
 // InstanceService_ServiceDesc is the grpc.ServiceDesc for InstanceService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -677,6 +717,11 @@ var InstanceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Watch",
 			Handler:       _InstanceService_Watch_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "WaitReady",
+			Handler:       _InstanceService_WaitReady_Handler,
 			ServerStreams: true,
 		},
 	},
