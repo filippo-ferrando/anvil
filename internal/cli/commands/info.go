@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -20,6 +21,34 @@ func printExtraHosts(w io.Writer, hosts map[string]string) {
 	for _, name := range names {
 		fmt.Fprintf(w, "Host:\t%s -> %s\n", name, hosts[name])
 	}
+}
+
+func yesNo(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
+}
+
+// restartPolicyLabel renders p the way --restart takes it.
+func restartPolicyLabel(p *anvilv1.RestartPolicy) string {
+	mode := p.GetMode()
+	if mode == "" {
+		mode = "no"
+	}
+	if p.GetMaxRetries() > 0 {
+		return fmt.Sprintf("%s:%d", mode, p.GetMaxRetries())
+	}
+	return mode
+}
+
+// scheduleLabel renders a snapshot schedule, e.g. "every 6h0m0s, keep 8, last 2026-09-29 18:00".
+func scheduleLabel(s *anvilv1.SnapshotSchedule) string {
+	out := fmt.Sprintf("every %s, keep %d", time.Duration(s.GetEverySeconds())*time.Second, s.GetKeep())
+	if s.GetLastRunUnix() > 0 {
+		out += ", last " + time.Unix(s.GetLastRunUnix(), 0).Format("2006-01-02 15:04")
+	}
+	return out
 }
 
 // printGuestInfo prints what the guest agent reports, for a running VM.
@@ -61,6 +90,8 @@ func newInfoCommand(flags *globalFlags) *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "Name:\t%s\n", inst.GetName())
 				fmt.Fprintf(cmd.OutOrStdout(), "Kind:\t%s\n", kindLabel(inst.GetKind()))
 				fmt.Fprintf(cmd.OutOrStdout(), "State:\t%s\n", stateLabel(inst.GetState()))
+				fmt.Fprintf(cmd.OutOrStdout(), "Autostart:\t%s\n", yesNo(inst.GetAutostart()))
+				fmt.Fprintf(cmd.OutOrStdout(), "Restart:\t%s\n", restartPolicyLabel(inst.GetRestartPolicy()))
 				if intentName, role := inst.GetLabels()["intent"], inst.GetLabels()["role"]; intentName != "" {
 					fmt.Fprintf(cmd.OutOrStdout(), "Intent:\t%s (role: %s)\n", intentName, role)
 				}
@@ -89,6 +120,9 @@ func newInfoCommand(flags *globalFlags) *cobra.Command {
 					}
 					printExtraHosts(cmd.OutOrStdout(), vmSpec.GetExtraHosts())
 					printGuestInfo(cmd.OutOrStdout(), inst)
+					if s := vmSpec.GetSnapshotSchedule(); s.GetEverySeconds() > 0 {
+						fmt.Fprintf(cmd.OutOrStdout(), "Snapshots:\t%s\n", scheduleLabel(s))
+					}
 				}
 				if containerSpec := inst.GetContainer(); containerSpec != nil {
 					fmt.Fprintf(cmd.OutOrStdout(), "Image:\t%s\n", containerSpec.GetImageRef())

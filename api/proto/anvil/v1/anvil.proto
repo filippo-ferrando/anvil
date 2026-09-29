@@ -37,6 +37,25 @@ service InstanceService {
   // WaitReady streams progress until a running instance's first-boot setup (cloud-init
   // for a VM) finished. Ends with an Instance event, or an Error one on failure or timeout.
   rpc WaitReady(WaitReadyRequest) returns (stream LaunchProgress);
+
+  // Update changes an existing instance's settings; unset fields stay as they are.
+  // CPU and memory of a running VM change live when possible, else at its next start (see restart_pending).
+  rpc Update(UpdateRequest) returns (UpdateReply);
+}
+
+message UpdateRequest {
+  string name = 1;
+  optional int32 cpus = 2;        // VM only
+  optional int64 memory_mib = 3;  // VM only
+  optional int64 disk_gib = 4;    // VM only, grow only; live on a running VM
+  optional bool autostart = 5;
+  RestartPolicy restart_policy = 6; // unset = unchanged
+}
+
+message UpdateReply {
+  Instance instance = 1;
+  bool restart_pending = 2; // some changes wait for the next start of the running VM
+  repeated string notes = 3; // what was applied and how, for display
 }
 
 message WaitReadyRequest {
@@ -164,6 +183,8 @@ message VMSpec {
   // Skips installing qemu-guest-agent through cloud-init. Without it, IP reporting,
   // agent shutdown and precise cloud-init status aren't available.
   bool no_guest_agent = 20;
+
+  SnapshotSchedule snapshot_schedule = 21;
 }
 
 // Mount is one host directory shared into a VM's guest over virtiofs.
@@ -222,6 +243,23 @@ message Instance {
 
   // Daemon-populated, live: what the guest agent last reported. Unset when unknown.
   GuestInfo guest = 9;
+
+  // autostart starts the instance when anvild starts, unless it was last stopped on purpose.
+  bool autostart = 10;
+  RestartPolicy restart_policy = 11;
+}
+
+// RestartPolicy says what anvild does when an instance stops without being asked to.
+message RestartPolicy {
+  string mode = 1;        // "no" (default), "on-failure" (exited with an error), "always"
+  int32 max_retries = 2;  // on-failure only: give up after this many restarts in a row; 0 = no limit
+}
+
+// SnapshotSchedule takes a live snapshot of a running VM every interval, keeping the newest ones.
+message SnapshotSchedule {
+  int64 every_seconds = 1;  // 0 = no schedule
+  int32 keep = 2;           // scheduled snapshots to keep; older ones are deleted
+  int64 last_run_unix = 3;  // daemon-populated
 }
 
 enum CloudInitStatus {
@@ -263,6 +301,9 @@ message LaunchRequest {
   // (cloud-init for a VM) finished. wait_timeout_seconds defaults to 900.
   bool wait = 12;
   int32 wait_timeout_seconds = 13;
+
+  bool autostart = 14;
+  RestartPolicy restart_policy = 15;
 }
 
 message LaunchProgress {
@@ -804,7 +845,18 @@ service SnapshotService {
   rpc Restore(SnapshotRestoreRequest) returns (SnapshotRestoreReply);
   rpc Delete(SnapshotDeleteRequest) returns (SnapshotDeleteReply);
   rpc List(SnapshotListRequest) returns (SnapshotListReply);
+
+  // SetSchedule sets (or, with every_seconds 0, removes) a VM's scheduled snapshots.
+  rpc SetSchedule(SnapshotSetScheduleRequest) returns (SnapshotSetScheduleReply);
 }
+
+message SnapshotSetScheduleRequest {
+  string name = 1;
+  int64 every_seconds = 2; // 0 removes the schedule; at least 60 otherwise
+  int32 keep = 3;          // at least 1
+}
+
+message SnapshotSetScheduleReply {}
 
 message SnapshotCreateRequest {
   string name = 1; // instance name

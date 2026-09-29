@@ -3,6 +3,9 @@
 package daemon
 
 import (
+	"fmt"
+	"time"
+
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 	"github.com/anvil-project/anvil/internal/instance"
 )
@@ -102,6 +105,7 @@ func vmSpecToPB(v *instance.VMSpec) *anvilv1.VMSpec {
 		SourceDiskPath:       v.SourceDiskPath,
 		SourceDiskBaseSha256: v.SourceDiskBaseSHA256,
 		NoGuestAgent:         v.NoGuestAgent,
+		SnapshotSchedule:     snapshotScheduleToPB(v.SnapshotSchedule),
 	}
 	for _, m := range v.Mounts {
 		pb.Mounts = append(pb.Mounts, &anvilv1.Mount{
@@ -215,7 +219,46 @@ func specToPB(s *instance.Spec) *anvilv1.Instance {
 		Vm:            vmSpecToPB(s.VM),
 		Container:     containerSpecToPB(s.Container),
 		Guest:         guestInfoToPB(s.Guest),
+		Autostart:     s.Autostart,
+		RestartPolicy: restartPolicyToPB(s.RestartPolicy),
 	}
+}
+
+func restartPolicyToPB(p instance.RestartPolicy) *anvilv1.RestartPolicy {
+	mode := p.Mode
+	if mode == "" {
+		mode = instance.RestartNo
+	}
+	return &anvilv1.RestartPolicy{Mode: mode, MaxRetries: int32(p.MaxRetries)}
+}
+
+// restartPolicyFromPB validates p; nil means "not set".
+func restartPolicyFromPB(p *anvilv1.RestartPolicy) (*instance.RestartPolicy, error) {
+	if p == nil {
+		return nil, nil
+	}
+	parsed, err := instance.ParseRestartPolicy(p.GetMode())
+	if err != nil {
+		return nil, err
+	}
+	if p.GetMaxRetries() != 0 {
+		if parsed.Mode != instance.RestartOnFailure {
+			return nil, fmt.Errorf("instance: max_retries only applies to on-failure")
+		}
+		parsed.MaxRetries = int(p.GetMaxRetries())
+	}
+	return &parsed, nil
+}
+
+func snapshotScheduleToPB(s *instance.SnapshotSchedule) *anvilv1.SnapshotSchedule {
+	if s == nil {
+		return nil
+	}
+	pb := &anvilv1.SnapshotSchedule{EverySeconds: int64(s.Every / time.Second), Keep: int32(s.Keep)}
+	if !s.LastRun.IsZero() {
+		pb.LastRunUnix = s.LastRun.Unix()
+	}
+	return pb
 }
 
 func guestInfoToPB(g *instance.GuestInfo) *anvilv1.GuestInfo {
@@ -269,8 +312,13 @@ func statsToPB(s instance.Stats) *anvilv1.InstanceStats {
 	}
 }
 
-func launchParamsFromPB(req *anvilv1.LaunchRequest) instance.LaunchParams {
+func launchParamsFromPB(req *anvilv1.LaunchRequest) (instance.LaunchParams, error) {
+	policy, err := restartPolicyFromPB(req.GetRestartPolicy())
+	if err != nil {
+		return instance.LaunchParams{}, err
+	}
 	params := instance.LaunchParams{
+		Autostart:      req.GetAutostart(),
 		Name:           req.GetName(),
 		Kind:           kindFromPB(req.GetKind()),
 		VM:             vmSpecFromPB(req.GetVm()),
@@ -287,5 +335,8 @@ func launchParamsFromPB(req *anvilv1.LaunchRequest) instance.LaunchParams {
 			DockerIPRange: req.GetPinnedDockerIpRange(),
 		}
 	}
-	return params
+	if policy != nil {
+		params.RestartPolicy = *policy
+	}
+	return params, nil
 }

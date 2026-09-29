@@ -35,6 +35,7 @@ const (
 	InstanceService_Stats_FullMethodName      = "/anvil.v1.InstanceService/Stats"
 	InstanceService_Watch_FullMethodName      = "/anvil.v1.InstanceService/Watch"
 	InstanceService_WaitReady_FullMethodName  = "/anvil.v1.InstanceService/WaitReady"
+	InstanceService_Update_FullMethodName     = "/anvil.v1.InstanceService/Update"
 )
 
 // InstanceServiceClient is the client API for InstanceService service.
@@ -68,6 +69,9 @@ type InstanceServiceClient interface {
 	// WaitReady streams progress until a running instance's first-boot setup (cloud-init
 	// for a VM) finished. Ends with an Instance event, or an Error one on failure or timeout.
 	WaitReady(ctx context.Context, in *WaitReadyRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LaunchProgress], error)
+	// Update changes an existing instance's settings; unset fields stay as they are.
+	// CPU and memory of a running VM change live when possible, else at its next start (see restart_pending).
+	Update(ctx context.Context, in *UpdateRequest, opts ...grpc.CallOption) (*UpdateReply, error)
 }
 
 type instanceServiceClient struct {
@@ -283,6 +287,16 @@ func (c *instanceServiceClient) WaitReady(ctx context.Context, in *WaitReadyRequ
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type InstanceService_WaitReadyClient = grpc.ServerStreamingClient[LaunchProgress]
 
+func (c *instanceServiceClient) Update(ctx context.Context, in *UpdateRequest, opts ...grpc.CallOption) (*UpdateReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateReply)
+	err := c.cc.Invoke(ctx, InstanceService_Update_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // InstanceServiceServer is the server API for InstanceService service.
 // All implementations must embed UnimplementedInstanceServiceServer
 // for forward compatibility.
@@ -314,6 +328,9 @@ type InstanceServiceServer interface {
 	// WaitReady streams progress until a running instance's first-boot setup (cloud-init
 	// for a VM) finished. Ends with an Instance event, or an Error one on failure or timeout.
 	WaitReady(*WaitReadyRequest, grpc.ServerStreamingServer[LaunchProgress]) error
+	// Update changes an existing instance's settings; unset fields stay as they are.
+	// CPU and memory of a running VM change live when possible, else at its next start (see restart_pending).
+	Update(context.Context, *UpdateRequest) (*UpdateReply, error)
 	mustEmbedUnimplementedInstanceServiceServer()
 }
 
@@ -371,6 +388,9 @@ func (UnimplementedInstanceServiceServer) Watch(*WatchRequest, grpc.ServerStream
 }
 func (UnimplementedInstanceServiceServer) WaitReady(*WaitReadyRequest, grpc.ServerStreamingServer[LaunchProgress]) error {
 	return status.Errorf(codes.Unimplemented, "method WaitReady not implemented")
+}
+func (UnimplementedInstanceServiceServer) Update(context.Context, *UpdateRequest) (*UpdateReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
 }
 func (UnimplementedInstanceServiceServer) mustEmbedUnimplementedInstanceServiceServer() {}
 func (UnimplementedInstanceServiceServer) testEmbeddedByValue()                         {}
@@ -646,6 +666,24 @@ func _InstanceService_WaitReady_Handler(srv interface{}, stream grpc.ServerStrea
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type InstanceService_WaitReadyServer = grpc.ServerStreamingServer[LaunchProgress]
 
+func _InstanceService_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InstanceServiceServer).Update(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InstanceService_Update_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InstanceServiceServer).Update(ctx, req.(*UpdateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // InstanceService_ServiceDesc is the grpc.ServiceDesc for InstanceService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -696,6 +734,10 @@ var InstanceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Stats",
 			Handler:    _InstanceService_Stats_Handler,
+		},
+		{
+			MethodName: "Update",
+			Handler:    _InstanceService_Update_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
@@ -2349,10 +2391,11 @@ var ExportService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	SnapshotService_Create_FullMethodName  = "/anvil.v1.SnapshotService/Create"
-	SnapshotService_Restore_FullMethodName = "/anvil.v1.SnapshotService/Restore"
-	SnapshotService_Delete_FullMethodName  = "/anvil.v1.SnapshotService/Delete"
-	SnapshotService_List_FullMethodName    = "/anvil.v1.SnapshotService/List"
+	SnapshotService_Create_FullMethodName      = "/anvil.v1.SnapshotService/Create"
+	SnapshotService_Restore_FullMethodName     = "/anvil.v1.SnapshotService/Restore"
+	SnapshotService_Delete_FullMethodName      = "/anvil.v1.SnapshotService/Delete"
+	SnapshotService_List_FullMethodName        = "/anvil.v1.SnapshotService/List"
+	SnapshotService_SetSchedule_FullMethodName = "/anvil.v1.SnapshotService/SetSchedule"
 )
 
 // SnapshotServiceClient is the client API for SnapshotService service.
@@ -2366,6 +2409,8 @@ type SnapshotServiceClient interface {
 	Restore(ctx context.Context, in *SnapshotRestoreRequest, opts ...grpc.CallOption) (*SnapshotRestoreReply, error)
 	Delete(ctx context.Context, in *SnapshotDeleteRequest, opts ...grpc.CallOption) (*SnapshotDeleteReply, error)
 	List(ctx context.Context, in *SnapshotListRequest, opts ...grpc.CallOption) (*SnapshotListReply, error)
+	// SetSchedule sets (or, with every_seconds 0, removes) a VM's scheduled snapshots.
+	SetSchedule(ctx context.Context, in *SnapshotSetScheduleRequest, opts ...grpc.CallOption) (*SnapshotSetScheduleReply, error)
 }
 
 type snapshotServiceClient struct {
@@ -2416,6 +2461,16 @@ func (c *snapshotServiceClient) List(ctx context.Context, in *SnapshotListReques
 	return out, nil
 }
 
+func (c *snapshotServiceClient) SetSchedule(ctx context.Context, in *SnapshotSetScheduleRequest, opts ...grpc.CallOption) (*SnapshotSetScheduleReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SnapshotSetScheduleReply)
+	err := c.cc.Invoke(ctx, SnapshotService_SetSchedule_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SnapshotServiceServer is the server API for SnapshotService service.
 // All implementations must embed UnimplementedSnapshotServiceServer
 // for forward compatibility.
@@ -2427,6 +2482,8 @@ type SnapshotServiceServer interface {
 	Restore(context.Context, *SnapshotRestoreRequest) (*SnapshotRestoreReply, error)
 	Delete(context.Context, *SnapshotDeleteRequest) (*SnapshotDeleteReply, error)
 	List(context.Context, *SnapshotListRequest) (*SnapshotListReply, error)
+	// SetSchedule sets (or, with every_seconds 0, removes) a VM's scheduled snapshots.
+	SetSchedule(context.Context, *SnapshotSetScheduleRequest) (*SnapshotSetScheduleReply, error)
 	mustEmbedUnimplementedSnapshotServiceServer()
 }
 
@@ -2448,6 +2505,9 @@ func (UnimplementedSnapshotServiceServer) Delete(context.Context, *SnapshotDelet
 }
 func (UnimplementedSnapshotServiceServer) List(context.Context, *SnapshotListRequest) (*SnapshotListReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method List not implemented")
+}
+func (UnimplementedSnapshotServiceServer) SetSchedule(context.Context, *SnapshotSetScheduleRequest) (*SnapshotSetScheduleReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetSchedule not implemented")
 }
 func (UnimplementedSnapshotServiceServer) mustEmbedUnimplementedSnapshotServiceServer() {}
 func (UnimplementedSnapshotServiceServer) testEmbeddedByValue()                         {}
@@ -2542,6 +2602,24 @@ func _SnapshotService_List_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SnapshotService_SetSchedule_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SnapshotSetScheduleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SnapshotServiceServer).SetSchedule(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SnapshotService_SetSchedule_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SnapshotServiceServer).SetSchedule(ctx, req.(*SnapshotSetScheduleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SnapshotService_ServiceDesc is the grpc.ServiceDesc for SnapshotService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2564,6 +2642,10 @@ var SnapshotService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "List",
 			Handler:    _SnapshotService_List_Handler,
+		},
+		{
+			MethodName: "SetSchedule",
+			Handler:    _SnapshotService_SetSchedule_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -67,10 +67,13 @@ Docker API" possible without a platform abstraction layer getting in the way.
   guest agent is connected
 - live progress on downloads instead of a silent terminal
 - `anvil snapshot` takes point-in-time QCOW2 checkpoints of a VM's disk and restores back
-  to them later, live if the VM is running
+  to them later, live if the VM is running, and `anvil snapshot schedule` takes them
+  every interval, keeping the newest N
 - `anvil fork` clones a VM into a new instance by copying its disk, keeping the same
   backing image so the fork only stores its own deltas. Safe to run on a running source
-  VM: it stays up, untouched, the whole time
+  VM: it stays up, and the copy is point-in-time (filesystem-consistent with the guest agent)
+- `anvil set` grows the disk and changes CPUs/memory, all live on a running VM; `--autostart` and
+  `--restart no|on-failure[:N]|always` keep long-running VMs and containers up
 
 **Containers**, talking to Docker's real HTTP API directly (Podman backend is on the
 way, tracked separately, see [limitations](#status--limitations)):

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"time"
 
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 	"github.com/anvil-project/anvil/internal/instance"
@@ -53,4 +54,12 @@ func (s *SnapshotServer) List(ctx context.Context, req *anvilv1.SnapshotListRequ
 		})
 	}
 	return reply, nil
+}
+
+func (s *SnapshotServer) SetSchedule(ctx context.Context, req *anvilv1.SnapshotSetScheduleRequest) (*anvilv1.SnapshotSetScheduleReply, error) {
+	every := time.Duration(req.GetEverySeconds()) * time.Second
+	if err := s.Manager.SetSnapshotSchedule(req.GetName(), every, int(req.GetKeep())); err != nil {
+		return nil, err
+	}
+	return &anvilv1.SnapshotSetScheduleReply{}, nil
 }

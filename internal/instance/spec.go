@@ -3,6 +3,7 @@ package instance
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -47,6 +48,72 @@ type Spec struct {
 
 	// Guest is live, never persisted: what the guest agent last reported (VM only, nil if unknown).
 	Guest *GuestInfo
+
+	// Autostart starts the instance when anvild starts, unless UserStopped.
+	Autostart     bool
+	RestartPolicy RestartPolicy
+	// UserStopped is set by an explicit stop and cleared by a start, so autostart and
+	// the restart policy leave an instance someone stopped on purpose alone.
+	UserStopped bool
+}
+
+// Restart modes for RestartPolicy.Mode.
+const (
+	RestartNo        = "no"
+	RestartOnFailure = "on-failure"
+	RestartAlways    = "always"
+)
+
+// RestartPolicy says what to do when an instance stops without anvil asking.
+type RestartPolicy struct {
+	Mode       string // RestartNo (also when empty), RestartOnFailure or RestartAlways
+	MaxRetries int    // on-failure only: restarts in a row before giving up; 0 = no limit
+}
+
+// ParseRestartPolicy reads "no", "always", "on-failure" or "on-failure:N".
+func ParseRestartPolicy(s string) (RestartPolicy, error) {
+	mode, retries, hasRetries := strings.Cut(strings.TrimSpace(s), ":")
+	switch mode {
+	case "", RestartNo, RestartAlways:
+		if hasRetries {
+			return RestartPolicy{}, fmt.Errorf("instance: only on-failure takes a retry count, got %q", s)
+		}
+		if mode == "" {
+			mode = RestartNo
+		}
+		return RestartPolicy{Mode: mode}, nil
+	case RestartOnFailure:
+		p := RestartPolicy{Mode: mode}
+		if hasRetries {
+			n, err := strconv.Atoi(retries)
+			if err != nil || n < 0 {
+				return RestartPolicy{}, fmt.Errorf("instance: invalid retry count in %q", s)
+			}
+			p.MaxRetries = n
+		}
+		return p, nil
+	default:
+		return RestartPolicy{}, fmt.Errorf("instance: unknown restart policy %q (want no, on-failure[:N] or always)", s)
+	}
+}
+
+// String is the inverse of ParseRestartPolicy.
+func (p RestartPolicy) String() string {
+	switch {
+	case p.Mode == "":
+		return RestartNo
+	case p.Mode == RestartOnFailure && p.MaxRetries > 0:
+		return fmt.Sprintf("%s:%d", p.Mode, p.MaxRetries)
+	default:
+		return p.Mode
+	}
+}
+
+// SnapshotSchedule takes a live snapshot of a running VM every Every, keeping the newest Keep.
+type SnapshotSchedule struct {
+	Every   time.Duration
+	Keep    int
+	LastRun time.Time
 }
 
 type VMSpec struct {
@@ -106,6 +173,9 @@ type VMSpec struct {
 
 	// NoGuestAgent skips installing qemu-guest-agent through cloud-init.
 	NoGuestAgent bool
+
+	// SnapshotSchedule is nil when no scheduled snapshots are set up.
+	SnapshotSchedule *SnapshotSchedule
 }
 
 // Mount is one host directory shared into the guest over virtiofs.

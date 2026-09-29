@@ -15,8 +15,10 @@ func newForkCommand(flags *globalFlags) *cobra.Command {
 		Long: "Fork copies <instance>'s current disk into a new instance <new-name>, preserving " +
 			"its backing file (the shared base image) rather than flattening it, so the fork " +
 			"only stores its own deltas, same as any freshly launched overlay. Safe to run while " +
-			"<instance> is running: the copy is taken with qemu-img's shared read mode, so " +
-			"<instance> keeps running throughout, untouched. The fork carries over <instance>'s " +
+			"<instance> is running: QEMU copies the disk exactly as it was when the fork started, " +
+			"while <instance> keeps running. With the guest agent connected, the guest's " +
+			"filesystems are frozen for that instant, so the copy is clean, not just like a " +
+			"power cut. The fork carries over <instance>'s " +
 			"CPUs, memory, cloud-init, SSH keys, mounts, and ports, but always starts out as a " +
 			"standalone instance: it doesn't inherit intent membership or a bridge address. " +
 			"VM instances only.",

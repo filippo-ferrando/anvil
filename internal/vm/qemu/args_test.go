@@ -279,3 +279,27 @@ func TestBuildArgsGuestAgent(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildArgsHotplugHeadroom(t *testing.T) {
+	args, err := BuildArgs(Config{DiskPath: "/d", QMPSocket: "/q", CPUs: 2, MemoryMiB: 1024, MaxCPUs: 8, MaxMemoryMiB: 4097})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		"-smp cpus=2,maxcpus=8,sockets=8,cores=1,threads=1",
+		"-m 1024M,maxmem=4096M", // the odd MiB is dropped: virtio-mem works in 2 MiB blocks
+		"-object memory-backend-memfd,id=vmem0-ram,size=3072M,share=on",
+		"-device virtio-mem-pci,id=vmem0,memdev=vmem0-ram,requested-size=0",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("expected %q in args, got: %s", want, joined)
+		}
+	}
+
+	plain, _ := BuildArgs(Config{DiskPath: "/d", QMPSocket: "/q", CPUs: 2, MemoryMiB: 1024})
+	joined = strings.Join(plain, " ")
+	if !strings.Contains(joined, "-smp 2 ") || !strings.Contains(joined, "-m 1024M ") || strings.Contains(joined, "virtio-mem") {
+		t.Errorf("expected no headroom without MaxCPUs/MaxMemoryMiB, got: %s", joined)
+	}
+}

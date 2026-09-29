@@ -4,15 +4,18 @@ package vm
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/anvil-project/anvil/internal/instance"
 	"github.com/anvil-project/anvil/internal/vm/cloudinit"
+	"github.com/anvil-project/anvil/internal/vm/image"
 	"github.com/anvil-project/anvil/internal/vm/qemu"
 )
 
@@ -65,7 +68,7 @@ func TestGuestAgentRealBoot(t *testing.T) {
 
 	bootMount := instance.Mount{HostPath: share("boot", "from boot mount\n"), GuestPath: "/mnt/boot", Tag: "mount0"}
 	spec := &instance.Spec{ID: id, Name: "e2e", VM: &instance.VMSpec{
-		Mounts: []instance.Mount{bootMount}, NextMountIndex: 1, MountFS: mountFSVirtiofs,
+		DiskPath: disk, Mounts: []instance.Mount{bootMount}, NextMountIndex: 1, MountFS: mountFSVirtiofs,
 	}}
 
 	userData, err := mergeGuestAgent("#cloud-config\n{}\n")
@@ -100,6 +103,8 @@ func TestGuestAgentRealBoot(t *testing.T) {
 		KVM:              kvmAvailable(),
 		Disk:             qemu.ProbeDiskTuning(ctx, disk),
 		Mounts:           mounts,
+		MaxCPUs:          4,
+		MaxMemoryMiB:     4096,
 	}
 	proc, err := qemu.Spawn(ctx, cfg, filepath.Join(dir, "qemu.log"))
 	if err != nil {
@@ -120,6 +125,10 @@ func TestGuestAgentRealBoot(t *testing.T) {
 		t.Fatalf("AttachQMP: %v", err)
 	}
 	b.running[id] = proc
+	if err := saveRuntimeState(dir, runtimeState{Pid: proc.Pid(), QMPSocket: cfg.QMPSocket,
+		BootMemoryMiB: cfg.MemoryMiB, MaxCPUs: cfg.MaxCPUs, MaxMemoryMiB: cfg.MaxMemoryMiB}); err != nil {
+		t.Fatal(err)
+	}
 	b.guests[id] = &guestState{agent: qemu.NewGuestAgent(cfg.GuestAgentSocket), cancel: func() {}}
 	go b.watchExit(id, "", proc)
 
@@ -190,6 +199,104 @@ func TestGuestAgentRealBoot(t *testing.T) {
 	}
 	if len(spec.VM.Mounts) != 1 || spec.VM.Mounts[0].GuestPath != "/mnt/ro" {
 		t.Errorf("expected only /mnt/ro left in the spec, got %+v", spec.VM.Mounts)
+	}
+
+	// Live fork with the guest agent: the filesystems are frozen only while the job starts.
+	backing, err := image.BackingFile(disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var forkSteps []string
+	forkDisk := filepath.Join(root, "fork.qcow2")
+	if err := b.forkLive(ctx, spec, proc, backing, forkDisk, func(s string) { forkSteps = append(forkSteps, s) }); err != nil {
+		t.Fatalf("forkLive: %v", err)
+	}
+	t.Logf("%s: live fork done: %v", elapsed(), forkSteps)
+	if !strings.Contains(strings.Join(forkSteps, "|"), "filesystem-consistent") {
+		t.Errorf("expected a filesystem-consistent fork with the agent connected, got %v", forkSteps)
+	}
+	mustGuest("touch /root/after-fork") // writes work again: the guest was thawed
+	run(t, "qemu-img", "check", forkDisk)
+
+	// Live resize: the root filesystem grows without a reboot.
+	sizeOf := func() int64 {
+		out := mustGuest("df -B1 --output=size / | tail -n 1")
+		n, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
+		if err != nil {
+			t.Fatalf("parsing df output %q: %v", out, err)
+		}
+		return n
+	}
+	before := sizeOf()
+	note, err := b.ResizeDisk(ctx, spec, 14)
+	if err != nil {
+		t.Fatalf("ResizeDisk: %v", err)
+	}
+	after := sizeOf()
+	t.Logf("%s: %s (root fs %d -> %d bytes)", elapsed(), note, before, after)
+	if after <= before || !strings.Contains(note, "filesystem grown") {
+		t.Errorf("expected the root filesystem to grow live, note %q, %d -> %d", note, before, after)
+	}
+
+	// Live vCPU changes, seen by the guest itself.
+	nproc := func() string { return mustGuest("nproc") }
+	if got := nproc(); got != "2" {
+		t.Fatalf("expected 2 vCPUs at boot, got %s", got)
+	}
+	if note, err := b.SetCPUsLive(ctx, spec, 4); err != nil {
+		t.Fatalf("SetCPUsLive(4): %v", err)
+	} else {
+		t.Logf("%s: %s", elapsed(), note)
+	}
+	waitGuest := func(what string, cond func() bool) {
+		t.Helper()
+		for i := 0; i < 50 && !cond(); i++ {
+			time.Sleep(200 * time.Millisecond)
+		}
+		if !cond() {
+			t.Errorf("guest never showed %s", what)
+		}
+	}
+	waitGuest("4 vCPUs", func() bool { return nproc() == "4" })
+	if _, err := b.SetCPUsLive(ctx, spec, 2); err != nil {
+		t.Fatalf("SetCPUsLive(2): %v", err)
+	}
+	waitGuest("2 vCPUs", func() bool { return nproc() == "2" })
+	t.Logf("%s: vCPUs 2 -> 4 -> 2 live", elapsed())
+
+	// Live memory changes through virtio-mem.
+	memTotalMiB := func() int64 {
+		out := mustGuest("awk '/^MemTotal:/ {print $2}' /proc/meminfo")
+		kib, err := strconv.ParseInt(out, 10, 64)
+		if err != nil {
+			t.Fatalf("parsing MemTotal %q: %v", out, err)
+		}
+		return kib / 1024
+	}
+	memBefore := memTotalMiB()
+	note, err = b.SetMemoryLive(ctx, spec, 3072)
+	if err != nil {
+		t.Fatalf("SetMemoryLive(3072): %v", err)
+	}
+	memGrown := memTotalMiB()
+	t.Logf("%s: %s (guest MemTotal %d -> %d MiB)", elapsed(), note, memBefore, memGrown)
+	if memGrown-memBefore < 900 {
+		t.Errorf("expected the guest to see about 1 GiB more, MemTotal %d -> %d MiB", memBefore, memGrown)
+	}
+	if got := mustGuest("cat /mnt/ro/hello.txt"); got != "read only" {
+		t.Errorf("expected virtiofs to keep working with added memory, got %q", got)
+	}
+	note, err = b.SetMemoryLive(ctx, spec, 2048)
+	if err != nil {
+		t.Fatalf("SetMemoryLive(2048): %v", err)
+	}
+	memShrunk := memTotalMiB()
+	t.Logf("%s: %s (guest MemTotal %d MiB)", elapsed(), note, memShrunk)
+	if memShrunk > memBefore+64 {
+		t.Errorf("expected the guest back near %d MiB, got %d", memBefore, memShrunk)
+	}
+	if _, err := b.SetMemoryLive(ctx, spec, 1024); !errors.Is(err, instance.ErrNeedsRestart) {
+		t.Errorf("expected going below boot memory to need a restart, got %v", err)
 	}
 
 	// A poweroff from inside the guest, not through Stop.

@@ -16,6 +16,7 @@ type Manager struct {
 	registry Registry
 	backends map[Kind]Backend
 	events   *broadcaster
+	restarts restartTracker
 }
 
 func NewManager(registry Registry, backends map[Kind]Backend) *Manager {
@@ -89,6 +90,9 @@ type LaunchParams struct {
 	// auto-allocating, used when relaunching a migrated intent member.
 	PinnedNetwork  *PinnedNetwork
 	PinnedStaticIP string
+
+	Autostart     bool
+	RestartPolicy RestartPolicy
 }
 
 // PinnedNetwork is an intent's exact subnet/gateway/docker-IP-range.
@@ -137,6 +141,9 @@ func (m *Manager) Launch(ctx context.Context, params LaunchParams, progress func
 		Labels:    labels,
 		VM:        params.VM,
 		Container: params.Container,
+
+		Autostart:     params.Autostart,
+		RestartPolicy: params.RestartPolicy,
 	}
 
 	progress(LaunchEvent{Status: "provisioning"})
@@ -521,6 +528,8 @@ func (m *Manager) Start(ctx context.Context, names []string) error {
 			return fmt.Errorf("instance: starting %s: %w", spec.Name, err)
 		}
 		spec.State = StateRunning
+		spec.UserStopped = false
+		m.restarts.started(spec.ID)
 		return m.registry.PutInstance(spec)
 	})
 }
@@ -535,10 +544,12 @@ func (m *Manager) Stop(ctx context.Context, names []string, force bool, timeout 
 		if err != nil {
 			return err
 		}
+		m.restarts.cancel(spec.ID)
 		if err := b.Stop(ctx, spec, force, timeout); err != nil {
 			return fmt.Errorf("instance: stopping %s: %w", spec.Name, err)
 		}
 		spec.State = StateStopped
+		spec.UserStopped = true
 		return m.registry.PutInstance(spec)
 	})
 }

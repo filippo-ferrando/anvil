@@ -29,6 +29,7 @@ type snapshotsPrompt int
 const (
 	snapshotsPromptNone snapshotsPrompt = iota
 	snapshotsPromptNew
+	snapshotsPromptSchedule
 )
 
 // snapshotsModel is the Snapshots page: a VM instance list on the left,
@@ -146,10 +147,8 @@ func (m model) updateSnapshots(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.setStatus(msg.verb, false)
 		}
-		if inst := m.snapshots.selectedInstance(); inst != nil {
-			return m, loadSnapshots(m.client, inst.GetName())
-		}
-		return m, nil
+		// Reloading the instances also refreshes the schedule shown, then the snapshots.
+		return m, loadInstances(m.client)
 
 	case tea.KeyMsg:
 		return m.updateSnapshotsKey(msg)
@@ -192,6 +191,19 @@ func (m model) updateSnapshotsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !submitted {
 			return m, nil
 		}
+		if sn.prompt == snapshotsPromptSchedule {
+			sn.prompt = snapshotsPromptNone
+			inst := sn.selectedInstance()
+			if inst == nil {
+				return m, nil
+			}
+			req, err := buildScheduleRequest(inst, sn.promptForm)
+			if err != nil {
+				m.setStatus(err.Error(), true)
+				return m, nil
+			}
+			return m, setSnapshotSchedule(m.client, req)
+		}
 		name := sn.promptForm.Value("Snapshot name")
 		sn.prompt = snapshotsPromptNone
 		if name == "" {
@@ -215,6 +227,12 @@ func (m model) updateSnapshotsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if inst := sn.selectedInstance(); inst != nil {
 			sn.loading = true
 			return m, loadSnapshots(m.client, inst.GetName())
+		}
+		return m, nil
+	case "S":
+		if inst := sn.selectedInstance(); inst != nil {
+			sn.prompt = snapshotsPromptSchedule
+			sn.promptForm = scheduleForm(inst)
 		}
 		return m, nil
 	case "n":
@@ -291,11 +309,19 @@ func (m snapshotsModel) View() string {
 		snapsBody = styleSubtitle.Render("no VM instances yet")
 	}
 
+	if inst := m.selectedInstance(); inst != nil {
+		sched := scheduleText(inst.GetVm().GetSnapshotSchedule())
+		if sched == "" {
+			sched = "no schedule (S to set one)"
+		}
+		snapsBody = styleSubtitle.Render("schedule: "+sched) + "\n" + snapsBody
+	}
+
 	left := instancesBox.Render(lipgloss.NewStyle().Height(m.panelHeight).Render(m.instances.View()))
 	right := snapsBox.Render(lipgloss.NewStyle().Height(m.panelHeight).Render(snapsBody))
 
 	help := helpBarWrap(m.contentWidth,
-		"tab", "switch focus", "n", "new", "a", "restore", "d", "delete", "r", "refresh", "esc", "back",
+		"tab", "switch focus", "n", "new", "S", "schedule", "a", "restore", "d", "delete", "r", "refresh", "esc", "back",
 	)
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right) + "\n" + help
 }

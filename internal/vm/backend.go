@@ -313,8 +313,8 @@ func (b *Backend) PrepareImportedDisk(ctx context.Context, imageRef, arch, diskP
 	return nil
 }
 
-// Fork copies source's disk into dest's dir, preserving the backing-file
-// pointer via qemu-img's -U mode, so it's safe to call while source runs.
+// Fork copies source's disk into dest's dir, preserving the backing-file pointer. A running
+// source is copied live and point-in-time (see forkLive); a stopped one with qemu-img.
 func (b *Backend) Fork(ctx context.Context, source, dest *instance.Spec, progress func(status string)) error {
 	if source.VM == nil || dest.VM == nil {
 		return fmt.Errorf("vm: Fork called with a nil VMSpec")
@@ -334,17 +334,28 @@ func (b *Backend) Fork(ctx context.Context, source, dest *instance.Spec, progres
 	}
 	diskPath := filepath.Join(dir, "disk.qcow2")
 
-	if progress != nil {
-		progress("copying disk")
-	}
-	cmd := exec.CommandContext(ctx, "qemu-img", "convert",
-		"-U",
-		"-O", "qcow2",
-		"-o", "backing_file="+backing+",backing_fmt=qcow2",
-		source.VM.DiskPath, diskPath,
-	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("vm: forking disk: %w: %s", err, out)
+	b.mu.Lock()
+	proc, running := b.running[source.ID]
+	b.mu.Unlock()
+	if running && proc.QMP != nil {
+		if err := b.forkLive(ctx, source, proc, backing, diskPath, progress); err != nil {
+			_ = os.Remove(diskPath)
+			return err
+		}
+	} else {
+		if progress != nil {
+			progress("copying disk")
+		}
+		// -U still opens a disk some untracked QEMU might hold locked.
+		cmd := exec.CommandContext(ctx, "qemu-img", "convert",
+			"-U",
+			"-O", "qcow2",
+			"-o", "backing_file="+backing+",backing_fmt=qcow2",
+			source.VM.DiskPath, diskPath,
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("vm: forking disk: %w: %s", err, out)
+		}
 	}
 	dest.VM.DiskPath = diskPath
 
@@ -598,6 +609,7 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 
 		GuestAgentSocket: guestAgentSocket(spec.ID),
 	}
+	cfg.MaxCPUs, cfg.MaxMemoryMiB = hotplugHeadroom(arch, v.CPUs, v.MemoryMiB)
 	if v.NetworkMode == "bridge" {
 		// Attach to the intent's shared network via the backend's Networker
 		// (Linux tap+bridge by default; see Networker's doc for why it's swappable).
@@ -653,7 +665,11 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		}
 		return fmt.Errorf("vm: attaching QMP: %w", err)
 	}
-	if err := saveRuntimeState(dir, runtimeState{Pid: proc.Pid(), QMPSocket: cfg.QMPSocket, StartedAt: time.Now()}); err != nil {
+	rt := runtimeState{
+		Pid: proc.Pid(), QMPSocket: cfg.QMPSocket, StartedAt: time.Now(),
+		BootMemoryMiB: v.MemoryMiB, MaxCPUs: cfg.MaxCPUs, MaxMemoryMiB: cfg.MaxMemoryMiB,
+	}
+	if err := saveRuntimeState(dir, rt); err != nil {
 		log.Printf("vm: failed to persist runtime state for %s: %v", spec.ID, err)
 	}
 

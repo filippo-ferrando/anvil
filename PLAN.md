@@ -57,7 +57,29 @@ container mirrors, man pages, shell completions and the TUI.
   (exit 0, or SIGINT/SIGTERM from an outside `docker stop`) or `error` (crash, SIGKILL,
   OOM), and one started again from outside goes back to `running`. Exits missed while
   dockerd was unreachable are caught up on reconnect.
-- **TUI coverage.** Everything above is reachable from the TUI: guest agent/IP/cloud-init
+- **Consistent fork of a running VM.** A running source is copied with a QEMU backup
+  job (`blockdev-backup`, top layer only), which captures the disk at the instant it
+  starts while the VM keeps running. With the guest agent, filesystems are frozen just
+  for that instant (`guest-fsfreeze`), so the fork is filesystem-consistent.
+- **Autostart and restart policy.** `--autostart` starts an instance when anvild starts,
+  unless it was stopped on purpose. `--restart on-failure[:N]|always` restarts an
+  instance that stopped on its own (exit detection above), with backoff from 1s to 1m;
+  on-failure gives up after N restarts that didn't run for 10 minutes.
+- **Resize after creation.** `anvil set --cpus/--memory/--disk` (TUI: `u`). The disk
+  grows live over QMP `block_resize`, and with the guest agent the root partition and
+  filesystem too (cloud-init's growpart/resizefs); CPU/memory of a running VM apply at
+  its next start.
+- **Live CPU and memory changes.** An x86_64 VM boots with headroom up to the host's CPU
+  count (capped at 64) and memory: every vCPU sits in its own socket so it can be plugged or
+  unplugged over QMP, and extra memory comes from a `virtio-mem` device. `anvil set
+  --cpus/--memory` (TUI: `u`) then applies live; the guest agent onlines new vCPUs and
+  memory. Memory can't go below what the VM booted with until it restarts, and a shrink
+  settles for what the guest could free. aarch64 VMs still apply these at the next start.
+- **Scheduled snapshots.** `anvil snapshot schedule <vm> --every 6h --keep 8` (TUI: `S`
+  on the Snapshots screen): live snapshots named `auto-<UTC time>`, only those pruned,
+  stopped VMs skipped.
+- **TUI coverage.** Everything above is reachable from the TUI (launch form: autostart and
+  restart policy; `u` settings; `S` snapshot schedule; detail panel: size, policies, schedule): guest agent/IP/cloud-init
   in the detail panel and list rows, launch toggles for the agent and `--wait`, `w` to
   wait for cloud-init on a running VM (esc stops waiting), live mounts with the current
   mounts listed and suggested by umount, image checksums with `h` on the Images screen,
@@ -81,33 +103,6 @@ A few things are blocked on this landing:
 - **Mixing engines in one intent.** Whether an intent can contain both a Docker
   container and a Podman container at once is undecided, current plan is "don't
   allow it" until there's a real reason to.
-
-## VM features
-
-### Consistent fork of a running VM
-
-`anvil fork` copies the disk of a running VM with `qemu-img convert -U`, which can catch
-writes halfway. Now that the guest agent exists, `guest-fsfreeze-freeze`/`thaw` around the
-copy (or a short-lived QMP blockdev snapshot) would make it consistent. Live snapshots use
-`savevm`, which pauses the VM and saves its memory, so they don't need this.
-
-### Autostart and restart policy
-
-After a host reboot, `Reconcile` works out each instance's state again but doesn't start
-anything. A per-instance or per-intent `--autostart` flag and a `restart=on-failure`
-policy would cover long-running services. Exit detection already reports a crash as
-`error` and a guest poweroff as `stopped`, which is what a restart policy would act on.
-
-### Resize after creation
-
-`anvil set <name> --cpus/--memory/--disk`. The disk is only sized at create time today
-(`Vault.OverlayFor`). CPU and memory can change while stopped. The disk can grow online
-with QMP `block_resize`, with cloud-init `growpart` handling the guest side.
-
-### Scheduled snapshots
-
-`anvil snapshot schedule <name> --every 6h --keep 8`, run by the daemon on top of the
-existing snapshot primitives, with retention.
 
 ## Intents
 

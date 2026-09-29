@@ -15,6 +15,11 @@ type runtimeState struct {
 	Pid       int       `json:"pid"`
 	QMPSocket string    `json:"qmp_socket"`
 	StartedAt time.Time `json:"started_at"`
+
+	// What the process was started with, which bounds live vCPU/memory changes.
+	BootMemoryMiB int64 `json:"boot_memory_mib,omitempty"`
+	MaxCPUs       int   `json:"max_cpus,omitempty"`
+	MaxMemoryMiB  int64 `json:"max_memory_mib,omitempty"`
 }
 
 func runtimeStatePath(instanceDir string) string {

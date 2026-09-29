@@ -372,3 +372,166 @@ func (c *QMPClient) hasPeripheral(ctx context.Context, id string) (bool, error) 
 	}
 	return false, nil
 }
+
+// DiskDriveID is the -drive id of every VM's main disk, as used by block commands.
+const DiskDriveID = "disk0"
+
+// StartTopBackup starts a point-in-time copy of drive's top layer into targetPath, an
+// existing qcow2 already backed by the same base image. The copy reflects the disk as
+// it was when this returns; call WaitJob with jobID for the copy to finish.
+func (c *QMPClient) StartTopBackup(ctx context.Context, drive, targetPath, jobID string) error {
+	node := jobID + "-target"
+	if _, err := c.Execute(ctx, "blockdev-add", map[string]any{
+		"driver":    "qcow2",
+		"node-name": node,
+		"file":      map[string]string{"driver": "file", "filename": targetPath},
+	}); err != nil {
+		return fmt.Errorf("qmp: opening backup target: %w", err)
+	}
+	if _, err := c.Execute(ctx, "blockdev-backup", map[string]any{
+		"job-id":       jobID,
+		"device":       drive,
+		"target":       node,
+		"sync":         "top",
+		"auto-dismiss": false,
+	}); err != nil {
+		_, _ = c.Execute(ctx, "blockdev-del", map[string]string{"node-name": node})
+		return fmt.Errorf("qmp: starting backup: %w", err)
+	}
+	return nil
+}
+
+// FinishTopBackup waits for a StartTopBackup job, then releases it and its target node.
+// progress, if set, gets the job's completion percentage now and then.
+func (c *QMPClient) FinishTopBackup(ctx context.Context, jobID string, progress func(pct int)) error {
+	defer func() {
+		cleanup := context.WithoutCancel(ctx)
+		_, _ = c.Execute(cleanup, "job-dismiss", map[string]string{"id": jobID})
+		_, _ = c.Execute(cleanup, "blockdev-del", map[string]string{"node-name": jobID + "-target"})
+	}()
+	lastPct := -1
+	for {
+		raw, err := c.Execute(ctx, "query-jobs", nil)
+		if err != nil {
+			return fmt.Errorf("qmp: querying jobs: %w", err)
+		}
+		var jobs []struct {
+			ID       string `json:"id"`
+			Status   string `json:"status"`
+			Current  int64  `json:"current-progress"`
+			Total    int64  `json:"total-progress"`
+			ErrorMsg string `json:"error"`
+		}
+		if err := json.Unmarshal(raw, &jobs); err != nil {
+			return fmt.Errorf("qmp: decoding query-jobs: %w", err)
+		}
+		found := false
+		for _, j := range jobs {
+			if j.ID != jobID {
+				continue
+			}
+			found = true
+			if j.Status == "concluded" {
+				if j.ErrorMsg != "" {
+					return fmt.Errorf("qmp: backup failed: %s", j.ErrorMsg)
+				}
+				return nil
+			}
+			if progress != nil && j.Total > 0 {
+				if pct := int(j.Current * 100 / j.Total); pct != lastPct {
+					progress(pct)
+					lastPct = pct
+				}
+			}
+		}
+		if !found {
+			return fmt.Errorf("qmp: backup job %s disappeared", jobID)
+		}
+		select {
+		case <-ctx.Done():
+			_, _ = c.Execute(context.WithoutCancel(ctx), "job-cancel", map[string]string{"id": jobID})
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
+
+// BlockResize grows drive's virtual size to sizeBytes while the VM runs.
+func (c *QMPClient) BlockResize(ctx context.Context, drive string, sizeBytes int64) error {
+	if _, err := c.Execute(ctx, "block_resize", map[string]any{"device": drive, "size": sizeBytes}); err != nil {
+		return fmt.Errorf("qmp: resizing %s: %w", drive, err)
+	}
+	return nil
+}
+
+// HotpluggableCPU is one vCPU slot from query-hotpluggable-cpus. QOMPath is set when
+// the slot holds a vCPU.
+type HotpluggableCPU struct {
+	Type  string `json:"type"`
+	Props struct {
+		SocketID int `json:"socket-id"`
+		CoreID   int `json:"core-id"`
+		ThreadID int `json:"thread-id"`
+	} `json:"props"`
+	QOMPath string `json:"qom-path"`
+}
+
+func (c *QMPClient) HotpluggableCPUs(ctx context.Context) ([]HotpluggableCPU, error) {
+	raw, err := c.Execute(ctx, "query-hotpluggable-cpus", nil)
+	if err != nil {
+		return nil, fmt.Errorf("qmp: listing vCPU slots: %w", err)
+	}
+	var cpus []HotpluggableCPU
+	if err := json.Unmarshal(raw, &cpus); err != nil {
+		return nil, fmt.Errorf("qmp: decoding vCPU slots: %w", err)
+	}
+	return cpus, nil
+}
+
+// AddCPU plugs a vCPU into the empty slot.
+func (c *QMPClient) AddCPU(ctx context.Context, slot HotpluggableCPU) error {
+	_, err := c.Execute(ctx, "device_add", map[string]any{
+		"driver":    slot.Type,
+		"id":        fmt.Sprintf("vcpu-s%d", slot.Props.SocketID),
+		"socket-id": slot.Props.SocketID,
+		"core-id":   slot.Props.CoreID,
+		"thread-id": slot.Props.ThreadID,
+	})
+	if err != nil {
+		return fmt.Errorf("qmp: adding vCPU %d: %w", slot.Props.SocketID, err)
+	}
+	return nil
+}
+
+// RemoveCPU asks the guest to give up the vCPU at qomPath. It is gone once the guest
+// has taken it offline, which the caller checks with HotpluggableCPUs.
+func (c *QMPClient) RemoveCPU(ctx context.Context, qomPath string) error {
+	if _, err := c.Execute(ctx, "device_del", map[string]string{"id": qomPath}); err != nil {
+		return fmt.Errorf("qmp: removing vCPU %s: %w", qomPath, err)
+	}
+	return nil
+}
+
+// SetVirtioMemRequested asks the guest to hold sizeBytes in the virtio-mem device.
+func (c *QMPClient) SetVirtioMemRequested(ctx context.Context, sizeBytes int64) error {
+	_, err := c.Execute(ctx, "qom-set", map[string]any{
+		"path": "/machine/peripheral/" + VirtioMemID, "property": "requested-size", "value": sizeBytes,
+	})
+	if err != nil {
+		return fmt.Errorf("qmp: resizing virtio-mem: %w", err)
+	}
+	return nil
+}
+
+// VirtioMemSize is how much memory the guest currently holds in the virtio-mem device.
+func (c *QMPClient) VirtioMemSize(ctx context.Context) (int64, error) {
+	raw, err := c.Execute(ctx, "qom-get", map[string]string{"path": "/machine/peripheral/" + VirtioMemID, "property": "size"})
+	if err != nil {
+		return 0, fmt.Errorf("qmp: reading virtio-mem size: %w", err)
+	}
+	var size int64
+	if err := json.Unmarshal(raw, &size); err != nil {
+		return 0, fmt.Errorf("qmp: decoding virtio-mem size: %w", err)
+	}
+	return size, nil
+}

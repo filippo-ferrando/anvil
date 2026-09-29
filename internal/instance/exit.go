@@ -30,5 +30,9 @@ func (m *Manager) recordExit(instanceID string, state State) {
 	spec.State = state
 	if err := m.registry.PutInstance(spec); err != nil {
 		log.Printf("instance: recording %s's new state %s: %v", spec.Name, state, err)
+		return
+	}
+	if state != StateRunning {
+		m.maybeRestart(spec)
 	}
 }

@@ -124,6 +124,10 @@ func run() error {
 	errCh := make(chan error, 1)
 	go func() { errCh <- grpcServer.Serve(lis) }()
 
+	// Both need the intent networks reconciled above; neither blocks serving requests.
+	go mgr.Autostart(ctx)
+	go mgr.RunSnapshotScheduler(ctx)
+
 	log.Printf("anvild: listening on %s", socketPath)
 	select {
 	case <-ctx.Done():

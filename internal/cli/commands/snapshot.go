@@ -24,6 +24,7 @@ func newSnapshotCommand(flags *globalFlags) *cobra.Command {
 		newSnapshotRestoreCommand(flags),
 		newSnapshotDeleteCommand(flags),
 		newSnapshotListCommand(flags),
+		newSnapshotScheduleCommand(flags),
 	)
 	return cmd
 }
@@ -115,4 +116,45 @@ func newSnapshotListCommand(flags *globalFlags) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newSnapshotScheduleCommand(flags *globalFlags) *cobra.Command {
+	var (
+		every time.Duration
+		keep  int32
+		off   bool
+	)
+	cmd := &cobra.Command{
+		Use:   "schedule <instance>",
+		Short: "Take a live snapshot of a running VM every interval, keeping the newest ones",
+		Long: "Take a live snapshot of a running VM every --every, keeping the newest --keep. " +
+			"Scheduled snapshots are named auto-<UTC time>; only those are ever pruned. A " +
+			"stopped VM is skipped, since its disk doesn't change. A live snapshot pauses the " +
+			"VM for as long as it takes to save its memory. --off removes the schedule.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			req := &anvilv1.SnapshotSetScheduleRequest{Name: args[0]}
+			switch {
+			case off:
+				// every_seconds 0 removes the schedule
+			case every <= 0:
+				return fmt.Errorf("--every is required (or --off to remove the schedule)")
+			default:
+				req.EverySeconds = int64(every / time.Second)
+				req.Keep = keep
+			}
+
+			c, err := dial(flags)
+			if err != nil {
+				return err
+			}
+			defer c.Close()
+			_, err = c.Snapshot.SetSchedule(cmd.Context(), req)
+			return err
+		},
+	}
+	cmd.Flags().DurationVar(&every, "every", 0, "interval between snapshots, e.g. 6h (at least 1m)")
+	cmd.Flags().Int32Var(&keep, "keep", 7, "how many scheduled snapshots to keep")
+	cmd.Flags().BoolVar(&off, "off", false, "remove the schedule")
+	return cmd
 }

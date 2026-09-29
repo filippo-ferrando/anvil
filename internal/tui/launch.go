@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
@@ -119,7 +120,11 @@ func launchFields(kind string, values map[string]string) []formField {
 		)
 	}
 
+	restart := textField(settingsRestart, "no, on-failure[:N] or always", v(settingsRestart, "no"))
+	restart.Suggestions = restartPolicySuggestions
 	fields = append(fields,
+		toggleField(settingsAutostart, "start it whenever anvild starts, unless stopped on purpose", false),
+		restart,
 		textField("Intent name (optional)", "", v("Intent name (optional)", "")),
 		textField("Role (optional, needs intent)", "", v("Role (optional, needs intent)", "")),
 		textField("Ports", "host:guest[/tcp|udp],...", v("Ports", "")),
@@ -437,6 +442,10 @@ func buildLaunchRequest(m launchModel) (*anvilv1.LaunchRequest, error) {
 		Name:       name,
 		IntentName: form.Value("Intent name (optional)"),
 		Role:       form.Value("Role (optional, needs intent)"),
+		Autostart:  form.Bool(settingsAutostart),
+	}
+	if p := strings.TrimSpace(form.Value(settingsRestart)); p != "" && p != "no" {
+		req.RestartPolicy = &anvilv1.RestartPolicy{Mode: p}
 	}
 
 	if m.kind == "container" {

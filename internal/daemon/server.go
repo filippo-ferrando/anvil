@@ -45,7 +45,11 @@ func sendLaunchEvent(stream launchProgressSender, ev instance.LaunchEvent) {
 const defaultWaitTimeout = 15 * time.Minute
 
 func (s *Server) Launch(req *anvilv1.LaunchRequest, stream anvilv1.InstanceService_LaunchServer) error {
-	params := launchParamsFromPB(req)
+	params, err := launchParamsFromPB(req)
+	if err != nil {
+		sendLaunchEvent(stream, instance.LaunchEvent{Err: err})
+		return err
+	}
 	ctx := stream.Context()
 	wait := req.GetWait() && !params.NoStart
 
@@ -60,7 +64,6 @@ func (s *Server) Launch(req *anvilv1.LaunchRequest, stream anvilv1.InstanceServi
 	}
 	// A launch with an intent_name joins (or creates) that intent instead
 	// of producing a standalone instance.
-	var err error
 	if params.IntentName != "" {
 		err = s.Intents.Launch(ctx, params, send)
 	} else {
@@ -261,4 +264,35 @@ func watchEventToPB(ev instance.Event) *anvilv1.WatchEvent {
 		t = anvilv1.WatchEventType_WATCH_EVENT_TYPE_DELETED
 	}
 	return &anvilv1.WatchEvent{Type: t, Instance: specToPB(ev.Spec)}
+}
+
+func (s *Server) Update(ctx context.Context, req *anvilv1.UpdateRequest) (*anvilv1.UpdateReply, error) {
+	var p instance.UpdateParams
+	if req.Cpus != nil {
+		n := int(req.GetCpus())
+		p.CPUs = &n
+	}
+	if req.MemoryMib != nil {
+		n := req.GetMemoryMib()
+		p.MemoryMiB = &n
+	}
+	if req.DiskGib != nil {
+		n := req.GetDiskGib()
+		p.DiskGiB = &n
+	}
+	if req.Autostart != nil {
+		b := req.GetAutostart()
+		p.Autostart = &b
+	}
+	policy, err := restartPolicyFromPB(req.GetRestartPolicy())
+	if err != nil {
+		return nil, err
+	}
+	p.RestartPolicy = policy
+
+	res, err := s.Manager.Update(ctx, req.GetName(), p)
+	if err != nil {
+		return nil, wrapErr(err)
+	}
+	return &anvilv1.UpdateReply{Instance: specToPB(res.Spec), RestartPending: res.RestartPending, Notes: res.Notes}, nil
 }

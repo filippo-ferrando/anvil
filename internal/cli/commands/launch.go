@@ -37,6 +37,8 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 		wait          bool
 		waitTimeout   time.Duration
 		noGuestAgent  bool
+		autostart     bool
+		restart       string
 	)
 
 	cmd := &cobra.Command{
@@ -99,6 +101,10 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 
 				Wait:               wait,
 				WaitTimeoutSeconds: int32(waitTimeout.Seconds()),
+				Autostart:          autostart,
+			}
+			if restart != "" {
+				req.RestartPolicy = &anvilv1.RestartPolicy{Mode: restart}
 			}
 
 			switch kind {
@@ -203,6 +209,8 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 	cmd.Flags().StringVar(&fromDisk, "from-disk", "", "use this already-prepared qcow2 file as the VM's own disk directly, skipping the image catalog and cloud-init entirely (internal, used by `anvil migrate`)")
 	cmd.Flags().BoolVar(&wait, "wait", false, "block until the instance finished its first-boot setup (cloud-init for a VM); fails if cloud-init reports errors")
 	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 15*time.Minute, "give up on --wait after this long")
+	cmd.Flags().BoolVar(&autostart, "autostart", false, "start the instance whenever anvild starts, unless it was stopped on purpose")
+	cmd.Flags().StringVar(&restart, "restart", "", "restart policy when it stops on its own: no (default), on-failure[:N] or always")
 	cmd.Flags().BoolVar(&noGuestAgent, "no-guest-agent", false, "don't install qemu-guest-agent through cloud-init (VM only); disables guest IP reporting and agent shutdown")
 	cmd.Flags().StringVar(&defaultUser, "default-user", "", "override the SSH login user normally read from the image catalog (VM only, mainly for internal use by `anvil migrate`)")
 	return cmd

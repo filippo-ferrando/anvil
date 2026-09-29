@@ -38,6 +38,11 @@ type Config struct {
 	// Mounts are virtiofs host-directory shares, each served by its own virtiofsd.
 	Mounts []Mount
 
+	// MaxCPUs/MaxMemoryMiB, when above CPUs/MemoryMiB, leave room to add vCPUs and
+	// memory (virtio-mem) while the VM runs. 0 means no headroom.
+	MaxCPUs      int
+	MaxMemoryMiB int64
+
 	// GuestAgentSocket, when set, exposes a virtio-serial channel for qemu-guest-agent on this unix socket.
 	GuestAgentSocket string
 }
@@ -53,6 +58,37 @@ type HostForward struct {
 type Mount struct {
 	Tag        string // virtiofs tag; the guest mounts it with `mount -t virtiofs <tag> <path>`
 	SocketPath string
+}
+
+// VirtioMemID is the virtio-mem device that holds memory added while the VM runs.
+const (
+	VirtioMemID        = "vmem0"
+	VirtioMemBackendID = "vmem0-ram"
+	VirtioMemBlockMiB  = 2 // virtio-mem's default block size on x86_64
+)
+
+// smpArg gives every vCPU its own socket, so each one can be hot-plugged on its own.
+func smpArg(cpus, maxCPUs int) string {
+	if maxCPUs <= cpus {
+		return fmt.Sprintf("%d", cpus)
+	}
+	return fmt.Sprintf("cpus=%d,maxcpus=%d,sockets=%d,cores=1,threads=1", cpus, maxCPUs, maxCPUs)
+}
+
+func memArg(mem, maxMem int64) string {
+	if hotplugMemoryMiB(mem, maxMem) == 0 {
+		return fmt.Sprintf("%dM", mem)
+	}
+	return fmt.Sprintf("%dM,maxmem=%dM", mem, mem+hotplugMemoryMiB(mem, maxMem))
+}
+
+// hotplugMemoryMiB is the virtio-mem region size: the headroom above mem, in whole blocks.
+func hotplugMemoryMiB(mem, maxMem int64) int64 {
+	if maxMem <= mem {
+		return 0
+	}
+	hot := maxMem - mem
+	return hot - hot%VirtioMemBlockMiB
 }
 
 // HotplugPorts is how many PCIe root ports each VM gets for virtiofs devices, which caps
@@ -193,8 +229,8 @@ func BuildArgs(cfg Config) ([]string, error) {
 		"-machine", MachineType(cfg.Arch) + ",memory-backend=mem0",
 		"-nographic",
 		"-nodefaults",
-		"-smp", fmt.Sprintf("%d", cpus),
-		"-m", fmt.Sprintf("%d", mem),
+		"-smp", smpArg(cpus, cfg.MaxCPUs),
+		"-m", memArg(mem, cfg.MaxMemoryMiB),
 		"-object", fmt.Sprintf("memory-backend-memfd,id=mem0,size=%dM,share=on", mem),
 		"-qmp", fmt.Sprintf("unix:%s,server=on,wait=off", cfg.QMPSocket),
 		"-serial", serial,
@@ -241,6 +277,14 @@ func BuildArgs(cfg Config) ([]string, error) {
 	args = append(args, netdevArgs...)
 
 	args = append(args, buildMounts(cfg.Mounts)...)
+
+	if hot := hotplugMemoryMiB(mem, cfg.MaxMemoryMiB); hot > 0 {
+		// Shared like the boot RAM, since vhost-user devices (virtiofsd) map it too.
+		args = append(args,
+			"-object", fmt.Sprintf("memory-backend-memfd,id=%s,size=%dM,share=on", VirtioMemBackendID, hot),
+			"-device", fmt.Sprintf("virtio-mem-pci,id=%s,memdev=%s,requested-size=0", VirtioMemID, VirtioMemBackendID),
+		)
+	}
 
 	if cfg.GuestAgentSocket != "" {
 		args = append(args,

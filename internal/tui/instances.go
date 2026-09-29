@@ -79,6 +79,7 @@ const (
 	instancesPromptAddPort
 	instancesPromptRemovePort
 	instancesPromptFork
+	instancesPromptSettings
 )
 
 // statsRefreshInterval is how often the selected running instance's live stats are re-polled; see maybeRefreshStats.
@@ -457,6 +458,11 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.instances.startPrompt(instancesPromptUmount, inst, newSimpleForm("Umount", []formField{guestPath}))
 		}
 		return m, nil
+	case "u":
+		if inst := m.selectedInstance(); inst != nil {
+			m.instances.startPrompt(instancesPromptSettings, inst, settingsForm(inst))
+		}
+		return m, nil
 	case "w":
 		if inst := m.selectedInstance(); inst != nil && inst.GetState() == anvilv1.State_STATE_RUNNING {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -538,6 +544,17 @@ func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	ins.prompt = instancesPromptNone
 
 	switch prompt {
+	case instancesPromptSettings:
+		req, changed, err := buildUpdateRequest(target, ins.promptForm)
+		if err != nil {
+			m.setStatus(err.Error(), true)
+			return m, nil
+		}
+		if !changed {
+			m.setStatus("nothing changed", false)
+			return m, nil
+		}
+		return m, updateInstance(m.client, req)
 	case instancesPromptMount:
 		hostPath, guestPath := ins.promptForm.Value("Host path"), ins.promptForm.Value("Guest path")
 		if hostPath == "" || guestPath == "" {
@@ -695,7 +712,7 @@ func (m instancesModel) View() string {
 
 	help := helpBarWrap(m.contentWidth,
 		"n", "launch", "s", "start/stop", "d", "delete", "f", "fork", "x", "shell",
-		"e", "exec", "w", "wait for cloud-init", "m", "mount", "M", "umount", "p", "add port", "P", "remove port",
+		"e", "exec", "u", "settings", "w", "wait for cloud-init", "m", "mount", "M", "umount", "p", "add port", "P", "remove port",
 		"E", "export", "i", "import", "l", "logs", "r", "refresh", "esc", "back",
 	)
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right) + "\n" + help
@@ -720,6 +737,17 @@ func (m instancesModel) detailView() string {
 	b = append(b, detailRow("Kind", kind))
 	b = append(b, detailRow("State", stateDot(inst.GetState())+" "+stateLabel(inst.GetState())))
 	b = append(b, detailRow("Image", image))
+	if vm := inst.GetVm(); vm != nil {
+		b = append(b, detailRow("Size", resourcesText(vm)))
+	}
+	policy := "restart " + restartPolicyText(inst.GetRestartPolicy())
+	if inst.GetAutostart() {
+		policy = "autostart  •  " + policy
+	}
+	b = append(b, detailRow("Policy", policy))
+	if sched := scheduleText(inst.GetVm().GetSnapshotSchedule()); sched != "" {
+		b = append(b, detailRow("Snaps", sched))
+	}
 	if intentName := inst.GetLabels()["intent"]; intentName != "" {
 		b = append(b, detailRow("Intent", intentName+" ("+inst.GetLabels()["role"]+")"))
 	}

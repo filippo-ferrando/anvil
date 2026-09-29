@@ -140,10 +140,14 @@ func (c *QGAConn) readResponse() (qgaResponse, error) {
 
 // call runs command and decodes its return value into out (skipped if out is nil).
 func (c *QGAConn) call(command string, args, out any) error {
+	return c.callWithTimeout(command, args, out, qgaCallTimeout)
+}
+
+func (c *QGAConn) callWithTimeout(command string, args, out any, timeout time.Duration) error {
 	if err := c.send(command, args); err != nil {
 		return err
 	}
-	_ = c.conn.SetReadDeadline(time.Now().Add(qgaCallTimeout))
+	_ = c.conn.SetReadDeadline(time.Now().Add(timeout))
 	resp, err := c.readResponse()
 	if err != nil {
 		return fmt.Errorf("qga: %s: %w", command, err)
@@ -175,6 +179,67 @@ func (c *QGAConn) NetworkInterfaces() ([]GuestInterface, error) {
 	var ifaces []GuestInterface
 	err := c.call("guest-network-get-interfaces", nil, &ifaces)
 	return ifaces, err
+}
+
+// fsfreezeTimeout bounds a freeze, which first flushes every guest filesystem.
+const fsfreezeTimeout = 30 * time.Second
+
+// FreezeFilesystems flushes and freezes every guest filesystem. Always pair it with
+// ThawFilesystems: guest writes block until then.
+func (c *QGAConn) FreezeFilesystems() error {
+	return c.callWithTimeout("guest-fsfreeze-freeze", nil, nil, fsfreezeTimeout)
+}
+
+// ThawFilesystems undoes FreezeFilesystems.
+func (c *QGAConn) ThawFilesystems() error {
+	return c.callWithTimeout("guest-fsfreeze-thaw", nil, nil, fsfreezeTimeout)
+}
+
+// OnlineAllCPUs brings every offline guest vCPU online (a hot-plugged one may start
+// offline) and returns how many it changed.
+func (c *QGAConn) OnlineAllCPUs() (int, error) {
+	var vcpus []struct {
+		LogicalID int  `json:"logical-id"`
+		Online    bool `json:"online"`
+	}
+	if err := c.call("guest-get-vcpus", nil, &vcpus); err != nil {
+		return 0, err
+	}
+	var offline []map[string]any
+	for _, v := range vcpus {
+		if !v.Online {
+			offline = append(offline, map[string]any{"logical-id": v.LogicalID, "online": true})
+		}
+	}
+	if len(offline) == 0 {
+		return 0, nil
+	}
+	var changed int
+	err := c.call("guest-set-vcpus", map[string]any{"vcpus": offline}, &changed)
+	return changed, err
+}
+
+// OnlineAllMemory brings every offline guest memory block online, for memory the
+// guest added but its distro doesn't online by itself.
+func (c *QGAConn) OnlineAllMemory() error {
+	var blocks []struct {
+		Phys     int64 `json:"phys-index"`
+		Online   bool  `json:"online"`
+		CanOffln bool  `json:"can-offline"`
+	}
+	if err := c.call("guest-get-memory-blocks", nil, &blocks); err != nil {
+		return err
+	}
+	var offline []map[string]any
+	for _, b := range blocks {
+		if !b.Online {
+			offline = append(offline, map[string]any{"phys-index": b.Phys, "online": true})
+		}
+	}
+	if len(offline) == 0 {
+		return nil
+	}
+	return c.call("guest-set-memory-blocks", map[string]any{"mem-blks": offline}, nil)
 }
 
 // Shutdown asks the guest OS to power off. The agent sends no reply when this
