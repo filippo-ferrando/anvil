@@ -1,0 +1,65 @@
+# Complete anvil.yaml example: every field `anvil apply` accepts.
+# Apply with: anvil apply -f docs/example.yaml --dry-run
+# Field reference and apply rules: docs/apply.md
+
+intent: shop # intent name, required; members resolve each other as <role>.shop.anvil
+
+members:
+  # Each key under members is a role. The role is also the member's DNS name.
+
+  db:
+    kind: container # "vm" or "container", required
+    image: postgres:16 # required
+    name: shop-postgres # instance name, defaults to "<intent>-<role>" (here "shop-db")
+    engine: docker # "docker" (default) or "podman" (not implemented yet)
+    env:
+      POSTGRES_USER: shop
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: shop
+    volumes:
+      - /srv/shop/db:/var/lib/postgresql/data # host path must be absolute
+      - /srv/shop/initdb:/docker-entrypoint-initdb.d:ro # ":ro" mounts read-only
+    ports:
+      - "5432:5432" # host:container, tcp by default
+    autostart: true # start when anvild starts, unless stopped on purpose
+    restart: on-failure:3 # "no" (default), "on-failure", "on-failure:N" or "always"
+
+  cache:
+    kind: container
+    image: redis:7
+    entrypoint: ["redis-server"] # replaces the image's entrypoint
+    command: ["--appendonly", "yes", "--maxmemory", "256mb"] # replaces the image's command
+    ports:
+      - "6379:6379/tcp"
+      - "6379:6379/udp" # protocol is "tcp" or "udp"
+    restart: always
+
+  app:
+    kind: vm
+    image: ubuntu-24.04 # a name from the VM image catalog, see `anvil find`
+    cpus: 2 # default 1
+    memory: 2048 # MiB, default 1024
+    disk: 20 # GiB, 0 or unset = catalog minimum; can only grow in place
+    cloud_init: | # inline user-data; mutually exclusive with cloud_init_name
+      #cloud-config
+      packages: [nginx]
+      runcmd:
+        - systemctl enable --now nginx
+    ssh_keys: # extra literal public keys; the caller's anvil key is always added
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyOnlyReplaceMe user@laptop
+    depends_on: [db, cache] # started only after db and cache are ready
+    autostart: true
+    restart: on-failure
+
+  worker:
+    kind: vm
+    image: debian-12
+    cloud_init_name: worker-setup # a saved template, see `anvil cloud-init list`
+    no_guest_agent: true # skip qemu-guest-agent: no guest IPs, agent shutdown or precise cloud-init status
+    depends_on: [app]
+    restart: "no"
+
+# VMs take no ports: a VM in an intent has its own address on the intent network.
+# Container-only fields (engine, env, entrypoint, command, volumes, ports) are errors on a VM,
+# and VM-only fields (cpus, memory, disk, cloud_init, cloud_init_name, ssh_keys,
+# no_guest_agent) are errors on a container. Unknown fields are errors too.

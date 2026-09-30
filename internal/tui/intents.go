@@ -40,6 +40,13 @@ type intentsModel struct {
 	importForm      simpleForm
 	importing       bool     // an import stream is in flight, blocking other keys
 	importLines     []string // the finished (or in-flight) import's progress transcript
+
+	applyPrompting bool // the apply manifest form is up
+	applyForm      simpleForm
+	applyReq       *anvilv1.IntentApplyRequest // the request whose plan is shown, sent again for real on confirm
+	applyRunning   bool
+	applyConfirm   bool // a dry run finished cleanly and waits for enter to apply
+	applyLines     []string
 }
 
 func newIntentsModel() intentsModel {
@@ -123,6 +130,28 @@ func (m model) updateIntents(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, receiveImportEvent(msg.stream)
 
+	case applyStreamMsg:
+		in := &m.intents
+		if len(msg.lines) > 1 {
+			in.applyLines = append(in.applyLines, msg.lines...)
+		} else if len(msg.lines) == 1 {
+			in.applyLines = appendProgressLine(in.applyLines, msg.lines[0])
+		}
+		if msg.err != nil {
+			in.applyRunning = false
+			in.applyLines = append(in.applyLines, styleError.Render(msg.err.Error()))
+			return m, nil
+		}
+		if !msg.done {
+			return m, receiveApplyEvent(msg.stream)
+		}
+		in.applyRunning = false
+		if in.applyReq.GetDryRun() {
+			in.applyConfirm = true
+			return m, nil
+		}
+		return m, loadIntents(m.client)
+
 	case tea.KeyMsg:
 		return m.updateIntentsKey(msg)
 	}
@@ -132,7 +161,7 @@ func (m model) updateIntents(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	in := &m.intents
 
-	if in.exporting || in.importing {
+	if in.exporting || in.importing || in.applyRunning {
 		return m, nil // block input until the stream finishes
 	}
 	// A finished export/import's transcript stays on screen until dismissed here.
@@ -149,6 +178,37 @@ func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			in.importLines = nil
 		}
 		return m, nil
+	}
+	if len(in.applyLines) > 0 {
+		switch msg.String() {
+		case "enter", "y":
+			if in.applyConfirm {
+				in.applyReq.DryRun = false
+				in.applyConfirm, in.applyRunning, in.applyLines = false, true, nil
+				return m, startApplyStream(m.client, in.applyReq)
+			}
+			in.applyLines = nil
+		case "esc", "q", "n":
+			in.applyLines, in.applyConfirm = nil, false
+		}
+		return m, nil
+	}
+	if in.applyPrompting {
+		var submitted, cancelled bool
+		in.applyForm, submitted, cancelled = in.applyForm.update(msg)
+		if cancelled || !submitted {
+			in.applyPrompting = !cancelled
+			return m, nil
+		}
+		in.applyPrompting = false
+		req, err := newApplyRequest(in.applyForm.Value("Manifest path"), in.applyForm.Bool("Prune"), in.applyForm.Bool("Recreate VMs"))
+		if err != nil {
+			m.setStatus(err.Error(), true)
+			return m, nil
+		}
+		req.DryRun = true
+		in.applyReq, in.applyRunning = req, true
+		return m, startApplyStream(m.client, req)
 	}
 	if in.importPrompting {
 		var submitted, cancelled bool
@@ -236,6 +296,14 @@ func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			})
 		}
 		return m, nil
+	case "A":
+		in.applyPrompting = true
+		in.applyForm = newSimpleForm("Apply manifest", []formField{
+			pathField("Manifest path", "e.g. ./anvil.yaml", "anvil.yaml"),
+			toggleField("Prune", "delete members no longer in the manifest", false),
+			toggleField("Recreate VMs", "allow replacing a VM, its disk is lost", false),
+		})
+		return m, nil
 	case "I":
 		in.importPrompting = true
 		in.importForm = newSimpleForm("Import bundle", []formField{
@@ -277,6 +345,19 @@ func (m intentsModel) View() string {
 	if m.importPrompting {
 		return m.importForm.View()
 	}
+	if m.applyRunning || len(m.applyLines) > 0 {
+		s := styleTitle.Render(" Apply ") + "\n\n" + strings.Join(m.applyLines, "\n") + "\n\n"
+		switch {
+		case m.applyConfirm:
+			s += helpBar("enter", "apply", "esc", "cancel")
+		case !m.applyRunning:
+			s += helpBar("esc", "dismiss")
+		}
+		return s
+	}
+	if m.applyPrompting {
+		return m.applyForm.View()
+	}
 	if m.confirmDelete != nil {
 		return styleWarn.Render(fmt.Sprintf("Remove intent %q?", m.confirmDelete.GetName())) + "\n\n" +
 			helpBar("y", "ungroup only", "p", "ungroup and purge members", "any other key", "cancel")
@@ -296,7 +377,7 @@ func (m intentsModel) View() string {
 		return styleTitle.Render(" "+m.showingInfo.GetName()+" ") + "\n\n" + body + "\n\n" +
 			helpBar("any key", "back")
 	}
-	return m.list.View() + "\n" + helpBar("i", "members", "x", "remove", "E", "export", "I", "import", "r", "refresh", "esc", "back")
+	return m.list.View() + "\n" + helpBar("i", "members", "x", "remove", "E", "export", "I", "import", "A", "apply", "r", "refresh", "esc", "back")
 }
 
 // memberLine renders one member as "role (kind)", plus its address and

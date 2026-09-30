@@ -2,9 +2,12 @@ package daemon
 
 import (
 	"context"
+	"time"
 
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
+	"github.com/anvil-project/anvil/internal/instance"
 	"github.com/anvil-project/anvil/internal/intent"
+	"github.com/anvil-project/anvil/internal/intent/apply"
 	"github.com/anvil-project/anvil/internal/store"
 )
 
@@ -13,10 +16,11 @@ import (
 type IntentServer struct {
 	anvilv1.UnimplementedIntentServiceServer
 	Manager *intent.Manager
+	Applier *apply.Applier
 }
 
-func NewIntentServer(mgr *intent.Manager) *IntentServer {
-	return &IntentServer{Manager: mgr}
+func NewIntentServer(mgr *intent.Manager, instances *instance.Manager) *IntentServer {
+	return &IntentServer{Manager: mgr, Applier: &apply.Applier{Instances: instances, Intents: mgr}}
 }
 
 func intentMemberToPB(it store.Intent, m store.IntentMember) *anvilv1.IntentMember {
@@ -85,4 +89,45 @@ func (s *IntentServer) Delete(ctx context.Context, req *anvilv1.IntentDeleteRequ
 		return nil, err
 	}
 	return &anvilv1.IntentDeleteReply{Intent: intentToPB(it)}, nil
+}
+
+func (s *IntentServer) Apply(req *anvilv1.IntentApplyRequest, stream anvilv1.IntentService_ApplyServer) error {
+	sendErr := func(err error) error {
+		_ = stream.Send(&anvilv1.IntentApplyProgress{Event: &anvilv1.IntentApplyProgress_Error{Error: err.Error()}})
+		return nil // reported in-band, like a failed launch
+	}
+	m, err := apply.Parse(req.GetManifest())
+	if err != nil {
+		return sendErr(err)
+	}
+	opts := apply.Options{
+		DryRun:      req.GetDryRun(),
+		Prune:       req.GetPrune(),
+		Recreate:    req.GetRecreate(),
+		SSHKeys:     req.GetSshPublicKeys(),
+		WaitTimeout: time.Duration(req.GetWaitTimeoutSeconds()) * time.Second,
+	}
+	onPlan := func(steps []apply.Step) {
+		plan := &anvilv1.IntentApplyPlan{IntentName: m.Intent}
+		for _, st := range steps {
+			plan.Steps = append(plan.Steps, &anvilv1.IntentApplyStep{
+				Role: st.Role, InstanceName: st.Name, Action: string(st.Action), Changes: st.Changes,
+			})
+		}
+		_ = stream.Send(&anvilv1.IntentApplyProgress{Event: &anvilv1.IntentApplyProgress_Plan{Plan: plan}})
+	}
+	progress := func(status string) {
+		_ = stream.Send(&anvilv1.IntentApplyProgress{Event: &anvilv1.IntentApplyProgress_Status{Status: status}})
+	}
+	if err := s.Applier.Apply(stream.Context(), m, opts, onPlan, progress); err != nil {
+		return sendErr(err)
+	}
+	if opts.DryRun {
+		return nil
+	}
+	it, err := s.Manager.Info(m.Intent)
+	if err != nil {
+		return sendErr(err)
+	}
+	return stream.Send(&anvilv1.IntentApplyProgress{Event: &anvilv1.IntentApplyProgress_Intent{Intent: intentToPB(it)}})
 }

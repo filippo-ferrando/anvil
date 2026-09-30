@@ -96,6 +96,9 @@ by name -> no manual networking required. Names are served by `anvild` itself, s
 member added later with `anvil intent add` is resolvable right away by the ones already
 running, as `db`, `db.myapp.anvil` or `myapp-db`. See [docs/intent-dns.md](docs/intent-dns.md).
 
+An intent can also be described in an `anvil.yaml` file and kept in line with it by
+`anvil apply -f anvil.yaml`, with `depends_on` start order. See [docs/apply.md](docs/apply.md).
+
 **Migration**: move an instance, or a whole intent, to a different host over plain SSH:
 
 ```

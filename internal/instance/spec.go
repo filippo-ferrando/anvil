@@ -253,3 +253,36 @@ type Snapshot struct {
 	// and false for an offline one. Restore only ever resets the disk, so a restart after it always boots fresh regardless of this flag.
 	HasVMState bool
 }
+
+// ParsePortMapping reads "<host-port>:<guest-port>[/tcp|udp]"; the protocol defaults to tcp.
+func ParsePortMapping(s string) (PortMapping, error) {
+	spec, proto, hasProto := strings.Cut(s, "/")
+	if !hasProto {
+		proto = "tcp"
+	}
+	if proto != "tcp" && proto != "udp" {
+		return PortMapping{}, fmt.Errorf("port %q: protocol must be tcp or udp", s)
+	}
+	hostStr, guestStr, ok := strings.Cut(spec, ":")
+	if !ok {
+		return PortMapping{}, fmt.Errorf(`port %q must be "<host-port>:<guest-port>[/tcp|udp]"`, s)
+	}
+	host, err1 := strconv.Atoi(hostStr)
+	guest, err2 := strconv.Atoi(guestStr)
+	if err1 != nil || err2 != nil || host < 1 || host > 65535 || guest < 1 || guest > 65535 {
+		return PortMapping{}, fmt.Errorf("port %q: ports must be numbers from 1 to 65535", s)
+	}
+	return PortMapping{HostPort: host, GuestPort: guest, Protocol: proto}, nil
+}
+
+// ParseVolumeMount reads "<host-path>:<container-path>[:ro]".
+func ParseVolumeMount(s string) (VolumeMount, error) {
+	parts := strings.Split(s, ":")
+	if len(parts) < 2 || len(parts) > 3 || parts[0] == "" || parts[1] == "" {
+		return VolumeMount{}, fmt.Errorf(`volume %q must be "<host-path>:<container-path>[:ro]"`, s)
+	}
+	if len(parts) == 3 && parts[2] != "ro" {
+		return VolumeMount{}, fmt.Errorf(`volume %q: third part must be "ro"`, s)
+	}
+	return VolumeMount{HostPath: parts[0], ContainerPath: parts[1], ReadOnly: len(parts) == 3}, nil
+}

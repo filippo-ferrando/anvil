@@ -9,6 +9,9 @@ container mirrors, man pages, shell completions and the TUI.
 
 ### Recently done
 
+- **Declarative intents.** `anvil apply -f anvil.yaml` (and `A` on the TUI Intents screen)
+  plans create, update, recreate, start and prune steps against the current state, then
+  applies them in `depends_on` order with a readiness wait. See `docs/apply.md`.
 - **Man pages.** `anvil man <dir>` generates the page tree through cobra's `GenManTree`.
 - **VM disk I/O tuning.** The main disk runs on its own iothread with
   `discard=unmap,detect-zeroes=unmap`, so guest `fstrim` shrinks the qcow2 file again.
@@ -85,6 +88,36 @@ container mirrors, man pages, shell completions and the TUI.
   mounts listed and suggested by umount, image checksums with `h` on the Images screen,
   and state changes (including outside exits) showing up on their own through `Watch`.
 
+## VM hypervisors
+
+### Firecracker backend
+
+QEMU is the only VM hypervisor on Linux right now. Firecracker microVMs should be a
+second one, with the same lifecycle, commands, TUI screens and intent membership as QEMU
+VMs. The only visible difference is a `--hypervisor firecracker` flag (default `qemu`).
+
+- **Selection.** Add a `Hypervisor` field to `VMSpec` and a `VmHypervisor` enum in the
+  proto, set up the same way as `ContainerEngine`. The Manager still sees one `KindVM`
+  backend, which hands each call to QEMU or Firecracker based on the spec.
+- **Process control.** Code lives in `internal/vm/firecracker`: start the `firecracker`
+  binary per VM (optionally under `jailer`) and drive it over its REST API on a unix
+  socket, the same way QMP is used for QEMU.
+- **Images.** Firecracker boots an uncompressed kernel plus a raw rootfs, not a qcow2
+  cloud image. The catalog needs a kernel per distro, and qcow2 bases have to be converted
+  to raw (or ext4) disks on pull.
+- **cloud-init.** No CD-ROM device exists, so the NoCloud seed goes on a second virtio-blk
+  drive, or through MMDS. The cloud-init library and `--wait` should work unchanged.
+- **Networking.** No SLIRP, only tap devices. Intent VMs plug the tap into the intent
+  bridge as they do today. Standalone VMs need a small per-host bridge plus DNAT rules
+  (or a userspace proxy) for the SSH port and `anvil port` forwards.
+- **Gaps to decide.** No virtiofs, so `anvil mount` either returns a clear "not
+  supported on firecracker" error or falls back to a block-device share. Snapshots
+  use Firecracker's own full-VM snapshot API, and fork, export/import and migration
+  must carry the kernel and hypervisor type in the bundle. Unsupported operations
+  return a clear error rather than doing nothing, like `--engine podman` does today.
+- **Tests.** A spawn integration test like `spawn_integration_test.go` that skips when
+  `firecracker` or `/dev/kvm` is missing, plus unit tests for the REST client.
+
 ## Container engines
 
 ### Podman backend
@@ -106,11 +139,29 @@ A few things are blocked on this landing:
 
 ## Intents
 
-### Declarative intents
+### GitOps sync
 
-`anvil apply -f anvil.yaml`: a compose-like file that the daemon compares against the
-current state and applies. Includes `depends_on` start order with a readiness check, so a
-`db` member is up before `app` starts. Parallel start currently starts all members at once.
+Builds on `anvil apply` (`internal/intent/apply`). The daemon watches a git repo (GitHub or any git remote)
+and keeps the host strictly in line with every `anvil.yaml` found in it, recursively.
+
+- **Source.** `anvil gitops add <name> --repo <url> [--branch main] [--path infra/]`,
+  saved in bbolt. The daemon shells out to the local `git` binary, as migration does
+  with `ssh`, so existing SSH keys or credential helpers are enough for private repos.
+- **Watch.** Poll the remote on an interval (default 1m) and apply only when the commit
+  changes. The daemon listens on a unix socket only, so push webhooks are out of scope.
+- **Reconcile.** On each new commit, load every `anvil.yaml` under the path and run the
+  same compare-and-apply as `anvil apply`, in one pass over the whole repo.
+- **Strict coherence.** Instances and intents created by a sync are tagged with their
+  source. Anything tagged but no longer in the repo is deleted, and manual changes to
+  tagged instances (stop, delete, edit) are reverted on the next check. Untagged
+  instances are never touched.
+- **Safety.** A repo that fails to parse, or a failed apply, leaves the current state as
+  is and records the error. `--dry-run` on `anvil gitops sync` shows the plan without
+  applying it, and `anvil gitops pause <name>` stops reconciling for manual work.
+- **Surface.** gRPC service plus `anvil gitops add/list/remove/status/sync/pause/resume`.
+  A TUI screen shows each source with its last synced commit, drift and last error.
+- **Tests.** Unit tests for the reconcile diff, including pruning and drift revert,
+  against a local bare repo created in the test.
 
 ## Migration
 

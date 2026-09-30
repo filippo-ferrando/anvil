@@ -615,6 +615,10 @@ service IntentService {
   rpc Info(IntentInfoRequest) returns (IntentInfoReply);
   rpc Remove(IntentRemoveRequest) returns (IntentRemoveReply);
   rpc Delete(IntentDeleteRequest) returns (IntentDeleteReply);
+
+  // Apply compares a manifest (anvil.yaml) with the intent's current state and applies the
+  // difference. The plan is always sent first; dry_run stops there.
+  rpc Apply(IntentApplyRequest) returns (stream IntentApplyProgress);
 }
 
 message IntentMember {
@@ -674,6 +678,37 @@ message IntentDeleteRequest {
 
 message IntentDeleteReply {
   Intent intent = 1;
+}
+
+message IntentApplyRequest {
+  bytes manifest = 1;               // anvil.yaml content
+  bool dry_run = 2;                 // only send the plan
+  bool prune = 3;                   // delete members that are no longer in the manifest
+  bool recreate = 4;                // allow replacing a VM, which loses its disk
+  repeated string ssh_public_keys = 5; // authorized on every new VM, e.g. the caller's anvil key
+  int32 wait_timeout_seconds = 6;   // readiness wait per depended-on member, defaults to 900
+}
+
+// IntentApplyStep is one planned change to a member.
+message IntentApplyStep {
+  string role = 1;
+  string instance_name = 2;
+  string action = 3;           // "create" | "recreate" | "update" | "start" | "keep" | "delete"
+  repeated string changes = 4; // why, one short line per difference
+}
+
+message IntentApplyPlan {
+  string intent_name = 1;
+  repeated IntentApplyStep steps = 2;
+}
+
+message IntentApplyProgress {
+  oneof event {
+    IntentApplyPlan plan = 1; // always the first event
+    string status = 2;
+    Intent intent = 3;        // final event on success, unset on a dry run
+    string error = 4;
+  }
 }
 
 // HostService manages the known-hosts list migration targets are resolved

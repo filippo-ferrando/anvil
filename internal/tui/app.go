@@ -187,6 +187,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateInstances(msg)
 	case imageChecksumMsg:
 		return m.updateImages(msg)
+	case applyStreamMsg:
+		return m.updateIntents(msg)
 	}
 
 	// Dispatch actionDoneMsg to the screen that originated the action, not necessarily m.screen.

@@ -1605,6 +1605,7 @@ const (
 	IntentService_Info_FullMethodName   = "/anvil.v1.IntentService/Info"
 	IntentService_Remove_FullMethodName = "/anvil.v1.IntentService/Remove"
 	IntentService_Delete_FullMethodName = "/anvil.v1.IntentService/Delete"
+	IntentService_Apply_FullMethodName  = "/anvil.v1.IntentService/Apply"
 )
 
 // IntentServiceClient is the client API for IntentService service.
@@ -1618,6 +1619,9 @@ type IntentServiceClient interface {
 	Info(ctx context.Context, in *IntentInfoRequest, opts ...grpc.CallOption) (*IntentInfoReply, error)
 	Remove(ctx context.Context, in *IntentRemoveRequest, opts ...grpc.CallOption) (*IntentRemoveReply, error)
 	Delete(ctx context.Context, in *IntentDeleteRequest, opts ...grpc.CallOption) (*IntentDeleteReply, error)
+	// Apply compares a manifest (anvil.yaml) with the intent's current state and applies the
+	// difference. The plan is always sent first; dry_run stops there.
+	Apply(ctx context.Context, in *IntentApplyRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[IntentApplyProgress], error)
 }
 
 type intentServiceClient struct {
@@ -1668,6 +1672,25 @@ func (c *intentServiceClient) Delete(ctx context.Context, in *IntentDeleteReques
 	return out, nil
 }
 
+func (c *intentServiceClient) Apply(ctx context.Context, in *IntentApplyRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[IntentApplyProgress], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &IntentService_ServiceDesc.Streams[0], IntentService_Apply_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[IntentApplyRequest, IntentApplyProgress]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type IntentService_ApplyClient = grpc.ServerStreamingClient[IntentApplyProgress]
+
 // IntentServiceServer is the server API for IntentService service.
 // All implementations must embed UnimplementedIntentServiceServer
 // for forward compatibility.
@@ -1679,6 +1702,9 @@ type IntentServiceServer interface {
 	Info(context.Context, *IntentInfoRequest) (*IntentInfoReply, error)
 	Remove(context.Context, *IntentRemoveRequest) (*IntentRemoveReply, error)
 	Delete(context.Context, *IntentDeleteRequest) (*IntentDeleteReply, error)
+	// Apply compares a manifest (anvil.yaml) with the intent's current state and applies the
+	// difference. The plan is always sent first; dry_run stops there.
+	Apply(*IntentApplyRequest, grpc.ServerStreamingServer[IntentApplyProgress]) error
 	mustEmbedUnimplementedIntentServiceServer()
 }
 
@@ -1700,6 +1726,9 @@ func (UnimplementedIntentServiceServer) Remove(context.Context, *IntentRemoveReq
 }
 func (UnimplementedIntentServiceServer) Delete(context.Context, *IntentDeleteRequest) (*IntentDeleteReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
+}
+func (UnimplementedIntentServiceServer) Apply(*IntentApplyRequest, grpc.ServerStreamingServer[IntentApplyProgress]) error {
+	return status.Errorf(codes.Unimplemented, "method Apply not implemented")
 }
 func (UnimplementedIntentServiceServer) mustEmbedUnimplementedIntentServiceServer() {}
 func (UnimplementedIntentServiceServer) testEmbeddedByValue()                       {}
@@ -1794,6 +1823,17 @@ func _IntentService_Delete_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _IntentService_Apply_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(IntentApplyRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(IntentServiceServer).Apply(m, &grpc.GenericServerStream[IntentApplyRequest, IntentApplyProgress]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type IntentService_ApplyServer = grpc.ServerStreamingServer[IntentApplyProgress]
+
 // IntentService_ServiceDesc is the grpc.ServiceDesc for IntentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1818,7 +1858,13 @@ var IntentService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _IntentService_Delete_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Apply",
+			Handler:       _IntentService_Apply_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "anvil/v1/anvil.proto",
 }
 
