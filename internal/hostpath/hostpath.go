@@ -4,6 +4,7 @@ package hostpath
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
@@ -17,12 +18,28 @@ const AnvilUser = "anvil"
 var lookupUser = user.Lookup
 
 // Ancestors returns path's parent directories, root-to-leaf, excluding
-// path itself and "/".
+// path itself and "/". A relative path is resolved against the working directory first.
 func Ancestors(path string) []string {
-	clean := filepath.Clean(path)
+	clean, err := filepath.Abs(path)
+	if err != nil {
+		clean = filepath.Clean(path)
+	}
 	var dirs []string
 	for dir := filepath.Dir(clean); dir != "/" && dir != "."; dir = filepath.Dir(dir) {
 		dirs = append([]string{dir}, dirs...)
+	}
+	return dirs
+}
+
+// needsTraverse returns the ancestors of path that "other" can't already
+// traverse; the rest (like a root-owned /home at 0755) need no ACL.
+func needsTraverse(path string) []string {
+	var dirs []string
+	for _, dir := range Ancestors(path) {
+		if info, err := os.Stat(dir); err == nil && info.Mode().Perm()&0o001 != 0 {
+			continue
+		}
+		dirs = append(dirs, dir)
 	}
 	return dirs
 }
@@ -34,7 +51,7 @@ func Hint(path string) string {
 	var b strings.Builder
 	b.WriteString("\nthe \"anvil\" system user needs real access to this path, not just you")
 	b.WriteString(". Try:\n")
-	for _, dir := range Ancestors(clean) {
+	for _, dir := range needsTraverse(clean) {
 		fmt.Fprintf(&b, "  setfacl -m u:%s:x %s\n", AnvilUser, dir)
 	}
 	fmt.Fprintf(&b, "  setfacl -R -m u:%s:rwx %s\n", AnvilUser, clean)
@@ -61,9 +78,10 @@ func Grant(path string) error {
 		}
 		return nil
 	}
-	for _, dir := range Ancestors(clean) {
+	for _, dir := range needsTraverse(clean) {
 		if err := run("-m", fmt.Sprintf("u:%s:x", AnvilUser), dir); err != nil {
-			return err
+			return fmt.Errorf("%w\n%s is not traversable by %q and only its owner or root can change that. Try:\n  sudo setfacl -m u:%s:x %s",
+				err, dir, AnvilUser, AnvilUser, dir)
 		}
 	}
 	if err := run("-R", "-m", fmt.Sprintf("u:%s:rwx", AnvilUser), clean); err != nil {
