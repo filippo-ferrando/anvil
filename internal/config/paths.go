@@ -40,3 +40,8 @@ func ExportStagingDir() string { return filepath.Join(CacheDir, "export-staging"
 func ImportedVolumeDir(instanceName string, idx int) string {
 	return filepath.Join(StateDir, "container-volumes", instanceName, fmt.Sprint(idx))
 }
+
+// MountedFolderDir is the same, for a VM's Nth shared folder.
+func MountedFolderDir(instanceName string, idx int) string {
+	return filepath.Join(StateDir, "vm-mounts", instanceName, fmt.Sprint(idx))
+}

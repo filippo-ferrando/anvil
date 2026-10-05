@@ -163,22 +163,35 @@ func (b *Backend) adoptMigratedDisk(ctx context.Context, spec *instance.Spec, di
 	// Check the base before touching the disk, so a mismatch leaves it where it was.
 	var basePath string
 	if v.SourceDiskBaseSHA256 != "" {
-		var err error
-		if basePath, err = b.matchingLocalBase(v); err != nil {
+		local, err := b.matchingLocalBase(v)
+		switch {
+		case err == nil:
+			// A base image that travelled for nothing, because this host cached
+			// its own copy in the meantime.
+			if v.SourceBaseImagePath != "" {
+				_ = os.Remove(v.SourceBaseImagePath)
+			}
+		case v.SourceBaseImagePath == "":
 			return err
+		default:
+			if progress != nil {
+				progress("adopting the base image that came with the disk")
+			}
+			if local, err = b.adoptSentBase(v, dir); err != nil {
+				return err
+			}
 		}
+		basePath = local
 	}
 
 	diskPath := filepath.Join(dir, "disk.qcow2")
-	if err := os.Rename(v.SourceDiskPath, diskPath); err != nil {
-		// Rename can fail across filesystems; fall back to a copy.
-		if err := copyFile(v.SourceDiskPath, diskPath); err != nil {
-			return fmt.Errorf("vm: adopting migrated disk: %w", err)
-		}
-		_ = os.Remove(v.SourceDiskPath)
+	if err := moveFile(v.SourceDiskPath, diskPath); err != nil {
+		return fmt.Errorf("vm: adopting migrated disk: %w", err)
 	}
 	v.DiskPath = diskPath
 	v.SourceDiskPath = ""
+	v.SourceBaseImagePath = ""
+	adoptMountBookkeeping(v)
 
 	if basePath != "" {
 		if progress != nil {
@@ -216,6 +229,48 @@ func (b *Backend) matchingLocalBase(v *instance.VMSpec) (string, error) {
 		return "", fmt.Errorf("vm: local base image %s differs from the source's (sha256 %s, want %s)", entry.ID, sum, v.SourceDiskBaseSHA256)
 	}
 	return basePath, nil
+}
+
+// adoptSentBase installs a base image that travelled with a migrated disk. It goes
+// into the image cache when nothing is cached under that name yet, so later
+// migrations only need the delta, and next to the disk otherwise.
+func (b *Backend) adoptSentBase(v *instance.VMSpec, dir string) (string, error) {
+	sum, err := image.FileChecksum(v.SourceBaseImagePath)
+	if err != nil {
+		return "", fmt.Errorf("vm: hashing the base image that came with the disk: %w", err)
+	}
+	if sum != v.SourceDiskBaseSHA256 {
+		return "", fmt.Errorf("vm: the base image that came with the disk is corrupt (sha256 %s, want %s)", sum, v.SourceDiskBaseSHA256)
+	}
+
+	dest := filepath.Join(dir, "base.qcow2")
+	if catalog, cerr := b.EffectiveCatalog(); cerr == nil {
+		if entry, ferr := catalog.Find(v.ImageRef, v.Arch); ferr == nil {
+			// Never overwrite a cached image: other instances' disks back onto it.
+			if path, cached := b.Vault.CachedPath(entry); !cached {
+				dest = path
+			}
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
+		return "", fmt.Errorf("vm: creating %s: %w", filepath.Dir(dest), err)
+	}
+	if err := moveFile(v.SourceBaseImagePath, dest); err != nil {
+		return "", fmt.Errorf("vm: adopting the base image that came with the disk: %w", err)
+	}
+	return dest, nil
+}
+
+// moveFile renames src to dst, copying instead when they're on different filesystems.
+func moveFile(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+	if err := copyFile(src, dst); err != nil {
+		return err
+	}
+	_ = os.Remove(src)
+	return nil
 }
 
 // copyFile copies src to dst; used as os.Rename's cross-filesystem fallback.
@@ -268,6 +323,21 @@ func (b *Backend) BaseImageChecksum(spec *instance.Spec) (string, error) {
 	return image.FileChecksum(backing)
 }
 
+// BaseImagePath returns the local path of the base image spec's disk is an overlay on.
+func (b *Backend) BaseImagePath(spec *instance.Spec) (string, error) {
+	if spec.VM == nil {
+		return "", fmt.Errorf("vm: BaseImagePath called with a nil VMSpec")
+	}
+	backing, err := image.BackingFile(spec.VM.DiskPath)
+	if err != nil {
+		return "", fmt.Errorf("vm: inspecting %s's disk: %w", spec.Name, err)
+	}
+	if backing == "" {
+		return "", fmt.Errorf("vm: %s's disk has no base image", spec.Name)
+	}
+	return backing, nil
+}
+
 // ExportDiskDelta writes only the parts of spec's disk that differ from its base
 // image to destPath. spec's VM must be stopped.
 func (b *Backend) ExportDiskDelta(ctx context.Context, spec *instance.Spec, destPath string) error {
@@ -293,7 +363,8 @@ func (b *Backend) ExportDiskDelta(ctx context.Context, spec *instance.Spec, dest
 
 // PrepareImportedDisk rebases an imported disk's backing file onto this
 // host's own base image, since it still points at its original export host.
-func (b *Backend) PrepareImportedDisk(ctx context.Context, imageRef, arch, diskPath string) error {
+// A non-empty baseSHA256 must match that base image, or the disk is rejected.
+func (b *Backend) PrepareImportedDisk(ctx context.Context, imageRef, arch, diskPath, baseSHA256 string) error {
 	catalog, err := b.EffectiveCatalog()
 	if err != nil {
 		return err
@@ -305,6 +376,16 @@ func (b *Backend) PrepareImportedDisk(ctx context.Context, imageRef, arch, diskP
 	basePath, err := b.Vault.Ensure(ctx, entry, nil)
 	if err != nil {
 		return fmt.Errorf("vm: preparing imported disk's base image: %w", err)
+	}
+	if baseSHA256 != "" {
+		sum, err := image.FileChecksum(basePath)
+		if err != nil {
+			return fmt.Errorf("vm: hashing base image %s: %w", basePath, err)
+		}
+		if sum != baseSHA256 {
+			return fmt.Errorf("vm: local base image %s differs from the one this bundle was made against "+
+				"(sha256 %s, want %s), importing it would corrupt the disk", entry.ID, sum, baseSHA256)
+		}
 	}
 	cmd := exec.CommandContext(ctx, "qemu-img", "rebase", "-u", "-F", "qcow2", "-b", basePath, diskPath)
 	if out, err := cmd.CombinedOutput(); err != nil {

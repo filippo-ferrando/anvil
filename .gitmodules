@@ -1,0 +1,3 @@
+[submodule "catalog"]
+	path = catalog
+	url = forgejo:rdfilippo/anvil-catalog

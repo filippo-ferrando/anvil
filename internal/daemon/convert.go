@@ -70,7 +70,17 @@ func vmSpecFromPB(v *anvilv1.VMSpec) *instance.VMSpec {
 		DefaultUser:          v.GetDefaultUser(),
 		SourceDiskPath:       v.GetSourceDiskPath(),
 		SourceDiskBaseSHA256: v.GetSourceDiskBaseSha256(),
+		SourceBaseImagePath:  v.GetSourceBaseImagePath(),
 		NoGuestAgent:         v.GetNoGuestAgent(),
+	}
+	for _, m := range v.GetMounts() {
+		spec.Mounts = append(spec.Mounts, instance.Mount{
+			HostPath:       m.GetHostPath(),
+			GuestPath:      m.GetGuestPath(),
+			Tag:            m.GetTag(),
+			ReadOnly:       m.GetReadOnly(),
+			SourceDataPath: m.GetSourceDataPath(),
+		})
 	}
 	for _, p := range v.GetPorts() {
 		spec.Ports = append(spec.Ports, instance.PortMapping{
@@ -104,15 +114,17 @@ func vmSpecToPB(v *instance.VMSpec) *anvilv1.VMSpec {
 		ExtraHosts:           v.ExtraHosts,
 		SourceDiskPath:       v.SourceDiskPath,
 		SourceDiskBaseSha256: v.SourceDiskBaseSHA256,
+		SourceBaseImagePath:  v.SourceBaseImagePath,
 		NoGuestAgent:         v.NoGuestAgent,
 		SnapshotSchedule:     snapshotScheduleToPB(v.SnapshotSchedule),
 	}
 	for _, m := range v.Mounts {
 		pb.Mounts = append(pb.Mounts, &anvilv1.Mount{
-			HostPath:  m.HostPath,
-			GuestPath: m.GuestPath,
-			Tag:       m.Tag,
-			ReadOnly:  m.ReadOnly,
+			HostPath:       m.HostPath,
+			GuestPath:      m.GuestPath,
+			Tag:            m.Tag,
+			ReadOnly:       m.ReadOnly,
+			SourceDataPath: m.SourceDataPath,
 		})
 	}
 	for _, p := range v.Ports {
@@ -161,9 +173,10 @@ func containerSpecFromPB(c *anvilv1.ContainerSpec) *instance.ContainerSpec {
 	}
 	for _, vol := range c.GetVolumes() {
 		spec.Volumes = append(spec.Volumes, instance.VolumeMount{
-			HostPath:      vol.GetHostPath(),
-			ContainerPath: vol.GetContainerPath(),
-			ReadOnly:      vol.GetReadOnly(),
+			HostPath:       vol.GetHostPath(),
+			ContainerPath:  vol.GetContainerPath(),
+			ReadOnly:       vol.GetReadOnly(),
+			SourceDataPath: vol.GetSourceDataPath(),
 		})
 	}
 	for _, p := range c.GetPorts() {
@@ -193,9 +206,10 @@ func containerSpecToPB(c *instance.ContainerSpec) *anvilv1.ContainerSpec {
 	}
 	for _, vol := range c.Volumes {
 		spec.Volumes = append(spec.Volumes, &anvilv1.VolumeMount{
-			HostPath:      vol.HostPath,
-			ContainerPath: vol.ContainerPath,
-			ReadOnly:      vol.ReadOnly,
+			HostPath:       vol.HostPath,
+			ContainerPath:  vol.ContainerPath,
+			ReadOnly:       vol.ReadOnly,
+			SourceDataPath: vol.SourceDataPath,
 		})
 	}
 	for _, p := range c.Ports {

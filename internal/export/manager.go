@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/anvil-project/anvil/internal/config"
+	"github.com/anvil-project/anvil/internal/hostpath"
 	"github.com/anvil-project/anvil/internal/instance"
 	"github.com/anvil-project/anvil/internal/store"
 )
@@ -35,9 +36,11 @@ type Intents interface {
 	Launch(ctx context.Context, params instance.LaunchParams, progress func(instance.LaunchEvent)) error
 }
 
-// VMImporter prepares an imported VM's diff disk for adoption on this host.
+// VMImporter handles a VM's diff disk at both ends: naming the base image it sits on
+// at export time, and rebasing it onto this host's own copy at import time.
 type VMImporter interface {
-	PrepareImportedDisk(ctx context.Context, imageRef, arch, diskPath string) error
+	BaseImageChecksum(spec *instance.Spec) (string, error)
+	PrepareImportedDisk(ctx context.Context, imageRef, arch, diskPath, baseSHA256 string) error
 }
 
 type Manager struct {
@@ -134,10 +137,25 @@ func (m *Manager) Export(ctx context.Context, p ExportParams, progress func(stat
 				SSHPublicKeys:    v.SSHPublicKeys,
 				DiskFile:         "disks/" + spec.ID + ".qcow2",
 			}
+			// A disk with no base image (one adopted from a flattened migration) has
+			// no checksum to record, which only means the import can't cross-check it.
+			if sum, err := m.VMImporter.BaseImageChecksum(spec); err == nil {
+				mem.VM.BaseSHA256 = sum
+			}
 			for _, port := range v.Ports {
 				mem.VM.Ports = append(mem.VM.Ports, PortMapping{HostPort: port.HostPort, GuestPort: port.GuestPort, Protocol: port.Protocol})
 			}
 			disks = append(disks, diskSource{archivePath: mem.VM.DiskFile, localPath: v.DiskPath})
+			for i, mnt := range v.Mounts {
+				m := Mount{GuestPath: mnt.GuestPath, Tag: mnt.Tag, ReadOnly: mnt.ReadOnly}
+				if info, err := os.Stat(mnt.HostPath); err == nil && info.IsDir() {
+					m.Archive = fmt.Sprintf("mounts/%s/%d", spec.ID, i)
+					dirs = append(dirs, dirSource{archivePath: m.Archive, localPath: mnt.HostPath})
+				} else {
+					progress(fmt.Sprintf("warning: %q's shared folder %s isn't a directory anvild can read, skipping its contents", spec.Name, mnt.HostPath))
+				}
+				mem.VM.Mounts = append(mem.VM.Mounts, m)
+			}
 
 		case instance.KindContainer:
 			c := spec.Container
@@ -372,7 +390,7 @@ func (m *Manager) fillLaunchParams(ctx context.Context, params *instance.LaunchP
 			return fmt.Errorf("member has no VM spec")
 		}
 		diskPath := filepath.Join(stagingDir, mem.VM.DiskFile)
-		if err := m.VMImporter.PrepareImportedDisk(ctx, mem.VM.ImageRef, mem.VM.Arch, diskPath); err != nil {
+		if err := m.VMImporter.PrepareImportedDisk(ctx, mem.VM.ImageRef, mem.VM.Arch, diskPath, mem.VM.BaseSHA256); err != nil {
 			return fmt.Errorf("preparing disk: %w", err)
 		}
 		v := &instance.VMSpec{
@@ -387,6 +405,19 @@ func (m *Manager) fillLaunchParams(ctx context.Context, params *instance.LaunchP
 		}
 		for _, p := range mem.VM.Ports {
 			v.Ports = append(v.Ports, instance.PortMapping{HostPort: p.HostPort, GuestPort: p.GuestPort, Protocol: p.Protocol})
+		}
+		for i, mnt := range mem.VM.Mounts {
+			if mnt.Archive == "" {
+				progress(fmt.Sprintf("warning: %q's folder shared at %s had no archived contents, skipping it", destName, mnt.GuestPath))
+				continue
+			}
+			hostPath := config.MountedFolderDir(destName, i)
+			if err := hostpath.MoveDir(filepath.Join(stagingDir, mnt.Archive), hostPath); err != nil {
+				return fmt.Errorf("restoring the folder shared at %s: %w", mnt.GuestPath, err)
+			}
+			v.Mounts = append(v.Mounts, instance.Mount{
+				HostPath: hostPath, GuestPath: mnt.GuestPath, Tag: mnt.Tag, ReadOnly: mnt.ReadOnly,
+			})
 		}
 		params.Kind = instance.KindVM
 		params.VM = v
@@ -409,7 +440,7 @@ func (m *Manager) fillLaunchParams(ctx context.Context, params *instance.LaunchP
 				continue
 			}
 			hostPath := config.ImportedVolumeDir(destName, i)
-			if err := moveDir(filepath.Join(stagingDir, vol.Archive), hostPath); err != nil {
+			if err := hostpath.MoveDir(filepath.Join(stagingDir, vol.Archive), hostPath); err != nil {
 				return fmt.Errorf("restoring volume %d: %w", i, err)
 			}
 			c.Volumes = append(c.Volumes, instance.VolumeMount{HostPath: hostPath, ContainerPath: vol.ContainerPath, ReadOnly: vol.ReadOnly})
@@ -421,47 +452,4 @@ func (m *Manager) fillLaunchParams(ctx context.Context, params *instance.LaunchP
 		return fmt.Errorf("unknown member kind %q", mem.Kind)
 	}
 	return nil
-}
-
-// moveDir relocates src to dst, falling back to a recursive copy when a plain rename can't cross
-// filesystems (src and dst can live under different XDG dirs); same idiom as internal/vm.Backend.adoptMigratedDisk.
-func moveDir(src, dst string) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
-		return err
-	}
-	if err := os.Rename(src, dst); err == nil {
-		return nil
-	}
-	if err := copyDir(src, dst); err != nil {
-		return err
-	}
-	return os.RemoveAll(src)
-}
-
-func copyDir(src, dst string) error {
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-		if info.IsDir() {
-			return os.MkdirAll(target, 0o750)
-		}
-		in, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer in.Close()
-		out, err := os.Create(target)
-		if err != nil {
-			return err
-		}
-		defer out.Close()
-		_, err = out.ReadFrom(in)
-		return err
-	})
 }

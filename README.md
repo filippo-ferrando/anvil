@@ -109,6 +109,28 @@ No daemon-to-daemon trust to set up. If you can already SSH there, you can migra
 Copies the disk, brings the network config with it, and only deletes the source once the
 target actually confirms it worked.
 
+Before anything is stopped or copied, the target is checked for the things that would
+make the migration fail or the instance unusable: CPU architecture and the matching
+`qemu-system-*`, KVM, the container engine, free space, RAM, and a name collision.
+Problems that can't be worked around stop the migration there, the rest are printed as
+warnings. `anvil migrate <name> --to <host> --dry-run` runs only those checks.
+
+Only a VM's own changes travel, not its base image, and the base image itself is sent
+once when the target has no copy of it. Migrating a second VM of the same distro to that
+host then sends only its changes again.
+
+Bind-mounted data travels too: a VM's shared folders and a container's bind-mounted
+directories are copied to the target, where they land under `/var/lib/anvil` rather than
+at their original host paths, and the mounts are recreated over them. A host path that
+isn't a readable directory is reported: a container still mounts that same path on the
+target, a VM drops the share rather than fail to start. `anvil export` packs the same
+data into its bundle.
+
+Migration SSH trusts a host's key the first time it sees it and records it. To require a
+key anvil already knows instead, add the host with `anvil host add <alias> <user@host>
+--strict-host-key`; adding the same alias again replaces it, so this can be turned on
+once the key is on record.
+
 **A TUI**, because staring at JSON all day gets old:
 
 ```

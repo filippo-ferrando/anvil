@@ -19,6 +19,10 @@ type target struct {
 	Host     string
 	Port     int // 0 means ssh's own default (22)
 	Identity string
+
+	// StrictHostKey refuses a host key that isn't already in anvil's known_hosts,
+	// instead of accepting the first one seen.
+	StrictHostKey bool
 }
 
 // parseTarget parses "user@host[:port]" into its parts. user is required.
@@ -60,8 +64,12 @@ func commonArgs(t target, portFlag string) []string {
 		identity = config.MigrateIdentityPath()
 	}
 	args = append(args, "-i", identity)
+	hostKeyChecking := "accept-new"
+	if t.StrictHostKey {
+		hostKeyChecking = "yes"
+	}
 	args = append(args,
-		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "StrictHostKeyChecking="+hostKeyChecking,
 		"-o", "UserKnownHostsFile="+config.MigrateKnownHostsPath(),
 		"-o", "BatchMode=yes", // never prompt for credentials
 	)

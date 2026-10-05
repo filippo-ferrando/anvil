@@ -48,6 +48,7 @@ type Exporter interface {
 // a VM's disk that differ from its base image.
 type DeltaExporter interface {
 	BaseImageChecksum(spec *instance.Spec) (string, error)
+	BaseImagePath(spec *instance.Spec) (string, error)
 	ExportDiskDelta(ctx context.Context, spec *instance.Spec, destPath string) error
 }
 
@@ -109,6 +110,7 @@ func (m *Manager) resolveTarget(to string) (target, error) {
 			return target{}, perr
 		}
 		t.Identity = h.Identity
+		t.StrictHostKey = h.StrictHostKey
 		return t, nil
 	}
 	return parseTarget(to)
@@ -247,11 +249,15 @@ func (m *Manager) migrateInstance(ctx context.Context, t target, spec *instance.
 
 	if p.DryRun {
 		progress(fmt.Sprintf("would migrate %q (%s) to %s@%s as %q", spec.Name, spec.Kind, t.User, t.Host, destName))
-		detail, err := m.CheckHost(ctx, p.To)
-		if err != nil {
-			return "", fmt.Errorf("migrate: dry run connectivity check failed: %w", err)
-		}
-		progress("target check: " + detail)
+	}
+	progress("checking the target")
+	caps, warnings, err := m.preflight(ctx, t, spec, destName)
+	reportWarnings(spec.Name, warnings, progress)
+	if err != nil {
+		return "", err
+	}
+	progress(fmt.Sprintf("target check: %s is %s, anvil at %s", t.Host, caps.arch, caps.anvil))
+	if p.DryRun {
 		return "", nil
 	}
 
@@ -261,7 +267,7 @@ func (m *Manager) migrateInstance(ctx context.Context, t target, spec *instance.
 		return "", fmt.Errorf("migrate: stopping %q: %w", spec.Name, err)
 	}
 
-	newID, err := m.migrateSpec(ctx, t, spec, destName, nil, progress)
+	newID, err := m.migrateSpec(ctx, t, spec, destName, nil, caps, progress)
 	if err != nil {
 		return "", err
 	}
@@ -302,6 +308,7 @@ func (m *Manager) migrateIntent(ctx context.Context, t target, it store.Intent, 
 		spec     *instance.Spec
 		role     string
 		staticIP string // this member's own pinned address (VM only, CIDR form); "" if none
+		caps     remoteCaps
 	}
 	members := make([]resolvedMember, 0, len(it.Members))
 	names := make([]string, 0, len(it.Members))
@@ -318,16 +325,37 @@ func (m *Manager) migrateIntent(ctx context.Context, t target, it store.Intent, 
 		names = append(names, spec.Name)
 	}
 
-	if p.DryRun {
-		for _, mem := range members {
+	// Every member is checked before anything stops, so an unusable target
+	// never leaves the intent half stopped.
+	progress("checking the target")
+	checked := make([]resolvedMember, 0, len(members))
+	names = names[:0]
+	var preflightFailed []MemberResult
+	for _, mem := range members {
+		if p.DryRun {
 			progress(fmt.Sprintf("would migrate %q (%s, role %q) to %s@%s", mem.spec.Name, mem.spec.Kind, mem.role, t.User, t.Host))
 		}
-		detail, err := m.CheckHost(ctx, p.To)
+		caps, warnings, err := m.preflight(ctx, t, mem.spec, mem.spec.Name)
+		reportWarnings(mem.spec.Name, warnings, progress)
 		if err != nil {
-			return Result{}, fmt.Errorf("migrate: dry run connectivity check failed: %w", err)
+			if !p.BestEffort {
+				return Result{}, err
+			}
+			progress(fmt.Sprintf("skipping member %q: %v", mem.role, err))
+			preflightFailed = append(preflightFailed, MemberResult{Role: mem.role, Err: err})
+			continue
 		}
-		progress("target check: " + detail)
+		mem.caps = caps
+		checked = append(checked, mem)
+		names = append(names, mem.spec.Name)
+	}
+	members = checked
+	if p.DryRun {
 		return Result{IntentName: it.Name}, nil
+	}
+	if len(members) == 0 {
+		return Result{IntentName: it.Name, Members: preflightFailed},
+			fmt.Errorf("migrate: no member of intent %q can run on the target", it.Name)
 	}
 
 	progress(fmt.Sprintf("stopping %d source instance(s)", len(names)))
@@ -341,13 +369,13 @@ func (m *Manager) migrateIntent(ctx context.Context, t target, it store.Intent, 
 		name string
 		idx  int
 	}
-	var results []MemberResult
+	results := preflightFailed
 	var succeeded []succeededMember
 	failed := false
 	for _, mem := range members {
 		progress(fmt.Sprintf("migrating %q (role %q)", mem.spec.Name, mem.role))
 		im := &intentMigration{name: it.Name, role: mem.role, network: netPayload, staticIP: mem.staticIP}
-		newID, err := m.migrateSpec(ctx, t, mem.spec, mem.spec.Name, im, progress)
+		newID, err := m.migrateSpec(ctx, t, mem.spec, mem.spec.Name, im, mem.caps, progress)
 		if err != nil {
 			failed = true
 			results = append(results, MemberResult{Role: mem.role, Err: err})
@@ -397,6 +425,13 @@ func (m *Manager) migrateIntent(ctx context.Context, t target, it store.Intent, 
 	return Result{IntentName: it.Name, Members: results, RolledBack: rolledBack}, nil
 }
 
+// reportWarnings sends each preflight warning for name through progress.
+func reportWarnings(name string, warnings []string, progress func(status string)) {
+	for _, w := range warnings {
+		progress(fmt.Sprintf("warning: %s: %s", name, w))
+	}
+}
+
 // intentMigration bundles what migrateSpec needs for an intent member;
 // nil for a standalone migration.
 type intentMigration struct {
@@ -408,7 +443,7 @@ type intentMigration struct {
 
 // migrateSpec transfers spec's data and relaunches it on t as destName.
 // im is nil for a standalone migration.
-func (m *Manager) migrateSpec(ctx context.Context, t target, spec *instance.Spec, destName string, im *intentMigration, progress func(status string)) (string, error) {
+func (m *Manager) migrateSpec(ctx context.Context, t target, spec *instance.Spec, destName string, im *intentMigration, caps remoteCaps, progress func(status string)) (string, error) {
 	pl := payload.Payload{Name: destName, Kind: string(spec.Kind)}
 	if im != nil {
 		pl.IntentName = im.name
@@ -422,11 +457,13 @@ func (m *Manager) migrateSpec(ctx context.Context, t target, spec *instance.Spec
 		if m.Exporter == nil {
 			return "", fmt.Errorf("migrate: no VM exporter configured")
 		}
-		if err := m.buildVMPayload(ctx, spec, t, &pl, progress); err != nil {
+		if err := m.buildVMPayload(ctx, spec, t, caps, &pl, progress); err != nil {
 			return "", err
 		}
 	case instance.KindContainer:
-		buildContainerPayload(spec, &pl)
+		if err := buildContainerPayload(ctx, spec, t, &pl, progress); err != nil {
+			return "", err
+		}
 	default:
 		return "", fmt.Errorf("migrate: unsupported instance kind %q", spec.Kind)
 	}
@@ -469,7 +506,7 @@ func rollbackRemote(ctx context.Context, t target, names []string) error {
 // buildVMPayload ships spec's disk to t and fills in pl.VM with everything
 // anvil migrate-import needs to relaunch it. If t already caches the same base
 // image, only the delta on top of it is sent; otherwise the disk is flattened.
-func (m *Manager) buildVMPayload(ctx context.Context, spec *instance.Spec, t target, pl *payload.Payload, progress func(status string)) error {
+func (m *Manager) buildVMPayload(ctx context.Context, spec *instance.Spec, t target, caps remoteCaps, pl *payload.Payload, progress func(status string)) (err error) {
 	stagingDir := config.MigrateStagingDir()
 	if err := os.MkdirAll(stagingDir, 0o750); err != nil {
 		return fmt.Errorf("migrate: creating staging dir: %w", err)
@@ -477,8 +514,15 @@ func (m *Manager) buildVMPayload(ctx context.Context, spec *instance.Spec, t tar
 	localPath := filepath.Join(stagingDir, spec.ID+".qcow2")
 	defer os.Remove(localPath)
 
-	caps := probeRemote(ctx, t, spec.VM.ImageRef, spec.VM.Arch)
-	baseSHA := m.exportDiskDelta(ctx, spec, caps, localPath, progress)
+	// Nothing uploaded so far is of any use to the target if a later step fails.
+	var staged []string
+	defer func() {
+		if err != nil {
+			removeRemote(ctx, t, staged)
+		}
+	}()
+
+	baseSHA, basePath := m.exportDiskDelta(ctx, spec, t, caps, localPath, progress)
 	if baseSHA == "" {
 		progress("flattening disk")
 		if err := m.Exporter.ExportDisk(ctx, spec, localPath); err != nil {
@@ -486,46 +530,109 @@ func (m *Manager) buildVMPayload(ctx context.Context, spec *instance.Spec, t tar
 		}
 	}
 
+	// The exported size is only known now, so re-check it against the target
+	// before spending the upload.
+	if short := caps.spaceShortfall(fileSize(localPath) + fileSize(basePath)); len(short) > 0 {
+		return fmt.Errorf("migrate: not enough room on the target: %s", strings.Join(short, "; "))
+	}
+
+	remoteBase := ""
+	if basePath != "" {
+		remoteBase = remoteStagingDir + "/anvil-migrate-base-" + baseSHA + ".qcow2"
+		progress("sending the base image too, the target has no copy of it")
+		if err := uploadDisk(ctx, t, basePath, remoteBase, caps, progress); err != nil {
+			return err
+		}
+		staged = append(staged, remoteBase)
+	}
+
 	remotePath := remoteStagingDir + "/anvil-migrate-" + spec.ID + ".qcow2"
 	if err := uploadDisk(ctx, t, localPath, remotePath, caps, progress); err != nil {
 		return err
 	}
+	staged = append(staged, remotePath)
+
+	mounts, mountPaths, err := uploadMountData(ctx, t, spec, progress)
+	if err != nil {
+		return err
+	}
+	staged = append(staged, mountPaths...)
 
 	pl.VM = &payload.VM{
-		ImageRef:       spec.VM.ImageRef,
-		Arch:           spec.VM.Arch,
-		CPUs:           int32(spec.VM.CPUs),
-		MemoryMiB:      spec.VM.MemoryMiB,
-		DefaultUser:    spec.VM.DefaultUser,
-		RemoteDiskPath: remotePath,
-		BaseSHA256:     baseSHA,
+		ImageRef:            spec.VM.ImageRef,
+		Arch:                spec.VM.Arch,
+		CPUs:                int32(spec.VM.CPUs),
+		MemoryMiB:           spec.VM.MemoryMiB,
+		DefaultUser:         spec.VM.DefaultUser,
+		RemoteDiskPath:      remotePath,
+		BaseSHA256:          baseSHA,
+		RemoteBaseImagePath: remoteBase,
+		Mounts:              mounts,
 	}
 	return nil
 }
 
-// exportDiskDelta writes spec's disk delta to localPath when t caches the exact
-// same base image, returning that base's SHA256, or "" if a full disk must be sent.
-func (m *Manager) exportDiskDelta(ctx context.Context, spec *instance.Spec, caps remoteCaps, localPath string, progress func(status string)) string {
+// uploadMountData sends every folder shared into spec's guest, and returns the
+// payload mounts plus the staging paths they landed in.
+func uploadMountData(ctx context.Context, t target, spec *instance.Spec, progress func(status string)) ([]payload.Mount, []string, error) {
+	var mounts []payload.Mount
+	var staged []string
+	for i, mnt := range spec.VM.Mounts {
+		if info, err := os.Stat(mnt.HostPath); err != nil || !info.IsDir() {
+			progress(fmt.Sprintf("warning: %s is not a readable directory, so %s is not shared on the target", mnt.HostPath, mnt.GuestPath))
+			continue
+		}
+		pm := payload.Mount{GuestPath: mnt.GuestPath, Tag: mnt.Tag, ReadOnly: mnt.ReadOnly}
+		pm.RemoteDataPath = remoteDataPath(spec.ID, i)
+		if err := uploadDir(ctx, t, mnt.HostPath, pm.RemoteDataPath, progress); err != nil {
+			return nil, staged, err
+		}
+		staged = append(staged, pm.RemoteDataPath)
+		mounts = append(mounts, pm)
+	}
+	return mounts, staged, nil
+}
+
+// remoteDataPath is where one instance's Nth shared folder is staged on the target.
+func remoteDataPath(instanceID string, idx int) string {
+	return fmt.Sprintf("%s/anvil-migrate-data-%s-%d", remoteStagingDir, instanceID, idx)
+}
+
+// exportDiskDelta writes spec's disk delta to localPath, so only the changes on top
+// of the base image travel. It returns that base's SHA256, plus its local path when
+// the target has no copy of it and it has to travel too. Both are "" when the whole
+// disk must be flattened instead.
+func (m *Manager) exportDiskDelta(ctx context.Context, spec *instance.Spec, t target, caps remoteCaps, localPath string, progress func(status string)) (baseSHA, basePath string) {
 	de, ok := m.Exporter.(DeltaExporter)
-	if !ok || caps.baseSHA == "" {
-		return ""
+	if !ok {
+		return "", ""
 	}
 	sum, err := de.BaseImageChecksum(spec)
-	if err != nil || sum != caps.baseSHA {
-		return ""
+	if err != nil {
+		return "", ""
 	}
-	progress("target has the same base image, exporting only the disk changes")
+
+	// The target may have cached the base since the probe, for instance while an
+	// earlier member of the same intent was imported.
+	if sum != caps.baseSHA && sum != remoteBaseSHA(ctx, t, spec.VM.ImageRef, spec.VM.Arch) {
+		if basePath, err = de.BaseImagePath(spec); err != nil {
+			log.Printf("migrate: locating %s's base image, falling back to a full disk: %v", spec.Name, err)
+			return "", ""
+		}
+	}
+
+	progress("exporting only the disk changes")
 	if err := de.ExportDiskDelta(ctx, spec, localPath); err != nil {
 		log.Printf("migrate: exporting %s's disk delta, falling back to a full disk: %v", spec.Name, err)
 		_ = os.Remove(localPath)
-		return ""
+		return "", ""
 	}
-	return sum
+	return sum, basePath
 }
 
-// buildContainerPayload fills in pl.Container from spec; the target
-// re-pulls ImageRef itself, no data transfer.
-func buildContainerPayload(spec *instance.Spec, pl *payload.Payload) {
+// buildContainerPayload fills in pl.Container from spec. The target re-pulls
+// ImageRef itself, so only the bind-mounted directories are transferred.
+func buildContainerPayload(ctx context.Context, spec *instance.Spec, t target, pl *payload.Payload, progress func(status string)) (err error) {
 	c := spec.Container
 	pc := &payload.Container{
 		ImageRef:   c.ImageRef,
@@ -536,10 +643,26 @@ func buildContainerPayload(spec *instance.Spec, pl *payload.Payload) {
 		NetworkMode: "",
 		Engine:      string(c.Engine),
 	}
-	for _, v := range c.Volumes {
-		pc.Volumes = append(pc.Volumes, payload.VolumeMount{
-			HostPath: v.HostPath, ContainerPath: v.ContainerPath, ReadOnly: v.ReadOnly,
-		})
+
+	var staged []string
+	defer func() {
+		if err != nil {
+			removeRemote(ctx, t, staged)
+		}
+	}()
+	for i, v := range c.Volumes {
+		pv := payload.VolumeMount{HostPath: v.HostPath, ContainerPath: v.ContainerPath, ReadOnly: v.ReadOnly}
+		if info, statErr := os.Stat(v.HostPath); statErr != nil || !info.IsDir() {
+			progress(fmt.Sprintf("warning: %s is not a readable directory, the target mounts that same path instead", v.HostPath))
+			pc.Volumes = append(pc.Volumes, pv)
+			continue
+		}
+		pv.RemoteDataPath = remoteDataPath(spec.ID, i)
+		if err := uploadDir(ctx, t, v.HostPath, pv.RemoteDataPath, progress); err != nil {
+			return err
+		}
+		staged = append(staged, pv.RemoteDataPath)
+		pc.Volumes = append(pc.Volumes, pv)
 	}
 	for _, port := range c.Ports {
 		pc.Ports = append(pc.Ports, payload.PortMapping{
@@ -547,6 +670,7 @@ func buildContainerPayload(spec *instance.Spec, pl *payload.Payload) {
 		})
 	}
 	pl.Container = pc
+	return nil
 }
 
 // parseMigrateResult scans anvil migrate-import's captured stdout for its

@@ -18,6 +18,10 @@ type Host struct {
 	Alias    string
 	Target   string // "user@host[:port]"
 	Identity string // optional path to a private key; empty uses ssh's own default identity resolution
+
+	// StrictHostKey requires this host's key to already be in anvil's known_hosts,
+	// instead of trusting whatever key answers the first time.
+	StrictHostKey bool
 }
 
 func (s *Store) PutHost(h Host) error {

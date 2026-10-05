@@ -105,6 +105,15 @@ func launchRequestFromPayload(pl payload.Payload) (*anvilv1.LaunchRequest, error
 			DefaultUser:          pl.VM.DefaultUser,
 			SourceDiskPath:       pl.VM.RemoteDiskPath,
 			SourceDiskBaseSha256: pl.VM.BaseSHA256,
+			SourceBaseImagePath:  pl.VM.RemoteBaseImagePath,
+		}
+		for _, m := range pl.VM.Mounts {
+			req.Vm.Mounts = append(req.Vm.Mounts, &anvilv1.Mount{
+				GuestPath:      m.GuestPath,
+				Tag:            m.Tag,
+				ReadOnly:       m.ReadOnly,
+				SourceDataPath: m.RemoteDataPath,
+			})
 		}
 
 	case "container":
@@ -127,6 +136,7 @@ func launchRequestFromPayload(pl payload.Payload) (*anvilv1.LaunchRequest, error
 		for _, v := range pl.Container.Volumes {
 			cs.Volumes = append(cs.Volumes, &anvilv1.VolumeMount{
 				HostPath: v.HostPath, ContainerPath: v.ContainerPath, ReadOnly: v.ReadOnly,
+				SourceDataPath: v.RemoteDataPath,
 			})
 		}
 		for _, p := range pl.Container.Ports {

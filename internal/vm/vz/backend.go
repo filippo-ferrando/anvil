@@ -46,9 +46,13 @@ func (b *Backend) ExportDisk(ctx context.Context, spec *instance.Spec, destPath 
 	return errNotImplemented("ExportDisk")
 }
 
-// PrepareImportedDisk ensures imageRef/arch's base image is present and
-// rebases diskPath's backing file onto it. Satisfies internal/export.VMImporter.
-func (b *Backend) PrepareImportedDisk(ctx context.Context, imageRef, arch, diskPath string) error {
+// BaseImageChecksum and PrepareImportedDisk satisfy internal/export.VMImporter,
+// same as internal/vm.Backend.
+func (b *Backend) BaseImageChecksum(spec *instance.Spec) (string, error) {
+	return "", errNotImplemented("BaseImageChecksum")
+}
+
+func (b *Backend) PrepareImportedDisk(ctx context.Context, imageRef, arch, diskPath, baseSHA256 string) error {
 	return errNotImplemented("PrepareImportedDisk")
 }
 

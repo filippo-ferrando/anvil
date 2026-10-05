@@ -39,6 +39,25 @@ type VM struct {
 	DefaultUser    string
 	RemoteDiskPath string
 	BaseSHA256     string
+
+	// RemoteBaseImagePath is where the base image itself was uploaded, set only
+	// when the target didn't already have it cached.
+	RemoteBaseImagePath string
+
+	// Mounts are the guest's shared folders, recreated on the target.
+	Mounts []Mount
+}
+
+// Mount is one folder shared into a VM's guest, with its contents.
+type Mount struct {
+	GuestPath string
+	Tag       string // kept as it was, the guest's fstab travelled inside the disk
+	ReadOnly  bool
+
+	// RemoteDataPath is where this folder's contents were uploaded on the target.
+	// A folder whose contents can't be read on the source is left out entirely,
+	// since a mount with no directory behind it stops the VM from starting.
+	RemoteDataPath string
 }
 
 // Container mirrors the subset of instance.ContainerSpec a migrated
@@ -58,6 +77,10 @@ type VolumeMount struct {
 	HostPath      string
 	ContainerPath string
 	ReadOnly      bool
+
+	// RemoteDataPath is where this volume's contents were uploaded on the target.
+	// When it is empty the target bind-mounts HostPath as it stands.
+	RemoteDataPath string
 }
 
 type PortMapping struct {

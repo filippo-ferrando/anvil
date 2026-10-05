@@ -104,9 +104,11 @@ VMs. The only visible difference is a `--hypervisor firecracker` flag (default `
   socket, the same way QMP is used for QEMU.
 - **Images.** Firecracker boots an uncompressed kernel plus a raw rootfs, not a qcow2
   cloud image. The catalog needs a kernel per distro, and qcow2 bases have to be converted
-  to raw (or ext4) disks on pull.
+  to raw (or ext4) disks on pull -> use a dedicated "cache" to store the firecracker images.
 - **cloud-init.** No CD-ROM device exists, so the NoCloud seed goes on a second virtio-blk
   drive, or through MMDS. The cloud-init library and `--wait` should work unchanged.
+- **catalog**. create a dedicated Firecracker catalog with the same distros, versions and checksums as the QEMU
+  catalog.
 - **Networking.** No SLIRP, only tap devices. Intent VMs plug the tap into the intent
   bridge as they do today. Standalone VMs need a small per-host bridge plus DNAT rules
   (or a userspace proxy) for the SSH port and `anvil port` forwards.
@@ -165,18 +167,8 @@ and keeps the host strictly in line with every `anvil.yaml` found in it, recursi
 
 ## Migration
 
-- **Arbitrary bind mounts aren't migrated.** Moving a container only carries over
-  anvil-managed volumes; a host bind mount's actual data doesn't travel with it.
-  `--dry-run` should warn about this instead of staying silent.
-- **Base image transfer from the source.** When the target lacks the base image, the
-  whole flattened disk is sent. Sending the base image once and then only deltas would
-  help hosts that migrate many VMs of the same distro, and hosts without internet access.
 - **Live migration.** QMP `migrate` through an SSH tunnel, to move a running VM with a short
   pause instead of a stop, copy and start.
-- **Delta export bundles.** `anvil export` could use the same base-image delta as migration
-  when the importing host has the base image.
-- **Host key trust.** Migration SSH uses `StrictHostKeyChecking=accept-new`, which is
-  trust on first use. This should be documented, with an option to require a known key.
 
 ## Discovery and observability
 

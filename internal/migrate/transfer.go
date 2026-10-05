@@ -6,12 +6,17 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/anvil-project/anvil/internal/instance"
 )
 
 // uploadAttempts is how many times one disk upload resumes after a broken connection.
@@ -21,26 +26,90 @@ const uploadAttempts = 4
 // /var/tmp is disk-backed on most distros, unlike /tmp, which is often a small tmpfs.
 const remoteStagingDir = "/var/tmp"
 
-// remoteCaps is what the target offers for a VM disk upload.
+// remoteStateDir/remoteCacheDir are where the target's anvild keeps instance disks
+// and cached base images, mirroring config.StateDir/CacheDir on Linux.
+const (
+	remoteStateDir = "/var/lib/anvil"
+	remoteCacheDir = "/var/cache/anvil"
+)
+
+// remoteCaps is what the target host has, as seen in one probe.
 type remoteCaps struct {
 	zstd      bool
 	sha256sum bool
 	baseSHA   string // target's SHA256 of the VM's base image; "" if not cached or unknown
+
+	anvil  string // path to the target's anvil binary; "" if not installed
+	anvild string
+	arch   string // target's CPU arch, in VM Arch naming ("x86_64", "aarch64")
+	kvm    bool   // /dev/kvm exists
+	qemu   bool   // qemu-system-<the migrating VM's arch> is installed
+	docker bool
+	podman bool
+	tar    bool
+
+	nameTaken     bool  // the destination name is already used on the target
+	memTotalKB    int64 // 0 when unknown
+	freeStagingKB int64
+	freeStateKB   int64
+	freeCacheKB   int64
 }
 
-// probeRemote asks t, in one SSH round trip, which tools it has and whether it
-// caches the base image imageRef/arch. Any failure just means "no extras".
-func probeRemote(ctx context.Context, t target, imageRef, arch string) remoteCaps {
-	script := "command -v zstd >/dev/null 2>&1 && echo zstd; " +
-		"command -v sha256sum >/dev/null 2>&1 && echo sha256sum; "
-	if imageRef != "" {
-		script += "echo base=$(anvil image checksum " + shQuote(imageRef)
-		if arch != "" {
-			script += " --arch " + shQuote(arch)
-		}
-		script += " 2>/dev/null)"
+// imageChecksumCmd asks the target's own anvil for its cached checksum of
+// imageRef, printing nothing when it has no copy of it.
+func imageChecksumCmd(imageRef, arch string) string {
+	return "anvil image checksum " + shQuote(imageRef) + " --arch " + shQuote(arch) + " 2>/dev/null"
+}
+
+// remoteBaseSHA re-reads that checksum on its own, for a target that may have
+// cached the image since the probe ran.
+func remoteBaseSHA(ctx context.Context, t target, imageRef, arch string) string {
+	if imageRef == "" {
+		return ""
 	}
-	out, _ := sshRun(ctx, t, remoteSh(script), nil)
+	if arch == "" {
+		arch = "x86_64"
+	}
+	out, _ := sshRun(ctx, t, remoteSh(imageChecksumCmd(imageRef, arch)), nil)
+	if sum := strings.TrimSpace(out); isSHA256Hex(sum) {
+		return sum
+	}
+	return ""
+}
+
+// probeRemote asks t, in one SSH round trip, everything preflight and the disk
+// upload need to know. Any failure just leaves the matching field unset.
+func probeRemote(ctx context.Context, t target, spec *instance.Spec, destName string) remoteCaps {
+	var b strings.Builder
+	b.WriteString("echo arch=$(uname -m); " +
+		"echo anvil=$(command -v anvil); echo anvild=$(command -v anvild); " +
+		"command -v zstd >/dev/null 2>&1 && echo zstd; " +
+		"command -v sha256sum >/dev/null 2>&1 && echo sha256sum; " +
+		"command -v docker >/dev/null 2>&1 && echo docker; " +
+		"command -v podman >/dev/null 2>&1 && echo podman; " +
+		"command -v tar >/dev/null 2>&1 && echo tar; " +
+		"[ -e /dev/kvm ] && echo kvm; " +
+		"echo mem=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null); " +
+		"echo staging=$(df -Pk " + remoteStagingDir + " 2>/dev/null | awk 'NR==2{print $4}'); " +
+		"echo state=$(df -Pk " + remoteStateDir + " 2>/dev/null | awk 'NR==2{print $4}'); " +
+		"echo cache=$(df -Pk " + remoteCacheDir + " 2>/dev/null | awk 'NR==2{print $4}'); ")
+	if destName != "" {
+		b.WriteString("anvil info " + shQuote(destName) + " >/dev/null 2>&1 && echo nametaken; ")
+	}
+	if spec != nil && spec.VM != nil {
+		arch := spec.VM.Arch
+		if arch == "" {
+			arch = "x86_64"
+		}
+		b.WriteString("command -v " + qemuBinary(arch) + " >/dev/null 2>&1 && echo qemu; ")
+		if spec.VM.ImageRef != "" {
+			b.WriteString("echo base=$(" + imageChecksumCmd(spec.VM.ImageRef, arch) + "); ")
+		}
+	}
+	// Each line reports itself, so a failing step must not fail the probe.
+	b.WriteString("exit 0")
+
+	out, _ := sshRun(ctx, t, remoteSh(b.String()), nil)
 	return parseRemoteCaps(out)
 }
 
@@ -48,19 +117,69 @@ func parseRemoteCaps(out string) remoteCaps {
 	var caps remoteCaps
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
-		switch {
-		case line == "zstd":
+		key, value, _ := strings.Cut(line, "=")
+		switch key {
+		case "zstd":
 			caps.zstd = true
-		case line == "sha256sum":
+		case "sha256sum":
 			caps.sha256sum = true
-		case strings.HasPrefix(line, "base="):
-			if sum := strings.TrimPrefix(line, "base="); isSHA256Hex(sum) {
-				caps.baseSHA = sum
+		case "kvm":
+			caps.kvm = true
+		case "qemu":
+			caps.qemu = true
+		case "docker":
+			caps.docker = true
+		case "podman":
+			caps.podman = true
+		case "tar":
+			caps.tar = true
+		case "nametaken":
+			caps.nameTaken = true
+		case "anvil":
+			caps.anvil = value
+		case "anvild":
+			caps.anvild = value
+		case "arch":
+			caps.arch = normalizeArch(value)
+		case "mem":
+			caps.memTotalKB = parseKB(value)
+		case "staging":
+			caps.freeStagingKB = parseKB(value)
+		case "state":
+			caps.freeStateKB = parseKB(value)
+		case "cache":
+			caps.freeCacheKB = parseKB(value)
+		case "base":
+			if isSHA256Hex(value) {
+				caps.baseSHA = value
 			}
 		}
 	}
 	return caps
 }
+
+func parseKB(s string) int64 {
+	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// normalizeArch maps what uname -m prints to the naming VM specs use.
+func normalizeArch(s string) string {
+	switch s := strings.TrimSpace(s); s {
+	case "amd64":
+		return "x86_64"
+	case "arm64":
+		return "aarch64"
+	default:
+		return s
+	}
+}
+
+// hostArch is this host's CPU arch in the same naming.
+func hostArch() string { return normalizeArch(runtime.GOARCH) }
 
 func isSHA256Hex(s string) bool {
 	if len(s) != 64 {
@@ -264,4 +383,78 @@ func fileSHA256(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// uploadDir streams localDir's contents to remoteDir on t as a gzipped tar, so a
+// shared folder's data travels with the instance that mounts it.
+func uploadDir(ctx context.Context, t target, localDir, remoteDir string, progress func(status string)) error {
+	tarBin, err := exec.LookPath("tar")
+	if err != nil {
+		return fmt.Errorf("migrate: tar not found on PATH (needed to send %s)", localDir)
+	}
+	progress(fmt.Sprintf("sending %s (%s)", localDir, humanBytes(dirSize(localDir))))
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	remote := "rm -rf " + shQuote(remoteDir) + " && mkdir -p " + shQuote(remoteDir) +
+		" && tar -xzf - -C " + shQuote(remoteDir)
+	ssh, err := sshCommand(ctx, t, remoteSh(remote))
+	if err != nil {
+		return err
+	}
+	var sshErrOut strings.Builder
+	ssh.Stderr = &sshErrOut
+
+	local := exec.CommandContext(ctx, tarBin, "-czf", "-", "-C", localDir, ".")
+	var tarErrOut strings.Builder
+	local.Stderr = &tarErrOut
+	pipe, err := local.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("migrate: archiving %s: %w", localDir, err)
+	}
+	ssh.Stdin = pipe
+	if err := local.Start(); err != nil {
+		return fmt.Errorf("migrate: archiving %s: %w", localDir, err)
+	}
+
+	sshErr := ssh.Run()
+	if sshErr != nil {
+		cancel() // stops tar if ssh died first
+	}
+	tarErr := local.Wait()
+	if sshErr != nil {
+		return fmt.Errorf("migrate: sending %s to %s@%s: %w: %s", localDir, t.User, t.Host, sshErr, strings.TrimSpace(sshErrOut.String()))
+	}
+	if tarErr != nil {
+		return fmt.Errorf("migrate: archiving %s: %w: %s", localDir, tarErr, strings.TrimSpace(tarErrOut.String()))
+	}
+	return nil
+}
+
+// removeRemote deletes staged paths left on t by a migration that failed.
+func removeRemote(ctx context.Context, t target, paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	quoted := make([]string, len(paths))
+	for i, p := range paths {
+		quoted[i] = shQuote(p)
+	}
+	_, _ = sshRun(context.WithoutCancel(ctx), t, remoteSh("rm -rf "+strings.Join(quoted, " ")), nil)
+}
+
+// dirSize is how much data a directory holds, 0 if it can't be read.
+func dirSize(path string) int64 {
+	var total int64
+	_ = filepath.WalkDir(path, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if info, err := d.Info(); err == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
 }

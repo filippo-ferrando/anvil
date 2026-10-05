@@ -320,3 +320,23 @@ func (b *Backend) upgradeLegacyMounts(spec *instance.Spec) error {
 	}
 	return nil
 }
+
+// adoptMountBookkeeping settles the mount fields a migrated or imported disk
+// brings with it. The guest's fstab travelled inside the disk, already written
+// for virtiofs, so it must not be rewritten, and new tags must not reuse an old one.
+func adoptMountBookkeeping(v *instance.VMSpec) {
+	if len(v.Mounts) == 0 {
+		return
+	}
+	v.MountFS = mountFSVirtiofs
+	next := 0
+	for _, m := range v.Mounts {
+		var n int
+		if _, err := fmt.Sscanf(m.Tag, "mount%d", &n); err == nil && n >= next {
+			next = n + 1
+		}
+	}
+	if next > v.NextMountIndex {
+		v.NextMountIndex = next
+	}
+}

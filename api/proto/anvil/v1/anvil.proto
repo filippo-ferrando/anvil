@@ -185,6 +185,10 @@ message VMSpec {
   bool no_guest_agent = 20;
 
   SnapshotSchedule snapshot_schedule = 21;
+
+  // Set with source_disk_base_sha256 when the base image itself travelled with the
+  // disk, because the target didn't have it cached. Adopted before the rebase.
+  string source_base_image_path = 22;
 }
 
 // Mount is one host directory shared into a VM's guest over virtiofs.
@@ -193,6 +197,10 @@ message Mount {
   string guest_path = 2;
   string tag = 3; // internal virtiofs tag, assigned automatically
   bool read_only = 4;
+
+  // Set only when relaunching a migrated VM: the shared folder's contents were
+  // uploaded here, and are moved into place before the mount is recreated.
+  string source_data_path = 5;
 }
 
 enum ContainerEngine {
@@ -223,6 +231,9 @@ message VolumeMount {
   string host_path = 1;
   string container_path = 2;
   bool read_only = 3;
+
+  // Same as Mount.source_data_path, for a migrated container's bind mount.
+  string source_data_path = 4;
 }
 
 message PortMapping {
@@ -724,6 +735,10 @@ message Host {
   string alias = 1;
   string target = 2;   // "user@host[:port]"
   string identity = 3; // optional path to a private key
+
+  // Requires this host's SSH key to already be in anvil's own known_hosts file,
+  // instead of trusting whatever key answers the first time.
+  bool strict_host_key = 4;
 }
 
 message HostAddRequest {

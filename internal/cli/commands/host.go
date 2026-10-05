@@ -27,11 +27,16 @@ func newHostCommand(flags *globalFlags) *cobra.Command {
 }
 
 func newHostAddCommand(flags *globalFlags) *cobra.Command {
-	var identity string
+	var (
+		identity  string
+		strictKey bool
+	)
 	cmd := &cobra.Command{
 		Use:   "add <alias> <user@host[:port]>",
 		Short: "Add a known host",
-		Args:  cobra.ExactArgs(2),
+		Long: "Add a known host. Adding the same alias again replaces it, which is how " +
+			"--strict-host-key is turned on for a host whose key anvil already recorded.",
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := dial(flags)
 			if err != nil {
@@ -39,13 +44,15 @@ func newHostAddCommand(flags *globalFlags) *cobra.Command {
 			}
 			defer c.Close()
 			_, err = c.Host.Add(cmd.Context(), &anvilv1.HostAddRequest{
-				Host: &anvilv1.Host{Alias: args[0], Target: args[1], Identity: identity},
+				Host: &anvilv1.Host{Alias: args[0], Target: args[1], Identity: identity, StrictHostKey: strictKey},
 			})
 			return err
 		},
 	}
 	cmd.Flags().StringVarP(&identity, "identity", "i", "", "path to a private key to use for this host, instead of ssh's own default identity resolution "+
 		"(anvild runs as root, so this needs to be a key root can read, and its own identity resolution otherwise falls back to root's own ~/.ssh, not yours)")
+	cmd.Flags().BoolVar(&strictKey, "strict-host-key", false, "refuse to connect unless this host's SSH key is already in anvil's own known_hosts file; "+
+		"without it the first key seen is accepted and recorded")
 	return cmd
 }
 
@@ -66,13 +73,17 @@ func newHostListCommand(flags *globalFlags) *cobra.Command {
 				return err
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "ALIAS\tTARGET\tIDENTITY")
+			fmt.Fprintln(tw, "ALIAS\tTARGET\tIDENTITY\tHOST KEY")
 			for _, h := range reply.GetHosts() {
 				identity := h.GetIdentity()
 				if identity == "" {
 					identity = "-"
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\n", h.GetAlias(), h.GetTarget(), identity)
+				hostKey := "trust on first use"
+				if h.GetStrictHostKey() {
+					hostKey = "strict"
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", h.GetAlias(), h.GetTarget(), identity, hostKey)
 			}
 			return tw.Flush()
 		},

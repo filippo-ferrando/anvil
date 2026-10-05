@@ -21,12 +21,14 @@ func NewHostServer(s *store.Store, m *migrate.Manager) *HostServer {
 }
 
 func hostToPB(h store.Host) *anvilv1.Host {
-	return &anvilv1.Host{Alias: h.Alias, Target: h.Target, Identity: h.Identity}
+	return &anvilv1.Host{Alias: h.Alias, Target: h.Target, Identity: h.Identity, StrictHostKey: h.StrictHostKey}
 }
 
 func (s *HostServer) Add(ctx context.Context, req *anvilv1.HostAddRequest) (*anvilv1.HostAddReply, error) {
 	h := req.GetHost()
-	if err := s.Store.PutHost(store.Host{Alias: h.GetAlias(), Target: h.GetTarget(), Identity: h.GetIdentity()}); err != nil {
+	if err := s.Store.PutHost(store.Host{
+		Alias: h.GetAlias(), Target: h.GetTarget(), Identity: h.GetIdentity(), StrictHostKey: h.GetStrictHostKey(),
+	}); err != nil {
 		return nil, err
 	}
 	return &anvilv1.HostAddReply{}, nil

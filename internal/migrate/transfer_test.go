@@ -53,6 +53,28 @@ func TestParseRemoteCaps(t *testing.T) {
 	}
 }
 
+func TestParseRemoteCapsFields(t *testing.T) {
+	caps := parseRemoteCaps("arch=aarch64\nanvil=/usr/bin/anvil\nanvild=/usr/bin/anvild\n" +
+		"kvm\nqemu\ndocker\npodman\nnametaken\nmem=16303532\nstaging=104857600\nstate=52428800\ncache=20971520\n")
+	if caps.arch != "aarch64" || caps.anvil != "/usr/bin/anvil" || caps.anvild != "/usr/bin/anvild" {
+		t.Errorf("unexpected identity fields: %+v", caps)
+	}
+	if !caps.kvm || !caps.qemu || !caps.docker || !caps.podman || !caps.nameTaken {
+		t.Errorf("unexpected flags: %+v", caps)
+	}
+	if caps.memTotalKB != 16303532 || caps.freeStagingKB != 104857600 || caps.freeStateKB != 52428800 || caps.freeCacheKB != 20971520 {
+		t.Errorf("unexpected sizes: %+v", caps)
+	}
+	// uname -m naming is mapped onto the naming VM specs use.
+	if got := parseRemoteCaps("arch=amd64\n").arch; got != "x86_64" {
+		t.Errorf("arch amd64 parsed as %q, want x86_64", got)
+	}
+	// A df or awk that printed nothing leaves the reading unknown, not zero-free.
+	if got := parseRemoteCaps("staging=\n").freeStagingKB; got != 0 {
+		t.Errorf("empty free space parsed as %d, want 0", got)
+	}
+}
+
 func TestShQuoteRoundTrip(t *testing.T) {
 	in := "it's a /path with spaces"
 	out, err := exec.Command("sh", "-c", "printf %s "+shQuote(in)).Output()
@@ -158,5 +180,16 @@ func TestUploadDiskDetectsCorruption(t *testing.T) {
 	}
 	if _, err := os.Stat(dst); !os.IsNotExist(err) {
 		t.Error("expected the corrupt remote file to be removed")
+	}
+}
+
+func TestCommonArgsHostKeyChecking(t *testing.T) {
+	args := strings.Join(commonArgs(target{}, "-p"), " ")
+	if !strings.Contains(args, "StrictHostKeyChecking=accept-new") {
+		t.Errorf("expected trust on first use by default, got %q", args)
+	}
+	args = strings.Join(commonArgs(target{StrictHostKey: true}, "-p"), " ")
+	if !strings.Contains(args, "StrictHostKeyChecking=yes") {
+		t.Errorf("expected a strict host key check, got %q", args)
 	}
 }

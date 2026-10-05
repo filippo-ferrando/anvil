@@ -50,6 +50,10 @@ func (s *Server) Launch(req *anvilv1.LaunchRequest, stream anvilv1.InstanceServi
 		sendLaunchEvent(stream, instance.LaunchEvent{Err: err})
 		return err
 	}
+	if err := adoptStagedData(&params); err != nil {
+		sendLaunchEvent(stream, instance.LaunchEvent{Err: err})
+		return err
+	}
 	ctx := stream.Context()
 	wait := req.GetWait() && !params.NoStart
 

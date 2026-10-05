@@ -17,7 +17,12 @@ type hostItem struct{ host *anvilv1.Host }
 
 func (i hostItem) FilterValue() string { return i.host.GetAlias() }
 func (i hostItem) Title() string       { return i.host.GetAlias() }
-func (i hostItem) Description() string { return i.host.GetTarget() }
+func (i hostItem) Description() string {
+	if i.host.GetStrictHostKey() {
+		return i.host.GetTarget() + " (strict host key)"
+	}
+	return i.host.GetTarget()
+}
 
 type migrationModel struct {
 	hosts         list.Model
@@ -159,6 +164,7 @@ func (m model) updateMigrationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, addHost(m.client, &anvilv1.Host{
 				Alias: alias, Target: target, Identity: mg.addForm.Value("Identity path (optional)"),
+				StrictHostKey: mg.addForm.Bool("Strict host key"),
 			})
 		}
 		return m, nil
@@ -204,6 +210,7 @@ func (m model) updateMigrationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			textField("Alias", "", ""),
 			textField("user@host[:port]", "", ""),
 			textField("Identity path (optional)", "", ""),
+			toggleField("Strict host key", "require a host key anvil already knows", false),
 		})
 		mg.addForm.SetHeight(contentHeight(m.height) - 2)
 		return m, nil

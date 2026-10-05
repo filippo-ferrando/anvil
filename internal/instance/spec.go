@@ -171,6 +171,10 @@ type VMSpec struct {
 	// the base image with this checksum, to be rebased onto the local copy.
 	SourceDiskBaseSHA256 string
 
+	// SourceBaseImagePath, if set, is that base image itself, sent along because
+	// this host didn't have it. Adopted before the rebase.
+	SourceBaseImagePath string
+
 	// NoGuestAgent skips installing qemu-guest-agent through cloud-init.
 	NoGuestAgent bool
 
@@ -184,6 +188,10 @@ type Mount struct {
 	GuestPath string
 	Tag       string
 	ReadOnly  bool
+
+	// SourceDataPath, if set, is where this folder's contents were staged by a
+	// migration or an import. They are moved into place before the instance is created.
+	SourceDataPath string
 }
 
 // ContainerEngine selects which container runtime a ContainerSpec runs on.
@@ -219,6 +227,9 @@ type VolumeMount struct {
 	HostPath      string
 	ContainerPath string
 	ReadOnly      bool
+
+	// SourceDataPath works the same as Mount.SourceDataPath.
+	SourceDataPath string
 }
 
 type PortMapping struct {
