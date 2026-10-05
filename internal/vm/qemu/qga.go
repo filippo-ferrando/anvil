@@ -167,7 +167,6 @@ func (c *QGAConn) callWithTimeout(command string, args, out any, timeout time.Du
 // GuestInterface is one network interface as reported by guest-network-get-interfaces.
 type GuestInterface struct {
 	Name        string `json:"name"`
-	HWAddress   string `json:"hardware-address"`
 	IPAddresses []struct {
 		Type    string `json:"ip-address-type"` // "ipv4" | "ipv6"
 		Address string `json:"ip-address"`

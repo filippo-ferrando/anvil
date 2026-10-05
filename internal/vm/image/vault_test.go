@@ -62,7 +62,7 @@ func TestOverlayForRejectsShrinkingBelowBaseImageSize(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(v.preparedPath(entry)), 0o750); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	// Base bigger than the disk size we're about to request.
+	// Base bigger than the disk size about to be requested.
 	createBase := exec.Command("qemu-img", "create", "-f", "qcow2", v.preparedPath(entry), "2G")
 	if out, err := createBase.CombinedOutput(); err != nil {
 		t.Fatalf("creating fake base image: %v: %s", err, out)

@@ -9,8 +9,14 @@ container mirrors, man pages, shell completions and the TUI.
 
 ### Recently done
 
+- **Host discovery over mDNS.** anvild announces itself as `_anvil._tcp`
+  (`internal/discovery`), so `avahi-browse` sees it too. `anvil host discover` (TUI
+  Migration screen: `d`) lists the name, address and SSH port of the other anvil hosts
+  on the network. Nothing is saved and no access is granted. `ANVIL_MDNS=off` turns the
+  announcement off.
+
 - **Declarative intents.** `anvil apply -f anvil.yaml` (and `A` on the TUI Intents screen)
-  plans create, update, recreate, start and prune steps against the current state, then
+  plans create, update, recreate, start, keep and delete steps against the current state, then
   applies them in `depends_on` order with a readiness wait. See `docs/apply.md`.
 - **Man pages.** `anvil man <dir>` generates the page tree through cobra's `GenManTree`.
 - **VM disk I/O tuning.** The main disk runs on its own iothread with
@@ -172,12 +178,9 @@ and keeps the host strictly in line with every `anvil.yaml` found in it, recursi
 
 ## Discovery and observability
 
-### mDNS discovery of other Anvil hosts
+### Interact with remote `anvild` over SSH
 
-Migration currently relies entirely on `anvil host add` (a saved `user@host` alias).
-There's no automatic discovery of other machines running `anvild` on the same
-network (`internal/discovery/` is an empty package). Discovery wouldn't grant any trust by
-itself either way, so it's a pure convenience feature, not a blocker for anything.
+Enable the connection to a remote `anvild` over SSH, `anvil` and `anvil tui` should be able to use a non-local daemon with the same feature set. (obviously, the remote host must have `anvild` running and the user must have permission to it, also `anvil mount` should refer to the remote machine).
 
 ### Metrics and event history
 

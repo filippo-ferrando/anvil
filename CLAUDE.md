@@ -16,6 +16,7 @@ make build   # anvil (CGO_ENABLED=0) + anvild
 make test    # go test ./...
 make vet     # go vet ./...
 make fmt     # gofmt -l -s . (lists files that need formatting; doesn't rewrite them)
+make man     # regenerate man/man1 from the live command tree, plus docs/man/anvild.8
 ```
 
 Single test / package:
@@ -47,13 +48,13 @@ anvil (CLI + TUI, one binary)  ──gRPC over a unix socket──▶  anvild (d
 ```
 
 **The daemon owns all business logic. The CLI and TUI are dumb clients**: build a
-request, call the daemon over the unix socket, print/render the reply. Keep it that way
-— logic added to `internal/cli/commands` or `internal/tui` instead of behind the gRPC
+request, call the daemon over the unix socket, print/render the reply. Keep it that way:
+logic added to `internal/cli/commands` or `internal/tui` instead of behind the gRPC
 boundary in `internal/` will drift between the two clients. Access control is just unix
 group membership (`anvil` group) plus socket reachability; there are no accounts, no
 portal, no password.
 
-Migration/host-to-host work never uses daemon-to-daemon gRPC — it shells out over plain
+Migration/host-to-host work never uses daemon-to-daemon gRPC. It shells out over plain
 SSH to the target's own local `anvil` CLI (`internal/migrate`). This means Anvil never
 solves cross-host trust itself: whatever SSH access already exists is sufficient.
 
@@ -63,17 +64,20 @@ solves cross-host trust itself: whatever SSH access already exists is sufficient
 cmd/anvild/      daemon entrypoint (platform_linux.go / platform_darwin.go pick the VM backend)
 cmd/anvil/       CLI entrypoint
 pkg/client/      thin gRPC client, shared by the CLI and TUI
-api/proto/       gRPC API definition (anvil.proto) — source of truth; api/gen is generated, don't hand-edit
+api/proto/       gRPC API definition (anvil.proto), the source of truth; api/gen is generated, don't hand-edit
 internal/
   daemon/        gRPC service implementation (one *_server.go per resource area)
   instance/      domain model + Backend interface + the Manager that dispatches to it
   vm/            QEMU backend (Linux): process mgmt, QMP, cloud-init, image catalog
-  vm/vz/         Apple Virtualization.framework backend (darwin) — stub, not implemented yet
+  vm/vz/         Apple Virtualization.framework backend (darwin), a stub, not implemented yet
   container/docker/   Docker backend
-  container/podman/   empty package, Podman backend not implemented yet (see PLAN.md)
+  container/      the Backend that picks an engine; Podman is rejected, not implemented (see PLAN.md)
   intent/        grouping VMs/containers together, shared per-intent bridge network + IPAM
   intent/dns/    per-intent DNS server on each intent's gateway ("<role>.<intent>.anvil")
   migrate/       SSH-driven cross-host migration
+  discovery/     mDNS announce and browse behind `anvil host discover`
+  export/        bundle export/import behind `anvil export` and `anvil import`
+  intent/apply/  the compare-and-apply engine behind `anvil apply`
   store/         bbolt-backed registry (instances, intents, images, mirrors, hosts, cloud-init)
   cli/commands/  cobra commands (one file per command/command group)
   tui/           the Bubble Tea app
@@ -87,7 +91,7 @@ packaging/       PKGBUILD/deb/rpm build scripts, systemd unit, sysusers/tmpfiles
 Delete/Status/Logs) that both the QEMU/vz backend and the Docker backend implement.
 Optional capabilities (mount, port-forward, snapshot, fork) are separate interfaces
 (`Mounter`, `PortForwarder`, `Snapshotter`, `Forker`) that a backend implements only if
-it supports that operation — a container backend has no `Snapshotter`, for instance.
+it supports that operation, so a container backend has no `Snapshotter`.
 `internal/instance/manager.go`'s `Manager` type-asserts against these before calling
 them. When adding a capability to one backend, extend this interface set rather than
 adding backend-specific branching in the daemon or manager.
@@ -97,14 +101,14 @@ adding backend-specific branching in the daemon or manager.
 `newVMBackend` is defined per-platform via build tags (`cmd/anvild/platform_linux.go`,
 `platform_darwin.go`): Linux builds compile in `internal/vm` (QEMU), darwin builds
 compile in `internal/vm/vz` (Virtualization.framework, currently unimplemented). Despite
-this scaffolding, the README describes Anvil as Linux-only today — treat darwin/`vz` as
+this scaffolding, the README describes Anvil as Linux-only today, so treat darwin/`vz` as
 in-progress, not a supported target.
 
 ### Mirrors vs. cloud-init template repos
 
 `anvil mirror` (`internal/store/mirrors.go`) adds to or overrides the built-in VM image
-catalog, or rewrites container image references to pull through a different registry —
-both are *standing, re-consulted registry entries*. `anvil cloud-init import-repo` is a
+catalog, or rewrites container image references to pull through a different registry.
+Both are *standing, re-consulted registry entries*. `anvil cloud-init import-repo` is a
 one-shot bulk copy of cloud-init YAML templates into the saved cloud-init library; it has
 no corresponding `list`/`remove`/`enable`/`disable`, imported templates become
 indistinguishable from hand-written ones. Don't conflate the two when touching either

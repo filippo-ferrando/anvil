@@ -1,5 +1,5 @@
 [Unit]
-Description=anvil daemon (cloud-init VMs and Docker/Podman containers)
+Description=anvil daemon (cloud-init VMs and Docker containers)
 After=network.target
 
 # Runs as the unprivileged "anvil" system user (created by anvil.sysusers,

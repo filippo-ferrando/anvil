@@ -1869,10 +1869,11 @@ var IntentService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	HostService_Add_FullMethodName    = "/anvil.v1.HostService/Add"
-	HostService_List_FullMethodName   = "/anvil.v1.HostService/List"
-	HostService_Remove_FullMethodName = "/anvil.v1.HostService/Remove"
-	HostService_Test_FullMethodName   = "/anvil.v1.HostService/Test"
+	HostService_Add_FullMethodName      = "/anvil.v1.HostService/Add"
+	HostService_List_FullMethodName     = "/anvil.v1.HostService/List"
+	HostService_Remove_FullMethodName   = "/anvil.v1.HostService/Remove"
+	HostService_Test_FullMethodName     = "/anvil.v1.HostService/Test"
+	HostService_Discover_FullMethodName = "/anvil.v1.HostService/Discover"
 )
 
 // HostServiceClient is the client API for HostService service.
@@ -1886,6 +1887,10 @@ type HostServiceClient interface {
 	List(ctx context.Context, in *HostListRequest, opts ...grpc.CallOption) (*HostListReply, error)
 	Remove(ctx context.Context, in *HostRemoveRequest, opts ...grpc.CallOption) (*HostRemoveReply, error)
 	Test(ctx context.Context, in *HostTestRequest, opts ...grpc.CallOption) (*HostTestReply, error)
+	// Discover lists other anvil hosts announcing themselves on the local
+	// network over mDNS. Nothing is saved and no trust is granted, it just
+	// fills in what `anvil host add` would otherwise have to be told.
+	Discover(ctx context.Context, in *HostDiscoverRequest, opts ...grpc.CallOption) (*HostDiscoverReply, error)
 }
 
 type hostServiceClient struct {
@@ -1936,6 +1941,16 @@ func (c *hostServiceClient) Test(ctx context.Context, in *HostTestRequest, opts 
 	return out, nil
 }
 
+func (c *hostServiceClient) Discover(ctx context.Context, in *HostDiscoverRequest, opts ...grpc.CallOption) (*HostDiscoverReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HostDiscoverReply)
+	err := c.cc.Invoke(ctx, HostService_Discover_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // HostServiceServer is the server API for HostService service.
 // All implementations must embed UnimplementedHostServiceServer
 // for forward compatibility.
@@ -1947,6 +1962,10 @@ type HostServiceServer interface {
 	List(context.Context, *HostListRequest) (*HostListReply, error)
 	Remove(context.Context, *HostRemoveRequest) (*HostRemoveReply, error)
 	Test(context.Context, *HostTestRequest) (*HostTestReply, error)
+	// Discover lists other anvil hosts announcing themselves on the local
+	// network over mDNS. Nothing is saved and no trust is granted, it just
+	// fills in what `anvil host add` would otherwise have to be told.
+	Discover(context.Context, *HostDiscoverRequest) (*HostDiscoverReply, error)
 	mustEmbedUnimplementedHostServiceServer()
 }
 
@@ -1968,6 +1987,9 @@ func (UnimplementedHostServiceServer) Remove(context.Context, *HostRemoveRequest
 }
 func (UnimplementedHostServiceServer) Test(context.Context, *HostTestRequest) (*HostTestReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Test not implemented")
+}
+func (UnimplementedHostServiceServer) Discover(context.Context, *HostDiscoverRequest) (*HostDiscoverReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Discover not implemented")
 }
 func (UnimplementedHostServiceServer) mustEmbedUnimplementedHostServiceServer() {}
 func (UnimplementedHostServiceServer) testEmbeddedByValue()                     {}
@@ -2062,6 +2084,24 @@ func _HostService_Test_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
+func _HostService_Discover_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HostDiscoverRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).Discover(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_Discover_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).Discover(ctx, req.(*HostDiscoverRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // HostService_ServiceDesc is the grpc.ServiceDesc for HostService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2084,6 +2124,10 @@ var HostService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Test",
 			Handler:    _HostService_Test_Handler,
+		},
+		{
+			MethodName: "Discover",
+			Handler:    _HostService_Discover_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
@@ -2448,7 +2492,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// SnapshotService manages QCOW2 internal snapshots of a VM's disk, a point-in-time checkpoint you can restore back to later in place. VM only.
+// SnapshotService manages QCOW2 internal snapshots of a VM's disk, a point-in-time checkpoint that can be restored in place later. VM only.
 // Create/Delete apply live over QMP; Restore stops the instance first and restarts it afterward if it was running.
 type SnapshotServiceClient interface {
 	Create(ctx context.Context, in *SnapshotCreateRequest, opts ...grpc.CallOption) (*SnapshotCreateReply, error)
@@ -2521,7 +2565,7 @@ func (c *snapshotServiceClient) SetSchedule(ctx context.Context, in *SnapshotSet
 // All implementations must embed UnimplementedSnapshotServiceServer
 // for forward compatibility.
 //
-// SnapshotService manages QCOW2 internal snapshots of a VM's disk, a point-in-time checkpoint you can restore back to later in place. VM only.
+// SnapshotService manages QCOW2 internal snapshots of a VM's disk, a point-in-time checkpoint that can be restored in place later. VM only.
 // Create/Delete apply live over QMP; Restore stops the instance first and restarts it afterward if it was running.
 type SnapshotServiceServer interface {
 	Create(context.Context, *SnapshotCreateRequest) (*SnapshotCreateReply, error)

@@ -82,14 +82,34 @@ func vmSpecFromPB(v *anvilv1.VMSpec) *instance.VMSpec {
 			SourceDataPath: m.GetSourceDataPath(),
 		})
 	}
-	for _, p := range v.GetPorts() {
-		spec.Ports = append(spec.Ports, instance.PortMapping{
+	spec.Ports = portsFromPB(v.GetPorts())
+	return spec
+}
+
+// portsFromPB and portsToPB convert a port list each way, so the four
+// spec converters don't each repeat the same loop.
+func portsFromPB(in []*anvilv1.PortMapping) []instance.PortMapping {
+	out := make([]instance.PortMapping, 0, len(in))
+	for _, p := range in {
+		out = append(out, instance.PortMapping{
 			HostPort:  int(p.GetHostPort()),
 			GuestPort: int(p.GetGuestPort()),
 			Protocol:  p.GetProtocol(),
 		})
 	}
-	return spec
+	return out
+}
+
+func portsToPB(in []instance.PortMapping) []*anvilv1.PortMapping {
+	out := make([]*anvilv1.PortMapping, 0, len(in))
+	for _, p := range in {
+		out = append(out, &anvilv1.PortMapping{
+			HostPort:  int32(p.HostPort),
+			GuestPort: int32(p.GuestPort),
+			Protocol:  p.Protocol,
+		})
+	}
+	return out
 }
 
 func vmSpecToPB(v *instance.VMSpec) *anvilv1.VMSpec {
@@ -127,13 +147,7 @@ func vmSpecToPB(v *instance.VMSpec) *anvilv1.VMSpec {
 			SourceDataPath: m.SourceDataPath,
 		})
 	}
-	for _, p := range v.Ports {
-		pb.Ports = append(pb.Ports, &anvilv1.PortMapping{
-			HostPort:  int32(p.HostPort),
-			GuestPort: int32(p.GuestPort),
-			Protocol:  p.Protocol,
-		})
-	}
+	pb.Ports = portsToPB(v.Ports)
 	return pb
 }
 
@@ -179,13 +193,7 @@ func containerSpecFromPB(c *anvilv1.ContainerSpec) *instance.ContainerSpec {
 			SourceDataPath: vol.GetSourceDataPath(),
 		})
 	}
-	for _, p := range c.GetPorts() {
-		spec.Ports = append(spec.Ports, instance.PortMapping{
-			HostPort:  int(p.GetHostPort()),
-			GuestPort: int(p.GetGuestPort()),
-			Protocol:  p.GetProtocol(),
-		})
-	}
+	spec.Ports = portsFromPB(c.GetPorts())
 	return spec
 }
 
@@ -212,13 +220,7 @@ func containerSpecToPB(c *instance.ContainerSpec) *anvilv1.ContainerSpec {
 			SourceDataPath: vol.SourceDataPath,
 		})
 	}
-	for _, p := range c.Ports {
-		spec.Ports = append(spec.Ports, &anvilv1.PortMapping{
-			HostPort:  int32(p.HostPort),
-			GuestPort: int32(p.GuestPort),
-			Protocol:  p.Protocol,
-		})
-	}
+	spec.Ports = portsToPB(c.Ports)
 	return spec
 }
 

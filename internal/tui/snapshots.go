@@ -52,12 +52,12 @@ type snapshotsModel struct {
 }
 
 func newSnapshotsModel() snapshotsModel {
-	instances := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	instances := newList()
 	instances.SetFilteringEnabled(false)
 	instances.Title = "VM instances"
 	instances.SetShowHelp(false)
 
-	snaps := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	snaps := newList()
 	snaps.SetFilteringEnabled(false)
 	snaps.Title = "Snapshots"
 	snaps.SetShowHelp(false)

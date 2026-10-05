@@ -78,7 +78,7 @@ func (v *Vault) OverlayFor(ctx context.Context, entry DistroEntry, overlayPath s
 	if progress != nil {
 		progress("creating disk overlay")
 	}
-	createCmd := exec.Command("qemu-img", "create",
+	createCmd := exec.CommandContext(ctx, "qemu-img", "create",
 		"-f", "qcow2",
 		"-F", "qcow2",
 		"-b", base,
@@ -90,7 +90,7 @@ func (v *Vault) OverlayFor(ctx context.Context, entry DistroEntry, overlayPath s
 
 	// Only resize when actually growing.
 	if requestedBytes > baseSizeBytes {
-		resizeCmd := exec.Command("qemu-img", "resize", overlayPath, fmt.Sprintf("%dG", diskGiB))
+		resizeCmd := exec.CommandContext(ctx, "qemu-img", "resize", overlayPath, fmt.Sprintf("%dG", diskGiB))
 		if out, err := resizeCmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("image: qemu-img resize failed: %w: %s", err, string(out))
 		}

@@ -10,7 +10,7 @@ import (
 
 func TestAdoptOneMovesStagedData(t *testing.T) {
 	dir := t.TempDir()
-	staged := filepath.Join(dir, "staged")
+	staged := filepath.Join(dir, "anvil-migrate-data-01J-0")
 	if err := os.MkdirAll(staged, 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -50,5 +50,22 @@ func TestAdoptStagedDataLeavesOrdinaryLaunchesAlone(t *testing.T) {
 	}
 	if params.VM.Mounts[0].HostPath != "/srv/data" || params.Container.Volumes[0].HostPath != "/srv/db" {
 		t.Error("expected host paths to be left as they were")
+	}
+}
+
+// TestAdoptOneRejectsArbitraryPath makes sure a caller can't point a launch at
+// a path outside a migration upload: adopting one deletes it.
+func TestAdoptOneRejectsArbitraryPath(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "etc")
+	if err := os.MkdirAll(victim, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	mnt := instance.Mount{GuestPath: "/data", SourceDataPath: victim}
+	if err := adoptOne(&mnt.SourceDataPath, &mnt.HostPath, filepath.Join(dir, "dest")); err == nil {
+		t.Fatal("expected a path outside a staged upload to be rejected")
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Errorf("the rejected path should be untouched: %v", err)
 	}
 }

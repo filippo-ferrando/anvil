@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 )
 
 // NetdevID is the fixed id BuildArgs gives the VM's single netdev (bridge
@@ -141,9 +142,16 @@ var ovmfArchHints = map[string][]string{
 	"aarch64": {"aavmf", "aarch64", "arm64", "qemu_efi"},
 }
 
+// ovmfCache holds the firmware path found for an arch. The scan below walks
+// all of /usr/share, which is slow enough to matter on every VM start.
+var ovmfCache sync.Map
+
 func OVMFPath(arch string) (string, error) {
 	if arch == "" {
 		arch = "x86_64"
+	}
+	if cached, ok := ovmfCache.Load(arch); ok {
+		return cached.(string), nil
 	}
 	hints := ovmfArchHints[arch]
 
@@ -186,6 +194,7 @@ func OVMFPath(arch string) (string, error) {
 	}
 
 	if len(matches) > 0 {
+		ovmfCache.Store(arch, matches[0])
 		return matches[0], nil
 	}
 	if len(candidates) == 0 {

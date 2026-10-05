@@ -710,10 +710,7 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		}
 		cfg.SLIRPHostForwards = []qemu.HostForward{{HostPort: sshPort, GuestPort: 22, Protocol: "tcp"}}
 		for _, p := range v.Ports {
-			proto := p.Protocol
-			if proto == "" {
-				proto = "tcp"
-			}
+			proto := instance.Protocol(p.Protocol)
 			cfg.SLIRPHostForwards = append(cfg.SLIRPHostForwards, qemu.HostForward{
 				HostPort: p.HostPort, GuestPort: p.GuestPort, Protocol: proto,
 			})
@@ -721,29 +718,31 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		v.SSHPort = sshPort
 	}
 
-	mounts, err := b.startVirtiofsds(spec)
-	if err != nil {
+	// Undoes everything set up below, so a new failure path can't forget a piece.
+	// killVirtiofsds is a no-op when none were started.
+	unwind := func() {
+		b.killVirtiofsds(spec.ID)
 		if cfg.BridgeTapDevice != "" {
 			_ = b.Networker.Detach(spec.ID)
 		}
+	}
+
+	mounts, err := b.startVirtiofsds(spec)
+	if err != nil {
+		unwind()
 		return err
 	}
 	cfg.Mounts = mounts
 
 	proc, err := qemu.Spawn(ctx, cfg, filepath.Join(dir, "qemu.log"))
 	if err != nil {
-		b.killVirtiofsds(spec.ID)
-		if cfg.BridgeTapDevice != "" {
-			_ = b.Networker.Detach(spec.ID)
-		}
+		unwind()
 		return fmt.Errorf("vm: spawning qemu: %w", err)
 	}
 	if err := proc.AttachQMP(ctx); err != nil {
 		_ = proc.Stop(ctx, 0)
-		b.killVirtiofsds(spec.ID)
-		if cfg.BridgeTapDevice != "" {
-			_ = b.Networker.Detach(spec.ID)
-		}
+		_ = proc.Close()
+		unwind()
 		return fmt.Errorf("vm: attaching QMP: %w", err)
 	}
 	rt := runtimeState{
@@ -844,7 +843,12 @@ func (b *Backend) Reconcile(ctx context.Context, spec *instance.Spec) (instance.
 	b.mu.Unlock()
 
 	if err := proc.AttachQMP(ctx); err != nil {
-		// The process is alive but uncontrollable over QMP; report it as an error state.
+		// The process is alive but uncontrollable over QMP. Drop it again, or
+		// Status would report it as starting forever and nothing would watch it.
+		b.mu.Lock()
+		delete(b.running, spec.ID)
+		b.mu.Unlock()
+		_ = proc.Close()
 		return instance.StateError, fmt.Errorf("vm: reconciled pid %d is alive but QMP is unreachable at %s: %w", rt.Pid, rt.QMPSocket, err)
 	}
 	b.watchGuest(spec, proc)
@@ -884,6 +888,29 @@ func (b *Backend) Status(ctx context.Context, spec *instance.Spec) (instance.Sta
 	return instance.StateStopped, nil
 }
 
+// maxConsoleLineBytes caps how much of console.log one tailed line is assumed
+// to need, so a tail never reads the whole file.
+const maxConsoleLineBytes = 512
+
+// sendInChunks streams the rest of f to send without holding it all in memory.
+func sendInChunks(f *os.File, send func([]byte) error) error {
+	buf := make([]byte, 64<<10)
+	for {
+		n, err := f.Read(buf)
+		if n > 0 {
+			if sendErr := send(buf[:n]); sendErr != nil {
+				return sendErr
+			}
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("vm: reading console log: %w", err)
+		}
+	}
+}
+
 // Logs streams spec's console.log, QEMU's capture of the guest's serial
 // console. Returns cleanly with no output if the log doesn't exist yet.
 func (b *Backend) Logs(ctx context.Context, spec *instance.Spec, follow bool, tailLines int, send func([]byte) error) error {
@@ -901,17 +928,26 @@ func (b *Backend) Logs(ctx context.Context, spec *instance.Spec, follow bool, ta
 	}
 	defer f.Close()
 
-	data, err := io.ReadAll(f)
-	if err != nil {
-		return fmt.Errorf("vm: reading console log: %w", err)
-	}
 	if tailLines > 0 {
-		data = tailLinesOf(data, tailLines)
-	}
-	if len(data) > 0 {
-		if err := send(data); err != nil {
-			return err
+		// console.log is append-only and never rotated, so a long-lived VM's
+		// can reach gigabytes. Read back only enough to hold the wanted lines.
+		limit := int64(tailLines) * maxConsoleLineBytes
+		if fi, err := f.Stat(); err == nil && fi.Size() > limit {
+			if _, err := f.Seek(-limit, io.SeekEnd); err != nil {
+				return fmt.Errorf("vm: seeking console log: %w", err)
+			}
 		}
+		data, err := io.ReadAll(f)
+		if err != nil {
+			return fmt.Errorf("vm: reading console log: %w", err)
+		}
+		if data = tailLinesOf(data, tailLines); len(data) > 0 {
+			if err := send(data); err != nil {
+				return err
+			}
+		}
+	} else if err := sendInChunks(f, send); err != nil {
+		return err
 	}
 	if !follow {
 		return nil
@@ -937,15 +973,6 @@ func (b *Backend) Logs(ctx context.Context, spec *instance.Spec, follow bool, ta
 	}
 }
 
-// portProtocol normalizes an empty protocol to "tcp", matching how
-// instance.PortMapping.Protocol is treated everywhere else it's consumed.
-func portProtocol(p string) string {
-	if p == "" {
-		return "tcp"
-	}
-	return p
-}
-
 // AddPort adds a host-to-guest SLIRP port forward to spec, applied live
 // over QMP (no restart, unlike Mount) if running, else persisted for Start.
 func (b *Backend) AddPort(ctx context.Context, spec *instance.Spec, port instance.PortMapping) error {
@@ -955,9 +982,9 @@ func (b *Backend) AddPort(ctx context.Context, spec *instance.Spec, port instanc
 	if spec.VM.NetworkMode == "bridge" {
 		return fmt.Errorf("vm: %s uses bridge networking; it has its own address, so no host-forwarded ports apply", spec.Name)
 	}
-	proto := portProtocol(port.Protocol)
+	proto := instance.Protocol(port.Protocol)
 	for _, p := range spec.VM.Ports {
-		if p.HostPort == port.HostPort && portProtocol(p.Protocol) == proto {
+		if p.HostPort == port.HostPort && instance.Protocol(p.Protocol) == proto {
 			return fmt.Errorf("vm: %s already forwards host port %d/%s", spec.Name, port.HostPort, proto)
 		}
 	}
@@ -983,11 +1010,11 @@ func (b *Backend) RemovePort(ctx context.Context, spec *instance.Spec, hostPort 
 	if spec.VM == nil {
 		return fmt.Errorf("vm: RemovePort called with a nil VMSpec")
 	}
-	proto := portProtocol(protocol)
+	proto := instance.Protocol(protocol)
 
 	idx := -1
 	for i, p := range spec.VM.Ports {
-		if p.HostPort == hostPort && portProtocol(p.Protocol) == proto {
+		if p.HostPort == hostPort && instance.Protocol(p.Protocol) == proto {
 			idx = i
 			break
 		}
@@ -1036,11 +1063,19 @@ func (b *Backend) reconfigureAndRestartIfRunning(ctx context.Context, spec *inst
 }
 
 func tailLinesOf(data []byte, n int) []byte {
-	lines := bytes.Split(data, []byte("\n"))
-	if len(lines) <= n {
-		return data
+	// A log almost always ends in a newline, whose trailing empty field would
+	// otherwise count as one of the n lines and return n-1 real ones.
+	trailing := bytes.HasSuffix(data, []byte("\n"))
+	body := bytes.TrimSuffix(data, []byte("\n"))
+	lines := bytes.Split(body, []byte("\n"))
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
 	}
-	return bytes.Join(lines[len(lines)-n:], []byte("\n"))
+	out := bytes.Join(lines, []byte("\n"))
+	if trailing && len(out) > 0 {
+		out = append(out, '\n')
+	}
+	return out
 }
 
 // mergeSSHKeys adds keys to existing's top-level ssh_authorized_keys

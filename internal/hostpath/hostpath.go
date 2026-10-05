@@ -89,3 +89,13 @@ func Grant(path string) error {
 	}
 	return run("-R", "-d", "-m", fmt.Sprintf("u:%s:rwx", AnvilUser), clean)
 }
+
+// Under resolves rel inside base and rejects anything that escapes it.
+// Bundle and migration manifests name their own files, so they are untrusted.
+func Under(base, rel string) (string, error) {
+	p := filepath.Join(base, filepath.Clean("/"+rel))
+	if p != base && !strings.HasPrefix(p, base+string(os.PathSeparator)) {
+		return "", fmt.Errorf("hostpath: %q escapes %s", rel, base)
+	}
+	return p, nil
+}

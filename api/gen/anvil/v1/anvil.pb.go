@@ -6557,6 +6557,163 @@ func (x *HostTestReply) GetMessage() string {
 	return ""
 }
 
+type HostDiscoverRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	TimeoutSeconds int32 `protobuf:"varint,1,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"` // 0 uses the daemon's own default
+}
+
+func (x *HostDiscoverRequest) Reset() {
+	*x = HostDiscoverRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_anvil_v1_anvil_proto_msgTypes[104]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *HostDiscoverRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HostDiscoverRequest) ProtoMessage() {}
+
+func (x *HostDiscoverRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_anvil_v1_anvil_proto_msgTypes[104]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HostDiscoverRequest.ProtoReflect.Descriptor instead.
+func (*HostDiscoverRequest) Descriptor() ([]byte, []int) {
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{104}
+}
+
+func (x *HostDiscoverRequest) GetTimeoutSeconds() int32 {
+	if x != nil {
+		return x.TimeoutSeconds
+	}
+	return 0
+}
+
+type DiscoveredHost struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Name    string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`       // the remote host's own hostname
+	Address string `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"` // address it answered from
+	SshPort int32  `protobuf:"varint,3,opt,name=ssh_port,json=sshPort,proto3" json:"ssh_port,omitempty"`
+}
+
+func (x *DiscoveredHost) Reset() {
+	*x = DiscoveredHost{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_anvil_v1_anvil_proto_msgTypes[105]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *DiscoveredHost) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiscoveredHost) ProtoMessage() {}
+
+func (x *DiscoveredHost) ProtoReflect() protoreflect.Message {
+	mi := &file_anvil_v1_anvil_proto_msgTypes[105]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiscoveredHost.ProtoReflect.Descriptor instead.
+func (*DiscoveredHost) Descriptor() ([]byte, []int) {
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{105}
+}
+
+func (x *DiscoveredHost) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *DiscoveredHost) GetAddress() string {
+	if x != nil {
+		return x.Address
+	}
+	return ""
+}
+
+func (x *DiscoveredHost) GetSshPort() int32 {
+	if x != nil {
+		return x.SshPort
+	}
+	return 0
+}
+
+type HostDiscoverReply struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Hosts []*DiscoveredHost `protobuf:"bytes,1,rep,name=hosts,proto3" json:"hosts,omitempty"`
+}
+
+func (x *HostDiscoverReply) Reset() {
+	*x = HostDiscoverReply{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_anvil_v1_anvil_proto_msgTypes[106]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *HostDiscoverReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HostDiscoverReply) ProtoMessage() {}
+
+func (x *HostDiscoverReply) ProtoReflect() protoreflect.Message {
+	mi := &file_anvil_v1_anvil_proto_msgTypes[106]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HostDiscoverReply.ProtoReflect.Descriptor instead.
+func (*HostDiscoverReply) Descriptor() ([]byte, []int) {
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{106}
+}
+
+func (x *HostDiscoverReply) GetHosts() []*DiscoveredHost {
+	if x != nil {
+		return x.Hosts
+	}
+	return nil
+}
+
 type MigrateKeyRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -6566,7 +6723,7 @@ type MigrateKeyRequest struct {
 func (x *MigrateKeyRequest) Reset() {
 	*x = MigrateKeyRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[104]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[107]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6579,7 +6736,7 @@ func (x *MigrateKeyRequest) String() string {
 func (*MigrateKeyRequest) ProtoMessage() {}
 
 func (x *MigrateKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[104]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[107]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6592,7 +6749,7 @@ func (x *MigrateKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrateKeyRequest.ProtoReflect.Descriptor instead.
 func (*MigrateKeyRequest) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{104}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{107}
 }
 
 type MigrateKeyReply struct {
@@ -6606,7 +6763,7 @@ type MigrateKeyReply struct {
 func (x *MigrateKeyReply) Reset() {
 	*x = MigrateKeyReply{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[105]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[108]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6619,7 +6776,7 @@ func (x *MigrateKeyReply) String() string {
 func (*MigrateKeyReply) ProtoMessage() {}
 
 func (x *MigrateKeyReply) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[105]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[108]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6632,7 +6789,7 @@ func (x *MigrateKeyReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrateKeyReply.ProtoReflect.Descriptor instead.
 func (*MigrateKeyReply) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{105}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{108}
 }
 
 func (x *MigrateKeyReply) GetPublicKey() string {
@@ -6653,7 +6810,7 @@ type MigrateGuestKeyRequest struct {
 func (x *MigrateGuestKeyRequest) Reset() {
 	*x = MigrateGuestKeyRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[106]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[109]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6666,7 +6823,7 @@ func (x *MigrateGuestKeyRequest) String() string {
 func (*MigrateGuestKeyRequest) ProtoMessage() {}
 
 func (x *MigrateGuestKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[106]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[109]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6679,7 +6836,7 @@ func (x *MigrateGuestKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrateGuestKeyRequest.ProtoReflect.Descriptor instead.
 func (*MigrateGuestKeyRequest) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{106}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{109}
 }
 
 func (x *MigrateGuestKeyRequest) GetTo() string {
@@ -6700,7 +6857,7 @@ type MigrateGuestKeyReply struct {
 func (x *MigrateGuestKeyReply) Reset() {
 	*x = MigrateGuestKeyReply{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[107]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[110]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6713,7 +6870,7 @@ func (x *MigrateGuestKeyReply) String() string {
 func (*MigrateGuestKeyReply) ProtoMessage() {}
 
 func (x *MigrateGuestKeyReply) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[107]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[110]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6726,7 +6883,7 @@ func (x *MigrateGuestKeyReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrateGuestKeyReply.ProtoReflect.Descriptor instead.
 func (*MigrateGuestKeyReply) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{107}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{110}
 }
 
 func (x *MigrateGuestKeyReply) GetPublicKey() string {
@@ -6755,7 +6912,7 @@ type MigrateRequest struct {
 func (x *MigrateRequest) Reset() {
 	*x = MigrateRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[108]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[111]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6768,7 +6925,7 @@ func (x *MigrateRequest) String() string {
 func (*MigrateRequest) ProtoMessage() {}
 
 func (x *MigrateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[108]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[111]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6781,7 +6938,7 @@ func (x *MigrateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrateRequest.ProtoReflect.Descriptor instead.
 func (*MigrateRequest) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{108}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{111}
 }
 
 func (x *MigrateRequest) GetName() string {
@@ -6843,7 +7000,7 @@ type MigrateProgress struct {
 func (x *MigrateProgress) Reset() {
 	*x = MigrateProgress{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[109]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[112]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6856,7 +7013,7 @@ func (x *MigrateProgress) String() string {
 func (*MigrateProgress) ProtoMessage() {}
 
 func (x *MigrateProgress) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[109]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[112]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6869,7 +7026,7 @@ func (x *MigrateProgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrateProgress.ProtoReflect.Descriptor instead.
 func (*MigrateProgress) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{109}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{112}
 }
 
 func (m *MigrateProgress) GetEvent() isMigrateProgress_Event {
@@ -6964,7 +7121,7 @@ type MigrateMemberResult struct {
 func (x *MigrateMemberResult) Reset() {
 	*x = MigrateMemberResult{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[110]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[113]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6977,7 +7134,7 @@ func (x *MigrateMemberResult) String() string {
 func (*MigrateMemberResult) ProtoMessage() {}
 
 func (x *MigrateMemberResult) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[110]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[113]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6990,7 +7147,7 @@ func (x *MigrateMemberResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrateMemberResult.ProtoReflect.Descriptor instead.
 func (*MigrateMemberResult) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{110}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{113}
 }
 
 func (x *MigrateMemberResult) GetRole() string {
@@ -7028,7 +7185,7 @@ type IntentMigrateDone struct {
 func (x *IntentMigrateDone) Reset() {
 	*x = IntentMigrateDone{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[111]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[114]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7041,7 +7198,7 @@ func (x *IntentMigrateDone) String() string {
 func (*IntentMigrateDone) ProtoMessage() {}
 
 func (x *IntentMigrateDone) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[111]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[114]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7054,7 +7211,7 @@ func (x *IntentMigrateDone) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IntentMigrateDone.ProtoReflect.Descriptor instead.
 func (*IntentMigrateDone) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{111}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{114}
 }
 
 func (x *IntentMigrateDone) GetIntentName() string {
@@ -7093,7 +7250,7 @@ type ExportRequest struct {
 func (x *ExportRequest) Reset() {
 	*x = ExportRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[112]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[115]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7106,7 +7263,7 @@ func (x *ExportRequest) String() string {
 func (*ExportRequest) ProtoMessage() {}
 
 func (x *ExportRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[112]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[115]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7119,7 +7276,7 @@ func (x *ExportRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportRequest.ProtoReflect.Descriptor instead.
 func (*ExportRequest) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{112}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{115}
 }
 
 func (x *ExportRequest) GetName() string {
@@ -7158,7 +7315,7 @@ type ExportProgress struct {
 func (x *ExportProgress) Reset() {
 	*x = ExportProgress{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[113]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[116]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7171,7 +7328,7 @@ func (x *ExportProgress) String() string {
 func (*ExportProgress) ProtoMessage() {}
 
 func (x *ExportProgress) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[113]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[116]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7184,7 +7341,7 @@ func (x *ExportProgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportProgress.ProtoReflect.Descriptor instead.
 func (*ExportProgress) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{113}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{116}
 }
 
 func (m *ExportProgress) GetEvent() isExportProgress_Event {
@@ -7249,7 +7406,7 @@ type ImportRequest struct {
 func (x *ImportRequest) Reset() {
 	*x = ImportRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[114]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[117]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7262,7 +7419,7 @@ func (x *ImportRequest) String() string {
 func (*ImportRequest) ProtoMessage() {}
 
 func (x *ImportRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[114]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[117]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7275,7 +7432,7 @@ func (x *ImportRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportRequest.ProtoReflect.Descriptor instead.
 func (*ImportRequest) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{114}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{117}
 }
 
 func (x *ImportRequest) GetBundlePath() string {
@@ -7305,7 +7462,7 @@ type ImportMemberResult struct {
 func (x *ImportMemberResult) Reset() {
 	*x = ImportMemberResult{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[115]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[118]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7318,7 +7475,7 @@ func (x *ImportMemberResult) String() string {
 func (*ImportMemberResult) ProtoMessage() {}
 
 func (x *ImportMemberResult) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[115]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[118]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7331,7 +7488,7 @@ func (x *ImportMemberResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportMemberResult.ProtoReflect.Descriptor instead.
 func (*ImportMemberResult) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{115}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{118}
 }
 
 func (x *ImportMemberResult) GetRole() string {
@@ -7370,7 +7527,7 @@ type ImportProgress struct {
 func (x *ImportProgress) Reset() {
 	*x = ImportProgress{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[116]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[119]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7383,7 +7540,7 @@ func (x *ImportProgress) String() string {
 func (*ImportProgress) ProtoMessage() {}
 
 func (x *ImportProgress) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[116]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[119]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7396,7 +7553,7 @@ func (x *ImportProgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportProgress.ProtoReflect.Descriptor instead.
 func (*ImportProgress) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{116}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{119}
 }
 
 func (m *ImportProgress) GetEvent() isImportProgress_Event {
@@ -7463,7 +7620,7 @@ type ImportDone struct {
 func (x *ImportDone) Reset() {
 	*x = ImportDone{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[117]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[120]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7476,7 +7633,7 @@ func (x *ImportDone) String() string {
 func (*ImportDone) ProtoMessage() {}
 
 func (x *ImportDone) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[117]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[120]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7489,7 +7646,7 @@ func (x *ImportDone) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportDone.ProtoReflect.Descriptor instead.
 func (*ImportDone) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{117}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{120}
 }
 
 func (x *ImportDone) GetIntentName() string {
@@ -7519,7 +7676,7 @@ type SnapshotSetScheduleRequest struct {
 func (x *SnapshotSetScheduleRequest) Reset() {
 	*x = SnapshotSetScheduleRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[118]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[121]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7532,7 +7689,7 @@ func (x *SnapshotSetScheduleRequest) String() string {
 func (*SnapshotSetScheduleRequest) ProtoMessage() {}
 
 func (x *SnapshotSetScheduleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[118]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[121]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7545,7 +7702,7 @@ func (x *SnapshotSetScheduleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotSetScheduleRequest.ProtoReflect.Descriptor instead.
 func (*SnapshotSetScheduleRequest) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{118}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{121}
 }
 
 func (x *SnapshotSetScheduleRequest) GetName() string {
@@ -7578,7 +7735,7 @@ type SnapshotSetScheduleReply struct {
 func (x *SnapshotSetScheduleReply) Reset() {
 	*x = SnapshotSetScheduleReply{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[119]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[122]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7591,7 +7748,7 @@ func (x *SnapshotSetScheduleReply) String() string {
 func (*SnapshotSetScheduleReply) ProtoMessage() {}
 
 func (x *SnapshotSetScheduleReply) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[119]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[122]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7604,7 +7761,7 @@ func (x *SnapshotSetScheduleReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotSetScheduleReply.ProtoReflect.Descriptor instead.
 func (*SnapshotSetScheduleReply) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{119}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{122}
 }
 
 type SnapshotCreateRequest struct {
@@ -7619,7 +7776,7 @@ type SnapshotCreateRequest struct {
 func (x *SnapshotCreateRequest) Reset() {
 	*x = SnapshotCreateRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[120]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[123]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7632,7 +7789,7 @@ func (x *SnapshotCreateRequest) String() string {
 func (*SnapshotCreateRequest) ProtoMessage() {}
 
 func (x *SnapshotCreateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[120]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[123]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7645,7 +7802,7 @@ func (x *SnapshotCreateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotCreateRequest.ProtoReflect.Descriptor instead.
 func (*SnapshotCreateRequest) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{120}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{123}
 }
 
 func (x *SnapshotCreateRequest) GetName() string {
@@ -7671,7 +7828,7 @@ type SnapshotCreateReply struct {
 func (x *SnapshotCreateReply) Reset() {
 	*x = SnapshotCreateReply{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[121]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[124]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7684,7 +7841,7 @@ func (x *SnapshotCreateReply) String() string {
 func (*SnapshotCreateReply) ProtoMessage() {}
 
 func (x *SnapshotCreateReply) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[121]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[124]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7697,7 +7854,7 @@ func (x *SnapshotCreateReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotCreateReply.ProtoReflect.Descriptor instead.
 func (*SnapshotCreateReply) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{121}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{124}
 }
 
 type SnapshotRestoreRequest struct {
@@ -7712,7 +7869,7 @@ type SnapshotRestoreRequest struct {
 func (x *SnapshotRestoreRequest) Reset() {
 	*x = SnapshotRestoreRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[122]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[125]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7725,7 +7882,7 @@ func (x *SnapshotRestoreRequest) String() string {
 func (*SnapshotRestoreRequest) ProtoMessage() {}
 
 func (x *SnapshotRestoreRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[122]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[125]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7738,7 +7895,7 @@ func (x *SnapshotRestoreRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotRestoreRequest.ProtoReflect.Descriptor instead.
 func (*SnapshotRestoreRequest) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{122}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{125}
 }
 
 func (x *SnapshotRestoreRequest) GetName() string {
@@ -7764,7 +7921,7 @@ type SnapshotRestoreReply struct {
 func (x *SnapshotRestoreReply) Reset() {
 	*x = SnapshotRestoreReply{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[123]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[126]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7777,7 +7934,7 @@ func (x *SnapshotRestoreReply) String() string {
 func (*SnapshotRestoreReply) ProtoMessage() {}
 
 func (x *SnapshotRestoreReply) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[123]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[126]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7790,7 +7947,7 @@ func (x *SnapshotRestoreReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotRestoreReply.ProtoReflect.Descriptor instead.
 func (*SnapshotRestoreReply) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{123}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{126}
 }
 
 type SnapshotDeleteRequest struct {
@@ -7805,7 +7962,7 @@ type SnapshotDeleteRequest struct {
 func (x *SnapshotDeleteRequest) Reset() {
 	*x = SnapshotDeleteRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[124]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[127]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7818,7 +7975,7 @@ func (x *SnapshotDeleteRequest) String() string {
 func (*SnapshotDeleteRequest) ProtoMessage() {}
 
 func (x *SnapshotDeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[124]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[127]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7831,7 +7988,7 @@ func (x *SnapshotDeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotDeleteRequest.ProtoReflect.Descriptor instead.
 func (*SnapshotDeleteRequest) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{124}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{127}
 }
 
 func (x *SnapshotDeleteRequest) GetName() string {
@@ -7857,7 +8014,7 @@ type SnapshotDeleteReply struct {
 func (x *SnapshotDeleteReply) Reset() {
 	*x = SnapshotDeleteReply{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[125]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[128]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7870,7 +8027,7 @@ func (x *SnapshotDeleteReply) String() string {
 func (*SnapshotDeleteReply) ProtoMessage() {}
 
 func (x *SnapshotDeleteReply) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[125]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[128]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7883,7 +8040,7 @@ func (x *SnapshotDeleteReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotDeleteReply.ProtoReflect.Descriptor instead.
 func (*SnapshotDeleteReply) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{125}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{128}
 }
 
 type SnapshotListRequest struct {
@@ -7897,7 +8054,7 @@ type SnapshotListRequest struct {
 func (x *SnapshotListRequest) Reset() {
 	*x = SnapshotListRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[126]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[129]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7910,7 +8067,7 @@ func (x *SnapshotListRequest) String() string {
 func (*SnapshotListRequest) ProtoMessage() {}
 
 func (x *SnapshotListRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[126]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[129]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7923,7 +8080,7 @@ func (x *SnapshotListRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotListRequest.ProtoReflect.Descriptor instead.
 func (*SnapshotListRequest) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{126}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{129}
 }
 
 func (x *SnapshotListRequest) GetName() string {
@@ -7948,7 +8105,7 @@ type SnapshotInfo struct {
 func (x *SnapshotInfo) Reset() {
 	*x = SnapshotInfo{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[127]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[130]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7961,7 +8118,7 @@ func (x *SnapshotInfo) String() string {
 func (*SnapshotInfo) ProtoMessage() {}
 
 func (x *SnapshotInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[127]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[130]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7974,7 +8131,7 @@ func (x *SnapshotInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotInfo.ProtoReflect.Descriptor instead.
 func (*SnapshotInfo) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{127}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{130}
 }
 
 func (x *SnapshotInfo) GetName() string {
@@ -8009,7 +8166,7 @@ type SnapshotListReply struct {
 func (x *SnapshotListReply) Reset() {
 	*x = SnapshotListReply{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_anvil_v1_anvil_proto_msgTypes[128]
+		mi := &file_anvil_v1_anvil_proto_msgTypes[131]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8022,7 +8179,7 @@ func (x *SnapshotListReply) String() string {
 func (*SnapshotListReply) ProtoMessage() {}
 
 func (x *SnapshotListReply) ProtoReflect() protoreflect.Message {
-	mi := &file_anvil_v1_anvil_proto_msgTypes[128]
+	mi := &file_anvil_v1_anvil_proto_msgTypes[131]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8035,7 +8192,7 @@ func (x *SnapshotListReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotListReply.ProtoReflect.Descriptor instead.
 func (*SnapshotListReply) Descriptor() ([]byte, []int) {
-	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{128}
+	return file_anvil_v1_anvil_proto_rawDescGZIP(), []int{131}
 }
 
 func (x *SnapshotListReply) GetSnapshots() []*SnapshotInfo {
@@ -8721,7 +8878,21 @@ var file_anvil_v1_anvil_proto_rawDesc = []byte{
 	0x65, 0x73, 0x74, 0x52, 0x65, 0x70, 0x6c, 0x79, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01,
 	0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x18, 0x0a, 0x07, 0x6d, 0x65, 0x73, 0x73,
 	0x61, 0x67, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x6d, 0x65, 0x73, 0x73, 0x61,
-	0x67, 0x65, 0x22, 0x13, 0x0a, 0x11, 0x4d, 0x69, 0x67, 0x72, 0x61, 0x74, 0x65, 0x4b, 0x65, 0x79,
+	0x67, 0x65, 0x22, 0x3e, 0x0a, 0x13, 0x48, 0x6f, 0x73, 0x74, 0x44, 0x69, 0x73, 0x63, 0x6f, 0x76,
+	0x65, 0x72, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x27, 0x0a, 0x0f, 0x74, 0x69, 0x6d,
+	0x65, 0x6f, 0x75, 0x74, 0x5f, 0x73, 0x65, 0x63, 0x6f, 0x6e, 0x64, 0x73, 0x18, 0x01, 0x20, 0x01,
+	0x28, 0x05, 0x52, 0x0e, 0x74, 0x69, 0x6d, 0x65, 0x6f, 0x75, 0x74, 0x53, 0x65, 0x63, 0x6f, 0x6e,
+	0x64, 0x73, 0x22, 0x59, 0x0a, 0x0e, 0x44, 0x69, 0x73, 0x63, 0x6f, 0x76, 0x65, 0x72, 0x65, 0x64,
+	0x48, 0x6f, 0x73, 0x74, 0x12, 0x12, 0x0a, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x01, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x12, 0x18, 0x0a, 0x07, 0x61, 0x64, 0x64, 0x72,
+	0x65, 0x73, 0x73, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x61, 0x64, 0x64, 0x72, 0x65,
+	0x73, 0x73, 0x12, 0x19, 0x0a, 0x08, 0x73, 0x73, 0x68, 0x5f, 0x70, 0x6f, 0x72, 0x74, 0x18, 0x03,
+	0x20, 0x01, 0x28, 0x05, 0x52, 0x07, 0x73, 0x73, 0x68, 0x50, 0x6f, 0x72, 0x74, 0x22, 0x43, 0x0a,
+	0x11, 0x48, 0x6f, 0x73, 0x74, 0x44, 0x69, 0x73, 0x63, 0x6f, 0x76, 0x65, 0x72, 0x52, 0x65, 0x70,
+	0x6c, 0x79, 0x12, 0x2e, 0x0a, 0x05, 0x68, 0x6f, 0x73, 0x74, 0x73, 0x18, 0x01, 0x20, 0x03, 0x28,
+	0x0b, 0x32, 0x18, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x44, 0x69, 0x73,
+	0x63, 0x6f, 0x76, 0x65, 0x72, 0x65, 0x64, 0x48, 0x6f, 0x73, 0x74, 0x52, 0x05, 0x68, 0x6f, 0x73,
+	0x74, 0x73, 0x22, 0x13, 0x0a, 0x11, 0x4d, 0x69, 0x67, 0x72, 0x61, 0x74, 0x65, 0x4b, 0x65, 0x79,
 	0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x22, 0x30, 0x0a, 0x0f, 0x4d, 0x69, 0x67, 0x72, 0x61,
 	0x74, 0x65, 0x4b, 0x65, 0x79, 0x52, 0x65, 0x70, 0x6c, 0x79, 0x12, 0x1d, 0x0a, 0x0a, 0x70, 0x75,
 	0x62, 0x6c, 0x69, 0x63, 0x5f, 0x6b, 0x65, 0x79, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09,
@@ -9057,7 +9228,7 @@ var file_anvil_v1_anvil_proto_rawDesc = []byte{
 	0x6e, 0x74, 0x65, 0x6e, 0x74, 0x41, 0x70, 0x70, 0x6c, 0x79, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73,
 	0x74, 0x1a, 0x1d, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x49, 0x6e, 0x74,
 	0x65, 0x6e, 0x74, 0x41, 0x70, 0x70, 0x6c, 0x79, 0x50, 0x72, 0x6f, 0x67, 0x72, 0x65, 0x73, 0x73,
-	0x30, 0x01, 0x32, 0x80, 0x02, 0x0a, 0x0b, 0x48, 0x6f, 0x73, 0x74, 0x53, 0x65, 0x72, 0x76, 0x69,
+	0x30, 0x01, 0x32, 0xc8, 0x02, 0x0a, 0x0b, 0x48, 0x6f, 0x73, 0x74, 0x53, 0x65, 0x72, 0x76, 0x69,
 	0x63, 0x65, 0x12, 0x37, 0x0a, 0x03, 0x41, 0x64, 0x64, 0x12, 0x18, 0x2e, 0x61, 0x6e, 0x76, 0x69,
 	0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x48, 0x6f, 0x73, 0x74, 0x41, 0x64, 0x64, 0x52, 0x65, 0x71, 0x75,
 	0x65, 0x73, 0x74, 0x1a, 0x16, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x48,
@@ -9073,59 +9244,64 @@ var file_anvil_v1_anvil_proto_rawDesc = []byte{
 	0x74, 0x12, 0x19, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x48, 0x6f, 0x73,
 	0x74, 0x54, 0x65, 0x73, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x17, 0x2e, 0x61,
 	0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x48, 0x6f, 0x73, 0x74, 0x54, 0x65, 0x73, 0x74,
-	0x52, 0x65, 0x70, 0x6c, 0x79, 0x32, 0xdf, 0x01, 0x0a, 0x0e, 0x4d, 0x69, 0x67, 0x72, 0x61, 0x74,
-	0x65, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x40, 0x0a, 0x07, 0x4d, 0x69, 0x67, 0x72,
-	0x61, 0x74, 0x65, 0x12, 0x18, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x4d,
-	0x69, 0x67, 0x72, 0x61, 0x74, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x19, 0x2e,
+	0x52, 0x65, 0x70, 0x6c, 0x79, 0x12, 0x46, 0x0a, 0x08, 0x44, 0x69, 0x73, 0x63, 0x6f, 0x76, 0x65,
+	0x72, 0x12, 0x1d, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x48, 0x6f, 0x73,
+	0x74, 0x44, 0x69, 0x73, 0x63, 0x6f, 0x76, 0x65, 0x72, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
+	0x1a, 0x1b, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x48, 0x6f, 0x73, 0x74,
+	0x44, 0x69, 0x73, 0x63, 0x6f, 0x76, 0x65, 0x72, 0x52, 0x65, 0x70, 0x6c, 0x79, 0x32, 0xdf, 0x01,
+	0x0a, 0x0e, 0x4d, 0x69, 0x67, 0x72, 0x61, 0x74, 0x65, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65,
+	0x12, 0x40, 0x0a, 0x07, 0x4d, 0x69, 0x67, 0x72, 0x61, 0x74, 0x65, 0x12, 0x18, 0x2e, 0x61, 0x6e,
+	0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x4d, 0x69, 0x67, 0x72, 0x61, 0x74, 0x65, 0x52, 0x65,
+	0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x19, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31,
+	0x2e, 0x4d, 0x69, 0x67, 0x72, 0x61, 0x74, 0x65, 0x50, 0x72, 0x6f, 0x67, 0x72, 0x65, 0x73, 0x73,
+	0x30, 0x01, 0x12, 0x3d, 0x0a, 0x03, 0x4b, 0x65, 0x79, 0x12, 0x1b, 0x2e, 0x61, 0x6e, 0x76, 0x69,
+	0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x4d, 0x69, 0x67, 0x72, 0x61, 0x74, 0x65, 0x4b, 0x65, 0x79, 0x52,
+	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x19, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76,
+	0x31, 0x2e, 0x4d, 0x69, 0x67, 0x72, 0x61, 0x74, 0x65, 0x4b, 0x65, 0x79, 0x52, 0x65, 0x70, 0x6c,
+	0x79, 0x12, 0x4c, 0x0a, 0x08, 0x47, 0x75, 0x65, 0x73, 0x74, 0x4b, 0x65, 0x79, 0x12, 0x20, 0x2e,
 	0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x4d, 0x69, 0x67, 0x72, 0x61, 0x74, 0x65,
-	0x50, 0x72, 0x6f, 0x67, 0x72, 0x65, 0x73, 0x73, 0x30, 0x01, 0x12, 0x3d, 0x0a, 0x03, 0x4b, 0x65,
-	0x79, 0x12, 0x1b, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x4d, 0x69, 0x67,
-	0x72, 0x61, 0x74, 0x65, 0x4b, 0x65, 0x79, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x19,
-	0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x4d, 0x69, 0x67, 0x72, 0x61, 0x74,
-	0x65, 0x4b, 0x65, 0x79, 0x52, 0x65, 0x70, 0x6c, 0x79, 0x12, 0x4c, 0x0a, 0x08, 0x47, 0x75, 0x65,
-	0x73, 0x74, 0x4b, 0x65, 0x79, 0x12, 0x20, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31,
-	0x2e, 0x4d, 0x69, 0x67, 0x72, 0x61, 0x74, 0x65, 0x47, 0x75, 0x65, 0x73, 0x74, 0x4b, 0x65, 0x79,
-	0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1e, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e,
-	0x76, 0x31, 0x2e, 0x4d, 0x69, 0x67, 0x72, 0x61, 0x74, 0x65, 0x47, 0x75, 0x65, 0x73, 0x74, 0x4b,
-	0x65, 0x79, 0x52, 0x65, 0x70, 0x6c, 0x79, 0x32, 0x8d, 0x01, 0x0a, 0x0d, 0x45, 0x78, 0x70, 0x6f,
-	0x72, 0x74, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x3d, 0x0a, 0x06, 0x45, 0x78, 0x70,
-	0x6f, 0x72, 0x74, 0x12, 0x17, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x45,
-	0x78, 0x70, 0x6f, 0x72, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x18, 0x2e, 0x61,
-	0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x45, 0x78, 0x70, 0x6f, 0x72, 0x74, 0x50, 0x72,
-	0x6f, 0x67, 0x72, 0x65, 0x73, 0x73, 0x30, 0x01, 0x12, 0x3d, 0x0a, 0x06, 0x49, 0x6d, 0x70, 0x6f,
-	0x72, 0x74, 0x12, 0x17, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x49, 0x6d,
-	0x70, 0x6f, 0x72, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x18, 0x2e, 0x61, 0x6e,
-	0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x49, 0x6d, 0x70, 0x6f, 0x72, 0x74, 0x50, 0x72, 0x6f,
-	0x67, 0x72, 0x65, 0x73, 0x73, 0x30, 0x01, 0x32, 0x8f, 0x03, 0x0a, 0x0f, 0x53, 0x6e, 0x61, 0x70,
-	0x73, 0x68, 0x6f, 0x74, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x48, 0x0a, 0x06, 0x43,
-	0x72, 0x65, 0x61, 0x74, 0x65, 0x12, 0x1f, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31,
-	0x2e, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x52,
-	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1d, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76,
-	0x31, 0x2e, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65,
-	0x52, 0x65, 0x70, 0x6c, 0x79, 0x12, 0x4b, 0x0a, 0x07, 0x52, 0x65, 0x73, 0x74, 0x6f, 0x72, 0x65,
-	0x12, 0x20, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x53, 0x6e, 0x61, 0x70,
-	0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x73, 0x74, 0x6f, 0x72, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65,
-	0x73, 0x74, 0x1a, 0x1e, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x53, 0x6e,
-	0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x73, 0x74, 0x6f, 0x72, 0x65, 0x52, 0x65, 0x70,
-	0x6c, 0x79, 0x12, 0x48, 0x0a, 0x06, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x12, 0x1f, 0x2e, 0x61,
-	0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74,
-	0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1d, 0x2e,
+	0x47, 0x75, 0x65, 0x73, 0x74, 0x4b, 0x65, 0x79, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a,
+	0x1e, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x4d, 0x69, 0x67, 0x72, 0x61,
+	0x74, 0x65, 0x47, 0x75, 0x65, 0x73, 0x74, 0x4b, 0x65, 0x79, 0x52, 0x65, 0x70, 0x6c, 0x79, 0x32,
+	0x8d, 0x01, 0x0a, 0x0d, 0x45, 0x78, 0x70, 0x6f, 0x72, 0x74, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63,
+	0x65, 0x12, 0x3d, 0x0a, 0x06, 0x45, 0x78, 0x70, 0x6f, 0x72, 0x74, 0x12, 0x17, 0x2e, 0x61, 0x6e,
+	0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x45, 0x78, 0x70, 0x6f, 0x72, 0x74, 0x52, 0x65, 0x71,
+	0x75, 0x65, 0x73, 0x74, 0x1a, 0x18, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e,
+	0x45, 0x78, 0x70, 0x6f, 0x72, 0x74, 0x50, 0x72, 0x6f, 0x67, 0x72, 0x65, 0x73, 0x73, 0x30, 0x01,
+	0x12, 0x3d, 0x0a, 0x06, 0x49, 0x6d, 0x70, 0x6f, 0x72, 0x74, 0x12, 0x17, 0x2e, 0x61, 0x6e, 0x76,
+	0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x49, 0x6d, 0x70, 0x6f, 0x72, 0x74, 0x52, 0x65, 0x71, 0x75,
+	0x65, 0x73, 0x74, 0x1a, 0x18, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x49,
+	0x6d, 0x70, 0x6f, 0x72, 0x74, 0x50, 0x72, 0x6f, 0x67, 0x72, 0x65, 0x73, 0x73, 0x30, 0x01, 0x32,
+	0x8f, 0x03, 0x0a, 0x0f, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x53, 0x65, 0x72, 0x76,
+	0x69, 0x63, 0x65, 0x12, 0x48, 0x0a, 0x06, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x12, 0x1f, 0x2e,
 	0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f,
-	0x74, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x52, 0x65, 0x70, 0x6c, 0x79, 0x12, 0x42, 0x0a, 0x04,
-	0x4c, 0x69, 0x73, 0x74, 0x12, 0x1d, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e,
-	0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x4c, 0x69, 0x73, 0x74, 0x52, 0x65, 0x71, 0x75,
-	0x65, 0x73, 0x74, 0x1a, 0x1b, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x53,
-	0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x4c, 0x69, 0x73, 0x74, 0x52, 0x65, 0x70, 0x6c, 0x79,
-	0x12, 0x57, 0x0a, 0x0b, 0x53, 0x65, 0x74, 0x53, 0x63, 0x68, 0x65, 0x64, 0x75, 0x6c, 0x65, 0x12,
-	0x24, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x53, 0x6e, 0x61, 0x70, 0x73,
-	0x68, 0x6f, 0x74, 0x53, 0x65, 0x74, 0x53, 0x63, 0x68, 0x65, 0x64, 0x75, 0x6c, 0x65, 0x52, 0x65,
-	0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x22, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31,
-	0x2e, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x53, 0x65, 0x74, 0x53, 0x63, 0x68, 0x65,
-	0x64, 0x75, 0x6c, 0x65, 0x52, 0x65, 0x70, 0x6c, 0x79, 0x42, 0x39, 0x5a, 0x37, 0x67, 0x69, 0x74,
-	0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2d, 0x70, 0x72,
-	0x6f, 0x6a, 0x65, 0x63, 0x74, 0x2f, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2f, 0x61, 0x70, 0x69, 0x2f,
-	0x67, 0x65, 0x6e, 0x2f, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2f, 0x76, 0x31, 0x3b, 0x61, 0x6e, 0x76,
-	0x69, 0x6c, 0x76, 0x31, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x74, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1d,
+	0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68,
+	0x6f, 0x74, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x52, 0x65, 0x70, 0x6c, 0x79, 0x12, 0x4b, 0x0a,
+	0x07, 0x52, 0x65, 0x73, 0x74, 0x6f, 0x72, 0x65, 0x12, 0x20, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c,
+	0x2e, 0x76, 0x31, 0x2e, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x73, 0x74,
+	0x6f, 0x72, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1e, 0x2e, 0x61, 0x6e, 0x76,
+	0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x65,
+	0x73, 0x74, 0x6f, 0x72, 0x65, 0x52, 0x65, 0x70, 0x6c, 0x79, 0x12, 0x48, 0x0a, 0x06, 0x44, 0x65,
+	0x6c, 0x65, 0x74, 0x65, 0x12, 0x1f, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e,
+	0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x52, 0x65,
+	0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1d, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31,
+	0x2e, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x52,
+	0x65, 0x70, 0x6c, 0x79, 0x12, 0x42, 0x0a, 0x04, 0x4c, 0x69, 0x73, 0x74, 0x12, 0x1d, 0x2e, 0x61,
+	0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74,
+	0x4c, 0x69, 0x73, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1b, 0x2e, 0x61, 0x6e,
+	0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x4c,
+	0x69, 0x73, 0x74, 0x52, 0x65, 0x70, 0x6c, 0x79, 0x12, 0x57, 0x0a, 0x0b, 0x53, 0x65, 0x74, 0x53,
+	0x63, 0x68, 0x65, 0x64, 0x75, 0x6c, 0x65, 0x12, 0x24, 0x2e, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e,
+	0x76, 0x31, 0x2e, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x53, 0x65, 0x74, 0x53, 0x63,
+	0x68, 0x65, 0x64, 0x75, 0x6c, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x22, 0x2e,
+	0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2e, 0x76, 0x31, 0x2e, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f,
+	0x74, 0x53, 0x65, 0x74, 0x53, 0x63, 0x68, 0x65, 0x64, 0x75, 0x6c, 0x65, 0x52, 0x65, 0x70, 0x6c,
+	0x79, 0x42, 0x39, 0x5a, 0x37, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f,
+	0x61, 0x6e, 0x76, 0x69, 0x6c, 0x2d, 0x70, 0x72, 0x6f, 0x6a, 0x65, 0x63, 0x74, 0x2f, 0x61, 0x6e,
+	0x76, 0x69, 0x6c, 0x2f, 0x61, 0x70, 0x69, 0x2f, 0x67, 0x65, 0x6e, 0x2f, 0x61, 0x6e, 0x76, 0x69,
+	0x6c, 0x2f, 0x76, 0x31, 0x3b, 0x61, 0x6e, 0x76, 0x69, 0x6c, 0x76, 0x31, 0x62, 0x06, 0x70, 0x72,
+	0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -9141,7 +9317,7 @@ func file_anvil_v1_anvil_proto_rawDescGZIP() []byte {
 }
 
 var file_anvil_v1_anvil_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_anvil_v1_anvil_proto_msgTypes = make([]protoimpl.MessageInfo, 133)
+var file_anvil_v1_anvil_proto_msgTypes = make([]protoimpl.MessageInfo, 136)
 var file_anvil_v1_anvil_proto_goTypes = []any{
 	(WatchEventType)(0),                 // 0: anvil.v1.WatchEventType
 	(Kind)(0),                           // 1: anvil.v1.Kind
@@ -9253,35 +9429,38 @@ var file_anvil_v1_anvil_proto_goTypes = []any{
 	(*HostRemoveReply)(nil),             // 107: anvil.v1.HostRemoveReply
 	(*HostTestRequest)(nil),             // 108: anvil.v1.HostTestRequest
 	(*HostTestReply)(nil),               // 109: anvil.v1.HostTestReply
-	(*MigrateKeyRequest)(nil),           // 110: anvil.v1.MigrateKeyRequest
-	(*MigrateKeyReply)(nil),             // 111: anvil.v1.MigrateKeyReply
-	(*MigrateGuestKeyRequest)(nil),      // 112: anvil.v1.MigrateGuestKeyRequest
-	(*MigrateGuestKeyReply)(nil),        // 113: anvil.v1.MigrateGuestKeyReply
-	(*MigrateRequest)(nil),              // 114: anvil.v1.MigrateRequest
-	(*MigrateProgress)(nil),             // 115: anvil.v1.MigrateProgress
-	(*MigrateMemberResult)(nil),         // 116: anvil.v1.MigrateMemberResult
-	(*IntentMigrateDone)(nil),           // 117: anvil.v1.IntentMigrateDone
-	(*ExportRequest)(nil),               // 118: anvil.v1.ExportRequest
-	(*ExportProgress)(nil),              // 119: anvil.v1.ExportProgress
-	(*ImportRequest)(nil),               // 120: anvil.v1.ImportRequest
-	(*ImportMemberResult)(nil),          // 121: anvil.v1.ImportMemberResult
-	(*ImportProgress)(nil),              // 122: anvil.v1.ImportProgress
-	(*ImportDone)(nil),                  // 123: anvil.v1.ImportDone
-	(*SnapshotSetScheduleRequest)(nil),  // 124: anvil.v1.SnapshotSetScheduleRequest
-	(*SnapshotSetScheduleReply)(nil),    // 125: anvil.v1.SnapshotSetScheduleReply
-	(*SnapshotCreateRequest)(nil),       // 126: anvil.v1.SnapshotCreateRequest
-	(*SnapshotCreateReply)(nil),         // 127: anvil.v1.SnapshotCreateReply
-	(*SnapshotRestoreRequest)(nil),      // 128: anvil.v1.SnapshotRestoreRequest
-	(*SnapshotRestoreReply)(nil),        // 129: anvil.v1.SnapshotRestoreReply
-	(*SnapshotDeleteRequest)(nil),       // 130: anvil.v1.SnapshotDeleteRequest
-	(*SnapshotDeleteReply)(nil),         // 131: anvil.v1.SnapshotDeleteReply
-	(*SnapshotListRequest)(nil),         // 132: anvil.v1.SnapshotListRequest
-	(*SnapshotInfo)(nil),                // 133: anvil.v1.SnapshotInfo
-	(*SnapshotListReply)(nil),           // 134: anvil.v1.SnapshotListReply
-	nil,                                 // 135: anvil.v1.VMSpec.ExtraHostsEntry
-	nil,                                 // 136: anvil.v1.ContainerSpec.EnvEntry
-	nil,                                 // 137: anvil.v1.ContainerSpec.ExtraHostsEntry
-	nil,                                 // 138: anvil.v1.Instance.LabelsEntry
+	(*HostDiscoverRequest)(nil),         // 110: anvil.v1.HostDiscoverRequest
+	(*DiscoveredHost)(nil),              // 111: anvil.v1.DiscoveredHost
+	(*HostDiscoverReply)(nil),           // 112: anvil.v1.HostDiscoverReply
+	(*MigrateKeyRequest)(nil),           // 113: anvil.v1.MigrateKeyRequest
+	(*MigrateKeyReply)(nil),             // 114: anvil.v1.MigrateKeyReply
+	(*MigrateGuestKeyRequest)(nil),      // 115: anvil.v1.MigrateGuestKeyRequest
+	(*MigrateGuestKeyReply)(nil),        // 116: anvil.v1.MigrateGuestKeyReply
+	(*MigrateRequest)(nil),              // 117: anvil.v1.MigrateRequest
+	(*MigrateProgress)(nil),             // 118: anvil.v1.MigrateProgress
+	(*MigrateMemberResult)(nil),         // 119: anvil.v1.MigrateMemberResult
+	(*IntentMigrateDone)(nil),           // 120: anvil.v1.IntentMigrateDone
+	(*ExportRequest)(nil),               // 121: anvil.v1.ExportRequest
+	(*ExportProgress)(nil),              // 122: anvil.v1.ExportProgress
+	(*ImportRequest)(nil),               // 123: anvil.v1.ImportRequest
+	(*ImportMemberResult)(nil),          // 124: anvil.v1.ImportMemberResult
+	(*ImportProgress)(nil),              // 125: anvil.v1.ImportProgress
+	(*ImportDone)(nil),                  // 126: anvil.v1.ImportDone
+	(*SnapshotSetScheduleRequest)(nil),  // 127: anvil.v1.SnapshotSetScheduleRequest
+	(*SnapshotSetScheduleReply)(nil),    // 128: anvil.v1.SnapshotSetScheduleReply
+	(*SnapshotCreateRequest)(nil),       // 129: anvil.v1.SnapshotCreateRequest
+	(*SnapshotCreateReply)(nil),         // 130: anvil.v1.SnapshotCreateReply
+	(*SnapshotRestoreRequest)(nil),      // 131: anvil.v1.SnapshotRestoreRequest
+	(*SnapshotRestoreReply)(nil),        // 132: anvil.v1.SnapshotRestoreReply
+	(*SnapshotDeleteRequest)(nil),       // 133: anvil.v1.SnapshotDeleteRequest
+	(*SnapshotDeleteReply)(nil),         // 134: anvil.v1.SnapshotDeleteReply
+	(*SnapshotListRequest)(nil),         // 135: anvil.v1.SnapshotListRequest
+	(*SnapshotInfo)(nil),                // 136: anvil.v1.SnapshotInfo
+	(*SnapshotListReply)(nil),           // 137: anvil.v1.SnapshotListReply
+	nil,                                 // 138: anvil.v1.VMSpec.ExtraHostsEntry
+	nil,                                 // 139: anvil.v1.ContainerSpec.EnvEntry
+	nil,                                 // 140: anvil.v1.ContainerSpec.ExtraHostsEntry
+	nil,                                 // 141: anvil.v1.Instance.LabelsEntry
 }
 var file_anvil_v1_anvil_proto_depIdxs = []int32{
 	24,  // 0: anvil.v1.UpdateRequest.restart_policy:type_name -> anvil.v1.RestartPolicy
@@ -9292,16 +9471,16 @@ var file_anvil_v1_anvil_proto_depIdxs = []int32{
 	16,  // 5: anvil.v1.StatsReply.stats:type_name -> anvil.v1.InstanceStats
 	19,  // 6: anvil.v1.VMSpec.mounts:type_name -> anvil.v1.Mount
 	22,  // 7: anvil.v1.VMSpec.ports:type_name -> anvil.v1.PortMapping
-	135, // 8: anvil.v1.VMSpec.extra_hosts:type_name -> anvil.v1.VMSpec.ExtraHostsEntry
+	138, // 8: anvil.v1.VMSpec.extra_hosts:type_name -> anvil.v1.VMSpec.ExtraHostsEntry
 	25,  // 9: anvil.v1.VMSpec.snapshot_schedule:type_name -> anvil.v1.SnapshotSchedule
-	136, // 10: anvil.v1.ContainerSpec.env:type_name -> anvil.v1.ContainerSpec.EnvEntry
+	139, // 10: anvil.v1.ContainerSpec.env:type_name -> anvil.v1.ContainerSpec.EnvEntry
 	21,  // 11: anvil.v1.ContainerSpec.volumes:type_name -> anvil.v1.VolumeMount
 	22,  // 12: anvil.v1.ContainerSpec.ports:type_name -> anvil.v1.PortMapping
 	3,   // 13: anvil.v1.ContainerSpec.engine:type_name -> anvil.v1.ContainerEngine
-	137, // 14: anvil.v1.ContainerSpec.extra_hosts:type_name -> anvil.v1.ContainerSpec.ExtraHostsEntry
+	140, // 14: anvil.v1.ContainerSpec.extra_hosts:type_name -> anvil.v1.ContainerSpec.ExtraHostsEntry
 	1,   // 15: anvil.v1.Instance.kind:type_name -> anvil.v1.Kind
 	2,   // 16: anvil.v1.Instance.state:type_name -> anvil.v1.State
-	138, // 17: anvil.v1.Instance.labels:type_name -> anvil.v1.Instance.LabelsEntry
+	141, // 17: anvil.v1.Instance.labels:type_name -> anvil.v1.Instance.LabelsEntry
 	18,  // 18: anvil.v1.Instance.vm:type_name -> anvil.v1.VMSpec
 	20,  // 19: anvil.v1.Instance.container:type_name -> anvil.v1.ContainerSpec
 	26,  // 20: anvil.v1.Instance.guest:type_name -> anvil.v1.GuestInfo
@@ -9338,121 +9517,124 @@ var file_anvil_v1_anvil_proto_depIdxs = []int32{
 	87,  // 51: anvil.v1.IntentApplyProgress.intent:type_name -> anvil.v1.Intent
 	101, // 52: anvil.v1.HostAddRequest.host:type_name -> anvil.v1.Host
 	101, // 53: anvil.v1.HostListReply.hosts:type_name -> anvil.v1.Host
-	116, // 54: anvil.v1.MigrateProgress.member_done:type_name -> anvil.v1.MigrateMemberResult
-	117, // 55: anvil.v1.MigrateProgress.intent_done:type_name -> anvil.v1.IntentMigrateDone
-	116, // 56: anvil.v1.IntentMigrateDone.members:type_name -> anvil.v1.MigrateMemberResult
-	123, // 57: anvil.v1.ImportProgress.done:type_name -> anvil.v1.ImportDone
-	121, // 58: anvil.v1.ImportDone.members:type_name -> anvil.v1.ImportMemberResult
-	133, // 59: anvil.v1.SnapshotListReply.snapshots:type_name -> anvil.v1.SnapshotInfo
-	27,  // 60: anvil.v1.InstanceService.Launch:input_type -> anvil.v1.LaunchRequest
-	29,  // 61: anvil.v1.InstanceService.Fork:input_type -> anvil.v1.ForkRequest
-	30,  // 62: anvil.v1.InstanceService.List:input_type -> anvil.v1.ListRequest
-	32,  // 63: anvil.v1.InstanceService.Info:input_type -> anvil.v1.InfoRequest
-	34,  // 64: anvil.v1.InstanceService.Start:input_type -> anvil.v1.StartRequest
-	36,  // 65: anvil.v1.InstanceService.Stop:input_type -> anvil.v1.StopRequest
-	38,  // 66: anvil.v1.InstanceService.Delete:input_type -> anvil.v1.DeleteRequest
-	40,  // 67: anvil.v1.InstanceService.Purge:input_type -> anvil.v1.PurgeRequest
-	42,  // 68: anvil.v1.InstanceService.Logs:input_type -> anvil.v1.LogsRequest
-	82,  // 69: anvil.v1.InstanceService.Mount:input_type -> anvil.v1.MountRequest
-	84,  // 70: anvil.v1.InstanceService.Umount:input_type -> anvil.v1.UmountRequest
-	11,  // 71: anvil.v1.InstanceService.AddPort:input_type -> anvil.v1.AddPortRequest
-	13,  // 72: anvil.v1.InstanceService.RemovePort:input_type -> anvil.v1.RemovePortRequest
-	15,  // 73: anvil.v1.InstanceService.Stats:input_type -> anvil.v1.StatsRequest
-	9,   // 74: anvil.v1.InstanceService.Watch:input_type -> anvil.v1.WatchRequest
-	8,   // 75: anvil.v1.InstanceService.WaitReady:input_type -> anvil.v1.WaitReadyRequest
-	6,   // 76: anvil.v1.InstanceService.Update:input_type -> anvil.v1.UpdateRequest
-	45,  // 77: anvil.v1.CloudInitService.List:input_type -> anvil.v1.CloudInitListRequest
-	47,  // 78: anvil.v1.CloudInitService.Get:input_type -> anvil.v1.CloudInitGetRequest
-	49,  // 79: anvil.v1.CloudInitService.Save:input_type -> anvil.v1.CloudInitSaveRequest
-	51,  // 80: anvil.v1.CloudInitService.Rename:input_type -> anvil.v1.CloudInitRenameRequest
-	53,  // 81: anvil.v1.CloudInitService.Delete:input_type -> anvil.v1.CloudInitDeleteRequest
-	55,  // 82: anvil.v1.CloudInitService.ImportRepo:input_type -> anvil.v1.CloudInitImportRepoRequest
-	59,  // 83: anvil.v1.MirrorService.Add:input_type -> anvil.v1.MirrorAddRequest
-	61,  // 84: anvil.v1.MirrorService.List:input_type -> anvil.v1.MirrorListRequest
-	63,  // 85: anvil.v1.MirrorService.Remove:input_type -> anvil.v1.MirrorRemoveRequest
-	65,  // 86: anvil.v1.MirrorService.SetEnabled:input_type -> anvil.v1.MirrorSetEnabledRequest
-	70,  // 87: anvil.v1.ImageService.List:input_type -> anvil.v1.ImageListRequest
-	75,  // 88: anvil.v1.ImageService.Delete:input_type -> anvil.v1.ImageDeleteRequest
-	73,  // 89: anvil.v1.ImageService.Catalog:input_type -> anvil.v1.CatalogRequest
-	77,  // 90: anvil.v1.ImageService.ListContainerImages:input_type -> anvil.v1.ContainerImageListRequest
-	79,  // 91: anvil.v1.ImageService.DeleteContainerImage:input_type -> anvil.v1.ContainerImageDeleteRequest
-	67,  // 92: anvil.v1.ImageService.Checksum:input_type -> anvil.v1.ImageChecksumRequest
-	89,  // 93: anvil.v1.IntentService.List:input_type -> anvil.v1.IntentListRequest
-	91,  // 94: anvil.v1.IntentService.Info:input_type -> anvil.v1.IntentInfoRequest
-	93,  // 95: anvil.v1.IntentService.Remove:input_type -> anvil.v1.IntentRemoveRequest
-	95,  // 96: anvil.v1.IntentService.Delete:input_type -> anvil.v1.IntentDeleteRequest
-	97,  // 97: anvil.v1.IntentService.Apply:input_type -> anvil.v1.IntentApplyRequest
-	102, // 98: anvil.v1.HostService.Add:input_type -> anvil.v1.HostAddRequest
-	104, // 99: anvil.v1.HostService.List:input_type -> anvil.v1.HostListRequest
-	106, // 100: anvil.v1.HostService.Remove:input_type -> anvil.v1.HostRemoveRequest
-	108, // 101: anvil.v1.HostService.Test:input_type -> anvil.v1.HostTestRequest
-	114, // 102: anvil.v1.MigrateService.Migrate:input_type -> anvil.v1.MigrateRequest
-	110, // 103: anvil.v1.MigrateService.Key:input_type -> anvil.v1.MigrateKeyRequest
-	112, // 104: anvil.v1.MigrateService.GuestKey:input_type -> anvil.v1.MigrateGuestKeyRequest
-	118, // 105: anvil.v1.ExportService.Export:input_type -> anvil.v1.ExportRequest
-	120, // 106: anvil.v1.ExportService.Import:input_type -> anvil.v1.ImportRequest
-	126, // 107: anvil.v1.SnapshotService.Create:input_type -> anvil.v1.SnapshotCreateRequest
-	128, // 108: anvil.v1.SnapshotService.Restore:input_type -> anvil.v1.SnapshotRestoreRequest
-	130, // 109: anvil.v1.SnapshotService.Delete:input_type -> anvil.v1.SnapshotDeleteRequest
-	132, // 110: anvil.v1.SnapshotService.List:input_type -> anvil.v1.SnapshotListRequest
-	124, // 111: anvil.v1.SnapshotService.SetSchedule:input_type -> anvil.v1.SnapshotSetScheduleRequest
-	28,  // 112: anvil.v1.InstanceService.Launch:output_type -> anvil.v1.LaunchProgress
-	28,  // 113: anvil.v1.InstanceService.Fork:output_type -> anvil.v1.LaunchProgress
-	31,  // 114: anvil.v1.InstanceService.List:output_type -> anvil.v1.ListReply
-	33,  // 115: anvil.v1.InstanceService.Info:output_type -> anvil.v1.InfoReply
-	35,  // 116: anvil.v1.InstanceService.Start:output_type -> anvil.v1.StartReply
-	37,  // 117: anvil.v1.InstanceService.Stop:output_type -> anvil.v1.StopReply
-	39,  // 118: anvil.v1.InstanceService.Delete:output_type -> anvil.v1.DeleteReply
-	41,  // 119: anvil.v1.InstanceService.Purge:output_type -> anvil.v1.PurgeReply
-	43,  // 120: anvil.v1.InstanceService.Logs:output_type -> anvil.v1.LogChunk
-	83,  // 121: anvil.v1.InstanceService.Mount:output_type -> anvil.v1.MountReply
-	85,  // 122: anvil.v1.InstanceService.Umount:output_type -> anvil.v1.UmountReply
-	12,  // 123: anvil.v1.InstanceService.AddPort:output_type -> anvil.v1.AddPortReply
-	14,  // 124: anvil.v1.InstanceService.RemovePort:output_type -> anvil.v1.RemovePortReply
-	17,  // 125: anvil.v1.InstanceService.Stats:output_type -> anvil.v1.StatsReply
-	10,  // 126: anvil.v1.InstanceService.Watch:output_type -> anvil.v1.WatchEvent
-	28,  // 127: anvil.v1.InstanceService.WaitReady:output_type -> anvil.v1.LaunchProgress
-	7,   // 128: anvil.v1.InstanceService.Update:output_type -> anvil.v1.UpdateReply
-	46,  // 129: anvil.v1.CloudInitService.List:output_type -> anvil.v1.CloudInitListReply
-	48,  // 130: anvil.v1.CloudInitService.Get:output_type -> anvil.v1.CloudInitGetReply
-	50,  // 131: anvil.v1.CloudInitService.Save:output_type -> anvil.v1.CloudInitSaveReply
-	52,  // 132: anvil.v1.CloudInitService.Rename:output_type -> anvil.v1.CloudInitRenameReply
-	54,  // 133: anvil.v1.CloudInitService.Delete:output_type -> anvil.v1.CloudInitDeleteReply
-	56,  // 134: anvil.v1.CloudInitService.ImportRepo:output_type -> anvil.v1.CloudInitImportRepoProgress
-	60,  // 135: anvil.v1.MirrorService.Add:output_type -> anvil.v1.MirrorAddReply
-	62,  // 136: anvil.v1.MirrorService.List:output_type -> anvil.v1.MirrorListReply
-	64,  // 137: anvil.v1.MirrorService.Remove:output_type -> anvil.v1.MirrorRemoveReply
-	66,  // 138: anvil.v1.MirrorService.SetEnabled:output_type -> anvil.v1.MirrorSetEnabledReply
-	71,  // 139: anvil.v1.ImageService.List:output_type -> anvil.v1.ImageListReply
-	81,  // 140: anvil.v1.ImageService.Delete:output_type -> anvil.v1.ImageDeleteReply
-	74,  // 141: anvil.v1.ImageService.Catalog:output_type -> anvil.v1.CatalogReply
-	78,  // 142: anvil.v1.ImageService.ListContainerImages:output_type -> anvil.v1.ContainerImageListReply
-	80,  // 143: anvil.v1.ImageService.DeleteContainerImage:output_type -> anvil.v1.ContainerImageDeleteReply
-	68,  // 144: anvil.v1.ImageService.Checksum:output_type -> anvil.v1.ImageChecksumReply
-	90,  // 145: anvil.v1.IntentService.List:output_type -> anvil.v1.IntentListReply
-	92,  // 146: anvil.v1.IntentService.Info:output_type -> anvil.v1.IntentInfoReply
-	94,  // 147: anvil.v1.IntentService.Remove:output_type -> anvil.v1.IntentRemoveReply
-	96,  // 148: anvil.v1.IntentService.Delete:output_type -> anvil.v1.IntentDeleteReply
-	100, // 149: anvil.v1.IntentService.Apply:output_type -> anvil.v1.IntentApplyProgress
-	103, // 150: anvil.v1.HostService.Add:output_type -> anvil.v1.HostAddReply
-	105, // 151: anvil.v1.HostService.List:output_type -> anvil.v1.HostListReply
-	107, // 152: anvil.v1.HostService.Remove:output_type -> anvil.v1.HostRemoveReply
-	109, // 153: anvil.v1.HostService.Test:output_type -> anvil.v1.HostTestReply
-	115, // 154: anvil.v1.MigrateService.Migrate:output_type -> anvil.v1.MigrateProgress
-	111, // 155: anvil.v1.MigrateService.Key:output_type -> anvil.v1.MigrateKeyReply
-	113, // 156: anvil.v1.MigrateService.GuestKey:output_type -> anvil.v1.MigrateGuestKeyReply
-	119, // 157: anvil.v1.ExportService.Export:output_type -> anvil.v1.ExportProgress
-	122, // 158: anvil.v1.ExportService.Import:output_type -> anvil.v1.ImportProgress
-	127, // 159: anvil.v1.SnapshotService.Create:output_type -> anvil.v1.SnapshotCreateReply
-	129, // 160: anvil.v1.SnapshotService.Restore:output_type -> anvil.v1.SnapshotRestoreReply
-	131, // 161: anvil.v1.SnapshotService.Delete:output_type -> anvil.v1.SnapshotDeleteReply
-	134, // 162: anvil.v1.SnapshotService.List:output_type -> anvil.v1.SnapshotListReply
-	125, // 163: anvil.v1.SnapshotService.SetSchedule:output_type -> anvil.v1.SnapshotSetScheduleReply
-	112, // [112:164] is the sub-list for method output_type
-	60,  // [60:112] is the sub-list for method input_type
-	60,  // [60:60] is the sub-list for extension type_name
-	60,  // [60:60] is the sub-list for extension extendee
-	0,   // [0:60] is the sub-list for field type_name
+	111, // 54: anvil.v1.HostDiscoverReply.hosts:type_name -> anvil.v1.DiscoveredHost
+	119, // 55: anvil.v1.MigrateProgress.member_done:type_name -> anvil.v1.MigrateMemberResult
+	120, // 56: anvil.v1.MigrateProgress.intent_done:type_name -> anvil.v1.IntentMigrateDone
+	119, // 57: anvil.v1.IntentMigrateDone.members:type_name -> anvil.v1.MigrateMemberResult
+	126, // 58: anvil.v1.ImportProgress.done:type_name -> anvil.v1.ImportDone
+	124, // 59: anvil.v1.ImportDone.members:type_name -> anvil.v1.ImportMemberResult
+	136, // 60: anvil.v1.SnapshotListReply.snapshots:type_name -> anvil.v1.SnapshotInfo
+	27,  // 61: anvil.v1.InstanceService.Launch:input_type -> anvil.v1.LaunchRequest
+	29,  // 62: anvil.v1.InstanceService.Fork:input_type -> anvil.v1.ForkRequest
+	30,  // 63: anvil.v1.InstanceService.List:input_type -> anvil.v1.ListRequest
+	32,  // 64: anvil.v1.InstanceService.Info:input_type -> anvil.v1.InfoRequest
+	34,  // 65: anvil.v1.InstanceService.Start:input_type -> anvil.v1.StartRequest
+	36,  // 66: anvil.v1.InstanceService.Stop:input_type -> anvil.v1.StopRequest
+	38,  // 67: anvil.v1.InstanceService.Delete:input_type -> anvil.v1.DeleteRequest
+	40,  // 68: anvil.v1.InstanceService.Purge:input_type -> anvil.v1.PurgeRequest
+	42,  // 69: anvil.v1.InstanceService.Logs:input_type -> anvil.v1.LogsRequest
+	82,  // 70: anvil.v1.InstanceService.Mount:input_type -> anvil.v1.MountRequest
+	84,  // 71: anvil.v1.InstanceService.Umount:input_type -> anvil.v1.UmountRequest
+	11,  // 72: anvil.v1.InstanceService.AddPort:input_type -> anvil.v1.AddPortRequest
+	13,  // 73: anvil.v1.InstanceService.RemovePort:input_type -> anvil.v1.RemovePortRequest
+	15,  // 74: anvil.v1.InstanceService.Stats:input_type -> anvil.v1.StatsRequest
+	9,   // 75: anvil.v1.InstanceService.Watch:input_type -> anvil.v1.WatchRequest
+	8,   // 76: anvil.v1.InstanceService.WaitReady:input_type -> anvil.v1.WaitReadyRequest
+	6,   // 77: anvil.v1.InstanceService.Update:input_type -> anvil.v1.UpdateRequest
+	45,  // 78: anvil.v1.CloudInitService.List:input_type -> anvil.v1.CloudInitListRequest
+	47,  // 79: anvil.v1.CloudInitService.Get:input_type -> anvil.v1.CloudInitGetRequest
+	49,  // 80: anvil.v1.CloudInitService.Save:input_type -> anvil.v1.CloudInitSaveRequest
+	51,  // 81: anvil.v1.CloudInitService.Rename:input_type -> anvil.v1.CloudInitRenameRequest
+	53,  // 82: anvil.v1.CloudInitService.Delete:input_type -> anvil.v1.CloudInitDeleteRequest
+	55,  // 83: anvil.v1.CloudInitService.ImportRepo:input_type -> anvil.v1.CloudInitImportRepoRequest
+	59,  // 84: anvil.v1.MirrorService.Add:input_type -> anvil.v1.MirrorAddRequest
+	61,  // 85: anvil.v1.MirrorService.List:input_type -> anvil.v1.MirrorListRequest
+	63,  // 86: anvil.v1.MirrorService.Remove:input_type -> anvil.v1.MirrorRemoveRequest
+	65,  // 87: anvil.v1.MirrorService.SetEnabled:input_type -> anvil.v1.MirrorSetEnabledRequest
+	70,  // 88: anvil.v1.ImageService.List:input_type -> anvil.v1.ImageListRequest
+	75,  // 89: anvil.v1.ImageService.Delete:input_type -> anvil.v1.ImageDeleteRequest
+	73,  // 90: anvil.v1.ImageService.Catalog:input_type -> anvil.v1.CatalogRequest
+	77,  // 91: anvil.v1.ImageService.ListContainerImages:input_type -> anvil.v1.ContainerImageListRequest
+	79,  // 92: anvil.v1.ImageService.DeleteContainerImage:input_type -> anvil.v1.ContainerImageDeleteRequest
+	67,  // 93: anvil.v1.ImageService.Checksum:input_type -> anvil.v1.ImageChecksumRequest
+	89,  // 94: anvil.v1.IntentService.List:input_type -> anvil.v1.IntentListRequest
+	91,  // 95: anvil.v1.IntentService.Info:input_type -> anvil.v1.IntentInfoRequest
+	93,  // 96: anvil.v1.IntentService.Remove:input_type -> anvil.v1.IntentRemoveRequest
+	95,  // 97: anvil.v1.IntentService.Delete:input_type -> anvil.v1.IntentDeleteRequest
+	97,  // 98: anvil.v1.IntentService.Apply:input_type -> anvil.v1.IntentApplyRequest
+	102, // 99: anvil.v1.HostService.Add:input_type -> anvil.v1.HostAddRequest
+	104, // 100: anvil.v1.HostService.List:input_type -> anvil.v1.HostListRequest
+	106, // 101: anvil.v1.HostService.Remove:input_type -> anvil.v1.HostRemoveRequest
+	108, // 102: anvil.v1.HostService.Test:input_type -> anvil.v1.HostTestRequest
+	110, // 103: anvil.v1.HostService.Discover:input_type -> anvil.v1.HostDiscoverRequest
+	117, // 104: anvil.v1.MigrateService.Migrate:input_type -> anvil.v1.MigrateRequest
+	113, // 105: anvil.v1.MigrateService.Key:input_type -> anvil.v1.MigrateKeyRequest
+	115, // 106: anvil.v1.MigrateService.GuestKey:input_type -> anvil.v1.MigrateGuestKeyRequest
+	121, // 107: anvil.v1.ExportService.Export:input_type -> anvil.v1.ExportRequest
+	123, // 108: anvil.v1.ExportService.Import:input_type -> anvil.v1.ImportRequest
+	129, // 109: anvil.v1.SnapshotService.Create:input_type -> anvil.v1.SnapshotCreateRequest
+	131, // 110: anvil.v1.SnapshotService.Restore:input_type -> anvil.v1.SnapshotRestoreRequest
+	133, // 111: anvil.v1.SnapshotService.Delete:input_type -> anvil.v1.SnapshotDeleteRequest
+	135, // 112: anvil.v1.SnapshotService.List:input_type -> anvil.v1.SnapshotListRequest
+	127, // 113: anvil.v1.SnapshotService.SetSchedule:input_type -> anvil.v1.SnapshotSetScheduleRequest
+	28,  // 114: anvil.v1.InstanceService.Launch:output_type -> anvil.v1.LaunchProgress
+	28,  // 115: anvil.v1.InstanceService.Fork:output_type -> anvil.v1.LaunchProgress
+	31,  // 116: anvil.v1.InstanceService.List:output_type -> anvil.v1.ListReply
+	33,  // 117: anvil.v1.InstanceService.Info:output_type -> anvil.v1.InfoReply
+	35,  // 118: anvil.v1.InstanceService.Start:output_type -> anvil.v1.StartReply
+	37,  // 119: anvil.v1.InstanceService.Stop:output_type -> anvil.v1.StopReply
+	39,  // 120: anvil.v1.InstanceService.Delete:output_type -> anvil.v1.DeleteReply
+	41,  // 121: anvil.v1.InstanceService.Purge:output_type -> anvil.v1.PurgeReply
+	43,  // 122: anvil.v1.InstanceService.Logs:output_type -> anvil.v1.LogChunk
+	83,  // 123: anvil.v1.InstanceService.Mount:output_type -> anvil.v1.MountReply
+	85,  // 124: anvil.v1.InstanceService.Umount:output_type -> anvil.v1.UmountReply
+	12,  // 125: anvil.v1.InstanceService.AddPort:output_type -> anvil.v1.AddPortReply
+	14,  // 126: anvil.v1.InstanceService.RemovePort:output_type -> anvil.v1.RemovePortReply
+	17,  // 127: anvil.v1.InstanceService.Stats:output_type -> anvil.v1.StatsReply
+	10,  // 128: anvil.v1.InstanceService.Watch:output_type -> anvil.v1.WatchEvent
+	28,  // 129: anvil.v1.InstanceService.WaitReady:output_type -> anvil.v1.LaunchProgress
+	7,   // 130: anvil.v1.InstanceService.Update:output_type -> anvil.v1.UpdateReply
+	46,  // 131: anvil.v1.CloudInitService.List:output_type -> anvil.v1.CloudInitListReply
+	48,  // 132: anvil.v1.CloudInitService.Get:output_type -> anvil.v1.CloudInitGetReply
+	50,  // 133: anvil.v1.CloudInitService.Save:output_type -> anvil.v1.CloudInitSaveReply
+	52,  // 134: anvil.v1.CloudInitService.Rename:output_type -> anvil.v1.CloudInitRenameReply
+	54,  // 135: anvil.v1.CloudInitService.Delete:output_type -> anvil.v1.CloudInitDeleteReply
+	56,  // 136: anvil.v1.CloudInitService.ImportRepo:output_type -> anvil.v1.CloudInitImportRepoProgress
+	60,  // 137: anvil.v1.MirrorService.Add:output_type -> anvil.v1.MirrorAddReply
+	62,  // 138: anvil.v1.MirrorService.List:output_type -> anvil.v1.MirrorListReply
+	64,  // 139: anvil.v1.MirrorService.Remove:output_type -> anvil.v1.MirrorRemoveReply
+	66,  // 140: anvil.v1.MirrorService.SetEnabled:output_type -> anvil.v1.MirrorSetEnabledReply
+	71,  // 141: anvil.v1.ImageService.List:output_type -> anvil.v1.ImageListReply
+	81,  // 142: anvil.v1.ImageService.Delete:output_type -> anvil.v1.ImageDeleteReply
+	74,  // 143: anvil.v1.ImageService.Catalog:output_type -> anvil.v1.CatalogReply
+	78,  // 144: anvil.v1.ImageService.ListContainerImages:output_type -> anvil.v1.ContainerImageListReply
+	80,  // 145: anvil.v1.ImageService.DeleteContainerImage:output_type -> anvil.v1.ContainerImageDeleteReply
+	68,  // 146: anvil.v1.ImageService.Checksum:output_type -> anvil.v1.ImageChecksumReply
+	90,  // 147: anvil.v1.IntentService.List:output_type -> anvil.v1.IntentListReply
+	92,  // 148: anvil.v1.IntentService.Info:output_type -> anvil.v1.IntentInfoReply
+	94,  // 149: anvil.v1.IntentService.Remove:output_type -> anvil.v1.IntentRemoveReply
+	96,  // 150: anvil.v1.IntentService.Delete:output_type -> anvil.v1.IntentDeleteReply
+	100, // 151: anvil.v1.IntentService.Apply:output_type -> anvil.v1.IntentApplyProgress
+	103, // 152: anvil.v1.HostService.Add:output_type -> anvil.v1.HostAddReply
+	105, // 153: anvil.v1.HostService.List:output_type -> anvil.v1.HostListReply
+	107, // 154: anvil.v1.HostService.Remove:output_type -> anvil.v1.HostRemoveReply
+	109, // 155: anvil.v1.HostService.Test:output_type -> anvil.v1.HostTestReply
+	112, // 156: anvil.v1.HostService.Discover:output_type -> anvil.v1.HostDiscoverReply
+	118, // 157: anvil.v1.MigrateService.Migrate:output_type -> anvil.v1.MigrateProgress
+	114, // 158: anvil.v1.MigrateService.Key:output_type -> anvil.v1.MigrateKeyReply
+	116, // 159: anvil.v1.MigrateService.GuestKey:output_type -> anvil.v1.MigrateGuestKeyReply
+	122, // 160: anvil.v1.ExportService.Export:output_type -> anvil.v1.ExportProgress
+	125, // 161: anvil.v1.ExportService.Import:output_type -> anvil.v1.ImportProgress
+	130, // 162: anvil.v1.SnapshotService.Create:output_type -> anvil.v1.SnapshotCreateReply
+	132, // 163: anvil.v1.SnapshotService.Restore:output_type -> anvil.v1.SnapshotRestoreReply
+	134, // 164: anvil.v1.SnapshotService.Delete:output_type -> anvil.v1.SnapshotDeleteReply
+	137, // 165: anvil.v1.SnapshotService.List:output_type -> anvil.v1.SnapshotListReply
+	128, // 166: anvil.v1.SnapshotService.SetSchedule:output_type -> anvil.v1.SnapshotSetScheduleReply
+	114, // [114:167] is the sub-list for method output_type
+	61,  // [61:114] is the sub-list for method input_type
+	61,  // [61:61] is the sub-list for extension type_name
+	61,  // [61:61] is the sub-list for extension extendee
+	0,   // [0:61] is the sub-list for field type_name
 }
 
 func init() { file_anvil_v1_anvil_proto_init() }
@@ -10710,7 +10892,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[104].Exporter = func(v any, i int) any {
-			switch v := v.(*MigrateKeyRequest); i {
+			switch v := v.(*HostDiscoverRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10722,7 +10904,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[105].Exporter = func(v any, i int) any {
-			switch v := v.(*MigrateKeyReply); i {
+			switch v := v.(*DiscoveredHost); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10734,7 +10916,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[106].Exporter = func(v any, i int) any {
-			switch v := v.(*MigrateGuestKeyRequest); i {
+			switch v := v.(*HostDiscoverReply); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10746,7 +10928,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[107].Exporter = func(v any, i int) any {
-			switch v := v.(*MigrateGuestKeyReply); i {
+			switch v := v.(*MigrateKeyRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10758,7 +10940,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[108].Exporter = func(v any, i int) any {
-			switch v := v.(*MigrateRequest); i {
+			switch v := v.(*MigrateKeyReply); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10770,7 +10952,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[109].Exporter = func(v any, i int) any {
-			switch v := v.(*MigrateProgress); i {
+			switch v := v.(*MigrateGuestKeyRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10782,7 +10964,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[110].Exporter = func(v any, i int) any {
-			switch v := v.(*MigrateMemberResult); i {
+			switch v := v.(*MigrateGuestKeyReply); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10794,7 +10976,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[111].Exporter = func(v any, i int) any {
-			switch v := v.(*IntentMigrateDone); i {
+			switch v := v.(*MigrateRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10806,7 +10988,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[112].Exporter = func(v any, i int) any {
-			switch v := v.(*ExportRequest); i {
+			switch v := v.(*MigrateProgress); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10818,7 +11000,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[113].Exporter = func(v any, i int) any {
-			switch v := v.(*ExportProgress); i {
+			switch v := v.(*MigrateMemberResult); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10830,7 +11012,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[114].Exporter = func(v any, i int) any {
-			switch v := v.(*ImportRequest); i {
+			switch v := v.(*IntentMigrateDone); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10842,7 +11024,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[115].Exporter = func(v any, i int) any {
-			switch v := v.(*ImportMemberResult); i {
+			switch v := v.(*ExportRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10854,7 +11036,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[116].Exporter = func(v any, i int) any {
-			switch v := v.(*ImportProgress); i {
+			switch v := v.(*ExportProgress); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10866,7 +11048,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[117].Exporter = func(v any, i int) any {
-			switch v := v.(*ImportDone); i {
+			switch v := v.(*ImportRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10878,7 +11060,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[118].Exporter = func(v any, i int) any {
-			switch v := v.(*SnapshotSetScheduleRequest); i {
+			switch v := v.(*ImportMemberResult); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10890,7 +11072,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[119].Exporter = func(v any, i int) any {
-			switch v := v.(*SnapshotSetScheduleReply); i {
+			switch v := v.(*ImportProgress); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10902,7 +11084,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[120].Exporter = func(v any, i int) any {
-			switch v := v.(*SnapshotCreateRequest); i {
+			switch v := v.(*ImportDone); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10914,7 +11096,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[121].Exporter = func(v any, i int) any {
-			switch v := v.(*SnapshotCreateReply); i {
+			switch v := v.(*SnapshotSetScheduleRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10926,7 +11108,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[122].Exporter = func(v any, i int) any {
-			switch v := v.(*SnapshotRestoreRequest); i {
+			switch v := v.(*SnapshotSetScheduleReply); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10938,7 +11120,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[123].Exporter = func(v any, i int) any {
-			switch v := v.(*SnapshotRestoreReply); i {
+			switch v := v.(*SnapshotCreateRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10950,7 +11132,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[124].Exporter = func(v any, i int) any {
-			switch v := v.(*SnapshotDeleteRequest); i {
+			switch v := v.(*SnapshotCreateReply); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10962,7 +11144,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[125].Exporter = func(v any, i int) any {
-			switch v := v.(*SnapshotDeleteReply); i {
+			switch v := v.(*SnapshotRestoreRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10974,7 +11156,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[126].Exporter = func(v any, i int) any {
-			switch v := v.(*SnapshotListRequest); i {
+			switch v := v.(*SnapshotRestoreReply); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10986,7 +11168,7 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[127].Exporter = func(v any, i int) any {
-			switch v := v.(*SnapshotInfo); i {
+			switch v := v.(*SnapshotDeleteRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -10998,6 +11180,42 @@ func file_anvil_v1_anvil_proto_init() {
 			}
 		}
 		file_anvil_v1_anvil_proto_msgTypes[128].Exporter = func(v any, i int) any {
+			switch v := v.(*SnapshotDeleteReply); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_anvil_v1_anvil_proto_msgTypes[129].Exporter = func(v any, i int) any {
+			switch v := v.(*SnapshotListRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_anvil_v1_anvil_proto_msgTypes[130].Exporter = func(v any, i int) any {
+			switch v := v.(*SnapshotInfo); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_anvil_v1_anvil_proto_msgTypes[131].Exporter = func(v any, i int) any {
 			switch v := v.(*SnapshotListReply); i {
 			case 0:
 				return &v.state
@@ -11028,19 +11246,19 @@ func file_anvil_v1_anvil_proto_init() {
 		(*IntentApplyProgress_Intent)(nil),
 		(*IntentApplyProgress_Error)(nil),
 	}
-	file_anvil_v1_anvil_proto_msgTypes[109].OneofWrappers = []any{
+	file_anvil_v1_anvil_proto_msgTypes[112].OneofWrappers = []any{
 		(*MigrateProgress_Status)(nil),
 		(*MigrateProgress_Error)(nil),
 		(*MigrateProgress_Done)(nil),
 		(*MigrateProgress_MemberDone)(nil),
 		(*MigrateProgress_IntentDone)(nil),
 	}
-	file_anvil_v1_anvil_proto_msgTypes[113].OneofWrappers = []any{
+	file_anvil_v1_anvil_proto_msgTypes[116].OneofWrappers = []any{
 		(*ExportProgress_Status)(nil),
 		(*ExportProgress_Done)(nil),
 		(*ExportProgress_Error)(nil),
 	}
-	file_anvil_v1_anvil_proto_msgTypes[116].OneofWrappers = []any{
+	file_anvil_v1_anvil_proto_msgTypes[119].OneofWrappers = []any{
 		(*ImportProgress_Status)(nil),
 		(*ImportProgress_Error)(nil),
 		(*ImportProgress_Done)(nil),
@@ -11051,7 +11269,7 @@ func file_anvil_v1_anvil_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_anvil_v1_anvil_proto_rawDesc,
 			NumEnums:      6,
-			NumMessages:   133,
+			NumMessages:   136,
 			NumExtensions: 0,
 			NumServices:   9,
 		},

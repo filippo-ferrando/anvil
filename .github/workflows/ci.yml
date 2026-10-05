@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # The QEMU and Docker integration tests skip themselves when their tools
+      # are missing, so the runner needs nothing extra installed.
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l -s .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt -s:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: make build
+
+      - name: Vet
+        run: make vet
+
+      - name: Test
+        run: go test ./...
+
+      - name: Test with the race detector
+        run: go test -race ./...

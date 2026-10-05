@@ -51,6 +51,21 @@ func (c *Client) url(path string) string {
 	return "http://unix/" + apiVersion + path
 }
 
+// refPath escapes an image reference for use as a path segment. Refs can come
+// from a mirror or an imported bundle, so they are not trusted to be well formed.
+func refPath(ref string) (string, error) {
+	if ref == "" {
+		return "", fmt.Errorf("docker: empty image reference")
+	}
+	for _, seg := range strings.Split(ref, "/") {
+		if seg == "." || seg == ".." {
+			return "", fmt.Errorf("docker: image reference %q contains a path segment", ref)
+		}
+	}
+	u := url.URL{Path: ref}
+	return u.EscapedPath(), nil
+}
+
 // do sends a request with an optional JSON body and returns the raw
 // response. Callers must check StatusCode and close Body.
 func (c *Client) do(ctx context.Context, method, path string, body any) (*http.Response, error) {
@@ -117,7 +132,6 @@ func statusError(resp *http.Response) error {
 // --- container create ---
 
 type portBinding struct {
-	HostIP   string `json:"HostIp,omitempty"`
 	HostPort string `json:"HostPort,omitempty"`
 }
 
@@ -190,7 +204,11 @@ type PortMapping struct {
 // ImageExists reports whether ref is already present in Docker's local
 // image store.
 func (c *Client) ImageExists(ctx context.Context, ref string) (bool, error) {
-	resp, err := c.do(ctx, http.MethodGet, "/images/"+ref+"/json", nil)
+	escaped, err := refPath(ref)
+	if err != nil {
+		return false, err
+	}
+	resp, err := c.do(ctx, http.MethodGet, "/images/"+escaped+"/json", nil)
 	if err != nil {
 		return false, err
 	}
@@ -268,7 +286,11 @@ func (c *Client) ImagesInUse(ctx context.Context) (map[string]int, error) {
 // RemoveImage deletes an image from Docker's local store by ID. An
 // already-gone image is not an error, matching RemoveContainer's idempotency.
 func (c *Client) RemoveImage(ctx context.Context, id string, force bool) error {
-	path := fmt.Sprintf("/images/%s?force=%t", id, force)
+	escaped, err := refPath(id)
+	if err != nil {
+		return err
+	}
+	path := fmt.Sprintf("/images/%s?force=%t", escaped, force)
 	resp, err := c.do(ctx, http.MethodDelete, path, nil)
 	if err != nil {
 		return err

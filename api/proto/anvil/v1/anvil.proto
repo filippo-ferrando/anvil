@@ -729,6 +729,11 @@ service HostService {
   rpc List(HostListRequest) returns (HostListReply);
   rpc Remove(HostRemoveRequest) returns (HostRemoveReply);
   rpc Test(HostTestRequest) returns (HostTestReply); // checks real SSH reachability
+
+  // Discover lists other anvil hosts announcing themselves on the local
+  // network over mDNS. Nothing is saved and no trust is granted, it just
+  // fills in what `anvil host add` would otherwise have to be told.
+  rpc Discover(HostDiscoverRequest) returns (HostDiscoverReply);
 }
 
 message Host {
@@ -766,6 +771,20 @@ message HostTestRequest {
 message HostTestReply {
   bool ok = 1;
   string message = 2; // human-readable detail either way
+}
+
+message HostDiscoverRequest {
+  int32 timeout_seconds = 1; // 0 uses the daemon's own default
+}
+
+message DiscoveredHost {
+  string name = 1;     // the remote host's own hostname
+  string address = 2;  // address it answered from
+  int32 ssh_port = 3;
+}
+
+message HostDiscoverReply {
+  repeated DiscoveredHost hosts = 1;
 }
 
 // MigrateService moves a single instance or a whole intent to a different
@@ -888,7 +907,7 @@ message ImportDone {
   repeated ImportMemberResult members = 2;
 }
 
-// SnapshotService manages QCOW2 internal snapshots of a VM's disk, a point-in-time checkpoint you can restore back to later in place. VM only.
+// SnapshotService manages QCOW2 internal snapshots of a VM's disk, a point-in-time checkpoint that can be restored in place later. VM only.
 // Create/Delete apply live over QMP; Restore stops the instance first and restarts it afterward if it was running.
 service SnapshotService {
   rpc Create(SnapshotCreateRequest) returns (SnapshotCreateReply);

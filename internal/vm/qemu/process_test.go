@@ -62,7 +62,6 @@ func TestLooksLikeOurQEMURejectsDeadPid(t *testing.T) {
 	diskPath := filepath.Join(t.TempDir(), "disk.qcow2")
 	pid, kill := spawnFakeQEMU(t, diskPath)
 	kill()
-	time.Sleep(50 * time.Millisecond) // give the kernel a moment to reap it
 
 	if looksLikeOurQEMU(pid, diskPath) {
 		t.Error("expected a dead pid to not match, even if it once looked like qemu-system")
@@ -77,7 +76,6 @@ func TestProcessAlive(t *testing.T) {
 		t.Error("expected the freshly spawned process to be alive")
 	}
 	kill()
-	time.Sleep(50 * time.Millisecond)
 	if processAlive(pid) {
 		t.Error("expected the killed process to no longer be alive")
 	}

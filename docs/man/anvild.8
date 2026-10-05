@@ -1,8 +1,8 @@
 .nh
-.TH "ANVILD" "8" "Sep 2026" "Anvil" "Anvil Manual"
+.TH "ANVILD" "8" "Oct 2026" "Anvil" "Anvil Manual"
 
 .SH NAME
-anvild \- daemon that drives QEMU VMs and Docker/Podman containers for anvil
+anvild \- daemon that drives QEMU VMs and Docker containers for anvil
 
 .SH SYNOPSIS
 \fBanvild\fP
@@ -15,8 +15,10 @@ just build a request and send it over that socket.
 
 It drives QEMU processes directly over QMP for VMs (no libvirt) and talks to
 Docker's real HTTP API for containers (no SDK). It takes no command-line
-flags or subcommands; its on-disk layout is fixed and its runtime behavior is
-controlled entirely through the requests it receives over the socket.
+flags or subcommands and its on-disk layout is fixed. Its runtime behavior is
+controlled through the requests it receives over the socket, with one
+exception: \fBANVIL_MDNS=off\fR in its environment turns off the local-network
+announcement described below.
 
 On startup it creates its run, state, and cache directories if missing,
 opens its registry, reconciles instance and intent-network state against
@@ -24,7 +26,9 @@ what's actually running, and starts listening. For every intent with a
 shared network it also serves DNS on port 53 of that network's gateway
 address, answering \fI<role>\fR.\fI<intent>\fR.anvil for each member and
 forwarding other names to the resolvers in \fB/etc/resolv.conf\fR. Binding
-port 53 needs \fBCAP_NET_BIND_SERVICE\fR. It shuts down gracefully on
+port 53 needs \fBCAP_NET_BIND_SERVICE\fR. It also announces itself on the
+local network over mDNS as \fB_anvil._tcp\fR, which is what \fBanvil host
+discover\fR finds; the announcement grants no access by itself. It shuts down gracefully on
 \fBSIGINT\fR or \fBSIGTERM\fR, waiting up to 10 seconds for in-flight RPCs
 (such as \fBanvil logs --follow\fR) to finish before forcing a stop.
 
@@ -44,8 +48,29 @@ cloud-init library.
 .PP
 \fB/var/lib/anvil/instances/\fP
 .RS 4
-Per-instance mutable state that doesn't belong in the registry (VM disks,
-container volumes).
+Per-instance mutable state that doesn't belong in the registry: VM disks and
+runtime files.
+.RE
+.PP
+\fB/var/lib/anvil/container-volumes/\fP
+.RS 4
+An imported container's restored bind-mount contents.
+.RE
+.PP
+\fB/var/lib/anvil/vm-mounts/\fP
+.RS 4
+An imported VM's restored shared-folder contents.
+.RE
+.PP
+\fB/var/lib/anvil/cloud-init/\fP
+.RS 4
+The saved cloud-init template library.
+.RE
+.PP
+\fB/var/lib/anvil/migrate-known-hosts\fP
+.RS 4
+anvil's own SSH known_hosts for migration targets. \fBanvil host add
+--strict-host-key\fR requires a host's key to already be here.
 .RE
 .PP
 \fB/var/lib/anvil/.ssh/id_ed25519\fP
@@ -64,6 +89,15 @@ Downloaded and checksum-verified base VM images.
 \fB/etc/anvil/\fP
 .RS 4
 Reserved for daemon configuration; unused today.
+.RE
+
+.SH ENVIRONMENT
+.PP
+\fBANVIL_MDNS\fP
+.RS 4
+Set to \fBoff\fR to stop anvild announcing itself on the local network over
+mDNS. \fBanvil host discover\fR on another host then won't see it. Anything
+else, including unset, leaves the announcement on.
 .RE
 
 .SH RUNNING

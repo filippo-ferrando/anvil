@@ -42,3 +42,27 @@ func TestHelpBarWrap(t *testing.T) {
 		}
 	})
 }
+
+func TestFriendlyError(t *testing.T) {
+	msg, hint := friendlyError("start: rpc error: code = Unavailable desc = connection refused")
+	if msg != "start: connection refused" {
+		t.Errorf("msg = %q, want the gRPC framing stripped", msg)
+	}
+	if hint == "" {
+		t.Error("expected a hint for Unavailable")
+	}
+	if msg, hint := friendlyError("invalid host port"); msg != "invalid host port" || hint != "" {
+		t.Errorf("plain text changed: %q, %q", msg, hint)
+	}
+}
+
+func TestScreenForDigit(t *testing.T) {
+	if s, ok := screenForDigit("1"); !ok || s != screenOrder[0] {
+		t.Errorf("1 -> %v, %v", s, ok)
+	}
+	for _, k := range []string{"0", "8", "a", "12"} {
+		if _, ok := screenForDigit(k); ok {
+			t.Errorf("%q should not map to a screen", k)
+		}
+	}
+}

@@ -54,14 +54,14 @@ func (s *CloudInitServer) Save(ctx context.Context, req *anvilv1.CloudInitSaveRe
 
 func (s *CloudInitServer) Rename(ctx context.Context, req *anvilv1.CloudInitRenameRequest) (*anvilv1.CloudInitRenameReply, error) {
 	if err := s.Store.RenameCloudInit(req.GetOldName(), req.GetNewName()); err != nil {
-		return nil, err
+		return nil, wrapErr(err)
 	}
 	return &anvilv1.CloudInitRenameReply{}, nil
 }
 
 func (s *CloudInitServer) Delete(ctx context.Context, req *anvilv1.CloudInitDeleteRequest) (*anvilv1.CloudInitDeleteReply, error) {
 	if err := s.Store.DeleteCloudInit(req.GetName()); err != nil {
-		return nil, err
+		return nil, wrapErr(err)
 	}
 	return &anvilv1.CloudInitDeleteReply{}, nil
 }

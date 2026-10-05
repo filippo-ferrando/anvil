@@ -112,14 +112,14 @@ func (s *MirrorServer) List(ctx context.Context, req *anvilv1.MirrorListRequest)
 
 func (s *MirrorServer) Remove(ctx context.Context, req *anvilv1.MirrorRemoveRequest) (*anvilv1.MirrorRemoveReply, error) {
 	if err := s.Store.DeleteMirror(req.GetName()); err != nil {
-		return nil, err
+		return nil, wrapErr(err)
 	}
 	return &anvilv1.MirrorRemoveReply{}, nil
 }
 
 func (s *MirrorServer) SetEnabled(ctx context.Context, req *anvilv1.MirrorSetEnabledRequest) (*anvilv1.MirrorSetEnabledReply, error) {
 	if err := s.Store.SetMirrorEnabled(req.GetName(), req.GetEnabled()); err != nil {
-		return nil, err
+		return nil, wrapErr(err)
 	}
 	return &anvilv1.MirrorSetEnabledReply{}, nil
 }

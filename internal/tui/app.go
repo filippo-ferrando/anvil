@@ -4,6 +4,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"os/user"
 	"strings"
 	"time"
@@ -14,8 +15,11 @@ import (
 	"github.com/anvil-project/anvil/pkg/client"
 )
 
-// statusVisible is how long a status line stays up before being cleared.
-const statusVisible = 4 * time.Second
+// statusVisible and errorVisible are how long a status line stays up before being cleared.
+const (
+	statusVisible = 4 * time.Second
+	errorVisible  = 10 * time.Second
+)
 
 type tickMsg time.Time
 
@@ -59,7 +63,9 @@ const (
 type model struct {
 	client *client.Client
 	socket string
-	who    string // local OS username, shown in the header
+	who    string // local OS username@hostname, shown in the header
+
+	daemonState string // "" before the first reply, then "ok" or "down", from the last instance list
 
 	screen         screen
 	sidebarFocused bool // true: up/down/enter on the sidebar; false: keys go to the active screen
@@ -95,6 +101,9 @@ func Run(socketPath string) error {
 	if u, err := user.Current(); err == nil {
 		who = u.Username
 	}
+	if h, err := os.Hostname(); err == nil {
+		who += "@" + h
+	}
 
 	m := model{
 		client:         c,
@@ -125,7 +134,11 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tickMsg:
-		if m.status != "" && time.Since(m.statusSetAt) > statusVisible {
+		visible := statusVisible
+		if m.statusBad {
+			visible = errorVisible
+		}
+		if m.status != "" && time.Since(m.statusSetAt) > visible {
 			m.status = ""
 		}
 		cmds := []tea.Cmd{tickCmd()}
@@ -172,9 +185,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.launch.setSize(msg.Width, contentHeight(msg.Height))
 		m.logs.viewport.Width, m.logs.viewport.Height = msg.Width, logsViewportHeight(msg.Height)
 		return m, nil
+	case instancesLoadedMsg:
+		m.daemonState = "ok"
+		if msg.err != nil {
+			m.daemonState = "down"
+		}
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+		// alt+1..9 jumps to a screen from anywhere except the full-screen takeovers.
+		if k := msg.String(); m.screen != screenLaunch && m.screen != screenLogs && strings.HasPrefix(k, "alt+") {
+			if s, ok := screenForDigit(strings.TrimPrefix(k, "alt+")); ok {
+				return m.jumpTo(s)
+			}
 		}
 		if m.screen != screenLaunch && m.screen != screenLogs && m.sidebarFocused {
 			return m.updateSidebar(msg)
@@ -241,24 +265,44 @@ func (m model) updateSidebar(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	idx := screenIndex(m.screen)
-	switch keyMsg.String() {
-	case "up", "k":
-		if idx > 0 {
-			m.screen = screenOrder[idx-1]
-			return m, loadCmdForScreen(m.screen, m.client)
-		}
-	case "down", "j":
-		if idx < len(screenOrder)-1 {
-			m.screen = screenOrder[idx+1]
-			return m, loadCmdForScreen(m.screen, m.client)
-		}
+	idx, n := screenIndex(m.screen), len(screenOrder)
+	move := func(i int) (tea.Model, tea.Cmd) {
+		m.screen = screenOrder[(i+n)%n]
+		return m, loadCmdForScreen(m.screen, m.client)
+	}
+	switch k := keyMsg.String(); k {
+	case "up", "k", "shift+tab":
+		return move(idx - 1)
+	case "down", "j", "tab":
+		return move(idx + 1)
+	case "home", "g":
+		return move(0)
+	case "end", "G":
+		return move(n - 1)
 	case "enter", "right", "l":
 		m.sidebarFocused = false
 	case "q":
 		return m, tea.Quit
+	default:
+		if s, ok := screenForDigit(k); ok {
+			return m.jumpTo(s)
+		}
 	}
 	return m, nil
+}
+
+// screenForDigit maps "1".."9" to the sidebar entry at that position.
+func screenForDigit(k string) (screen, bool) {
+	if len(k) != 1 || k[0] < '1' || int(k[0]-'1') >= len(screenOrder) {
+		return 0, false
+	}
+	return screenOrder[k[0]-'1'], true
+}
+
+// jumpTo opens s with focus on its content, reloading it.
+func (m model) jumpTo(s screen) (tea.Model, tea.Cmd) {
+	m.screen, m.sidebarFocused = s, false
+	return m, loadCmdForScreen(s, m.client)
 }
 
 func screenIndex(s screen) int {
@@ -291,10 +335,7 @@ func loadCmdForScreen(s screen, c *client.Client) tea.Cmd {
 }
 
 func (m model) View() string {
-	header := styleTitle.Render(" anvil ") + styleSubtitle.Render(fmt.Sprintf("  %s  socket=%s", m.who, m.socket))
-	if running, total := m.instances.counts(); total > 0 {
-		header += styleSubtitle.Render(fmt.Sprintf("  •  %d/%d running", running, total))
-	}
+	header := m.headerView()
 
 	var body string
 	if m.screen == screenLaunch || m.screen == screenLogs {
@@ -309,16 +350,59 @@ func (m model) View() string {
 		body = lipgloss.JoinHorizontal(lipgloss.Top, m.sidebarView(), strings.Repeat(" ", sidebarGutter), content)
 	}
 
-	status := ""
-	if m.status != "" {
-		style := styleGood
-		if m.statusBad {
-			style = styleError
-		}
-		status = "\n" + style.Render(m.status)
-	}
+	return header + "\n\n" + body + m.statusView()
+}
 
-	return header + "\n\n" + body + status
+// headerView is the top bar: app name, user, socket, then daemon state, instance counts and clock on the right.
+func (m model) headerView() string {
+	left := styleTitle.Render("⚒ anvil") + styleSubtitle.Render("  "+m.who+"  "+m.socket)
+
+	var right []string
+	switch m.daemonState {
+	case "ok":
+		right = append(right, styleGood.Render("● daemon connected"))
+	case "down":
+		right = append(right, styleError.Render("● daemon unreachable"))
+	default:
+		right = append(right, styleWarn.Render("● connecting…"))
+	}
+	if running, total := m.instances.counts(); total > 0 {
+		right = append(right, fmt.Sprintf("%s %s",
+			styleGood.Render(fmt.Sprint(running)), styleSubtitle.Render(fmt.Sprintf("of %d running", total))))
+	}
+	right = append(right, styleSubtitle.Render(time.Now().Format("15:04:05")))
+	r := strings.Join(right, styleSubtitle.Render("  │  ")) + " "
+
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(r)
+	if gap < 2 {
+		return left
+	}
+	return left + strings.Repeat(" ", gap) + r
+}
+
+// statusView renders the transient status line: a colored badge, the message on one line, and a hint for known errors.
+func (m model) statusView() string {
+	if m.status == "" {
+		return ""
+	}
+	badge := lipgloss.NewStyle().Bold(true).Foreground(colorDark).Padding(0, 1)
+	msg, hint, style := m.status, "", styleGood
+	if m.statusBad {
+		msg, hint = friendlyError(m.status)
+		badge, style = badge.Background(colorBad).SetString("✕ ERROR"), styleError
+	} else {
+		badge = badge.Background(colorGood).SetString("✓")
+	}
+	b := badge.String()
+	msg = strings.Join(strings.Fields(msg), " ")
+	if w := m.width - lipgloss.Width(b) - 2; w > 0 {
+		style = style.MaxWidth(w)
+	}
+	s := "\n" + b + " " + style.Render(msg)
+	if hint != "" {
+		s += "\n" + strings.Repeat(" ", lipgloss.Width(b)+1) + styleSubtitle.Render("hint: "+hint)
+	}
+	return s
 }
 
 func (m model) screenView() string {
@@ -343,30 +427,38 @@ func (m model) screenView() string {
 
 func (m model) sidebarView() string {
 	var b strings.Builder
-	for _, s := range screenOrder {
-		label := screenLabels[s]
+	b.WriteString(styleSubtitle.Render(" MENU") + "\n\n")
+	for i, s := range screenOrder {
+		label := fmt.Sprintf("%d %s", i+1, screenLabels[s])
 		switch {
 		case s == m.screen && m.sidebarFocused:
 			b.WriteString(styleMenuItemSelected.Render("▸ " + label))
 		case s == m.screen:
-			b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Padding(0, 2).Render(label))
+			b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Padding(0, 1).Render("▸ " + label))
 		default:
 			b.WriteString(styleMenuItem.Render("  " + label))
 		}
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
+	var keys []string
 	if m.sidebarFocused {
-		b.WriteString(styleHelp.Render("↑/↓ move\nenter open\nq quit"))
+		keys = helpItems("↑↓", "move", "1-7", "jump", "enter", "open", "q", "quit")
 	} else {
-		b.WriteString(styleHelp.Render("esc back here"))
+		keys = helpItems("esc", "menu", "alt+1-7", "jump")
 	}
-	return lipgloss.NewStyle().Width(sidebarWidth).Render(b.String())
+	for _, k := range keys {
+		b.WriteString(" " + k + "\n")
+	}
+	return lipgloss.NewStyle().
+		Width(sidebarWidth - 1).Height(contentHeight(m.height)).
+		BorderStyle(lipgloss.NormalBorder()).BorderRight(true).BorderForeground(colorAccentDim).
+		Render(b.String())
 }
 
-// contentHeight leaves room for the header, spacing, and a status line.
+// contentHeight leaves room for the header, spacing, and a two-line status area.
 func contentHeight(termHeight int) int {
-	h := termHeight - 6
+	h := termHeight - 7
 	if h < 3 {
 		h = 3
 	}

@@ -48,4 +48,5 @@ func Dial(socketPath string) (*Client, error) {
 	}, nil
 }
 
+// Close closes the underlying gRPC connection.
 func (c *Client) Close() error { return c.conn.Close() }

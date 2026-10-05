@@ -371,6 +371,5 @@ remove it.
 The Cloud Init page has its own, separate import action: `R` opens a form for a template
 repo's manifest URL (see above) plus a `Force` toggle, and streams a live per-template
 result as it imports, `m` (lowercase) is the older, single-file "Import" action
-(reads one local file from disk into the library, unrelated to a repo's manifest, see
-§CLI command surface's `anvil cloud-init new --from`/`import`) and still works
-independently.
+(reads one local file from disk into the library, unrelated to a repo's manifest, the
+TUI equivalent of `anvil cloud-init new --from <file>`) and still works independently.

@@ -687,3 +687,9 @@ func parseMigrateResult(out string) (id string, err error) {
 	}
 	return "", fmt.Errorf("target produced no result (got: %q)", out)
 }
+
+// IsStagedDataPath reports whether p names a shared folder this package
+// uploaded. Adopting a path deletes it, so anvild accepts only these.
+func IsStagedDataPath(p string) bool {
+	return strings.HasPrefix(filepath.Base(filepath.Clean(p)), "anvil-migrate-data-")
+}

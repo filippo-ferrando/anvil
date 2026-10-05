@@ -98,17 +98,17 @@ type imagesModel struct {
 }
 
 func newImagesModel() imagesModel {
-	cached := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	cached := newList()
 	cached.Title = "Cached (downloaded)"
 	cached.SetShowHelp(false)
 	cached.SetFilteringEnabled(false)
 
-	catalog := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	catalog := newList()
 	catalog.Title = "Available to launch"
 	catalog.SetShowHelp(false)
 	catalog.SetFilteringEnabled(false)
 
-	containerImages := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	containerImages := newList()
 	containerImages.Title = "Cached container images"
 	containerImages.SetShowHelp(false)
 	containerImages.SetFilteringEnabled(false)

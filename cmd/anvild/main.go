@@ -19,6 +19,7 @@ import (
 	"github.com/anvil-project/anvil/internal/container"
 	"github.com/anvil-project/anvil/internal/container/docker"
 	"github.com/anvil-project/anvil/internal/daemon"
+	"github.com/anvil-project/anvil/internal/discovery"
 	"github.com/anvil-project/anvil/internal/export"
 	"github.com/anvil-project/anvil/internal/instance"
 	"github.com/anvil-project/anvil/internal/intent"
@@ -96,6 +97,16 @@ func run() error {
 	dnsServer := dns.NewServer(intentMgr.DNSZones)
 	intentMgr.DNS = dnsServer
 	go dnsServer.Run(ctx, 30*time.Second)
+	// Announces this host to `anvil host discover` on the same network. It
+	// grants no access by itself, and ANVIL_MDNS=off turns it off.
+	if os.Getenv("ANVIL_MDNS") != "off" {
+		go func() {
+			if err := discovery.Serve(ctx, "", 0); err != nil {
+				log.Printf("anvild: mDNS discovery: %v", err)
+			}
+		}()
+	}
+
 	migrateMgr := migrate.NewManager(db, mgr, vmBackend, intentMgr)
 	exportMgr := export.NewManager(db, mgr, intentMgr, vmBackend)
 

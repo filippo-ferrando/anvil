@@ -232,3 +232,54 @@ func TestReconcileNetworksNoopWithoutNetworker(t *testing.T) {
 		t.Errorf("expected a nil Networker to be a no-op, got: %v", err)
 	}
 }
+
+// TestLaunchRemovesNetworkWhenFirstMemberFails covers the window where a new
+// intent's network exists but nothing in the store points at it yet.
+func TestLaunchRemovesNetworkWhenFirstMemberFails(t *testing.T) {
+	s := newFakeStore()
+	net := newFakeNetworker()
+	m := NewManager(s, &fakeInstances{}, net)
+
+	err := m.Launch(t.Context(), instance.LaunchParams{
+		Name:       "web",
+		IntentName: "myapp",
+		Container:  &instance.ContainerSpec{ImageRef: "nginx"},
+	}, func(instance.LaunchEvent) {})
+	if err == nil {
+		t.Fatal("expected the launch to fail")
+	}
+
+	if len(net.networks) != 0 {
+		t.Errorf("a failed first launch left networks behind: %v", net.networks)
+	}
+	if len(net.removed) != 1 {
+		t.Errorf("expected exactly one network removal, got %v", net.removed)
+	}
+	if its, _ := s.ListIntents(); len(its) != 0 {
+		t.Errorf("expected no intent to be persisted, got %+v", its)
+	}
+}
+
+// TestLaunchKeepsNetworkOfAnExistingIntent makes sure the cleanup above only
+// ever touches an intent this call created.
+func TestLaunchKeepsNetworkOfAnExistingIntent(t *testing.T) {
+	s := newFakeStore()
+	net := newFakeNetworker("anvil-intent1")
+	if err := s.PutIntent(store.Intent{
+		ID: "intent1", Name: "myapp",
+		Members: []store.IntentMember{{InstanceID: "inst1", Role: "db"}},
+		Network: &store.IntentNetwork{EngineNetworkName: "anvil-intent1", Subnet: "10.0.0.0/24", Gateway: "10.0.0.1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(s, &fakeInstances{}, net)
+
+	if err := m.Launch(t.Context(), instance.LaunchParams{
+		Name: "web", IntentName: "myapp", Container: &instance.ContainerSpec{ImageRef: "nginx"},
+	}, func(instance.LaunchEvent) {}); err == nil {
+		t.Fatal("expected the launch to fail")
+	}
+	if !net.networks["anvil-intent1"] {
+		t.Error("an existing intent's network must survive a failed launch")
+	}
+}

@@ -128,12 +128,9 @@ func (b *DockerBackend) AddPort(ctx context.Context, spec *instance.Spec, port i
 	if spec.Container == nil {
 		return fmt.Errorf("docker: AddPort called with a nil ContainerSpec")
 	}
-	proto := port.Protocol
-	if proto == "" {
-		proto = "tcp"
-	}
+	proto := instance.Protocol(port.Protocol)
 	for _, p := range spec.Container.Ports {
-		if p.HostPort == port.HostPort && effectiveProto(p.Protocol) == proto {
+		if p.HostPort == port.HostPort && instance.Protocol(p.Protocol) == proto {
 			return fmt.Errorf("docker: %s already publishes host port %d/%s", spec.Name, port.HostPort, proto)
 		}
 	}
@@ -149,13 +146,10 @@ func (b *DockerBackend) RemovePort(ctx context.Context, spec *instance.Spec, hos
 	if spec.Container == nil {
 		return fmt.Errorf("docker: RemovePort called with a nil ContainerSpec")
 	}
-	proto := protocol
-	if proto == "" {
-		proto = "tcp"
-	}
+	proto := instance.Protocol(protocol)
 	idx := -1
 	for i, p := range spec.Container.Ports {
-		if p.HostPort == hostPort && effectiveProto(p.Protocol) == proto {
+		if p.HostPort == hostPort && instance.Protocol(p.Protocol) == proto {
 			idx = i
 			break
 		}
@@ -166,13 +160,6 @@ func (b *DockerBackend) RemovePort(ctx context.Context, spec *instance.Spec, hos
 	}
 	spec.Container.Ports = append(spec.Container.Ports[:idx], spec.Container.Ports[idx+1:]...)
 	return b.recreate(ctx, spec)
-}
-
-func effectiveProto(p string) string {
-	if p == "" {
-		return "tcp"
-	}
-	return p
 }
 
 // recreate destroys and rebuilds spec's underlying container from its current fields, restarting it if it was running.

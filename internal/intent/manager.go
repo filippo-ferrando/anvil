@@ -208,13 +208,28 @@ func (m *Manager) Launch(ctx context.Context, params instance.LaunchParams, prog
 	defer m.mu.Unlock()
 
 	it, err := m.Store.GetIntentByName(params.IntentName)
-	if err != nil {
+	isNew := err != nil
+	if isNew {
 		it = store.Intent{ID: ulid.Make().String(), Name: params.IntentName}
 	}
 
 	if err := m.ensureNetwork(ctx, &it, params.PinnedNetwork); err != nil {
 		progress(instance.LaunchEvent{Err: err})
 		return err
+	}
+	// A brand-new intent is only persisted once its first member launches, so
+	// until then its fresh network has nothing referencing it. Take it back out
+	// on any failure, or it survives until the next daemon restart reconciles.
+	persisted := false
+	if isNew && it.Network != nil && m.Networker != nil {
+		defer func() {
+			if persisted {
+				return
+			}
+			if err := m.Networker.RemoveNetwork(ctx, it.Network.EngineNetworkName); err != nil {
+				log.Printf("intent: removing %q's unused network: %v", it.Name, err)
+			}
+		}()
 	}
 	m.setPending(&it)
 	defer m.setPending(nil)
@@ -307,6 +322,7 @@ func (m *Manager) Launch(ctx context.Context, params instance.LaunchParams, prog
 	if err := m.Store.PutIntent(it); err != nil {
 		return err
 	}
+	persisted = true
 	m.setPending(nil)
 	m.refreshDNS(ctx)
 	return nil

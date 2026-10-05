@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBuildArgsRequiresDiskAndSocket(t *testing.T) {
@@ -301,5 +302,27 @@ func TestBuildArgsHotplugHeadroom(t *testing.T) {
 	joined = strings.Join(plain, " ")
 	if !strings.Contains(joined, "-smp 2 ") || !strings.Contains(joined, "-m 1024M ") || strings.Contains(joined, "virtio-mem") {
 		t.Errorf("expected no headroom without MaxCPUs/MaxMemoryMiB, got: %s", joined)
+	}
+}
+
+func TestOVMFPathCachesItsScan(t *testing.T) {
+	ovmfCache.Delete("x86_64")
+	first, err := OVMFPath("x86_64")
+	if err != nil {
+		t.Skipf("no UEFI firmware installed on this machine: %v", err)
+	}
+
+	start := time.Now()
+	second, err := OVMFPath("x86_64")
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second != first {
+		t.Errorf("cached lookup returned %q, want %q", second, first)
+	}
+	// The uncached scan walks all of /usr/share and takes tens of ms.
+	if elapsed > time.Millisecond {
+		t.Errorf("second lookup took %v, expected it to be served from the cache", elapsed)
 	}
 }

@@ -121,7 +121,7 @@ type instancesModel struct {
 }
 
 func newInstancesModel() instancesModel {
-	l := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	l := newList()
 	l.SetFilteringEnabled(false) // avoids single-letter shortcuts colliding with filter typing
 	l.Title = "Instances"
 	l.SetShowHelp(false) // one consistent helpBar instead of list's own
@@ -143,7 +143,7 @@ func (m *instancesModel) setSize(width, height int) {
 	if m.detailWidth < 24 {
 		m.detailWidth = 24
 	}
-	m.panelHeight = height - boxHeightOverhead
+	m.panelHeight = height - boxHeightOverhead - lipgloss.Height(helpBarWrap(width, instancesHelp...)) + 1
 	if m.panelHeight < 3 {
 		m.panelHeight = 3
 	}
@@ -235,7 +235,7 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			m.instances.exporting = false
-			m.instances.exportLines = append(m.instances.exportLines, styleError.Render(msg.err.Error()))
+			m.instances.exportLines = append(m.instances.exportLines, errLine(msg.err))
 			return m, nil
 		}
 		if msg.done {
@@ -250,7 +250,7 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			m.instances.importing = false
-			m.instances.importLines = append(m.instances.importLines, styleError.Render(msg.err.Error()))
+			m.instances.importLines = append(m.instances.importLines, errLine(msg.err))
 			return m, nil
 		}
 		if msg.done {
@@ -265,7 +265,7 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			m.instances.forking = false
-			m.instances.forkLines = append(m.instances.forkLines, styleError.Render(msg.err.Error()))
+			m.instances.forkLines = append(m.instances.forkLines, errLine(msg.err))
 			return m, nil
 		}
 		if msg.done {
@@ -291,7 +291,7 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case msg.err != nil && status.Code(msg.err) == codes.Canceled:
 				m.instances.waitLines = append(m.instances.waitLines, styleSubtitle.Render("stopped waiting (the VM keeps running)"))
 			case msg.err != nil:
-				m.instances.waitLines = append(m.instances.waitLines, styleError.Render(msg.err.Error()))
+				m.instances.waitLines = append(m.instances.waitLines, errLine(msg.err))
 			case msg.instance != nil:
 				line := "ready: " + msg.instance.GetName()
 				if ips := msg.instance.GetGuest().GetIpAddresses(); len(ips) > 0 {
@@ -327,26 +327,14 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil // block input until the stream finishes
 	}
 	// A finished export/import/fork's transcript stays on screen until dismissed here.
-	if len(m.instances.exportLines) > 0 {
-		switch msg.String() {
-		case "esc", "enter", "q":
-			m.instances.exportLines = nil
+	for _, lines := range []*[]string{&m.instances.exportLines, &m.instances.importLines, &m.instances.forkLines} {
+		if len(*lines) > 0 {
+			switch msg.String() {
+			case "esc", "enter", "q":
+				*lines = nil
+			}
+			return m, nil
 		}
-		return m, nil
-	}
-	if len(m.instances.importLines) > 0 {
-		switch msg.String() {
-		case "esc", "enter", "q":
-			m.instances.importLines = nil
-		}
-		return m, nil
-	}
-	if len(m.instances.forkLines) > 0 {
-		switch msg.String() {
-		case "esc", "enter", "q":
-			m.instances.forkLines = nil
-		}
-		return m, nil
 	}
 
 	// The delete confirmation overlay eats every key: y=delete, p=purge, else cancel.
@@ -696,7 +684,9 @@ func (m instancesModel) View() string {
 		return s
 	}
 	if m.confirmDelete != nil {
-		return styleWarn.Render(fmt.Sprintf("Delete %q?", m.confirmDelete.GetName())) + "\n\n" +
+		return styleBox.BorderForeground(colorWarn).Render(
+			styleWarn.Bold(true).Render(fmt.Sprintf("⚠  Delete %q?", m.confirmDelete.GetName()))+"\n\n"+
+				styleSubtitle.Render("y keeps the data so it can be recovered, p removes it for good.")) + "\n\n" +
 			helpBar("y", "delete (recoverable)", "p", "delete permanently", "any other key", "cancel")
 	}
 	if m.prompt != instancesPromptNone {
@@ -705,17 +695,20 @@ func (m instancesModel) View() string {
 
 	listBody := m.list.View()
 	if m.loading {
-		listBody = styleSubtitle.Render("loading…")
+		listBody = styleSubtitle.Render("loading instances…")
 	}
 	left := styleBoxFocused.Render(lipgloss.NewStyle().Height(m.panelHeight).Width(m.list.Width()).Render(listBody))
 	right := styleBox.Render(lipgloss.NewStyle().Height(m.panelHeight).Width(m.detailWidth).Render(m.detailView()))
 
-	help := helpBarWrap(m.contentWidth,
-		"n", "launch", "s", "start/stop", "d", "delete", "f", "fork", "x", "shell",
-		"e", "exec", "u", "settings", "w", "wait for cloud-init", "m", "mount", "M", "umount", "p", "add port", "P", "remove port",
-		"E", "export", "i", "import", "l", "logs", "r", "refresh", "esc", "back",
-	)
+	help := helpBarWrap(m.contentWidth, instancesHelp...)
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right) + "\n" + help
+}
+
+// instancesHelp is the Instances legend, most used actions first.
+var instancesHelp = []string{
+	"n", "launch", "s", "start/stop", "x", "shell", "e", "exec", "l", "logs", "d", "delete",
+	"f", "fork", "u", "settings", "w", "wait cloud-init", "m/M", "mount/umount", "p/P", "add/rm port",
+	"E/i", "export/import", "r", "refresh", "esc", "menu",
 }
 
 // detailView renders the right-hand panel: the selected instance's static
@@ -723,7 +716,10 @@ func (m instancesModel) View() string {
 func (m instancesModel) detailView() string {
 	inst := m.selected()
 	if inst == nil {
-		return styleSubtitle.Render("no instances yet: press n to launch one")
+		if m.loading {
+			return ""
+		}
+		return styleSubtitle.Render("No instances yet.") + "\n\n" + helpBar("n", "launch one", "i", "import a bundle")
 	}
 
 	kind, image := "VM", inst.GetVm().GetImageRef()
@@ -737,6 +733,11 @@ func (m instancesModel) detailView() string {
 	b = append(b, detailRow("Kind", kind))
 	b = append(b, detailRow("State", stateDot(inst.GetState())+" "+stateLabel(inst.GetState())))
 	b = append(b, detailRow("Image", image))
+	if c := inst.GetCreatedAtUnix(); c > 0 {
+		t := time.Unix(c, 0)
+		b = append(b, detailRow("Created", t.Format("2006-01-02 15:04")+styleSubtitle.Render(
+			"  ("+humanDuration(int64(time.Since(t).Seconds()))+" ago)")))
+	}
 	if vm := inst.GetVm(); vm != nil {
 		b = append(b, detailRow("Size", resourcesText(vm)))
 	}

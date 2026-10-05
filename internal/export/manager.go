@@ -101,15 +101,18 @@ func (m *Manager) Export(ctx context.Context, p ExportParams, progress func(stat
 			return
 		}
 		progress(fmt.Sprintf("resuming %d instance(s)", len(restart)))
-		if err := m.Instances.Start(ctx, restart); err != nil {
+		// Detached from ctx: a cancelled export (Ctrl-C) would otherwise stop
+		// the instances and then fail to start them again.
+		resumeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+		defer cancel()
+		if err := m.Instances.Start(resumeCtx, restart); err != nil {
 			progress(fmt.Sprintf("warning: some instances failed to resume after export: %v", err))
 		}
 	}()
 
-	type diskSource struct{ archivePath, localPath string }
-	type dirSource struct{ archivePath, localPath string }
-	var disks []diskSource
-	var dirs []dirSource
+	// One entry per file or directory copied into the bundle.
+	type source struct{ archivePath, localPath string }
+	var disks, dirs []source
 
 	for _, spec := range members {
 		progress(fmt.Sprintf("archiving %q", spec.Name))
@@ -145,16 +148,16 @@ func (m *Manager) Export(ctx context.Context, p ExportParams, progress func(stat
 			for _, port := range v.Ports {
 				mem.VM.Ports = append(mem.VM.Ports, PortMapping{HostPort: port.HostPort, GuestPort: port.GuestPort, Protocol: port.Protocol})
 			}
-			disks = append(disks, diskSource{archivePath: mem.VM.DiskFile, localPath: v.DiskPath})
+			disks = append(disks, source{archivePath: mem.VM.DiskFile, localPath: v.DiskPath})
 			for i, mnt := range v.Mounts {
-				m := Mount{GuestPath: mnt.GuestPath, Tag: mnt.Tag, ReadOnly: mnt.ReadOnly}
+				out := Mount{GuestPath: mnt.GuestPath, Tag: mnt.Tag, ReadOnly: mnt.ReadOnly}
 				if info, err := os.Stat(mnt.HostPath); err == nil && info.IsDir() {
-					m.Archive = fmt.Sprintf("mounts/%s/%d", spec.ID, i)
-					dirs = append(dirs, dirSource{archivePath: m.Archive, localPath: mnt.HostPath})
+					out.Archive = fmt.Sprintf("mounts/%s/%d", spec.ID, i)
+					dirs = append(dirs, source{archivePath: out.Archive, localPath: mnt.HostPath})
 				} else {
 					progress(fmt.Sprintf("warning: %q's shared folder %s isn't a directory anvild can read, skipping its contents", spec.Name, mnt.HostPath))
 				}
-				mem.VM.Mounts = append(mem.VM.Mounts, m)
+				mem.VM.Mounts = append(mem.VM.Mounts, out)
 			}
 
 		case instance.KindContainer:
@@ -169,7 +172,7 @@ func (m *Manager) Export(ctx context.Context, p ExportParams, progress func(stat
 				vol := VolumeMount{ContainerPath: v.ContainerPath, ReadOnly: v.ReadOnly}
 				if info, err := os.Stat(v.HostPath); err == nil && info.IsDir() {
 					vol.Archive = fmt.Sprintf("volumes/%s/%d", spec.ID, i)
-					dirs = append(dirs, dirSource{archivePath: vol.Archive, localPath: v.HostPath})
+					dirs = append(dirs, source{archivePath: vol.Archive, localPath: v.HostPath})
 				} else {
 					progress(fmt.Sprintf("warning: %q's volume %s isn't a directory anvild can read, skipping its contents", spec.Name, v.HostPath))
 				}
@@ -389,7 +392,10 @@ func (m *Manager) fillLaunchParams(ctx context.Context, params *instance.LaunchP
 		if mem.VM == nil {
 			return fmt.Errorf("member has no VM spec")
 		}
-		diskPath := filepath.Join(stagingDir, mem.VM.DiskFile)
+		diskPath, err := hostpath.Under(stagingDir, mem.VM.DiskFile)
+		if err != nil {
+			return err
+		}
 		if err := m.VMImporter.PrepareImportedDisk(ctx, mem.VM.ImageRef, mem.VM.Arch, diskPath, mem.VM.BaseSHA256); err != nil {
 			return fmt.Errorf("preparing disk: %w", err)
 		}
@@ -411,8 +417,12 @@ func (m *Manager) fillLaunchParams(ctx context.Context, params *instance.LaunchP
 				progress(fmt.Sprintf("warning: %q's folder shared at %s had no archived contents, skipping it", destName, mnt.GuestPath))
 				continue
 			}
+			src, err := hostpath.Under(stagingDir, mnt.Archive)
+			if err != nil {
+				return err
+			}
 			hostPath := config.MountedFolderDir(destName, i)
-			if err := hostpath.MoveDir(filepath.Join(stagingDir, mnt.Archive), hostPath); err != nil {
+			if err := hostpath.MoveDir(src, hostPath); err != nil {
 				return fmt.Errorf("restoring the folder shared at %s: %w", mnt.GuestPath, err)
 			}
 			v.Mounts = append(v.Mounts, instance.Mount{
@@ -439,8 +449,12 @@ func (m *Manager) fillLaunchParams(ctx context.Context, params *instance.LaunchP
 				progress(fmt.Sprintf("warning: %q's volume for %s had no archived contents, skipping it", destName, vol.ContainerPath))
 				continue
 			}
+			src, err := hostpath.Under(stagingDir, vol.Archive)
+			if err != nil {
+				return err
+			}
 			hostPath := config.ImportedVolumeDir(destName, i)
-			if err := hostpath.MoveDir(filepath.Join(stagingDir, vol.Archive), hostPath); err != nil {
+			if err := hostpath.MoveDir(src, hostPath); err != nil {
 				return fmt.Errorf("restoring volume %d: %w", i, err)
 			}
 			c.Volumes = append(c.Volumes, instance.VolumeMount{HostPath: hostPath, ContainerPath: vol.ContainerPath, ReadOnly: vol.ReadOnly})

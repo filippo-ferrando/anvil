@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -22,6 +23,7 @@ func newHostCommand(flags *globalFlags) *cobra.Command {
 		newHostListCommand(flags),
 		newHostRemoveCommand(flags),
 		newHostTestCommand(flags),
+		newHostDiscoverCommand(flags),
 	)
 	return cmd
 }
@@ -50,7 +52,8 @@ func newHostAddCommand(flags *globalFlags) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&identity, "identity", "i", "", "path to a private key to use for this host, instead of ssh's own default identity resolution "+
-		"(anvild runs as root, so this needs to be a key root can read, and its own identity resolution otherwise falls back to root's own ~/.ssh, not yours)")
+		"(anvild runs as the unprivileged \"anvil\" user, so this needs to be a key that user can read; "+
+		"otherwise ssh falls back to that user's own ~/.ssh, not yours)")
 	cmd.Flags().BoolVar(&strictKey, "strict-host-key", false, "refuse to connect unless this host's SSH key is already in anvil's own known_hosts file; "+
 		"without it the first key seen is accepted and recorded")
 	return cmd
@@ -130,4 +133,45 @@ func newHostTestCommand(flags *globalFlags) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newHostDiscoverCommand(flags *globalFlags) *cobra.Command {
+	var timeout time.Duration
+	cmd := &cobra.Command{
+		Use:   "discover",
+		Short: "Find other anvil hosts on the local network over mDNS",
+		Long: "Find other anvil hosts announcing themselves on the local network. Nothing " +
+			"is saved and no trust is granted: pass what it prints to `anvil host add`, " +
+			"with the user to log in as.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := dial(flags)
+			if err != nil {
+				return err
+			}
+			defer c.Close()
+
+			// Rounds up: the field is whole seconds, and truncating a
+			// sub-second timeout to 0 would silently mean "use the default".
+			secs := int32((timeout + time.Second - 1) / time.Second)
+			reply, err := c.Host.Discover(cmd.Context(), &anvilv1.HostDiscoverRequest{
+				TimeoutSeconds: secs,
+			})
+			if err != nil {
+				return err
+			}
+			if len(reply.GetHosts()) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "no anvil hosts answered on this network")
+				return nil
+			}
+			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+			fmt.Fprintln(tw, "NAME\tADDRESS\tSSH PORT")
+			for _, h := range reply.GetHosts() {
+				fmt.Fprintf(tw, "%s\t%s\t%d\n", h.GetName(), h.GetAddress(), h.GetSshPort())
+			}
+			return tw.Flush()
+		},
+	}
+	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Second, "how long to wait for answers")
+	return cmd
 }

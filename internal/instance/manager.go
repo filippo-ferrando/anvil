@@ -19,6 +19,7 @@ type Manager struct {
 	restarts restartTracker
 }
 
+// NewManager returns a Manager dispatching to one Backend per Kind.
 func NewManager(registry Registry, backends map[Kind]Backend) *Manager {
 	events := &broadcaster{}
 	m := &Manager{backends: backends, events: events}
@@ -286,6 +287,8 @@ func cloneVMSpecForFork(v *VMSpec) *VMSpec {
 	return &clone
 }
 
+// List returns every instance of kindFilter, or all of them when it is empty,
+// with live guest detail filled in where a backend reports it.
 func (m *Manager) List(kindFilter Kind) ([]*Spec, error) {
 	specs, err := m.registry.List(kindFilter)
 	return m.withGuests(specs), err
@@ -307,6 +310,7 @@ func (m *Manager) resolve(names []string) ([]*Spec, error) {
 	return specs, nil
 }
 
+// Info returns the named instances, with live guest detail filled in.
 func (m *Manager) Info(names []string) ([]*Spec, error) {
 	specs, err := m.resolve(names)
 	return m.withGuests(specs), err
@@ -514,6 +518,8 @@ func forEachParallel(specs []*Spec, fn func(*Spec) error) error {
 	return errors.Join(errs...)
 }
 
+// Start starts each named instance, at most maxParallelOps at a time, and
+// tries every one even if an earlier instance fails.
 func (m *Manager) Start(ctx context.Context, names []string) error {
 	specs, err := m.resolve(names)
 	if err != nil {
@@ -534,6 +540,9 @@ func (m *Manager) Start(ctx context.Context, names []string) error {
 	})
 }
 
+// Stop stops each named instance, at most maxParallelOps at a time, and tries
+// every one even if an earlier instance fails. A VM escalates from the guest
+// agent to ACPI to a hard stop, all inside timeout; force skips to the end.
 func (m *Manager) Stop(ctx context.Context, names []string, force bool, timeout time.Duration) error {
 	specs, err := m.resolve(names)
 	if err != nil {

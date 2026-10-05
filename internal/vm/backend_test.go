@@ -3,6 +3,10 @@
 package vm
 
 import (
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -103,18 +107,39 @@ func TestMergeExtraHostsAddsGuardedBootcmdLines(t *testing.T) {
 	}
 }
 
-func TestMergeExtraHostsIsDeterministic(t *testing.T) {
+func TestMergeExtraHostsIsSortedByName(t *testing.T) {
 	hosts := map[string]string{"web": "10.55.201.2", "db": "10.55.201.3", "cache": "10.55.201.4"}
-	first, err := mergeExtraHosts("#cloud-config\n{}\n", hosts)
+	out, err := mergeExtraHosts("#cloud-config\n{}\n", hosts)
 	if err != nil {
 		t.Fatalf("mergeExtraHosts: %v", err)
 	}
-	second, err := mergeExtraHosts("#cloud-config\n{}\n", hosts)
+
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(stripHeader(out)), &doc); err != nil {
+		t.Fatalf("output isn't valid YAML: %v\noutput was:\n%s", err, out)
+	}
+	bootcmd, _ := doc["bootcmd"].([]any)
+	if len(bootcmd) != 3 {
+		t.Fatalf("expected one bootcmd line per host, got %d: %v", len(bootcmd), bootcmd)
+	}
+	// Name order, not map order, is what makes the output reproducible.
+	wantOrder := []string{"cache", "db", "web"}
+	for i, name := range wantOrder {
+		line, _ := bootcmd[i].(string)
+		if !strings.Contains(line, " "+name) {
+			t.Errorf("bootcmd[%d] = %q, expected it to be the entry for %q", i, line, name)
+		}
+		if !strings.Contains(line, hosts[name]) {
+			t.Errorf("bootcmd[%d] = %q, expected it to carry address %q", i, line, hosts[name])
+		}
+	}
+
+	again, err := mergeExtraHosts("#cloud-config\n{}\n", hosts)
 	if err != nil {
 		t.Fatalf("mergeExtraHosts: %v", err)
 	}
-	if first != second {
-		t.Errorf("expected the same input map to always produce identical output (sorted by name), got:\n%s\nvs\n%s", first, second)
+	if out != again {
+		t.Errorf("the same input produced different output:\n%s\nvs\n%s", out, again)
 	}
 }
 
@@ -232,5 +257,90 @@ func TestAllocateFreePortUniqueAcrossCalls(t *testing.T) {
 			t.Fatalf("port %d handed out twice", p)
 		}
 		seen[p] = true
+	}
+}
+
+// TestLogsTailDoesNotReadWholeFile checks the tail path against a console log
+// far bigger than the lines asked for.
+func TestLogsTailDoesNotReadWholeFile(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "console*.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	for i := range 20000 {
+		fmt.Fprintf(f, "line %d\n", i)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+
+	limit := int64(3) * maxConsoleLineBytes
+	if fi, _ := f.Stat(); fi.Size() > limit {
+		if _, err := f.Seek(-limit, io.SeekEnd); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(len(data)) > limit {
+		t.Fatalf("read %d bytes, expected at most %d", len(data), limit)
+	}
+	got := string(tailLinesOf(data, 3))
+	want := "line 19997\nline 19998\nline 19999\n"
+	if got != want {
+		t.Errorf("tail = %q, want %q", got, want)
+	}
+}
+
+func TestSendInChunksStreamsEverything(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "console.log")
+	want := strings.Repeat("abcdefgh", 40000) // larger than one chunk
+	if err := os.WriteFile(path, []byte(want), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	var got []byte
+	chunks := 0
+	if err := sendInChunks(f, func(b []byte) error {
+		chunks++
+		got = append(got, b...)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != want {
+		t.Errorf("streamed %d bytes, want %d", len(got), len(want))
+	}
+	if chunks < 2 {
+		t.Errorf("expected the read to be chunked, got %d call(s)", chunks)
+	}
+}
+
+func TestTailLinesOf(t *testing.T) {
+	tests := []struct {
+		name, data string
+		n          int
+		want       string
+	}{
+		{"trailing newline keeps n real lines", "a\nb\nc\nd\n", 2, "c\nd\n"},
+		{"no trailing newline", "a\nb\nc\nd", 2, "c\nd"},
+		{"asks for more than there are", "a\nb\n", 10, "a\nb\n"},
+		{"single line", "only\n", 1, "only\n"},
+		{"empty", "", 3, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := string(tailLinesOf([]byte(tc.data), tc.n)); got != tc.want {
+				t.Errorf("tailLinesOf(%q, %d) = %q, want %q", tc.data, tc.n, got, tc.want)
+			}
+		})
 	}
 }

@@ -43,7 +43,7 @@ type cloudInitModel struct {
 }
 
 func newCloudInitModel() cloudInitModel {
-	l := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	l := newList()
 	l.SetFilteringEnabled(false) // avoids single-letter shortcuts colliding with filter typing
 	l.Title = "Configs"
 	l.SetShowHelp(false)
@@ -145,7 +145,7 @@ func (m model) updateCloudInit(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if msg.err != nil {
-			m.cloudInit.importLines = append(m.cloudInit.importLines, styleError.Render(msg.err.Error()))
+			m.cloudInit.importLines = append(m.cloudInit.importLines, errLine(msg.err))
 			return m, nil
 		}
 		if msg.done {

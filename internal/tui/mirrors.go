@@ -38,7 +38,7 @@ type mirrorsModel struct {
 }
 
 func newMirrorsModel() mirrorsModel {
-	l := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	l := newList()
 	l.SetFilteringEnabled(false) // avoids single-letter shortcuts colliding with filter typing
 	l.Title = "Mirrors"
 	l.SetShowHelp(false)

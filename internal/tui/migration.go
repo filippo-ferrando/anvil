@@ -24,8 +24,26 @@ func (i hostItem) Description() string {
 	return i.host.GetTarget()
 }
 
+// discoveredItem is one host heard over mDNS, not a saved one.
+type discoveredItem struct{ host *anvilv1.DiscoveredHost }
+
+func (i discoveredItem) FilterValue() string { return i.host.GetName() }
+func (i discoveredItem) Title() string       { return i.host.GetName() }
+func (i discoveredItem) Description() string { return discoveredAddress(i.host) }
+
+// discoveredAddress is the "host[:port]" half of a migration target; the
+// user still has to say which account to log in as.
+func discoveredAddress(h *anvilv1.DiscoveredHost) string {
+	if port := h.GetSshPort(); port != 0 && port != 22 {
+		return fmt.Sprintf("%s:%d", h.GetAddress(), port)
+	}
+	return h.GetAddress()
+}
+
 type migrationModel struct {
 	hosts         list.Model
+	discovered    list.Model
+	browsing      bool // the discovered list is showing instead of the saved one
 	adding        bool
 	addForm       simpleForm
 	confirmRemove *anvilv1.Host
@@ -39,11 +57,27 @@ type migrationModel struct {
 }
 
 func newMigrationModel() migrationModel {
-	l := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	l := newList()
 	l.SetFilteringEnabled(false) // avoids single-letter shortcuts colliding with filter typing
 	l.Title = "Known hosts"
 	l.SetShowHelp(false)
-	return migrationModel{hosts: l, migrateForm: newMigrateForm()}
+
+	d := newList()
+	d.SetFilteringEnabled(false)
+	d.Title = "Discovered on this network"
+	d.SetShowHelp(false)
+	return migrationModel{hosts: l, discovered: d, migrateForm: newMigrateForm()}
+}
+
+// newAddHostForm is the add-host form, prefilled when it comes from a
+// discovered host.
+func newAddHostForm(alias, target string) simpleForm {
+	return newSimpleForm("Add known host", []formField{
+		textField("Alias", "", alias),
+		textField("user@host[:port]", "", target),
+		textField("Identity path (optional)", "", ""),
+		toggleField("Strict host key", "require a host key anvil already knows", false),
+	})
 }
 
 func newMigrateForm() simpleForm {
@@ -62,6 +96,7 @@ func (m *migrationModel) setSize(width, height int) {
 		m.panelHeight = 3
 	}
 	m.hosts.SetSize(width/3, m.panelHeight)
+	m.discovered.SetSize(width/3, m.panelHeight)
 }
 
 func (m model) updateMigration(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -86,6 +121,24 @@ func (m model) updateMigration(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, loadHosts(m.client)
 
+	case hostsDiscoveredMsg:
+		if msg.err != nil {
+			m.setStatus("discovering hosts: "+msg.err.Error(), true)
+			return m, nil
+		}
+		items := make([]list.Item, len(msg.hosts))
+		for i, h := range msg.hosts {
+			items[i] = discoveredItem{host: h}
+		}
+		m.migration.discovered.SetItems(items)
+		m.migration.browsing = true
+		if len(items) == 0 {
+			m.setStatus("no anvil hosts answered on this network", false)
+		} else {
+			m.setStatus(fmt.Sprintf("found %d host(s), enter adds one", len(items)), false)
+		}
+		return m, nil
+
 	case hostTestedMsg:
 		if msg.err != nil {
 			m.setStatus(msg.alias+": "+msg.err.Error(), true)
@@ -102,7 +155,7 @@ func (m model) updateMigration(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			m.migration.migrating = false
-			m.migration.progressLines = append(m.migration.progressLines, styleError.Render(msg.err.Error()))
+			m.migration.progressLines = append(m.migration.progressLines, errLine(msg.err))
 			return m, nil
 		}
 		if msg.done {
@@ -197,6 +250,16 @@ func (m model) updateMigrationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if mg.browsing {
+		switch msg.String() {
+		case "esc", "q":
+			mg.browsing = false
+			return m, nil
+		case "x", "t":
+			return m, nil // these act on saved hosts, which aren't on screen
+		}
+	}
+
 	switch msg.String() {
 	case "esc", "q":
 		m.sidebarFocused = true
@@ -206,13 +269,19 @@ func (m model) updateMigrationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "a":
 		mg.adding = true
-		mg.addForm = newSimpleForm("Add known host", []formField{
-			textField("Alias", "", ""),
-			textField("user@host[:port]", "", ""),
-			textField("Identity path (optional)", "", ""),
-			toggleField("Strict host key", "require a host key anvil already knows", false),
-		})
+		mg.addForm = newAddHostForm("", "")
 		mg.addForm.SetHeight(contentHeight(m.height) - 2)
+		return m, nil
+	case "d":
+		m.setStatus("looking for anvil hosts on this network...", false)
+		return m, discoverHosts(m.client)
+	case "enter":
+		if h := m.selectedDiscovered(); h != nil {
+			mg.adding = true
+			// The user part is nobody's to guess, so the form opens on it.
+			mg.addForm = newAddHostForm(h.GetName(), "root@"+discoveredAddress(h))
+			mg.addForm.SetHeight(contentHeight(m.height) - 2)
+		}
 		return m, nil
 	case "x":
 		if h := m.selectedHost(); h != nil {
@@ -229,8 +298,23 @@ func (m model) updateMigrationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
-	mg.hosts, cmd = mg.hosts.Update(msg)
+	if mg.browsing {
+		mg.discovered, cmd = mg.discovered.Update(msg)
+	} else {
+		mg.hosts, cmd = mg.hosts.Update(msg)
+	}
 	return m, cmd
+}
+
+func (m model) selectedDiscovered() *anvilv1.DiscoveredHost {
+	if !m.migration.browsing {
+		return nil
+	}
+	item, ok := m.migration.discovered.SelectedItem().(discoveredItem)
+	if !ok {
+		return nil
+	}
+	return item.host
 }
 
 func (m model) selectedHost() *anvilv1.Host {
@@ -266,11 +350,18 @@ func (m migrationModel) View() string {
 	} else {
 		hostsBox = styleBoxFocused
 	}
+	listView := m.hosts.View()
+	if m.browsing {
+		listView = m.discovered.View()
+	}
 	// Pin the hosts list to a fixed height so it matches the form box beside it.
-	left := hostsBox.Render(lipgloss.NewStyle().Height(m.panelHeight).Render(m.hosts.View()))
+	left := hostsBox.Render(lipgloss.NewStyle().Height(m.panelHeight).Render(listView))
 	right := formBox.Render(m.migrateForm.View())
 
-	help := helpBar("tab", "switch focus", "a", "add host", "x", "remove", "t", "test", "esc", "back")
+	help := helpBar("tab", "switch focus", "a", "add host", "d", "discover", "x", "remove", "t", "test", "esc", "back")
+	if m.browsing {
+		help = helpBar("enter", "add this host", "d", "rescan", "esc", "saved hosts")
+	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right) + "\n" + help
 }
 

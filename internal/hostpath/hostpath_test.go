@@ -85,3 +85,32 @@ func TestNeedsTraverseSkipsOtherExecutable(t *testing.T) {
 		t.Fatalf("expected only %s among the dirs needing an ACL, got %q", closed, got)
 	}
 }
+
+func TestUnder(t *testing.T) {
+	base := "/var/lib/anvil/staging"
+	tests := []struct {
+		name, rel, want string
+		wantErr         bool
+	}{
+		{name: "plain", rel: "disk.qcow2", want: base + "/disk.qcow2"},
+		{name: "nested", rel: "mounts/0", want: base + "/mounts/0"},
+		{name: "leading slash is relative", rel: "/disk.qcow2", want: base + "/disk.qcow2"},
+		{name: "dot dot is clamped", rel: "../../../etc", want: base + "/etc"},
+		{name: "escape attempt", rel: "x/../../../../etc/shadow", want: base + "/etc/shadow"},
+		{name: "empty is the base itself", rel: "", want: base},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Under(base, tc.rel)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("Under(%q, %q) error = %v, wantErr %v", base, tc.rel, err, tc.wantErr)
+			}
+			if !tc.wantErr && got != tc.want {
+				t.Errorf("Under(%q, %q) = %q, want %q", base, tc.rel, got, tc.want)
+			}
+			if !tc.wantErr && !strings.HasPrefix(got, base) {
+				t.Errorf("Under(%q, %q) = %q, which escapes the base", base, tc.rel, got)
+			}
+		})
+	}
+}

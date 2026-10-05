@@ -84,6 +84,11 @@ type hostsLoadedMsg struct {
 	err   error
 }
 
+type hostsDiscoveredMsg struct {
+	hosts []*anvilv1.DiscoveredHost
+	err   error
+}
+
 type hostTestedMsg struct {
 	alias, detail string
 	ok            bool
@@ -655,6 +660,16 @@ func removeHost(c *client.Client, alias string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.Host.Remove(context.Background(), &anvilv1.HostRemoveRequest{Alias: alias})
 		return actionDoneMsg{screen: screenMigration, verb: "removed", err: err}
+	}
+}
+
+func discoverHosts(c *client.Client) tea.Cmd {
+	return func() tea.Msg {
+		reply, err := c.Host.Discover(context.Background(), &anvilv1.HostDiscoverRequest{})
+		if err != nil {
+			return hostsDiscoveredMsg{err: err}
+		}
+		return hostsDiscoveredMsg{hosts: reply.GetHosts()}
 	}
 }
 

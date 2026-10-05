@@ -8,7 +8,7 @@
 Name:           anvil
 Version:        @VERSION@
 Release:        @RELEASE@%{?dist}
-Summary:        Multipass-alike for cloud-init VMs and Docker/Podman containers
+Summary:        Multipass-alike for cloud-init VMs and Docker containers
 License:        Apache-2.0
 URL:            https://git.fferrando.cc/rdfilippo/anvil
 Source0:        %{name}-%{version}.tar.gz
@@ -17,13 +17,13 @@ Requires:       openssh-clients
 
 %description
 anvil manages cloud-init VMs (via direct QEMU process management) and
-Docker/Podman containers side by side, with grouped "intents", cold
+Docker containers side by side, with grouped "intents", cold
 migration between anvil hosts, and a terminal UI (anvil tui). This
 source package builds two binary packages: anvil (this one, the CLI/TUI
 client) and anvild (the daemon that actually drives QEMU/Docker).
 
 %package -n anvild
-Summary:        Daemon for anvil - manages QEMU VMs and Docker/Podman containers
+Summary:        Daemon for anvil - manages QEMU VMs and Docker containers
 Requires:       qemu-img
 Requires:       qemu-system-x86
 Requires:       xorriso

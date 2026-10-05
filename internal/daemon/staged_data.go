@@ -6,6 +6,7 @@ import (
 	"github.com/anvil-project/anvil/internal/config"
 	"github.com/anvil-project/anvil/internal/hostpath"
 	"github.com/anvil-project/anvil/internal/instance"
+	"github.com/anvil-project/anvil/internal/migrate"
 )
 
 // adoptStagedData moves the shared folders a migration uploaded into this host's
@@ -36,6 +37,11 @@ func adoptStagedData(params *instance.LaunchParams) error {
 func adoptOne(stagedPath, hostPath *string, dest string) error {
 	if *stagedPath == "" {
 		return nil
+	}
+	// Adopting deletes the source, so only ever accept a staged upload's own
+	// name, never an arbitrary path a caller put in the request.
+	if !migrate.IsStagedDataPath(*stagedPath) {
+		return fmt.Errorf("daemon: %q is not a staged migration upload", *stagedPath)
 	}
 	if err := hostpath.MoveDir(*stagedPath, dest); err != nil {
 		return err

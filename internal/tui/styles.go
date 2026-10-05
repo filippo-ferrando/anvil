@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"regexp"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -15,12 +17,14 @@ var (
 	colorBad       = lipgloss.Color("#F87171")
 	colorWarn      = lipgloss.Color("#FBBF24")
 	colorFg        = lipgloss.Color("#E5E7EB")
+	colorDark      = lipgloss.Color("#0B0B12") // text on a colored background
+	colorKeyBg     = lipgloss.Color("#2E2A4F") // background of a key in the shortcut legend
 
 	styleTitle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#0B0B12")).
+			Foreground(colorDark).
 			Background(colorAccent).
-			Padding(0, 2)
+			Padding(0, 1)
 
 	styleSubtitle = lipgloss.NewStyle().Foreground(colorMuted)
 
@@ -39,35 +43,44 @@ var (
 
 	styleFieldLabel = lipgloss.NewStyle().Foreground(colorMuted)
 
-	styleMenuItem         = lipgloss.NewStyle().Padding(0, 2).Foreground(colorFg)
-	styleMenuItemSelected = lipgloss.NewStyle().Padding(0, 2).
+	styleMenuItem         = lipgloss.NewStyle().Padding(0, 1).Foreground(colorFg)
+	styleMenuItemSelected = lipgloss.NewStyle().Padding(0, 1).
 				Bold(true).
 				Foreground(lipgloss.Color("#0B0B12")).
 				Background(colorAccent)
 )
 
-// helpItems renders each key/action pair the way helpBar always has,
-// without joining them onto a line; shared by helpBar and helpBarWrap.
+var (
+	styleKey       = lipgloss.NewStyle().Bold(true).Foreground(colorFg).Background(colorKeyBg).Padding(0, 1)
+	styleKeyAction = lipgloss.NewStyle().Foreground(colorMuted)
+	helpSep        = "   "
+)
+
+// newList is a bubbles list themed with the shared palette, without its own help footer.
+func newList() list.Model {
+	d := list.NewDefaultDelegate()
+	d.Styles.SelectedTitle = d.Styles.SelectedTitle.Foreground(colorAccent).BorderForeground(colorAccent)
+	d.Styles.SelectedDesc = d.Styles.SelectedDesc.Foreground(colorFg).BorderForeground(colorAccent)
+	d.Styles.NormalTitle = d.Styles.NormalTitle.Foreground(colorFg)
+	d.Styles.NormalDesc = d.Styles.NormalDesc.Foreground(colorMuted)
+	l := list.New(nil, d, 0, 0)
+	l.Styles.Title = styleTitle
+	l.SetShowHelp(false)
+	return l
+}
+
+// helpItems renders each key/action pair as a key chip followed by its action.
 func helpItems(pairs ...string) []string {
 	var b []string
 	for i := 0; i+1 < len(pairs); i += 2 {
-		b = append(b, lipgloss.NewStyle().Foreground(colorAccent).Render(pairs[i])+styleHelp.Render(" "+pairs[i+1]))
+		b = append(b, styleKey.Render(pairs[i])+" "+styleKeyAction.Render(pairs[i+1]))
 	}
 	return b
 }
 
-// helpBar renders a "key: action" footer from alternating key/action
-// pairs, on one line.
+// helpBar renders a shortcut legend from alternating key/action pairs, on one line.
 func helpBar(pairs ...string) string {
-	items := helpItems(pairs...)
-	line := ""
-	for i, s := range items {
-		if i > 0 {
-			line += styleHelp.Render("  •  ")
-		}
-		line += s
-	}
-	return styleHelp.Render(" ") + line
+	return " " + strings.Join(helpItems(pairs...), helpSep)
 }
 
 // helpBarWrap is helpBar, wrapped onto as many lines as it takes to keep
@@ -77,9 +90,9 @@ func helpBarWrap(width int, pairs ...string) string {
 		return helpBar(pairs...)
 	}
 	items := helpItems(pairs...)
-	sep := styleHelp.Render("  •  ")
+	sep := helpSep
 	sepWidth := lipgloss.Width(sep)
-	prefix := styleHelp.Render(" ")
+	prefix := " "
 	prefixWidth := lipgloss.Width(prefix)
 
 	var lines []string
@@ -105,4 +118,36 @@ func helpBarWrap(width int, pairs ...string) string {
 		lines = append(lines, prefix+line)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// rpcPrefix matches the "rpc error: code = X desc = " noise gRPC puts in front of a daemon error.
+var rpcPrefix = regexp.MustCompile(`rpc error: code = (\w+) desc = `)
+
+// friendlyError strips gRPC framing from an error text and returns a hint for the common causes.
+func friendlyError(text string) (msg, hint string) {
+	if m := rpcPrefix.FindStringSubmatch(text); m != nil {
+		switch m[1] {
+		case "Unavailable":
+			hint = "anvild is not reachable: check that it is running and the socket path is right"
+		case "PermissionDenied":
+			hint = "access denied: the user must be in the anvil group"
+		case "DeadlineExceeded":
+			hint = "the daemon took too long to answer, try again"
+		case "NotFound":
+			hint = "it may have been removed: press r to refresh"
+		case "AlreadyExists":
+			hint = "pick another name"
+		}
+	}
+	return rpcPrefix.ReplaceAllString(text, ""), hint
+}
+
+// errLine renders err as a red line for a progress transcript, with a hint line when one applies.
+func errLine(err error) string {
+	msg, hint := friendlyError(err.Error())
+	s := styleError.Render("✕ " + msg)
+	if hint != "" {
+		s += "\n" + styleSubtitle.Render("  "+hint)
+	}
+	return s
 }

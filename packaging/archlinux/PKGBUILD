@@ -3,7 +3,7 @@ pkgbase=anvil
 pkgname=('anvil' 'anvild')
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="Multipass-alike for cloud-init VMs and Docker/Podman containers"
+pkgdesc="Multipass-alike for cloud-init VMs and Docker containers"
 arch=('x86_64')
 url="https://git.fferrando.cc/rdfilippo/anvil"
 license=('Apache-2.0')
@@ -39,7 +39,7 @@ package_anvil() {
 }
 
 package_anvild() {
-  pkgdesc="Daemon for anvil - manages QEMU VMs and Docker/Podman containers"
+  pkgdesc="Daemon for anvil - manages QEMU VMs and Docker containers"
   depends=('qemu-base' 'xorriso' 'openssh' 'virtiofsd')
   optdepends=(
     'docker: run containers via Docker'

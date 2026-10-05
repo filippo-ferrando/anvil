@@ -182,7 +182,7 @@ func (p *Process) kill() error {
 		return nil
 	}
 	// A signaled process reports as a non-nil *exec.ExitError; dying of
-	// the SIGKILL we just sent counts as a successful kill.
+	// dying of the SIGKILL sent above counts as a successful kill.
 	if ws, ok := p.cmd.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() && ws.Signal() == syscall.SIGKILL {
 		return nil
 	}

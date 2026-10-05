@@ -34,9 +34,6 @@ func TestSpawnRealProcessLifecycle(t *testing.T) {
 		DiskPath:  diskPath,
 		QMPSocket: filepath.Join(dir, "qmp.sock"),
 		KVM:       false, // must work under plain TCG too
-		SLIRPHostForwards: []HostForward{
-			{HostPort: 12222, GuestPort: 22, Protocol: "tcp"},
-		},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -46,6 +43,11 @@ func TestSpawnRealProcessLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
+	// Every t.Fatal below would otherwise leave a real QEMU running forever.
+	t.Cleanup(func() {
+		_ = proc.Stop(context.Background(), 0)
+		_ = proc.Close()
+	})
 	if proc.Pid() == 0 {
 		t.Fatal("expected a non-zero pid after Spawn")
 	}
@@ -75,8 +77,6 @@ func TestSpawnRealProcessLifecycle(t *testing.T) {
 		t.Error("expected the process to be gone after Stop returned")
 	}
 	t.Log("Stop escalated and the process is confirmed gone")
-
-	_ = proc.Close()
 }
 
 // TestSpawnWithMountRealProcess spawns qemu-system-x86_64 with a boot-time virtiofs

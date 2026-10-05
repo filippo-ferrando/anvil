@@ -188,8 +188,13 @@ func allowed(z Zone, from netip.Addr) bool {
 	return from.IsLoopback() || (z.Subnet.IsValid() && z.Subnet.Contains(from))
 }
 
+// maxInFlightQueries bounds the goroutines and upstream sockets one zone can
+// hold at once. A member that floods the gateway is dropped, not served.
+const maxInFlightQueries = 64
+
 func (s *Server) serveUDP(l *zoneListener) {
 	buf := make([]byte, 65535)
+	sem := make(chan struct{}, maxInFlightQueries)
 	for {
 		n, from, err := l.udp.ReadFromUDPAddrPort(buf)
 		if err != nil {
@@ -200,7 +205,13 @@ func (s *Server) serveUDP(l *zoneListener) {
 			continue
 		}
 		req := append([]byte(nil), buf[:n]...)
+		select {
+		case sem <- struct{}{}:
+		default:
+			continue // already at the limit: drop it, the client will retry
+		}
 		go func() {
+			defer func() { <-sem }()
 			if resp := s.handle(z, req, "udp"); resp != nil {
 				_, _ = l.udp.WriteToUDPAddrPort(resp, from)
 			}

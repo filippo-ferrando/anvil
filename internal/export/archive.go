@@ -85,6 +85,11 @@ func extractTarZst(ctx context.Context, bundlePath, destDir string) error {
 	}
 
 	extractErr := extractAll(tar.NewReader(stdout), destDir)
+	if extractErr != nil {
+		// Nothing is reading stdout any more, so zstd would block in write
+		// forever and Wait with it.
+		_ = cmd.Process.Kill()
+	}
 	waitErr := cmd.Wait()
 	if extractErr != nil {
 		return extractErr

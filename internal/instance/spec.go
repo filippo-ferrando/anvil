@@ -35,6 +35,8 @@ const IntentLabel = "intent"
 // RoleLabel is the Labels key carrying a member's role within its intent.
 const RoleLabel = "role"
 
+// Spec is one instance's full persisted state: identity, kind, lifecycle
+// state, and whichever per-kind detail applies.
 type Spec struct {
 	ID        string
 	Name      string
@@ -116,6 +118,7 @@ type SnapshotSchedule struct {
 	LastRun time.Time
 }
 
+// VMSpec is the VM-only half of a Spec.
 type VMSpec struct {
 	ImageRef  string
 	Arch      string
@@ -202,6 +205,7 @@ const (
 	ContainerEnginePodman ContainerEngine = "podman"
 )
 
+// ContainerSpec is the container-only half of a Spec.
 type ContainerSpec struct {
 	ImageRef    string
 	Env         map[string]string
@@ -223,6 +227,7 @@ type ContainerSpec struct {
 	DNSSearch    []string
 }
 
+// VolumeMount is one host directory bind-mounted into a container.
 type VolumeMount struct {
 	HostPath      string
 	ContainerPath string
@@ -232,10 +237,20 @@ type VolumeMount struct {
 	SourceDataPath string
 }
 
+// PortMapping is one host-to-guest port forward.
 type PortMapping struct {
 	HostPort  int
 	GuestPort int
 	Protocol  string // "tcp" | "udp"
+}
+
+// Protocol normalizes an unset port protocol to "tcp", the default anvil
+// assumes everywhere a mapping omits one.
+func Protocol(p string) string {
+	if p == "" {
+		return "tcp"
+	}
+	return p
 }
 
 // FormatPorts renders ports as "8080:80/tcp, 2222:22/tcp", used to list
@@ -246,11 +261,7 @@ func FormatPorts(ports []PortMapping) string {
 	}
 	parts := make([]string, len(ports))
 	for i, p := range ports {
-		proto := p.Protocol
-		if proto == "" {
-			proto = "tcp"
-		}
-		parts[i] = fmt.Sprintf("%d:%d/%s", p.HostPort, p.GuestPort, proto)
+		parts[i] = fmt.Sprintf("%d:%d/%s", p.HostPort, p.GuestPort, Protocol(p.Protocol))
 	}
 	return strings.Join(parts, ", ")
 }

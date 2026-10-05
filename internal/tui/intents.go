@@ -50,7 +50,7 @@ type intentsModel struct {
 }
 
 func newIntentsModel() intentsModel {
-	l := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	l := newList()
 	l.SetFilteringEnabled(false)
 	l.Title = "Intents"
 	l.SetShowHelp(false)
@@ -106,7 +106,7 @@ func (m model) updateIntents(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			m.intents.exporting = false
-			m.intents.exportLines = append(m.intents.exportLines, styleError.Render(msg.err.Error()))
+			m.intents.exportLines = append(m.intents.exportLines, errLine(msg.err))
 			return m, nil
 		}
 		if msg.done {
@@ -121,7 +121,7 @@ func (m model) updateIntents(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			m.intents.importing = false
-			m.intents.importLines = append(m.intents.importLines, styleError.Render(msg.err.Error()))
+			m.intents.importLines = append(m.intents.importLines, errLine(msg.err))
 			return m, nil
 		}
 		if msg.done {
@@ -139,7 +139,7 @@ func (m model) updateIntents(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			in.applyRunning = false
-			in.applyLines = append(in.applyLines, styleError.Render(msg.err.Error()))
+			in.applyLines = append(in.applyLines, errLine(msg.err))
 			return m, nil
 		}
 		if !msg.done {

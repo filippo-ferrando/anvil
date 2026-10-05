@@ -55,10 +55,12 @@ Docker API" possible without a platform abstraction layer getting in the way.
 
 ## Features
 
-**VMs**, driven straight against `qemu-system-x86_64` over QMP (no libvirt in between):
+**VMs**, driven straight against `qemu-system-*` over QMP (no libvirt in between):
 
 - 15 base images out of the box: Ubuntu, Debian, Arch, Fedora, Rocky, AlmaLinux, CentOS
   Stream, openSUSE, Alpine (or bring your own via a mirror)
+- cross-arch guests: an `aarch64` image runs under emulation on an x86_64 host, see
+  [docs/aarch64-on-x86.md](docs/aarch64-on-x86.md)
 - real cloud-init under the hood, plus a saved cloud-init config library you can write,
   edit, and reuse (`anvil cloud-init`)
 - `anvil shell` / `anvil exec` / `anvil transfer` over real SSH, using a keypair Anvil
@@ -126,6 +128,12 @@ isn't a readable directory is reported: a container still mounts that same path 
 target, a VM drops the share rather than fail to start. `anvil export` packs the same
 data into its bundle.
 
+`anvil host discover` lists the other anvil hosts on the same network: anvild announces
+itself over mDNS as `_anvil._tcp`, so `avahi-browse` sees it too. It only reports a name,
+an address and an SSH port, nothing is saved and no access is granted, so the output is
+just what `anvil host add` would otherwise have to be told. `ANVIL_MDNS=off` in anvild's
+environment turns the announcement off.
+
 Migration SSH trusts a host's key the first time it sees it and records it. To require a
 key anvil already knows instead, add the host with `anvil host add <alias> <user@host>
 --strict-host-key`; adding the same alias again replaces it, so this can be turned on
@@ -155,13 +163,20 @@ anvil cloud-init import-repo <url>
 Clone the repo, then from its root:
 
 ```
-makepkg -si -p packaging/PKGBUILD
+makepkg -si -p packaging/archlinux/PKGBUILD
 ```
 
 This builds two packages, `anvil` (the CLI/TUI) and `anvild` (the daemon), and installs
 the daemon as a proper systemd service running under its own unprivileged `anvil` user:
-**not root**. `anvild.install` sets up the user, generates a migration keypair, and adds
-`anvil` to the `docker` group if it's already installed.
+**not root**. The post-install step (`packaging/common/post-install.sh`, shared by all three package
+formats) sets up the user, generates a migration keypair, and adds `anvil` to the
+`docker` group if it's already installed.
+
+### Debian/Ubuntu and Fedora/RHEL
+
+The same two packages build from `packaging/deb/build.sh` and `packaging/rpm/build.sh`.
+Both ship the completions, the man pages, and the same post-install step as the Arch
+package.
 
 ### From source
 
@@ -177,7 +192,6 @@ go build ./...
 ## Quick start
 
 ```
-sudo mkdir -p /run/anvil /var/lib/anvil /var/cache/anvil
 sudo ./anvild &
 
 ./anvil launch --kind vm ubuntu-24.04 --name box
@@ -192,10 +206,10 @@ version runs the daemon as an unprivileged system user instead, see [Install](#i
 
 ## The TUI
 
-`anvil tui` gives you a sidebar-driven view over Instances, Images, Intents, Cloud-Init,
-Mirrors, and Migration, the exact same gRPC API the CLI uses (`anvil stats <name>` is the
-CLI's own window into the same data). Shell/exec sessions hand the real terminal off to
-`ssh`/`docker exec` and back, logs stream live, and launch progress redraws in place
+`anvil tui` gives you a sidebar-driven view over Instances, Snapshots, Images, Intents,
+Cloud-Init, Mirrors, and Migration, over the exact same gRPC API the CLI uses
+(`anvil stats <name>` is the CLI's own window into the same data). Shell/exec sessions
+hand the real terminal off to `ssh`/`docker exec` and back, logs stream live, and launch progress redraws in place
 instead of scrolling your terminal into oblivion.
 
 Select an instance on the Instances screen and its detail panel shows a live CPU/memory
@@ -203,6 +217,10 @@ gauge, disk usage (or I/O rate for a container), network throughput, uptime, and
 sampled straight from the process itself (`/proc` + the tap device for a VM, Docker's own
 stats endpoint for a container), refreshed every couple of seconds, no guest agent
 required. From the same screen, `f` forks the selected VM and `E`/`i` export/import it.
+
+The Migration screen lists the known hosts beside a migrate form: `a` adds a host, `d`
+scans the local network over mDNS (`enter` on a result opens the add form prefilled),
+`t` tests one, `x` removes one, and `tab` moves over to the migrate form.
 
 ### A sneak peek at the TUI
 
@@ -257,9 +275,6 @@ aren't there yet:
 
 - **Podman** isn't wired up. `--engine podman` fails cleanly instead of pretending to
   work; Docker is the only engine right now.
-- **No mDNS auto-discovery** of other Anvil hosts. `anvil host add` (a saved
-  `user@host` alias) covers migration fine without it.
-- **No man pages** yet, just `--help` and this README.
 - The built-in image catalog's checksums are a work in progress: run
   `scripts/verify-catalog.sh` if you want to double-check before you trust it blindly, or
   point `anvil mirror add` at your own verified manifest instead.

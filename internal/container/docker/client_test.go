@@ -679,3 +679,31 @@ func TestEventsStreamsUntilClosed(t *testing.T) {
 		t.Errorf("unexpected filters query %q", gotQuery)
 	}
 }
+
+func TestRefPath(t *testing.T) {
+	tests := []struct {
+		name, ref, want string
+		wantErr         bool
+	}{
+		{name: "plain", ref: "nginx", want: "nginx"},
+		{name: "repo and tag", ref: "library/nginx:1.2", want: "library/nginx:1.2"},
+		{name: "registry with port", ref: "reg.local:5000/a/b:tag", want: "reg.local:5000/a/b:tag"},
+		{name: "digest", ref: "sha256:abc123", want: "sha256:abc123"},
+		{name: "query injection", ref: "nginx?force=true", want: "nginx%3Fforce=true"},
+		{name: "fragment injection", ref: "a#b", want: "a%23b"},
+		{name: "traversal", ref: "../../containers/x/kill", wantErr: true},
+		{name: "single dot segment", ref: "a/./b", wantErr: true},
+		{name: "empty", ref: "", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := refPath(tc.ref)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("refPath(%q) error = %v, wantErr %v", tc.ref, err, tc.wantErr)
+			}
+			if !tc.wantErr && got != tc.want {
+				t.Errorf("refPath(%q) = %q, want %q", tc.ref, got, tc.want)
+			}
+		})
+	}
+}

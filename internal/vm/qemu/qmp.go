@@ -14,15 +14,21 @@ import (
 	"time"
 )
 
+// qmpWriteTimeout bounds a single command write, so a QEMU that has stopped
+// reading its socket surfaces as an error instead of a hung caller.
+const qmpWriteTimeout = 5 * time.Second
+
 // QMPClient is a minimal client for QEMU's QMP protocol (newline-delimited
 // JSON over a unix socket).
 type QMPClient struct {
 	conn   net.Conn
 	reader *bufio.Reader
 
-	mu      sync.Mutex // serializes command/response round-trips
+	mu      sync.Mutex // guards pending only, never held across I/O
 	nextID  atomic.Int64
 	pending map[string]chan qmpResponse
+
+	writeMu sync.Mutex // serializes writers; readLoop must never wait on it
 }
 
 type qmpGreeting struct {
@@ -66,7 +72,13 @@ func DialQMP(ctx context.Context, socketPath string) (*QMPClient, error) {
 		pending: make(map[string]chan qmpResponse),
 	}
 
-	// Read the greeting banner QEMU sends unprompted on connect.
+	// Read the greeting banner QEMU sends unprompted on connect. A QEMU that
+	// accepts the socket but never greets would otherwise block Start forever.
+	greetBy := time.Now().Add(qmpWriteTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(greetBy) {
+		greetBy = d
+	}
+	_ = conn.SetReadDeadline(greetBy)
 	line, err := c.reader.ReadBytes('\n')
 	if err != nil {
 		conn.Close()
@@ -78,6 +90,7 @@ func DialQMP(ctx context.Context, socketPath string) (*QMPClient, error) {
 		return nil, fmt.Errorf("qmp: parsing greeting: %w", err)
 	}
 
+	_ = conn.SetReadDeadline(time.Time{})
 	go c.readLoop()
 
 	if _, err := c.Execute(ctx, "qmp_capabilities", nil); err != nil {
@@ -131,18 +144,23 @@ func (c *QMPClient) Execute(ctx context.Context, command string, args interface{
 	id := fmt.Sprintf("%d", c.nextID.Add(1))
 	respCh := make(chan qmpResponse, 1)
 
-	c.mu.Lock()
-	c.pending[id] = respCh
-	cmd := qmpCommand{Execute: command, Arguments: args, ID: id}
-	payload, err := json.Marshal(cmd)
+	payload, err := json.Marshal(qmpCommand{Execute: command, Arguments: args, ID: id})
 	if err != nil {
-		delete(c.pending, id)
-		c.mu.Unlock()
 		return nil, fmt.Errorf("qmp: encoding command: %w", err)
 	}
 	payload = append(payload, '\n')
-	_, writeErr := c.conn.Write(payload)
+
+	c.mu.Lock()
+	c.pending[id] = respCh
 	c.mu.Unlock()
+
+	// Written outside c.mu: a QEMU that has stopped draining the socket would
+	// otherwise block readLoop too, and no response could ever be delivered.
+	c.writeMu.Lock()
+	_ = c.conn.SetWriteDeadline(time.Now().Add(qmpWriteTimeout))
+	_, writeErr := c.conn.Write(payload)
+	_ = c.conn.SetWriteDeadline(time.Time{})
+	c.writeMu.Unlock()
 	if writeErr != nil {
 		// No response will ever arrive for this id; clean up the entry.
 		c.mu.Lock()
