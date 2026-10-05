@@ -4,10 +4,36 @@ package qemu
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
+
+// fakeOVMFRoot points the firmware scan at a fixture, so arg-building tests
+// don't depend on the host having edk2/OVMF installed.
+func fakeOVMFRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, rel := range []string{"edk2/x64/OVMF_CODE.fd", "edk2/aarch64/QEMU_EFI.fd"} {
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("firmware"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	prev := ovmfSearchRoot
+	ovmfSearchRoot = root
+	ovmfCache.Clear()
+	t.Cleanup(func() {
+		ovmfSearchRoot = prev
+		ovmfCache.Clear()
+	})
+	return root
+}
 
 func TestBuildArgsRequiresDiskAndSocket(t *testing.T) {
 	if _, err := BuildArgs(Config{}); err == nil {
@@ -19,6 +45,7 @@ func TestBuildArgsRequiresDiskAndSocket(t *testing.T) {
 }
 
 func TestBuildArgsSLIRPDefault(t *testing.T) {
+	fakeOVMFRoot(t)
 	args, err := BuildArgs(Config{
 		DiskPath:  "/var/lib/anvil/instances/x/disk.qcow2",
 		QMPSocket: "/run/anvil/x.qmp",
@@ -41,6 +68,7 @@ func TestBuildArgsSLIRPDefault(t *testing.T) {
 }
 
 func TestBuildArgsSLIRPHostForward(t *testing.T) {
+	fakeOVMFRoot(t)
 	args, err := BuildArgs(Config{
 		DiskPath:  "/d",
 		QMPSocket: "/q",
@@ -58,6 +86,7 @@ func TestBuildArgsSLIRPHostForward(t *testing.T) {
 }
 
 func TestBuildArgsBridgeTap(t *testing.T) {
+	fakeOVMFRoot(t)
 	args, err := BuildArgs(Config{
 		DiskPath:        "/d",
 		QMPSocket:       "/q",
@@ -76,6 +105,7 @@ func TestBuildArgsBridgeTap(t *testing.T) {
 }
 
 func TestBuildArgsBridgeTapWithMAC(t *testing.T) {
+	fakeOVMFRoot(t)
 	args, err := BuildArgs(Config{
 		DiskPath:        "/d",
 		QMPSocket:       "/q",
@@ -92,6 +122,7 @@ func TestBuildArgsBridgeTapWithMAC(t *testing.T) {
 }
 
 func TestBuildArgsBridgeTapWithoutMAC(t *testing.T) {
+	fakeOVMFRoot(t)
 	args, err := BuildArgs(Config{
 		DiskPath:        "/d",
 		QMPSocket:       "/q",
@@ -107,6 +138,7 @@ func TestBuildArgsBridgeTapWithoutMAC(t *testing.T) {
 }
 
 func TestBuildArgsSerialLog(t *testing.T) {
+	fakeOVMFRoot(t)
 	noLog, err := BuildArgs(Config{DiskPath: "/d", QMPSocket: "/q"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -126,6 +158,7 @@ func TestBuildArgsSerialLog(t *testing.T) {
 }
 
 func TestBuildArgsMounts(t *testing.T) {
+	fakeOVMFRoot(t)
 	args, err := BuildArgs(Config{
 		DiskPath:  "/d",
 		QMPSocket: "/q",
@@ -166,6 +199,7 @@ func TestBuildArgsTooManyMounts(t *testing.T) {
 }
 
 func TestBuildArgsNoMountsMeansNoVirtiofsDevice(t *testing.T) {
+	fakeOVMFRoot(t)
 	args, err := BuildArgs(Config{DiskPath: "/d", QMPSocket: "/q"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -180,6 +214,7 @@ func TestBuildArgsNoMountsMeansNoVirtiofsDevice(t *testing.T) {
 }
 
 func TestBuildArgsSeedISO(t *testing.T) {
+	fakeOVMFRoot(t)
 	args, err := BuildArgs(Config{
 		DiskPath:    "/d",
 		QMPSocket:   "/q",
@@ -195,6 +230,7 @@ func TestBuildArgsSeedISO(t *testing.T) {
 }
 
 func TestBuildArgsKVMvsTCG(t *testing.T) {
+	fakeOVMFRoot(t)
 	kvmArgs, _ := BuildArgs(Config{DiskPath: "/d", QMPSocket: "/q", KVM: true})
 	if !strings.Contains(strings.Join(kvmArgs, " "), "-accel kvm") {
 		t.Errorf("expected kvm accel")
@@ -206,6 +242,7 @@ func TestBuildArgsKVMvsTCG(t *testing.T) {
 }
 
 func TestBuildArgsDiskTuning(t *testing.T) {
+	fakeOVMFRoot(t)
 	cases := []struct {
 		name    string
 		tuning  DiskTuning
@@ -239,6 +276,7 @@ func TestBuildArgsDiskTuning(t *testing.T) {
 }
 
 func TestBuildArgsDiskUsesIOThread(t *testing.T) {
+	fakeOVMFRoot(t)
 	args, err := BuildArgs(Config{DiskPath: "/d", QMPSocket: "/q"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -258,6 +296,7 @@ func TestBuildArgsDiskUsesIOThread(t *testing.T) {
 }
 
 func TestBuildArgsGuestAgent(t *testing.T) {
+	fakeOVMFRoot(t)
 	without, err := BuildArgs(Config{DiskPath: "/d", QMPSocket: "/q"})
 	if err != nil {
 		t.Fatal(err)
@@ -282,6 +321,7 @@ func TestBuildArgsGuestAgent(t *testing.T) {
 }
 
 func TestBuildArgsHotplugHeadroom(t *testing.T) {
+	fakeOVMFRoot(t)
 	args, err := BuildArgs(Config{DiskPath: "/d", QMPSocket: "/q", CPUs: 2, MemoryMiB: 1024, MaxCPUs: 8, MaxMemoryMiB: 4097})
 	if err != nil {
 		t.Fatal(err)
@@ -305,24 +345,54 @@ func TestBuildArgsHotplugHeadroom(t *testing.T) {
 	}
 }
 
+func TestOVMFPathFindsFirmwarePerArch(t *testing.T) {
+	root := fakeOVMFRoot(t)
+
+	tests := []struct{ arch, want string }{
+		{arch: "", want: filepath.Join(root, "edk2/x64/OVMF_CODE.fd")},
+		{arch: "x86_64", want: filepath.Join(root, "edk2/x64/OVMF_CODE.fd")},
+		{arch: "aarch64", want: filepath.Join(root, "edk2/aarch64/QEMU_EFI.fd")},
+	}
+	for _, tc := range tests {
+		got, err := OVMFPath(tc.arch)
+		if err != nil {
+			t.Errorf("OVMFPath(%q): %v", tc.arch, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("OVMFPath(%q) = %q, want %q", tc.arch, got, tc.want)
+		}
+	}
+}
+
 func TestOVMFPathCachesItsScan(t *testing.T) {
-	ovmfCache.Delete("x86_64")
+	root := fakeOVMFRoot(t)
 	first, err := OVMFPath("x86_64")
 	if err != nil {
-		t.Skipf("no UEFI firmware installed on this machine: %v", err)
+		t.Fatal(err)
 	}
 
-	start := time.Now()
-	second, err := OVMFPath("x86_64")
-	elapsed := time.Since(start)
-	if err != nil {
+	// Removing the fixture proves the second call never rescans: the walk
+	// would now find nothing and return an error.
+	if err := os.RemoveAll(filepath.Join(root, "edk2")); err != nil {
 		t.Fatal(err)
+	}
+	second, err := OVMFPath("x86_64")
+	if err != nil {
+		t.Fatalf("second lookup rescanned instead of using the cache: %v", err)
 	}
 	if second != first {
 		t.Errorf("cached lookup returned %q, want %q", second, first)
 	}
-	// The uncached scan walks all of /usr/share and takes tens of ms.
-	if elapsed > time.Millisecond {
-		t.Errorf("second lookup took %v, expected it to be served from the cache", elapsed)
+}
+
+func TestOVMFPathReportsAMissingFirmware(t *testing.T) {
+	prev := ovmfSearchRoot
+	ovmfSearchRoot = t.TempDir()
+	ovmfCache.Clear()
+	t.Cleanup(func() { ovmfSearchRoot = prev; ovmfCache.Clear() })
+
+	if _, err := OVMFPath("x86_64"); err == nil {
+		t.Fatal("expected an error when no firmware is installed")
 	}
 }

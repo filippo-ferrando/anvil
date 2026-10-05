@@ -142,8 +142,12 @@ var ovmfArchHints = map[string][]string{
 	"aarch64": {"aavmf", "aarch64", "arm64", "qemu_efi"},
 }
 
+// ovmfSearchRoot is where the firmware scan looks. A variable so tests can
+// point it at a fixture instead of depending on what the host has installed.
+var ovmfSearchRoot = "/usr/share"
+
 // ovmfCache holds the firmware path found for an arch. The scan below walks
-// all of /usr/share, which is slow enough to matter on every VM start.
+// the whole search root, which is slow enough to matter on every VM start.
 var ovmfCache sync.Map
 
 func OVMFPath(arch string) (string, error) {
@@ -157,7 +161,7 @@ func OVMFPath(arch string) (string, error) {
 
 	var candidates, matches []string
 
-	err := filepath.WalkDir("/usr/share", func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(ovmfSearchRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // Ignore permission denied or access errors
 		}
@@ -180,7 +184,13 @@ func OVMFPath(arch string) (string, error) {
 		}
 
 		candidates = append(candidates, path)
-		lowerPath := strings.ToLower(path)
+		// Matched below the search root, so a directory above it can't skew
+		// which arch a firmware file looks like.
+		rel, relErr := filepath.Rel(ovmfSearchRoot, path)
+		if relErr != nil {
+			rel = path
+		}
+		lowerPath := strings.ToLower(rel)
 		for _, h := range hints {
 			if strings.Contains(lowerPath, h) {
 				matches = append(matches, path)
@@ -198,9 +208,9 @@ func OVMFPath(arch string) (string, error) {
 		return matches[0], nil
 	}
 	if len(candidates) == 0 {
-		return "", fmt.Errorf("could not dynamically locate any UEFI firmware (.fd) in /usr/share")
+		return "", fmt.Errorf("could not dynamically locate any UEFI firmware (.fd) in %s", ovmfSearchRoot)
 	}
-	return "", fmt.Errorf("could not locate %s UEFI firmware in /usr/share (found firmware for another arch only: %v); install the %s edk2/OVMF firmware package", arch, candidates, arch)
+	return "", fmt.Errorf("could not locate %s UEFI firmware in %s (found firmware for another arch only: %v); install the %s edk2/OVMF firmware package", arch, ovmfSearchRoot, candidates, arch)
 }
 
 // BuildArgs renders the full qemu-system-* argument list for cfg. It never
