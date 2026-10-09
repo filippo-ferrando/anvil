@@ -144,7 +144,7 @@ func injectGuestKeys(ctx context.Context, c *client.Client, name, to string) err
 			fmt.Fprintf(os.Stderr, "anvil: %s isn't running, skipping guest-key setup. Add the target's key to it manually if needed\n", inst.GetName())
 			continue
 		}
-		target, err := resolveSSHTarget(inst, "")
+		target, err := resolveSSHTarget(c, inst, "")
 		if err != nil {
 			return fmt.Errorf("%s: %w", inst.GetName(), err)
 		}

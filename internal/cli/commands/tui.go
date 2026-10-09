@@ -13,7 +13,7 @@ func newTuiCommand(flags *globalFlags) *cobra.Command {
 		Short: "Launch the terminal UI",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return tui.Run(flags.socket)
+			return tui.Run(flags.socket, flags.remote)
 		},
 	}
 }

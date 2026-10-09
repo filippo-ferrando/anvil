@@ -11,6 +11,7 @@ import (
 
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 	"github.com/anvil-project/anvil/internal/sshkey"
+	"github.com/anvil-project/anvil/pkg/client"
 )
 
 // shellDoneMsg reports the outcome of a suspended shell/exec session back into the update loop.
@@ -27,7 +28,7 @@ var ttyCompatSSHArgs = []string{
 // shellInto suspends the TUI and execs an interactive ssh session into inst.
 // user overrides the image's default user; blank keeps that default.
 func (m model) shellInto(inst *anvilv1.Instance, user string) (tea.Model, tea.Cmd) {
-	cmd, err := buildShellCommand(inst, user, nil)
+	cmd, err := buildShellCommand(m.client, inst, user, nil)
 	if err != nil {
 		m.setStatus(err.Error(), true)
 		return m, nil
@@ -46,9 +47,9 @@ func (m model) execInto(inst *anvilv1.Instance, user, command string) (tea.Model
 	var cmd *exec.Cmd
 	var err error
 	if inst.GetContainer() != nil {
-		cmd, err = buildContainerExecCommand(inst, fields)
+		cmd, err = buildContainerExecCommand(m.client, inst, fields)
 	} else {
-		cmd, err = buildShellCommand(inst, user, fields)
+		cmd, err = buildShellCommand(m.client, inst, user, fields)
 	}
 	if err != nil {
 		m.setStatus(err.Error(), true)
@@ -59,7 +60,7 @@ func (m model) execInto(inst *anvilv1.Instance, user, command string) (tea.Model
 
 // buildShellCommand builds the ssh invocation for inst: an interactive
 // login when command is empty, a one-off remote command otherwise.
-func buildShellCommand(inst *anvilv1.Instance, user string, command []string) (*exec.Cmd, error) {
+func buildShellCommand(c *client.Client, inst *anvilv1.Instance, user string, command []string) (*exec.Cmd, error) {
 	vm := inst.GetVm()
 	if vm == nil {
 		return nil, fmt.Errorf("%q isn't a VM", inst.GetName())
@@ -106,6 +107,7 @@ func buildShellCommand(inst *anvilv1.Instance, user string, command []string) (*
 		"-o", "UserKnownHostsFile=" + knownHosts,
 	}
 	args = append(args, ttyCompatSSHArgs...)
+	args = append(args, c.JumpArgs()...)
 	args = append(args, fmt.Sprintf("%s@%s", user, host))
 	args = append(args, command...)
 
@@ -115,7 +117,7 @@ func buildShellCommand(inst *anvilv1.Instance, user string, command []string) (*
 }
 
 // buildContainerExecCommand builds a `docker exec`/`podman exec` invocation against inst's engine.
-func buildContainerExecCommand(inst *anvilv1.Instance, command []string) (*exec.Cmd, error) {
+func buildContainerExecCommand(c *client.Client, inst *anvilv1.Instance, command []string) (*exec.Cmd, error) {
 	spec := inst.GetContainer()
 	if inst.GetState() != anvilv1.State_STATE_RUNNING {
 		return nil, fmt.Errorf("%q isn't running", inst.GetName())
@@ -135,6 +137,7 @@ func buildContainerExecCommand(inst *anvilv1.Instance, command []string) (*exec.
 
 	args := append([]string{"exec", "-it", spec.GetContainerId()}, command...)
 	cmd := exec.Command(bin, args...)
+	cmd.Env = c.DockerEnv()
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd, nil
 }

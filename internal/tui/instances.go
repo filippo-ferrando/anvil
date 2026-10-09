@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -548,10 +547,10 @@ func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if hostPath == "" || guestPath == "" {
 			return m, nil
 		}
-		// Resolve a relative path against this process's cwd, client-side.
-		absHostPath, err := filepath.Abs(hostPath)
+		// Local: relative to this process's cwd. Remote: must be absolute on the daemon's host.
+		absHostPath, err := m.client.HostPath(hostPath)
 		if err != nil {
-			m.setStatus("resolving "+hostPath+": "+err.Error(), true)
+			m.setStatus(err.Error(), true)
 			return m, nil
 		}
 		return m, mountInstance(m.client, target.GetName(), absHostPath, guestPath, ins.promptForm.Bool("Read-only"))

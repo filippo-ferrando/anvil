@@ -134,6 +134,18 @@ an address and an SSH port, nothing is saved and no access is granted, so the ou
 just what `anvil host add` would otherwise have to be told. `ANVIL_MDNS=off` in anvild's
 environment turns the announcement off.
 
+`anvil --remote <[user@]host>` (or `ANVIL_REMOTE`) drives the anvild on another host over
+plain SSH, for every command and for `anvil tui`. It runs `anvil dial-stdio` on that host,
+so it needs key or agent SSH auth, the `anvil` CLI there, and membership of its `anvil`
+group. `shell`, `exec` and `transfer` reach a VM through that host with `ssh -J`, and
+containers through `DOCKER_HOST=ssh://`, so the local `ssh` and `docker` CLIs are enough.
+Paths sent to the daemon (`mount`, `export`, `import`) are paths on the remote host and
+must be absolute.
+
+`ANVIL_METRICS=127.0.0.1:9469` (or `unix:/run/anvil/metrics.sock`) in anvild's
+environment serves Prometheus metrics at `/metrics`: each instance's state plus the live
+CPU, memory, disk, network and uptime numbers that `anvil stats` shows. It's off unless set.
+
 Migration SSH trusts a host's key the first time it sees it and records it. To require a
 key anvil already knows instead, add the host with `anvil host add <alias> <user@host>
 --strict-host-key`; adding the same alias again replaces it, so this can be turned on

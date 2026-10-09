@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -26,16 +25,16 @@ func newMountCommand(flags *globalFlags) *cobra.Command {
 			if !ok {
 				return fmt.Errorf(`second argument must be "<name>:<guest-path>"`)
 			}
-			absHostPath, err := filepath.Abs(hostPath)
-			if err != nil {
-				return fmt.Errorf("resolving %s: %w", hostPath, err)
-			}
-
 			c, err := dial(flags)
 			if err != nil {
 				return err
 			}
 			defer c.Close()
+			// With --remote, host-path is a directory on the daemon's host.
+			absHostPath, err := c.HostPath(hostPath)
+			if err != nil {
+				return err
+			}
 			_, err = c.Mount(cmd.Context(), &anvilv1.MountRequest{
 				Name:      name,
 				HostPath:  absHostPath,

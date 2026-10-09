@@ -43,16 +43,16 @@ func newTransferCommand(flags *globalFlags) *cobra.Command {
 					fmt.Fprintln(os.Stderr, "anvil: --user/--identity have no effect on a container instance, ignoring")
 				}
 				if srcIsRemote {
-					return runContainerCopy(inst, dstPath, srcPath, false)
+					return runContainerCopy(c, inst, dstPath, srcPath, false)
 				}
-				return runContainerCopy(inst, srcPath, dstPath, true)
+				return runContainerCopy(c, inst, srcPath, dstPath, true)
 			}
 
 			key, err := resolveIdentity(identity)
 			if err != nil {
 				return err
 			}
-			target, err := resolveSSHTarget(inst, user)
+			target, err := resolveSSHTarget(c, inst, user)
 			if err != nil {
 				return err
 			}

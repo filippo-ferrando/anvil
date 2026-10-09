@@ -142,6 +142,13 @@ jobs:
     needs: [build-arch, build-deb, build-rpm]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Write release notes
+        run: scripts/release-notes.sh "$GITHUB_REF_NAME" > release-notes.md
+
       - uses: actions/download-artifact@v3
         with:
           path: dist
@@ -149,6 +156,7 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v3
         with:
+          body_path: release-notes.md
           files: dist/**/*
           fail_on_unmatched_files: true
 

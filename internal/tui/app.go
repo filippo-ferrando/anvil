@@ -89,9 +89,15 @@ type model struct {
 	watchReloadPending bool // a reload triggered by a Watch event is already scheduled
 }
 
-// Run dials socketPath and blocks running the TUI until the user quits or an error occurs.
-func Run(socketPath string) error {
-	c, err := client.Dial(socketPath)
+// Run dials socketPath (on the ssh host remote, if set) and blocks running
+// the TUI until the user quits or an error occurs.
+func Run(socketPath, remote string) error {
+	dial := func() (*client.Client, error) { return client.Dial(socketPath) }
+	if remote != "" {
+		dial = func() (*client.Client, error) { return client.DialSSH(remote, socketPath) }
+		socketPath = remote + ":" + socketPath
+	}
+	c, err := dial()
 	if err != nil {
 		return fmt.Errorf("tui: dialing anvild at %s: %w", socketPath, err)
 	}

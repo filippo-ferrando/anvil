@@ -28,14 +28,14 @@ func newShellCommand(flags *globalFlags) *cobra.Command {
 				if cmd.Flags().Changed("user") || cmd.Flags().Changed("identity") {
 					fmt.Fprintln(os.Stderr, "anvil: --user/--identity have no effect on a container instance, ignoring")
 				}
-				return runContainerExec(inst, nil)
+				return runContainerExec(c, inst, nil)
 			}
 
 			key, err := resolveIdentity(identity)
 			if err != nil {
 				return err
 			}
-			target, err := resolveSSHTarget(inst, user)
+			target, err := resolveSSHTarget(c, inst, user)
 			if err != nil {
 				return err
 			}

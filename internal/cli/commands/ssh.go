@@ -43,10 +43,12 @@ type sshTarget struct {
 	Host       string // "localhost" for a standalone VM, or the guest's address for a bridged intent member
 	Port       int
 	User       string
+	Jump       []string // ssh flags to hop through a remote daemon's host, nil when local
 }
 
 // resolveSSHTarget builds a VM's connection info from an already-resolved instance.
-func resolveSSHTarget(inst *anvilv1.Instance, userOverride string) (sshTarget, error) {
+// Host is relative to the daemon's host, so a remote daemon adds a jump through it.
+func resolveSSHTarget(c *client.Client, inst *anvilv1.Instance, userOverride string) (sshTarget, error) {
 	name := inst.GetName()
 	vmSpec := inst.GetVm()
 	if vmSpec == nil {
@@ -73,7 +75,7 @@ func resolveSSHTarget(inst *anvilv1.Instance, userOverride string) (sshTarget, e
 		if !ok {
 			ip = vmSpec.GetStaticIp()
 		}
-		return sshTarget{InstanceID: inst.GetId(), Host: ip, Port: 22, User: user}, nil
+		return sshTarget{InstanceID: inst.GetId(), Host: ip, Port: 22, User: user, Jump: c.JumpArgs()}, nil
 	}
 
 	if vmSpec.GetSshPort() == 0 {
@@ -84,6 +86,7 @@ func resolveSSHTarget(inst *anvilv1.Instance, userOverride string) (sshTarget, e
 		Host:       "localhost",
 		Port:       int(vmSpec.GetSshPort()),
 		User:       user,
+		Jump:       c.JumpArgs(),
 	}, nil
 }
 
@@ -120,6 +123,7 @@ func commonSSHArgs(target sshTarget, portFlag, identity string) ([]string, error
 		"-o", "UserKnownHostsFile=" + knownHosts,
 	}
 	args = append(args, ttyCompatSSHArgs...)
+	args = append(args, target.Jump...)
 	if identity != "" {
 		args = append(args, "-i", identity)
 	}

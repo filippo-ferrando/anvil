@@ -107,6 +107,15 @@ func run() error {
 		}()
 	}
 
+	// Opt-in Prometheus endpoint: ANVIL_METRICS="127.0.0.1:9469" or "unix:/run/anvil/metrics.sock".
+	if addr := os.Getenv("ANVIL_METRICS"); addr != "" {
+		go func() {
+			if err := daemon.ServeMetrics(ctx, addr, mgr); err != nil {
+				log.Printf("anvild: metrics: %v", err)
+			}
+		}()
+	}
+
 	migrateMgr := migrate.NewManager(db, mgr, vmBackend, intentMgr)
 	exportMgr := export.NewManager(db, mgr, intentMgr, vmBackend)
 

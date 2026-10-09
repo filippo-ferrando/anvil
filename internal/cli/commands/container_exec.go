@@ -6,6 +6,7 @@ import (
 	"os/exec"
 
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
+	"github.com/anvil-project/anvil/pkg/client"
 )
 
 // containerBinFor returns the docker/podman CLI binary path for the given
@@ -30,7 +31,7 @@ func isStdinTerminal() bool {
 
 // runContainerExec runs command inside inst's container, inheriting stdio.
 // An empty command opens an interactive /bin/sh shell.
-func runContainerExec(inst *anvilv1.Instance, command []string) error {
+func runContainerExec(c *client.Client, inst *anvilv1.Instance, command []string) error {
 	spec := inst.GetContainer()
 	if spec == nil {
 		return fmt.Errorf("%q isn't a container", inst.GetName())
@@ -59,13 +60,14 @@ func runContainerExec(inst *anvilv1.Instance, command []string) error {
 	}
 
 	cmd := exec.Command(bin, args...)
+	cmd.Env = c.DockerEnv()
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
 }
 
 // runContainerCopy copies a file to or from inst's container via
 // `docker cp`/`podman cp`; toContainer selects the copy direction.
-func runContainerCopy(inst *anvilv1.Instance, localPath, containerPath string, toContainer bool) error {
+func runContainerCopy(c *client.Client, inst *anvilv1.Instance, localPath, containerPath string, toContainer bool) error {
 	spec := inst.GetContainer()
 	if spec == nil {
 		return fmt.Errorf("%q isn't a container", inst.GetName())
@@ -88,6 +90,7 @@ func runContainerCopy(inst *anvilv1.Instance, localPath, containerPath string, t
 	}
 
 	cmd := exec.Command(bin, args...)
+	cmd.Env = c.DockerEnv()
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
 }

@@ -3,6 +3,8 @@
 package commands
 
 import (
+	"os"
+
 	"github.com/spf13/cobra"
 
 	"github.com/anvil-project/anvil/internal/config"
@@ -11,6 +13,7 @@ import (
 
 type globalFlags struct {
 	socket string
+	remote string
 }
 
 // NewRootCommand builds the full `anvil` command tree.
@@ -29,6 +32,8 @@ over a unix socket.`,
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().StringVar(&flags.socket, "socket", config.SocketPath(), "anvild unix socket path")
+	root.PersistentFlags().StringVar(&flags.remote, "remote", os.Getenv("ANVIL_REMOTE"),
+		`use the anvild on this ssh host ("[user@]host" or "ssh://[user@]host[:port]"), defaults to $ANVIL_REMOTE`)
 
 	root.AddCommand(
 		newLaunchCommand(flags),
@@ -67,11 +72,15 @@ over a unix socket.`,
 		newExportCommand(flags),
 		newImportCommand(flags),
 		newTuiCommand(flags),
+		newDialStdioCommand(flags),
 	)
 	root.AddCommand(newManCommand(root))
 	return root
 }
 
 func dial(flags *globalFlags) (*client.Client, error) {
+	if flags.remote != "" {
+		return client.DialSSH(flags.remote, flags.socket)
+	}
 	return client.Dial(flags.socket)
 }

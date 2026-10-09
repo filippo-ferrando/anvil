@@ -9,6 +9,13 @@ container mirrors, man pages, shell completions and the TUI.
 
 ### Recently done
 
+- **Remote anvild over SSH.** `anvil --remote <[user@]host>` (or `ANVIL_REMOTE`), CLI and
+  TUI alike, tunnels gRPC through `ssh <host> anvil dial-stdio`. Guest SSH hops through the
+  host with `ssh -J`, container exec/cp go through `DOCKER_HOST=ssh://`, and paths sent to
+  the daemon (`mount`, `export`, `import`) are remote paths and must be absolute.
+- **Prometheus metrics.** `ANVIL_METRICS=<host:port>` or `unix:<path>` in anvild's
+  environment serves `/metrics`: per-instance state plus the live `anvil stats` numbers.
+
 - **Host discovery over mDNS.** anvild announces itself as `_anvil._tcp`
   (`internal/discovery`), so `avahi-browse` sees it too. `anvil host discover` (TUI
   Migration screen: `d`) lists the name, address and SSH port of the other anvil hosts
@@ -178,14 +185,8 @@ and keeps the host strictly in line with every `anvil.yaml` found in it, recursi
 
 ## Discovery and observability
 
-### Interact with remote `anvild` over SSH
+### Event history
 
-Enable the connection to a remote `anvild` over SSH, `anvil` and `anvil tui` should be able to use a non-local daemon with the same feature set. (obviously, the remote host must have `anvild` running and the user must have permission to it, also `anvil mount` should refer to the remote machine).
-
-### Metrics and event history
-
-- An optional Prometheus `/metrics` endpoint (opt-in, on its own socket or port) exposing
-  the per-instance stats the daemon already collects.
 - A small persisted event log (`anvil events`) for create/start/stop/migrate/failure, on
   top of the live `Watch` stream.
 - Streaming stats over `Watch` or a sibling RPC, so the TUI stops polling `Stats` every 2s.

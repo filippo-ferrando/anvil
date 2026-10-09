@@ -23,6 +23,9 @@ type Client struct {
 	Migrate   anvilv1.MigrateServiceClient
 	Export    anvilv1.ExportServiceClient
 	Snapshot  anvilv1.SnapshotServiceClient
+
+	// Remote is the ssh destination of the daemon's host, empty for a local daemon.
+	Remote string
 }
 
 // Dial connects to anvild's gRPC API over its unix socket at socketPath.
@@ -34,6 +37,10 @@ func Dial(socketPath string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("client: dialing %s: %w", socketPath, err)
 	}
+	return newClient(conn), nil
+}
+
+func newClient(conn *grpc.ClientConn) *Client {
 	return &Client{
 		conn:                  conn,
 		InstanceServiceClient: anvilv1.NewInstanceServiceClient(conn),
@@ -45,7 +52,7 @@ func Dial(socketPath string) (*Client, error) {
 		Migrate:               anvilv1.NewMigrateServiceClient(conn),
 		Export:                anvilv1.NewExportServiceClient(conn),
 		Snapshot:              anvilv1.NewSnapshotServiceClient(conn),
-	}, nil
+	}
 }
 
 // Close closes the underlying gRPC connection.

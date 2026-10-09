@@ -3,7 +3,6 @@ package commands
 import (
 	"fmt"
 	"io"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -26,16 +25,15 @@ func newExportCommand(flags *globalFlags) *cobra.Command {
 			if output == "" {
 				return fmt.Errorf("-o/--output is required")
 			}
-			absOutput, err := filepath.Abs(output)
-			if err != nil {
-				return fmt.Errorf("resolving %s: %w", output, err)
-			}
-
 			c, err := dial(flags)
 			if err != nil {
 				return err
 			}
 			defer c.Close()
+			absOutput, err := c.HostPath(output)
+			if err != nil {
+				return err
+			}
 
 			stream, err := c.Export.Export(cmd.Context(), &anvilv1.ExportRequest{Name: args[0], OutputPath: absOutput})
 			if err != nil {
@@ -75,16 +73,15 @@ func newImportCommand(flags *globalFlags) *cobra.Command {
 			"`--name` renames the imported intent, or the instance for a standalone bundle.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			absBundle, err := filepath.Abs(args[0])
-			if err != nil {
-				return fmt.Errorf("resolving %s: %w", args[0], err)
-			}
-
 			c, err := dial(flags)
 			if err != nil {
 				return err
 			}
 			defer c.Close()
+			absBundle, err := c.HostPath(args[0])
+			if err != nil {
+				return err
+			}
 
 			stream, err := c.Export.Import(cmd.Context(), &anvilv1.ImportRequest{BundlePath: absBundle, Name: name})
 			if err != nil {

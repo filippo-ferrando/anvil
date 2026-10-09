@@ -16,9 +16,9 @@ just build a request and send it over that socket.
 It drives QEMU processes directly over QMP for VMs (no libvirt) and talks to
 Docker's real HTTP API for containers (no SDK). It takes no command-line
 flags or subcommands and its on-disk layout is fixed. Its runtime behavior is
-controlled through the requests it receives over the socket, with one
-exception: \fBANVIL_MDNS=off\fR in its environment turns off the local-network
-announcement described below.
+controlled through the requests it receives over the socket, with two
+exceptions read from its environment, described under ENVIRONMENT:
+\fBANVIL_MDNS\fR and \fBANVIL_METRICS\fR.
 
 On startup it creates its run, state, and cache directories if missing,
 opens its registry, reconciles instance and intent-network state against
@@ -98,6 +98,16 @@ Reserved for daemon configuration; unused today.
 Set to \fBoff\fR to stop anvild announcing itself on the local network over
 mDNS. \fBanvil host discover\fR on another host then won't see it. Anything
 else, including unset, leaves the announcement on.
+.RE
+.PP
+\fBANVIL_METRICS\fP
+.RS 4
+Serve Prometheus metrics at \fB/metrics\fR on this address, either
+\fIhost\fB:\fIport\fR (e.g. \fB127.0.0.1:9469\fR) or \fBunix:\fIpath\fR for a unix
+socket. Unset, the default, serves nothing. The endpoint has no access
+control, so bind it to loopback or a socket unless the network is trusted.
+Each scrape reports every instance's state and the live stats of the running
+ones, the same numbers as \fBanvil stats\fR.
 .RE
 
 .SH RUNNING

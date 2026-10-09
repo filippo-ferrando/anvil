@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -324,7 +323,7 @@ func umountInstance(c *client.Client, name, guestPath string) tea.Cmd {
 // skips instance resolution and looks name up as an intent only, for a caller (the Intents page) that already knows name is an intent.
 func startExportStream(c *client.Client, name, outputPath string, isIntent bool) tea.Cmd {
 	return func() tea.Msg {
-		absOutput, err := filepath.Abs(outputPath)
+		absOutput, err := c.HostPath(outputPath)
 		if err != nil {
 			return exportStreamMsg{err: err, done: true}
 		}
@@ -362,7 +361,7 @@ func receiveExportEvent(stream anvilv1.ExportService_ExportClient) tea.Cmd {
 // streams its progress back.
 func startImportStream(c *client.Client, bundlePath, renameTo string) tea.Cmd {
 	return func() tea.Msg {
-		absBundle, err := filepath.Abs(bundlePath)
+		absBundle, err := c.HostPath(bundlePath)
 		if err != nil {
 			return importStreamMsg{err: err, done: true}
 		}

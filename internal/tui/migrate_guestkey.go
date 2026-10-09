@@ -122,9 +122,12 @@ func injectGuestKeys(ctx context.Context, c *client.Client, name, to string) err
 			"-i", identity,
 			"-o", "StrictHostKeyChecking=accept-new",
 			"-o", "UserKnownHostsFile=" + knownHosts,
+		}
+		args = append(args, c.JumpArgs()...)
+		args = append(args,
 			fmt.Sprintf("%s@%s", user, host),
 			remoteCommand,
-		}
+		)
 		cmd := exec.Command(sshBin, args...)
 		cmd.Stdin = strings.NewReader(key)
 		if out, err := cmd.CombinedOutput(); err != nil {
