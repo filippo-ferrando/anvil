@@ -213,7 +213,7 @@ func guestAddresses(ifaces []qemu.GuestInterface) []string {
 // first; some distros block guest-exec, so result.json is read as a fallback.
 func cloudInitStatus(ctx context.Context, c *qemu.QGAConn) instance.CloudInitStatus {
 	if res, err := c.Exec(ctx, "cloud-init", "status"); err == nil {
-		if s := parseCloudInitStatus(res.Stdout, res.ExitCode); s != instance.CloudInitUnknown {
+		if s := parseCloudInitStatus(res.Stdout); s != instance.CloudInitUnknown {
 			return s
 		}
 	}
@@ -228,7 +228,7 @@ func cloudInitStatus(ctx context.Context, c *qemu.QGAConn) instance.CloudInitSta
 }
 
 // parseCloudInitStatus reads the "status: <word>" line `cloud-init status` prints.
-func parseCloudInitStatus(out string, exitCode int) instance.CloudInitStatus {
+func parseCloudInitStatus(out string) instance.CloudInitStatus {
 	for _, line := range strings.Split(out, "\n") {
 		word, ok := strings.CutPrefix(strings.TrimSpace(line), "status:")
 		if !ok {
@@ -245,9 +245,8 @@ func parseCloudInitStatus(out string, exitCode int) instance.CloudInitStatus {
 			return instance.CloudInitDisabled
 		}
 	}
-	if exitCode == 1 {
-		return instance.CloudInitError
-	}
+	// No status line means the command itself broke (e.g. python upgraded mid-boot), not
+	// cloud-init: stay unknown so result.json decides instead of a sticky error.
 	return instance.CloudInitUnknown
 }
 

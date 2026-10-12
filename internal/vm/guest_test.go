@@ -20,21 +20,21 @@ import (
 func TestParseCloudInitStatus(t *testing.T) {
 	cases := []struct {
 		out  string
-		code int
 		want instance.CloudInitStatus
 	}{
-		{"status: running\n", 0, instance.CloudInitRunning},
-		{"\nstatus: done\n", 0, instance.CloudInitDone},
-		{"status: degraded done\n", 2, instance.CloudInitDone},
-		{"status: error\n", 1, instance.CloudInitError},
-		{"status: disabled\n", 0, instance.CloudInitDisabled},
-		{"status: not started\n", 0, instance.CloudInitRunning},
-		{"", 1, instance.CloudInitError},
-		{"garbage", 0, instance.CloudInitUnknown},
+		{"status: running\n", instance.CloudInitRunning},
+		{"\nstatus: done\n", instance.CloudInitDone},
+		{"status: degraded done\n", instance.CloudInitDone},
+		{"status: error\n", instance.CloudInitError},
+		{"status: disabled\n", instance.CloudInitDisabled},
+		{"status: not started\n", instance.CloudInitRunning},
+		{"", instance.CloudInitUnknown},
+		{"Traceback (most recent call last):\n", instance.CloudInitUnknown},
+		{"garbage", instance.CloudInitUnknown},
 	}
 	for _, c := range cases {
-		if got := parseCloudInitStatus(c.out, c.code); got != c.want {
-			t.Errorf("parseCloudInitStatus(%q, %d) = %q, want %q", c.out, c.code, got, c.want)
+		if got := parseCloudInitStatus(c.out); got != c.want {
+			t.Errorf("parseCloudInitStatus(%q) = %q, want %q", c.out, got, c.want)
 		}
 	}
 }
