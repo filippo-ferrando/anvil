@@ -6,8 +6,34 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+
 	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
 )
+
+// addOutputFlag registers -o/--output, checked with checkOutput before use.
+func addOutputFlag(cmd *cobra.Command, output *string) {
+	cmd.Flags().StringVarP(output, "output", "o", "table", `output format: "table" or "json"`)
+}
+
+func checkOutput(output string) error {
+	if output != "table" && output != "json" {
+		return fmt.Errorf(`--output must be "table" or "json", got %q`, output)
+	}
+	return nil
+}
+
+// printJSON writes m as indented JSON with the field names from anvil.proto.
+func printJSON(w io.Writer, m proto.Message) error {
+	b, err := protojson.MarshalOptions{Multiline: true, UseProtoNames: true}.Marshal(m)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(w, string(b))
+	return err
+}
 
 func kindLabel(k anvilv1.Kind) string {
 	switch k {

@@ -7,12 +7,16 @@ import (
 )
 
 func newListCommand(flags *globalFlags) *cobra.Command {
-	return &cobra.Command{
+	var output string
+	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List instances",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkOutput(output); err != nil {
+				return err
+			}
 			c, err := dial(flags)
 			if err != nil {
 				return err
@@ -23,8 +27,13 @@ func newListCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if output == "json" {
+				return printJSON(cmd.OutOrStdout(), reply)
+			}
 			printInstanceTable(cmd.OutOrStdout(), reply.GetInstances())
 			return nil
 		},
 	}
+	addOutputFlag(cmd, &output)
+	return cmd
 }
