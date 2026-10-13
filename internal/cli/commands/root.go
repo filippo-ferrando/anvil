@@ -7,8 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/anvil-project/anvil/internal/config"
-	"github.com/anvil-project/anvil/pkg/client"
+	"git.fferrando.cc/rdfilippo/anvil/internal/config"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 type globalFlags struct {

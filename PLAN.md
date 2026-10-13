@@ -13,6 +13,13 @@ container mirrors, man pages, shell completions and the TUI.
   TUI alike, tunnels gRPC through `ssh <host> anvil dial-stdio`. Guest SSH hops through the
   host with `ssh -J`, container exec/cp go through `DOCKER_HOST=ssh://`, and paths sent to
   the daemon (`mount`, `export`, `import`) are remote paths and must be absolute.
+- **JSON output.** `anvil list` and `anvil find` take `-o json` (default `table`), printed
+  with `protojson` and the field names from `anvil.proto`.
+- **Official catalogue as a submodule.** Extra distro manifests and cloud-init templates
+  live in their own repo, checked out at `catalogues/`, for `anvil mirror add` and
+  `anvil cloud-init import-repo`.
+- **Neovim integration removed.** `integrations/nvim` is gone; the CLI and TUI are the
+  only clients.
 - **Prometheus metrics.** `ANVIL_METRICS=<host:port>` or `unix:<path>` in anvild's
   environment serves `/metrics`: per-instance state plus the live `anvil stats` numbers.
 
@@ -57,6 +64,8 @@ container mirrors, man pages, shell completions and the TUI.
   - **`anvil launch --wait` / `anvil wait`**: block until cloud-init is done, read through the
     agent (`cloud-init status`, or `result.json` where guest-exec is blocked), or from the
     serial console when there is no agent. Cloud-init errors make the command fail.
+    Output from `cloud-init status` with no `status:` line (the command itself broke, e.g.
+    python upgraded mid-boot) counts as unknown, so `result.json` decides, not a false error.
 - **virtiofs mounts, live.** 9p is gone: each mount is served by its own `virtiofsd`
   (namespace sandbox, falling back to none) on a `vhost-user-fs-pci` device. Guest RAM is a
   shared memfd and every VM has 8 PCIe root ports, so with a connected guest agent

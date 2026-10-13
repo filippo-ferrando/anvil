@@ -9,9 +9,9 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 
-	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
-	"github.com/anvil-project/anvil/internal/sshkey"
-	"github.com/anvil-project/anvil/pkg/client"
+	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/sshkey"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 // cloudInitNameField is the VM-only field naming a saved library entry.

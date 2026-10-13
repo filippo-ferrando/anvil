@@ -8,8 +8,8 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 
-	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
-	"github.com/anvil-project/anvil/pkg/client"
+	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 type intentItem struct{ intent *anvilv1.Intent }

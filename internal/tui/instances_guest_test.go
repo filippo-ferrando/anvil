@@ -11,7 +11,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
+	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 )
 
 func instancesModelWith(insts ...*anvilv1.Instance) model {

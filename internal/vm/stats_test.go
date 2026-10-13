@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/anvil-project/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 )
 
 func TestReadProcCPUTicksOnRealProcess(t *testing.T) {

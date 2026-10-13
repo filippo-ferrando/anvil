@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/anvil-project/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 )
 
 func TestAdoptOneMovesStagedData(t *testing.T) {

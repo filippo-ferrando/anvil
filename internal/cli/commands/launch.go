@@ -10,8 +10,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
-	"github.com/anvil-project/anvil/internal/sshkey"
+	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/sshkey"
 )
 
 func newLaunchCommand(flags *globalFlags) *cobra.Command {

@@ -3,10 +3,10 @@ package daemon
 import (
 	"fmt"
 
-	"github.com/anvil-project/anvil/internal/config"
-	"github.com/anvil-project/anvil/internal/hostpath"
-	"github.com/anvil-project/anvil/internal/instance"
-	"github.com/anvil-project/anvil/internal/migrate"
+	"git.fferrando.cc/rdfilippo/anvil/internal/config"
+	"git.fferrando.cc/rdfilippo/anvil/internal/hostpath"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/migrate"
 )
 
 // adoptStagedData moves the shared folders a migration uploaded into this host's

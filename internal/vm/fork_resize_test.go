@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anvil-project/anvil/internal/instance"
-	"github.com/anvil-project/anvil/internal/vm/image"
-	"github.com/anvil-project/anvil/internal/vm/qemu"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/qemu"
 )
 
 // runningDiskVM spawns a real QEMU on an overlay of a small base image, like an anvil VM's disk.

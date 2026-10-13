@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anvil-project/anvil/internal/config"
-	"github.com/anvil-project/anvil/internal/instance"
-	"github.com/anvil-project/anvil/internal/vm/image"
+	"git.fferrando.cc/rdfilippo/anvil/internal/config"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
 )
 
 // statsSampleWindow bounds how long Stats waits between its two live

@@ -4,11 +4,11 @@ import (
 	"context"
 	"time"
 
-	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
-	"github.com/anvil-project/anvil/internal/instance"
-	"github.com/anvil-project/anvil/internal/intent"
-	"github.com/anvil-project/anvil/internal/intent/apply"
-	"github.com/anvil-project/anvil/internal/store"
+	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/intent"
+	"git.fferrando.cc/rdfilippo/anvil/internal/intent/apply"
+	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 )
 
 // IntentServer implements anvilv1.IntentServiceServer against an

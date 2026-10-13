@@ -10,10 +10,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/anvil-project/anvil/internal/config"
-	"github.com/anvil-project/anvil/internal/hostpath"
-	"github.com/anvil-project/anvil/internal/instance"
-	"github.com/anvil-project/anvil/internal/store"
+	"git.fferrando.cc/rdfilippo/anvil/internal/config"
+	"git.fferrando.cc/rdfilippo/anvil/internal/hostpath"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 )
 
 // Store is the subset of *store.Store's methods Manager needs.

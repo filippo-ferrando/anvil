@@ -24,13 +24,13 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/anvil-project/anvil/internal/config"
-	"github.com/anvil-project/anvil/internal/instance"
-	"github.com/anvil-project/anvil/internal/store"
-	"github.com/anvil-project/anvil/internal/vm/cloudinit"
-	"github.com/anvil-project/anvil/internal/vm/image"
-	"github.com/anvil-project/anvil/internal/vm/network"
-	"github.com/anvil-project/anvil/internal/vm/qemu"
+	"git.fferrando.cc/rdfilippo/anvil/internal/config"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/store"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/cloudinit"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/network"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/qemu"
 )
 
 // Source is the subset of *store.Store's methods Backend needs to

@@ -1,8 +1,8 @@
 package daemon
 
 import (
-	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
-	"github.com/anvil-project/anvil/internal/export"
+	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/export"
 )
 
 // ExportServer implements anvilv1.ExportServiceServer against an

@@ -6,7 +6,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/anvil-project/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 )
 
 // wrapErr converts instance.ErrNotFound into a gRPC codes.NotFound status,

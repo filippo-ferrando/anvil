@@ -54,6 +54,10 @@ boundary in `internal/` will drift between the two clients. Access control is ju
 group membership (`anvil` group) plus socket reachability; there are no accounts, no
 portal, no password.
 
+`anvil --remote <[user@]host>` (or `ANVIL_REMOTE`) points the CLI/TUI at another host's
+anvild: `pkg/client/ssh.go` runs `ssh <host> anvil dial-stdio` and speaks gRPC over that
+pipe, so the remote daemon still only listens on its unix socket.
+
 Migration/host-to-host work never uses daemon-to-daemon gRPC. It shells out over plain
 SSH to the target's own local `anvil` CLI (`internal/migrate`). This means Anvil never
 solves cross-host trust itself: whatever SSH access already exists is sufficient.
@@ -63,10 +67,11 @@ solves cross-host trust itself: whatever SSH access already exists is sufficient
 ```
 cmd/anvild/      daemon entrypoint (platform_linux.go / platform_darwin.go pick the VM backend)
 cmd/anvil/       CLI entrypoint
-pkg/client/      thin gRPC client, shared by the CLI and TUI
+pkg/client/      thin gRPC client (unix socket, or SSH for --remote), shared by the CLI and TUI
 api/proto/       gRPC API definition (anvil.proto), the source of truth; api/gen is generated, don't hand-edit
 internal/
-  daemon/        gRPC service implementation (one *_server.go per resource area)
+  daemon/        gRPC service implementation (one *_server.go per resource area), plus
+                 the optional Prometheus /metrics endpoint (metrics.go, ANVIL_METRICS)
   instance/      domain model + Backend interface + the Manager that dispatches to it
   vm/            QEMU backend (Linux): process mgmt, QMP, cloud-init, image catalog
   vm/vz/         Apple Virtualization.framework backend (darwin), a stub, not implemented yet
@@ -82,6 +87,9 @@ internal/
   cli/commands/  cobra commands (one file per command/command group)
   tui/           the Bubble Tea app
 data/distros/    built-in VM image catalog (embedded in the binary)
+catalogues/      official extra catalogue (distro manifests + cloud-init templates), a git
+                 submodule consumed via `anvil mirror add` / `cloud-init import-repo`, not embedded
+scripts/         verify-catalog.sh (checksums), release-notes.sh (used by the release workflow)
 packaging/       PKGBUILD/deb/rpm build scripts, systemd unit, sysusers/tmpfiles rules
 ```
 
@@ -116,10 +124,12 @@ code path. Full mechanics and manifest schemas: `docs/mirrors.md`.
 
 ## Conventions
 
-- Go 1.27, module `github.com/anvil-project/anvil`.
+- Go 1.27, module `git.fferrando.cc/rdfilippo/anvil`.
 - New gRPC surface starts in `api/proto/anvil/v1/anvil.proto`, then `make proto`, then
   implement in the matching `internal/daemon/*_server.go`.
 - `internal/cli/commands` is cobra; each command/command group gets its own file.
+- list-style commands offer `-o table|json` through `addOutputFlag`/`checkOutput`/`printJSON`
+  in `internal/cli/commands/table.go`; JSON is the gRPC reply itself, not a CLI-side shape.
 - no em-dashes in docs, comment or code, use normal punctuation.
 - use a simple language style in comments and docs, avoid jargon, avoid "we" or "you" or "I", avoid marketing-speak.
 - keep comments of max 2 lines, avoid long paragraphs, avoid repeating the code in the comment.

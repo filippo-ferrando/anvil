@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/anvil-project/anvil/internal/container/docker"
-	"github.com/anvil-project/anvil/internal/instance"
-	"github.com/anvil-project/anvil/internal/store"
+	"git.fferrando.cc/rdfilippo/anvil/internal/container/docker"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 )
 
 // Source is the subset of *store.Store's methods DockerBackend needs to

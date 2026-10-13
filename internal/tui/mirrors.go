@@ -7,7 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 
-	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
+	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 )
 
 type mirrorItem struct{ mirror *anvilv1.Mirror }

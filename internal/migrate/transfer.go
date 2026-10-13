@@ -16,7 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/anvil-project/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 )
 
 // uploadAttempts is how many times one disk upload resumes after a broken connection.

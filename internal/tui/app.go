@@ -12,7 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/anvil-project/anvil/pkg/client"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 // statusVisible and errorVisible are how long a status line stays up before being cleared.

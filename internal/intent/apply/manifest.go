@@ -12,7 +12,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/anvil-project/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 )
 
 // Manifest is one parsed anvil.yaml: an intent and its members, keyed by role.

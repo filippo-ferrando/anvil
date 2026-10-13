@@ -7,8 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
-	"github.com/anvil-project/anvil/internal/migrate/payload"
+	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/migrate/payload"
 )
 
 // newMigrateImportCommand reads a payload.Payload as JSON from stdin,

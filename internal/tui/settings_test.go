@@ -6,7 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 
-	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
+	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 )
 
 // setField replaces a text field's value, the way typing into it would.

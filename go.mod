@@ -1,4 +1,4 @@
-module github.com/anvil-project/anvil
+module git.fferrando.cc/rdfilippo/anvil
 
 go 1.27.1
 

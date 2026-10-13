@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/anvil-project/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 )
 
 // Backend dispatches instance.KindContainer calls to the concrete

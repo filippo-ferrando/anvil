@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/anvil-project/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 )
 
 // preflight checks t can actually run spec before anything is stopped or

@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
+	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 )
 
 // progressKey returns the part of status before the first ": ", or the whole string if there isn't one.

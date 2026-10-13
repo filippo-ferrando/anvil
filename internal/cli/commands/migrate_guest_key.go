@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/anvil-project/anvil/internal/sshkey"
+	"git.fferrando.cc/rdfilippo/anvil/internal/sshkey"
 )
 
 // newMigrateGuestKeyCommand prints this identity's default anvil

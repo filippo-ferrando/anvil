@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anvil-project/anvil/internal/container/docker"
-	"github.com/anvil-project/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/container/docker"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 )
 
 // TestRealDockerExitDetection runs a short-lived container on the real dockerd and checks

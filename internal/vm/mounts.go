@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anvil-project/anvil/internal/hostpath"
-	"github.com/anvil-project/anvil/internal/instance"
-	"github.com/anvil-project/anvil/internal/vm/qemu"
+	"git.fferrando.cc/rdfilippo/anvil/internal/hostpath"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/qemu"
 )
 
 // mountFSVirtiofs marks a VMSpec whose guest fstab was written for virtiofs. Specs from

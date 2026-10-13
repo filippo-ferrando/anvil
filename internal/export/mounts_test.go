@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anvil-project/anvil/internal/instance"
-	"github.com/anvil-project/anvil/internal/store"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 )
 
 // fakeInstances answers Export's lookups with one fixed spec and records the

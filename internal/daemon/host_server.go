@@ -5,10 +5,10 @@ import (
 	"sort"
 	"time"
 
-	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
-	"github.com/anvil-project/anvil/internal/discovery"
-	"github.com/anvil-project/anvil/internal/migrate"
-	"github.com/anvil-project/anvil/internal/store"
+	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/discovery"
+	"git.fferrando.cc/rdfilippo/anvil/internal/migrate"
+	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 )
 
 // HostServer implements anvilv1.HostServiceServer against *store.Store,

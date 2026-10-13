@@ -361,6 +361,20 @@ Updating a template later is just editing the YAML file (and `templates.json` if
 added/removed one) on the server and re-running `import-repo --force`, it *re-fetches*
 and overwrites the matching saved configs by name.
 
+## The official catalogue
+
+The `catalogues/` git submodule holds the official catalogue repo: `distros_x86_64.json`
+and `distros_aarch64.json` are VM mirror manifests, and `cloudinits/` is a template repo.
+None of it is embedded in the binary; add it like any other source, with the URLs listed
+in `catalogues/README.md`:
+
+```
+anvil mirror add --kind vm --manifest-url <distros manifest url> anvil-catalogue
+anvil cloud-init import-repo <templates.json url>
+```
+
+`anvil find` then lists the extra distros next to the built-in ones.
+
 ## From the TUI
 
 The Mirrors page (`anvil tui`, sidebar) shows the same list `anvil mirror list` does,

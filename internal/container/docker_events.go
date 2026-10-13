@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anvil-project/anvil/internal/container/docker"
-	"github.com/anvil-project/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/container/docker"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 )
 
 // InstanceLister finds the instance behind a Docker container ID; *store.Store satisfies it.

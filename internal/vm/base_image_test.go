@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anvil-project/anvil/internal/instance"
-	"github.com/anvil-project/anvil/internal/vm/image"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
 )
 
 // testManifest describes one fake distro with no published checksum, so the

@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
-	"github.com/anvil-project/anvil/internal/instance"
+	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 )
 
 // SnapshotServer implements anvilv1.SnapshotServiceServer against an

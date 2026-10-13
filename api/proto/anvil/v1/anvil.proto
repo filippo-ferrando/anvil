@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package anvil.v1;
 
-option go_package = "github.com/anvil-project/anvil/api/gen/anvil/v1;anvilv1";
+option go_package = "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1;anvilv1";
 
 // InstanceService manages the lifecycle of VM and container instances.
 service InstanceService {

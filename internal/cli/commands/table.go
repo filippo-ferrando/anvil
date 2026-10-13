@@ -10,7 +10,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
-	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
+	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 )
 
 // addOutputFlag registers -o/--output, checked with checkOutput before use.

@@ -3,9 +3,9 @@
 package main
 
 import (
-	"github.com/anvil-project/anvil/internal/store"
-	"github.com/anvil-project/anvil/internal/vm/image"
-	"github.com/anvil-project/anvil/internal/vm/vz"
+	"git.fferrando.cc/rdfilippo/anvil/internal/store"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/vz"
 )
 
 // newVMBackend constructs this platform's VM backend. See platform_linux.go.

@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/anvil-project/anvil/internal/config"
+	"git.fferrando.cc/rdfilippo/anvil/internal/config"
 )
 
 // target is a parsed "user@host[:port]" SSH destination, plus an optional

@@ -74,6 +74,8 @@ Docker API" possible without a platform abstraction layer getting in the way.
 - `anvil fork` clones a VM into a new instance by copying its disk, keeping the same
   backing image so the fork only stores its own deltas. Safe to run on a running source
   VM: it stays up, and the copy is point-in-time (filesystem-consistent with the guest agent)
+- `anvil find [term]` lists the VM images that `anvil launch` can resolve, built-in and
+  mirrored alike
 - `anvil set` grows the disk and changes CPUs/memory, all live on a running VM; `--autostart` and
   `--restart no|on-failure[:N]|always` keep long-running VMs and containers up
 
@@ -151,6 +153,9 @@ key anvil already knows instead, add the host with `anvil host add <alias> <user
 --strict-host-key`; adding the same alias again replaces it, so this can be turned on
 once the key is on record.
 
+`anvil list` and `anvil find` take `-o json` for scripts: the reply is printed as JSON
+with the field names from `anvil.proto`, instead of the table.
+
 **A TUI**, because staring at JSON all day gets old:
 
 ```
@@ -167,6 +172,12 @@ release:
 anvil mirror add --kind vm --manifest-url <url> extra-images
 anvil cloud-init import-repo <url>
 ```
+
+The official catalogue (extra distro manifests for x86_64 and aarch64, plus cloud-init
+templates) is its own repo, checked out here as the `catalogues/` git submodule. Its
+README has the exact URLs to pass to the two commands above. `git submodule update
+--init` fetches it after a clone. See [docs/mirrors.md](docs/mirrors.md) for how
+mirrors and template repos work.
 
 ## Install
 
@@ -198,7 +209,8 @@ usually installed outside `PATH`, e.g. `/usr/lib/virtiofsd`).
 
 ```
 make proto          # regenerate api/gen/anvil/v1 from the .proto file
-go build ./...
+make build          # builds ./anvil and ./anvild
+make man            # optional: man pages into man/man1 and man/man8
 ```
 
 ## Quick start
@@ -258,31 +270,40 @@ Unix group and being able to reach the socket, *no* accounts, *no* portal, *no* 
 
 Everything the daemon does across hosts (migration) goes over plain SSH to the target's
 own local `anvil` CLI, never daemon-to-daemon gRPC. That means Anvil never has to solve
-cross-host trust on its own, whatever SSH access you already have is enough.
+cross-host trust on its own, whatever SSH access you already have is enough. The same
+goes for `anvil --remote`: the CLI runs `anvil dial-stdio` on the other host over SSH and
+speaks gRPC through that pipe to the local socket there.
 
 ```
 cmd/anvild/      daemon entrypoint
 cmd/anvil/       CLI entrypoint
-pkg/client/      thin gRPC client, shared by the CLI and TUI
+pkg/client/      thin gRPC client (unix socket or SSH), shared by the CLI and TUI
 internal/
   daemon/        gRPC service implementation
   instance/      domain model + the Manager
   vm/            QEMU backend: process management, QMP, cloud-init, image catalog
+  vm/vz/         Apple Virtualization.framework backend (stub, not implemented)
   container/     Docker backend (Podman lands here too, eventually)
-  intent/        grouping, shared bridge networking and DNS per intent
+  intent/        grouping, shared bridge networking per intent
+  intent/dns/    per-intent DNS server ("<role>.<intent>.anvil")
+  intent/apply/  the compare-and-apply engine behind `anvil apply`
   migrate/       SSH-driven migration
+  discovery/     mDNS announce and browse behind `anvil host discover`
+  export/        bundles behind `anvil export` and `anvil import`
   store/         bbolt-backed registry
   cli/commands/  cobra commands
   tui/           the Bubble Tea app
 api/proto/       the gRPC API definition
 data/distros/    the built-in VM image catalog
-packaging/       PKGBUILD, systemd unit, sysusers/tmpfiles rules
+catalogues/      the official extra catalogue (git submodule)
+packaging/       PKGBUILD, deb/rpm build scripts, systemd unit, sysusers/tmpfiles rules
+scripts/         catalog checksum check, release notes from commit subjects
 ```
 
 ## Status & limitations
 
 Anvil is young but everything above is real and working, not vaporware: VMs,
-containers, intents, migration, the TUI, and Arch packaging all run today. A few things
+containers, intents, migration, the TUI, and Arch/deb/rpm packaging all run today. A few things
 aren't there yet:
 
 - **Podman** isn't wired up. `--engine podman` fails cleanly instead of pretending to

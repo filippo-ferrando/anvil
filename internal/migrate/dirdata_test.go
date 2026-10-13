@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anvil-project/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 )
 
 // TestUploadDirRoundTrip runs the real tar pipeline with the "remote" side on

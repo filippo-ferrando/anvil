@@ -13,10 +13,10 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	"github.com/anvil-project/anvil/internal/instance"
-	"github.com/anvil-project/anvil/internal/intent/dns"
-	"github.com/anvil-project/anvil/internal/intent/ipam"
-	"github.com/anvil-project/anvil/internal/store"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/intent/dns"
+	"git.fferrando.cc/rdfilippo/anvil/internal/intent/ipam"
+	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 )
 
 // Store is the subset of *store.Store's methods Manager needs.

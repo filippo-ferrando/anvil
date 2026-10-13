@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/anvil-project/anvil/internal/cli/commands"
+	"git.fferrando.cc/rdfilippo/anvil/internal/cli/commands"
 )
 
 func main() {

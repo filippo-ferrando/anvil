@@ -5,9 +5,9 @@ package vm
 import (
 	"log"
 
-	"github.com/anvil-project/anvil/internal/config"
-	"github.com/anvil-project/anvil/internal/instance"
-	"github.com/anvil-project/anvil/internal/vm/qemu"
+	"git.fferrando.cc/rdfilippo/anvil/internal/config"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/qemu"
 )
 
 var _ instance.ExitNotifier = (*Backend)(nil)

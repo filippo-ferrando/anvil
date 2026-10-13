@@ -16,7 +16,7 @@ import (
 	"golang.org/x/net/ipv4"
 	"golang.org/x/sys/unix"
 
-	"github.com/anvil-project/anvil/internal/intent/dns"
+	"git.fferrando.cc/rdfilippo/anvil/internal/intent/dns"
 )
 
 // Service is the DNS-SD service type anvild announces itself under, so

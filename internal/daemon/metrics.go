@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/anvil-project/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 )
 
 // metric is one Prometheus gauge family and how to read it from a stats snapshot.

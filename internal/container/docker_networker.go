@@ -3,7 +3,7 @@ package container
 import (
 	"context"
 
-	"github.com/anvil-project/anvil/internal/container/docker"
+	"git.fferrando.cc/rdfilippo/anvil/internal/container/docker"
 )
 
 // DockerNetworker implements internal/intent.Networker against a real

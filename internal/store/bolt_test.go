@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anvil-project/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 )
 
 func TestInstancePoliciesRoundTrip(t *testing.T) {

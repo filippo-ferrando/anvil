@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anvil-project/anvil/internal/instance"
-	"github.com/anvil-project/anvil/internal/vm/qemu"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/qemu"
 )
 
 // spawnBlankVM starts a real QEMU with an empty disk, tracked by b as instance id.

@@ -3,7 +3,7 @@ package commands
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/anvil-project/anvil/internal/tui"
+	"git.fferrando.cc/rdfilippo/anvil/internal/tui"
 )
 
 // newTuiCommand launches the terminal UI using the shared daemon socket flag.

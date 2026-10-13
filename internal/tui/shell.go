@@ -9,9 +9,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
-	"github.com/anvil-project/anvil/internal/sshkey"
-	"github.com/anvil-project/anvil/pkg/client"
+	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/sshkey"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 // shellDoneMsg reports the outcome of a suspended shell/exec session back into the update loop.

@@ -11,7 +11,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/anvil-project/anvil/data/distros"
+	"git.fferrando.cc/rdfilippo/anvil/data/distros"
 )
 
 // manifestFetchTimeout bounds a mirror manifest fetch.

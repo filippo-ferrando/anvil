@@ -8,7 +8,7 @@ import (
 
 	"go.etcd.io/bbolt"
 
-	"github.com/anvil-project/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 )
 
 var bucketCloudInit = []byte("cloud_init_configs") // name -> json(cloudInitRecord)

@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
-	"github.com/anvil-project/anvil/internal/container"
-	"github.com/anvil-project/anvil/internal/instance"
-	"github.com/anvil-project/anvil/internal/store"
-	"github.com/anvil-project/anvil/internal/vm/image"
+	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/container"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/store"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
 )
 
 // VMCatalog is the subset of a VM backend ImageServer needs, kept as an

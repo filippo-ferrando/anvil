@@ -3,9 +3,9 @@ package daemon
 import (
 	"context"
 
-	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
-	"github.com/anvil-project/anvil/internal/cloudinitrepo"
-	"github.com/anvil-project/anvil/internal/store"
+	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/cloudinitrepo"
+	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 )
 
 // CloudInitServer implements anvilv1.CloudInitServiceServer against *store.Store.

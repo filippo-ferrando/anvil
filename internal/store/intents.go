@@ -7,7 +7,7 @@ import (
 
 	"go.etcd.io/bbolt"
 
-	"github.com/anvil-project/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 )
 
 var (

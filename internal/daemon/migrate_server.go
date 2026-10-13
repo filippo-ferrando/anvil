@@ -3,8 +3,8 @@ package daemon
 import (
 	"context"
 
-	anvilv1 "github.com/anvil-project/anvil/api/gen/anvil/v1"
-	"github.com/anvil-project/anvil/internal/migrate"
+	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/migrate"
 )
 
 // MigrateServer implements anvilv1.MigrateServiceServer against a

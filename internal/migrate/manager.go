@@ -15,10 +15,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anvil-project/anvil/internal/config"
-	"github.com/anvil-project/anvil/internal/instance"
-	"github.com/anvil-project/anvil/internal/migrate/payload"
-	"github.com/anvil-project/anvil/internal/store"
+	"git.fferrando.cc/rdfilippo/anvil/internal/config"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/migrate/payload"
+	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 )
 
 // Store is the subset of *store.Store's methods Manager needs.
