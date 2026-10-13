@@ -133,6 +133,30 @@ type ExitNotifier interface {
 	SetExitHook(hook func(instanceID string, state State))
 }
 
+// GUISession is what a client needs to connect an instance's apps to the host's display.
+type GUISession struct {
+	// Container only: host side of the container's /run/anvil-gui and /tmp/.X11-unix.
+	RelayDir string
+	X11Dir   string
+
+	// VM only: where the shipped waypipe and xwayland-satellite are in the guest.
+	GuestToolsDir string
+}
+
+// GUIPreparer is implemented by a Backend whose instances can show GUI apps on the host.
+// PrepareGUI runs against a running instance; x11 also readies XWayland.
+type GUIPreparer interface {
+	PrepareGUI(ctx context.Context, spec *Spec, x11 bool, progress func(status string)) (GUISession, error)
+}
+
+// GuestFileReader is implemented by a Backend that can read files inside a running instance.
+type GuestFileReader interface {
+	// ListGuestDir returns the names in dir, nil when it doesn't exist.
+	ListGuestDir(ctx context.Context, spec *Spec, dir string) ([]string, error)
+	// ReadGuestFile returns a file's content (following symlinks), ok false when it doesn't exist.
+	ReadGuestFile(ctx context.Context, spec *Spec, path string) (data []byte, ok bool, err error)
+}
+
 // Registry is the persistence contract Manager needs.
 type Registry interface {
 	PutInstance(spec *Spec) error

@@ -31,6 +31,7 @@ type record struct {
 	Autostart     bool                   `json:"autostart,omitempty"`
 	RestartPolicy instance.RestartPolicy `json:"restart_policy,omitzero"`
 	UserStopped   bool                   `json:"user_stopped,omitempty"`
+	GUI           bool                   `json:"gui,omitempty"`
 }
 
 func toRecord(s *instance.Spec) record {
@@ -38,6 +39,7 @@ func toRecord(s *instance.Spec) record {
 		ID: s.ID, Name: s.Name, Kind: s.Kind, State: s.State,
 		CreatedAt: s.CreatedAt, Labels: s.Labels, VM: s.VM, Container: s.Container,
 		Autostart: s.Autostart, RestartPolicy: s.RestartPolicy, UserStopped: s.UserStopped,
+		GUI: s.GUI,
 	}
 }
 
@@ -46,6 +48,7 @@ func (r record) toSpec() *instance.Spec {
 		ID: r.ID, Name: r.Name, Kind: r.Kind, State: r.State,
 		CreatedAt: r.CreatedAt, Labels: r.Labels, VM: r.VM, Container: r.Container,
 		Autostart: r.Autostart, RestartPolicy: r.RestartPolicy, UserStopped: r.UserStopped,
+		GUI: r.GUI,
 	}
 }
 

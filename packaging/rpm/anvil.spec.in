@@ -90,6 +90,14 @@ install -Dm644 packaging/common/anvil.tmpfiles %{buildroot}/usr/lib/tmpfiles.d/a
 # there's no command tree for `anvil man`'s equivalent to walk.
 install -Dm644 docs/man/anvild.8 %{buildroot}%{_mandir}/man8/anvild.8
 
+# Static GUI tools for `anvil gui`, only present when build.sh found them.
+: > anvild-gui.files
+if [ -d gui-tools ]; then
+  install -Dm755 gui-tools/waypipe %{buildroot}/usr/lib/anvil/gui/waypipe
+  install -Dm755 gui-tools/xwayland-satellite %{buildroot}/usr/lib/anvil/gui/xwayland-satellite
+  printf '%s\n' /usr/lib/anvil/gui/waypipe /usr/lib/anvil/gui/xwayland-satellite > anvild-gui.files
+fi
+
 %files
 %license LICENSE.md
 %{_bindir}/anvil
@@ -98,7 +106,7 @@ install -Dm644 docs/man/anvild.8 %{buildroot}%{_mandir}/man8/anvild.8
 %{_datadir}/fish/vendor_completions.d/anvil.fish
 %{_mandir}/man1/*.1*
 
-%files -n anvild
+%files -n anvild -f anvild-gui.files
 %license LICENSE.md
 %{_bindir}/anvild
 /usr/lib/anvil/post-install.sh

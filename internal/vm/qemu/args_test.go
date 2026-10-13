@@ -188,6 +188,31 @@ func TestBuildArgsMounts(t *testing.T) {
 	}
 }
 
+func TestBuildArgsToolsShareSkipsHotplugPorts(t *testing.T) {
+	fakeOVMFRoot(t)
+	args, err := BuildArgs(Config{
+		DiskPath: "/d", QMPSocket: "/q",
+		Mounts:     []Mount{{Tag: "mount0", SocketPath: "/s0"}},
+		ToolsShare: &Mount{Tag: "anviltools", SocketPath: "/run/x/fs-anviltools.sock"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ") + " "
+	for _, want := range []string{
+		"-chardev socket,id=fsc-anviltools,path=/run/x/fs-anviltools.sock",
+		"-device vhost-user-fs-pci,id=fs-anviltools,chardev=fsc-anviltools,tag=anviltools,queue-size=1024 ",
+		"tag=mount0,queue-size=1024,bus=hp0",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("expected %q in args, got: %s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "tag=anviltools,queue-size=1024,bus=") {
+		t.Error("the tools share must not take a hot-plug port")
+	}
+}
+
 func TestBuildArgsTooManyMounts(t *testing.T) {
 	mounts := make([]Mount, HotplugPorts+1)
 	for i := range mounts {

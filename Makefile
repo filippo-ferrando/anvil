@@ -1,4 +1,4 @@
-.PHONY: proto tui-deps build man test vet fmt clean
+.PHONY: proto tui-deps build gui-tools man test vet fmt clean
 
 GOBIN := $(shell go env GOPATH)/bin
 
@@ -25,6 +25,10 @@ build:
 	CGO_ENABLED=0 go build ./cmd/anvil/...
 	go build ./cmd/anvild/...
 
+# Builds static waypipe and xwayland-satellite for `anvil gui` into build/gui-tools (needs docker).
+gui-tools:
+	scripts/build-gui-tools.sh build/gui-tools
+
 # Regenerates man/man1 (one page per `anvil` subcommand, via the hidden
 # `anvil man` command in internal/cli/commands/man.go) and copies
 # docs/man/anvild.8, anvild's hand-written page, into man/man8. Both
@@ -48,4 +52,4 @@ fmt:
 
 clean:
 	rm -f anvil anvild
-	rm -rf man
+	rm -rf man build

@@ -237,6 +237,7 @@ func specToPB(s *instance.Spec) *anvilv1.Instance {
 		Guest:         guestInfoToPB(s.Guest),
 		Autostart:     s.Autostart,
 		RestartPolicy: restartPolicyToPB(s.RestartPolicy),
+		GuiEnabled:    s.GUI,
 	}
 }
 

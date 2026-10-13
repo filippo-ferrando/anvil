@@ -71,6 +71,7 @@ over a unix socket.`,
 		newMigrateGuestKeyCommand(flags),
 		newExportCommand(flags),
 		newImportCommand(flags),
+		newGUICommand(flags),
 		newTuiCommand(flags),
 		newDialStdioCommand(flags),
 	)

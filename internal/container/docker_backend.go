@@ -106,6 +106,9 @@ func (b *DockerBackend) Create(ctx context.Context, spec *instance.Spec, progres
 			ReadOnly:      v.ReadOnly,
 		})
 	}
+	if spec.GUI {
+		addGUIParams(&params, spec.ID)
+	}
 	for _, p := range c.Ports {
 		params.Ports = append(params.Ports, docker.PortMapping{
 			HostPort:  p.HostPort,
@@ -201,6 +204,12 @@ func (b *DockerBackend) Start(ctx context.Context, spec *instance.Spec) error {
 	if spec.Container.ContainerID == "" {
 		return fmt.Errorf("docker: %s has no container ID yet (Create must run first)", spec.Name)
 	}
+	if spec.GUI {
+		// /run is empty after a reboot; a missing bind source would make Docker create it root-owned.
+		if _, err := ensureGUIDirs(spec.ID); err != nil {
+			return err
+		}
+	}
 	b.clearExpectedExit(spec.Container.ContainerID)
 	if err := b.Client.StartContainer(ctx, spec.Container.ContainerID); err != nil {
 		return fmt.Errorf("docker: starting %s: %w", spec.Name, err)
@@ -237,6 +246,9 @@ func (b *DockerBackend) Delete(ctx context.Context, spec *instance.Spec) error {
 	b.expectExit(spec.Container.ContainerID)
 	if err := b.Client.RemoveContainer(ctx, spec.Container.ContainerID, true); err != nil {
 		return fmt.Errorf("docker: removing %s: %w", spec.Name, err)
+	}
+	if spec.GUI {
+		removeGUIDirs(spec.ID)
 	}
 	return nil
 }

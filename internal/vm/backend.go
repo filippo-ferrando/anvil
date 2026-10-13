@@ -733,6 +733,9 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		return err
 	}
 	cfg.Mounts = mounts
+	if spec.GUI {
+		cfg.ToolsShare = b.startToolsShare(spec)
+	}
 
 	proc, err := qemu.Spawn(ctx, cfg, filepath.Join(dir, "qemu.log"))
 	if err != nil {

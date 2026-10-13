@@ -39,6 +39,9 @@ type Config struct {
 	// Mounts are virtiofs host-directory shares, each served by its own virtiofsd.
 	Mounts []Mount
 
+	// ToolsShare, if set, is a read-only virtiofs share on the root bus, outside the hot-plug ports.
+	ToolsShare *Mount
+
 	// MaxCPUs/MaxMemoryMiB, when above CPUs/MemoryMiB, leave room to add vCPUs and
 	// memory (virtio-mem) while the VM runs. 0 means no headroom.
 	MaxCPUs      int
@@ -296,6 +299,13 @@ func BuildArgs(cfg Config) ([]string, error) {
 	args = append(args, netdevArgs...)
 
 	args = append(args, buildMounts(cfg.Mounts)...)
+	if t := cfg.ToolsShare; t != nil {
+		args = append(args,
+			"-chardev", fmt.Sprintf("socket,id=%s,path=%s", VirtiofsChardevID(t.Tag), escapeQEMUOpt(t.SocketPath)),
+			"-device", fmt.Sprintf("vhost-user-fs-pci,id=%s,chardev=%s,tag=%s,queue-size=1024",
+				VirtiofsDeviceID(t.Tag), VirtiofsChardevID(t.Tag), t.Tag),
+		)
+	}
 
 	if hot := hotplugMemoryMiB(mem, cfg.MaxMemoryMiB); hot > 0 {
 		// Shared like the boot RAM, since vhost-user devices (virtiofsd) map it too.

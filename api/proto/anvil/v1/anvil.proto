@@ -41,6 +41,51 @@ service InstanceService {
   // Update changes an existing instance's settings; unset fields stay as they are.
   // CPU and memory of a running VM change live when possible, else at its next start (see restart_pending).
   rpc Update(UpdateRequest) returns (UpdateReply);
+
+  // PrepareGUI gets an instance ready to show GUI apps on the host (starting it if
+  // stopped) and ends with a GUISession event, or an Error one.
+  rpc PrepareGUI(PrepareGUIRequest) returns (stream PrepareGUIProgress);
+
+  // GetGUIAppInfo finds an app's desktop entry name and icon inside a GUI-enabled instance.
+  rpc GetGUIAppInfo(GUIAppInfoRequest) returns (GUIAppInfoReply);
+}
+
+message PrepareGUIRequest {
+  string name = 1;
+  bool x11 = 2; // also prepare XWayland for X11 apps
+}
+
+message PrepareGUIProgress {
+  oneof event {
+    string status = 1;
+    GUISession session = 2; // final event on success
+    string error = 3;
+  }
+}
+
+// GUISession is what the client needs to connect an instance's apps to the host's display.
+message GUISession {
+  Instance instance = 1;
+
+  // Container only: host directories bind-mounted at /run/anvil-gui and /tmp/.X11-unix.
+  string relay_dir = 2;
+  string x11_dir = 3;
+
+  // VM only: where the shipped waypipe and xwayland-satellite are in the guest.
+  string guest_tools_dir = 4;
+}
+
+message GUIAppInfoRequest {
+  string name = 1;    // instance name
+  string command = 2; // the app's command, e.g. "ghidraRun" or "/usr/bin/gimp"
+}
+
+message GUIAppInfoReply {
+  bool found = 1;           // a matching desktop entry was found
+  string app_name = 2;      // its Name=
+  bytes icon = 3;           // empty when no icon file was found
+  string icon_ext = 4;      // "png" or "svg"
+  int32 icon_size = 5;      // pixel size of a png icon, 0 for svg
 }
 
 message UpdateRequest {
@@ -258,6 +303,9 @@ message Instance {
   // autostart starts the instance when anvild starts, unless it was last stopped on purpose.
   bool autostart = 10;
   RestartPolicy restart_policy = 11;
+
+  // Daemon-populated: the instance can show GUI apps on the host (`anvil gui`).
+  bool gui_enabled = 12;
 }
 
 // RestartPolicy says what anvild does when an instance stops without being asked to.

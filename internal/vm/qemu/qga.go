@@ -50,6 +50,13 @@ type qgaError struct {
 
 func (e *qgaError) Error() string { return fmt.Sprintf("qga: %s: %s", e.Class, e.Desc) }
 
+// IsGuestError reports whether err is the agent refusing a command (a file it can't open, say),
+// as opposed to the agent being unreachable.
+func IsGuestError(err error) bool {
+	var qe *qgaError
+	return errors.As(err, &qe)
+}
+
 type qgaResponse struct {
 	Return json.RawMessage `json:"return"`
 	Error  *qgaError       `json:"error"`

@@ -143,6 +143,15 @@ type hostConfig struct {
 	ExtraHosts []string `json:"ExtraHosts,omitempty"`
 	Dns        []string `json:"Dns,omitempty"`
 	DnsSearch  []string `json:"DnsSearch,omitempty"`
+
+	Devices  []deviceMapping `json:"Devices,omitempty"`
+	GroupAdd []string        `json:"GroupAdd,omitempty"`
+}
+
+type deviceMapping struct {
+	PathOnHost        string `json:"PathOnHost"`
+	PathInContainer   string `json:"PathInContainer"`
+	CgroupPermissions string `json:"CgroupPermissions"`
 }
 
 type endpointSettings struct {
@@ -187,6 +196,11 @@ type CreateContainerParams struct {
 	// name it can't answer itself.
 	DNSServers []string
 	DNSSearch  []string
+
+	// Devices are host device paths (a directory means every device in it), at the same path inside.
+	Devices []string
+	// GroupAdd are extra group IDs for the container's processes, e.g. to open those devices.
+	GroupAdd []string
 }
 
 type VolumeMount struct {
@@ -425,6 +439,10 @@ func (c *Client) CreateContainer(ctx context.Context, p CreateContainerParams) (
 	for name, ip := range p.ExtraHosts {
 		req.HostConfig.ExtraHosts = append(req.HostConfig.ExtraHosts, name+":"+ip)
 	}
+	for _, d := range p.Devices {
+		req.HostConfig.Devices = append(req.HostConfig.Devices, deviceMapping{PathOnHost: d, PathInContainer: d, CgroupPermissions: "rwm"})
+	}
+	req.HostConfig.GroupAdd = p.GroupAdd
 	if p.NetworkAlias != "" && p.NetworkMode != "" {
 		req.NetworkingConfig = &networkingConfig{
 			EndpointsConfig: map[string]endpointSettings{

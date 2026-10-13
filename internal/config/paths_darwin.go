@@ -9,4 +9,6 @@ const (
 	StateDir = "/usr/local/var/anvil"
 	CacheDir = "/usr/local/var/cache/anvil"
 	ConfDir  = "/usr/local/etc/anvil"
+
+	guiToolsDir = "/usr/local/lib/anvil/gui"
 )

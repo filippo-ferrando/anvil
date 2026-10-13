@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"archive/tar"
 	"encoding/binary"
 	"encoding/json"
 	"net"
@@ -73,6 +74,26 @@ func TestCreateContainer(t *testing.T) {
 	bindings := gotBody.HostConfig.PortBindings["80/tcp"]
 	if len(bindings) != 1 || bindings[0].HostPort != "8080" {
 		t.Errorf("expected port binding 8080, got %v", bindings)
+	}
+}
+
+func TestCreateContainerDevicesAndGroups(t *testing.T) {
+	var gotBody createContainerRequest
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(createContainerResponse{ID: "abc"})
+	}))
+	_, err := c.CreateContainer(t.Context(), CreateContainerParams{Image: "x", Devices: []string{"/dev/dri"}, GroupAdd: []string{"985", "983"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := gotBody.HostConfig.Devices
+	if len(d) != 1 || d[0] != (deviceMapping{PathOnHost: "/dev/dri", PathInContainer: "/dev/dri", CgroupPermissions: "rwm"}) {
+		t.Errorf("devices %+v", d)
+	}
+	if g := gotBody.HostConfig.GroupAdd; len(g) != 2 || g[0] != "985" || g[1] != "983" {
+		t.Errorf("groups %v", g)
 	}
 }
 
@@ -705,5 +726,37 @@ func TestRefPath(t *testing.T) {
 				t.Errorf("refPath(%q) = %q, want %q", tc.ref, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestArchive(t *testing.T) {
+	var gotQuery string
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query().Get("path")
+		if gotQuery == "/missing" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		tw := tar.NewWriter(w)
+		_ = tw.WriteHeader(&tar.Header{Name: "apps/", Typeflag: tar.TypeDir, Mode: 0o755})
+		_ = tw.WriteHeader(&tar.Header{Name: "apps/a.desktop", Typeflag: tar.TypeReg, Size: 3, Mode: 0o644})
+		_, _ = tw.Write([]byte("abc"))
+		_ = tw.WriteHeader(&tar.Header{Name: "apps/big", Typeflag: tar.TypeReg, Size: 10, Mode: 0o644})
+		_, _ = tw.Write([]byte("0123456789"))
+		_ = tw.WriteHeader(&tar.Header{Name: "apps/link", Typeflag: tar.TypeSymlink, Linkname: "a.desktop"})
+		_ = tw.Close()
+	}))
+	entries, ok, err := c.Archive(t.Context(), "cid", "/usr/share/apps", 5)
+	if err != nil || !ok {
+		t.Fatalf("%v %v", ok, err)
+	}
+	if gotQuery != "/usr/share/apps" || len(entries) != 4 {
+		t.Fatalf("query %q entries %+v", gotQuery, entries)
+	}
+	if string(entries[1].Data) != "abc" || entries[2].Data != nil || entries[3].Linkname != "a.desktop" {
+		t.Fatalf("entries %+v", entries)
+	}
+	if _, ok, err := c.Archive(t.Context(), "cid", "/missing", 5); ok || err != nil {
+		t.Fatalf("missing: %v %v", ok, err)
 	}
 }

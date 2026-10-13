@@ -4,8 +4,21 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 )
+
+// GUIRelayDir is the host side of a GUI-enabled container's /run/anvil-gui.
+func GUIRelayDir(id string) string { return filepath.Join(RunDir, "gui", id) }
+
+// GUIToolsDir holds the static waypipe and xwayland-satellite shared into VMs.
+// ANVIL_GUI_TOOLS overrides it, for development builds.
+func GUIToolsDir() string {
+	if dir := os.Getenv("ANVIL_GUI_TOOLS"); dir != "" {
+		return dir
+	}
+	return guiToolsDir
+}
 
 // SocketPath is the daemon's gRPC listen address.
 func SocketPath() string { return filepath.Join(RunDir, "anvild.sock") }

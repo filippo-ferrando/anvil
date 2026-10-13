@@ -61,9 +61,10 @@ const (
 
 // model is the whole application's Bubble Tea state, with one field per screen.
 type model struct {
-	client *client.Client
-	socket string
-	who    string // local OS username@hostname, shown in the header
+	client     *client.Client
+	socket     string
+	socketPath string // the daemon socket as given, for anvil commands run from the TUI
+	who        string // local OS username@hostname, shown in the header
 
 	daemonState string // "" before the first reply, then "ok" or "down", from the last instance list
 
@@ -115,6 +116,7 @@ func Run(socketPath, remote string) error {
 	m := model{
 		client:         c,
 		socket:         addr,
+		socketPath:     socketPath,
 		who:            who,
 		screen:         screenInstances,
 		sidebarFocused: true,

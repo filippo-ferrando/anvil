@@ -57,6 +57,9 @@ type Spec struct {
 	// UserStopped is set by an explicit stop and cleared by a start, so autostart and
 	// the restart policy leave an instance someone stopped on purpose alone.
 	UserStopped bool
+
+	// GUI is set on every instance created since GUI app support; older ones lack the plumbing.
+	GUI bool
 }
 
 // Restart modes for RestartPolicy.Mode.

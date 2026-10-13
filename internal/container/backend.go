@@ -143,6 +143,18 @@ func (b *Backend) Stats(ctx context.Context, spec *instance.Spec) (instance.Stat
 	return sp.Stats(ctx, spec)
 }
 
+func (b *Backend) PrepareGUI(ctx context.Context, spec *instance.Spec, x11 bool, progress func(status string)) (instance.GUISession, error) {
+	eng, err := b.engineFor(spec)
+	if err != nil {
+		return instance.GUISession{}, err
+	}
+	gp, ok := eng.(instance.GUIPreparer)
+	if !ok {
+		return instance.GUISession{}, fmt.Errorf("container: this engine doesn't support GUI apps")
+	}
+	return gp.PrepareGUI(ctx, spec, x11, progress)
+}
+
 // ImageInfo is one image cached by a container engine: a separate
 // inventory from the VM image vault (internal/vm/image.Vault).
 type ImageInfo struct {

@@ -78,6 +78,14 @@ install -d "$pkg_anvild/DEBIAN" "$pkg_anvild/usr/bin" \
   "$pkg_anvild/usr/share/man/man8" \
   "$pkg_anvild/usr/share/doc/anvild"
 install -m755 "$work/anvild-bin" "$pkg_anvild/usr/bin/anvild"
+# Static waypipe/xwayland-satellite for `anvil gui`, from scripts/build-gui-tools.sh.
+gui_tools="${GUI_TOOLS_DIR:-$repo/build/gui-tools}"
+if [ -x "$gui_tools/waypipe" ] && [ -x "$gui_tools/xwayland-satellite" ]; then
+  install -Dm755 "$gui_tools/waypipe" "$pkg_anvild/usr/lib/anvil/gui/waypipe"
+  install -Dm755 "$gui_tools/xwayland-satellite" "$pkg_anvild/usr/lib/anvil/gui/xwayland-satellite"
+else
+  echo "==> warning: no GUI tools in $gui_tools (run make gui-tools), anvil gui won't work with VMs" >&2
+fi
 install -m755 "$common/post-install.sh" "$pkg_anvild/usr/lib/anvil/post-install.sh"
 # Hand-written, not generated: anvild takes no flags/subcommands, so
 # there's no command tree for `anvil man`'s equivalent to walk.

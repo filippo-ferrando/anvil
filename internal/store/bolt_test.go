@@ -18,7 +18,7 @@ func TestInstancePoliciesRoundTrip(t *testing.T) {
 	last := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	in := &instance.Spec{
 		ID: "01", Name: "web", Kind: instance.KindVM, State: instance.StateStopped,
-		Autostart: true, UserStopped: true,
+		Autostart: true, UserStopped: true, GUI: true,
 		RestartPolicy: instance.RestartPolicy{Mode: instance.RestartOnFailure, MaxRetries: 3},
 		VM:            &instance.VMSpec{SnapshotSchedule: &instance.SnapshotSchedule{Every: 6 * time.Hour, Keep: 8, LastRun: last}},
 	}
@@ -29,7 +29,7 @@ func TestInstancePoliciesRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !out.Autostart || !out.UserStopped || out.RestartPolicy != in.RestartPolicy {
+	if !out.Autostart || !out.UserStopped || !out.GUI || out.RestartPolicy != in.RestartPolicy {
 		t.Errorf("policies not persisted: %+v", out)
 	}
 	if sc := out.VM.SnapshotSchedule; sc == nil || sc.Every != 6*time.Hour || sc.Keep != 8 || !sc.LastRun.Equal(last) {

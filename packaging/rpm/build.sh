@@ -41,8 +41,20 @@ filelist="$topdir/files.lst"
 git -C "$repo" ls-files --others --cached --exclude-standard -z \
   | while IFS= read -r -d '' f; do [ -f "$repo/$f" ] && printf '%s\0' "$f"; done \
   > "$filelist"
+# Static waypipe/xwayland-satellite for `anvil gui` (gitignored), from scripts/build-gui-tools.sh.
+# Their rename to gui-tools/ has to come before the anvil-<version>/ prefix.
+gui_tools="${GUI_TOOLS_DIR:-$repo/build/gui-tools}"
+gui_transform=()
+gui_files=()
+if [ -x "$gui_tools/waypipe" ] && [ -x "$gui_tools/xwayland-satellite" ]; then
+  gui_transform=(--transform 's,^\(waypipe\|xwayland-satellite\)$,gui-tools/&,')
+  gui_files=(-C "$gui_tools" waypipe xwayland-satellite)
+else
+  echo "==> warning: no GUI tools in $gui_tools (run make gui-tools), anvil gui won't work with VMs" >&2
+fi
 tar --null -C "$repo" -T "$filelist" \
-  --transform "s,^,anvil-${version}/," \
+  "${gui_transform[@]}" --transform "s,^,anvil-${version}/," \
+  "${gui_files[@]}" \
   -czf "$topdir/SOURCES/anvil-${version}.tar.gz"
 
 echo "==> rendering spec"

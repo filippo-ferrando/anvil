@@ -19,23 +19,25 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	InstanceService_Launch_FullMethodName     = "/anvil.v1.InstanceService/Launch"
-	InstanceService_Fork_FullMethodName       = "/anvil.v1.InstanceService/Fork"
-	InstanceService_List_FullMethodName       = "/anvil.v1.InstanceService/List"
-	InstanceService_Info_FullMethodName       = "/anvil.v1.InstanceService/Info"
-	InstanceService_Start_FullMethodName      = "/anvil.v1.InstanceService/Start"
-	InstanceService_Stop_FullMethodName       = "/anvil.v1.InstanceService/Stop"
-	InstanceService_Delete_FullMethodName     = "/anvil.v1.InstanceService/Delete"
-	InstanceService_Purge_FullMethodName      = "/anvil.v1.InstanceService/Purge"
-	InstanceService_Logs_FullMethodName       = "/anvil.v1.InstanceService/Logs"
-	InstanceService_Mount_FullMethodName      = "/anvil.v1.InstanceService/Mount"
-	InstanceService_Umount_FullMethodName     = "/anvil.v1.InstanceService/Umount"
-	InstanceService_AddPort_FullMethodName    = "/anvil.v1.InstanceService/AddPort"
-	InstanceService_RemovePort_FullMethodName = "/anvil.v1.InstanceService/RemovePort"
-	InstanceService_Stats_FullMethodName      = "/anvil.v1.InstanceService/Stats"
-	InstanceService_Watch_FullMethodName      = "/anvil.v1.InstanceService/Watch"
-	InstanceService_WaitReady_FullMethodName  = "/anvil.v1.InstanceService/WaitReady"
-	InstanceService_Update_FullMethodName     = "/anvil.v1.InstanceService/Update"
+	InstanceService_Launch_FullMethodName        = "/anvil.v1.InstanceService/Launch"
+	InstanceService_Fork_FullMethodName          = "/anvil.v1.InstanceService/Fork"
+	InstanceService_List_FullMethodName          = "/anvil.v1.InstanceService/List"
+	InstanceService_Info_FullMethodName          = "/anvil.v1.InstanceService/Info"
+	InstanceService_Start_FullMethodName         = "/anvil.v1.InstanceService/Start"
+	InstanceService_Stop_FullMethodName          = "/anvil.v1.InstanceService/Stop"
+	InstanceService_Delete_FullMethodName        = "/anvil.v1.InstanceService/Delete"
+	InstanceService_Purge_FullMethodName         = "/anvil.v1.InstanceService/Purge"
+	InstanceService_Logs_FullMethodName          = "/anvil.v1.InstanceService/Logs"
+	InstanceService_Mount_FullMethodName         = "/anvil.v1.InstanceService/Mount"
+	InstanceService_Umount_FullMethodName        = "/anvil.v1.InstanceService/Umount"
+	InstanceService_AddPort_FullMethodName       = "/anvil.v1.InstanceService/AddPort"
+	InstanceService_RemovePort_FullMethodName    = "/anvil.v1.InstanceService/RemovePort"
+	InstanceService_Stats_FullMethodName         = "/anvil.v1.InstanceService/Stats"
+	InstanceService_Watch_FullMethodName         = "/anvil.v1.InstanceService/Watch"
+	InstanceService_WaitReady_FullMethodName     = "/anvil.v1.InstanceService/WaitReady"
+	InstanceService_Update_FullMethodName        = "/anvil.v1.InstanceService/Update"
+	InstanceService_PrepareGUI_FullMethodName    = "/anvil.v1.InstanceService/PrepareGUI"
+	InstanceService_GetGUIAppInfo_FullMethodName = "/anvil.v1.InstanceService/GetGUIAppInfo"
 )
 
 // InstanceServiceClient is the client API for InstanceService service.
@@ -72,6 +74,11 @@ type InstanceServiceClient interface {
 	// Update changes an existing instance's settings; unset fields stay as they are.
 	// CPU and memory of a running VM change live when possible, else at its next start (see restart_pending).
 	Update(ctx context.Context, in *UpdateRequest, opts ...grpc.CallOption) (*UpdateReply, error)
+	// PrepareGUI gets an instance ready to show GUI apps on the host (starting it if
+	// stopped) and ends with a GUISession event, or an Error one.
+	PrepareGUI(ctx context.Context, in *PrepareGUIRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PrepareGUIProgress], error)
+	// GetGUIAppInfo finds an app's desktop entry name and icon inside a GUI-enabled instance.
+	GetGUIAppInfo(ctx context.Context, in *GUIAppInfoRequest, opts ...grpc.CallOption) (*GUIAppInfoReply, error)
 }
 
 type instanceServiceClient struct {
@@ -297,6 +304,35 @@ func (c *instanceServiceClient) Update(ctx context.Context, in *UpdateRequest, o
 	return out, nil
 }
 
+func (c *instanceServiceClient) PrepareGUI(ctx context.Context, in *PrepareGUIRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PrepareGUIProgress], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &InstanceService_ServiceDesc.Streams[5], InstanceService_PrepareGUI_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[PrepareGUIRequest, PrepareGUIProgress]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type InstanceService_PrepareGUIClient = grpc.ServerStreamingClient[PrepareGUIProgress]
+
+func (c *instanceServiceClient) GetGUIAppInfo(ctx context.Context, in *GUIAppInfoRequest, opts ...grpc.CallOption) (*GUIAppInfoReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GUIAppInfoReply)
+	err := c.cc.Invoke(ctx, InstanceService_GetGUIAppInfo_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // InstanceServiceServer is the server API for InstanceService service.
 // All implementations must embed UnimplementedInstanceServiceServer
 // for forward compatibility.
@@ -331,6 +367,11 @@ type InstanceServiceServer interface {
 	// Update changes an existing instance's settings; unset fields stay as they are.
 	// CPU and memory of a running VM change live when possible, else at its next start (see restart_pending).
 	Update(context.Context, *UpdateRequest) (*UpdateReply, error)
+	// PrepareGUI gets an instance ready to show GUI apps on the host (starting it if
+	// stopped) and ends with a GUISession event, or an Error one.
+	PrepareGUI(*PrepareGUIRequest, grpc.ServerStreamingServer[PrepareGUIProgress]) error
+	// GetGUIAppInfo finds an app's desktop entry name and icon inside a GUI-enabled instance.
+	GetGUIAppInfo(context.Context, *GUIAppInfoRequest) (*GUIAppInfoReply, error)
 	mustEmbedUnimplementedInstanceServiceServer()
 }
 
@@ -391,6 +432,12 @@ func (UnimplementedInstanceServiceServer) WaitReady(*WaitReadyRequest, grpc.Serv
 }
 func (UnimplementedInstanceServiceServer) Update(context.Context, *UpdateRequest) (*UpdateReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
+}
+func (UnimplementedInstanceServiceServer) PrepareGUI(*PrepareGUIRequest, grpc.ServerStreamingServer[PrepareGUIProgress]) error {
+	return status.Errorf(codes.Unimplemented, "method PrepareGUI not implemented")
+}
+func (UnimplementedInstanceServiceServer) GetGUIAppInfo(context.Context, *GUIAppInfoRequest) (*GUIAppInfoReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetGUIAppInfo not implemented")
 }
 func (UnimplementedInstanceServiceServer) mustEmbedUnimplementedInstanceServiceServer() {}
 func (UnimplementedInstanceServiceServer) testEmbeddedByValue()                         {}
@@ -684,6 +731,35 @@ func _InstanceService_Update_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InstanceService_PrepareGUI_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(PrepareGUIRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(InstanceServiceServer).PrepareGUI(m, &grpc.GenericServerStream[PrepareGUIRequest, PrepareGUIProgress]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type InstanceService_PrepareGUIServer = grpc.ServerStreamingServer[PrepareGUIProgress]
+
+func _InstanceService_GetGUIAppInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GUIAppInfoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InstanceServiceServer).GetGUIAppInfo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InstanceService_GetGUIAppInfo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InstanceServiceServer).GetGUIAppInfo(ctx, req.(*GUIAppInfoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // InstanceService_ServiceDesc is the grpc.ServiceDesc for InstanceService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -739,6 +815,10 @@ var InstanceService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "Update",
 			Handler:    _InstanceService_Update_Handler,
 		},
+		{
+			MethodName: "GetGUIAppInfo",
+			Handler:    _InstanceService_GetGUIAppInfo_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -764,6 +844,11 @@ var InstanceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "WaitReady",
 			Handler:       _InstanceService_WaitReady_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "PrepareGUI",
+			Handler:       _InstanceService_PrepareGUI_Handler,
 			ServerStreams: true,
 		},
 	},

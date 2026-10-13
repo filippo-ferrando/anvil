@@ -145,6 +145,7 @@ func (m *Manager) Launch(ctx context.Context, params LaunchParams, progress func
 
 		Autostart:     params.Autostart,
 		RestartPolicy: params.RestartPolicy,
+		GUI:           true,
 	}
 
 	progress(LaunchEvent{Status: "provisioning"})
@@ -231,6 +232,7 @@ func (m *Manager) Fork(ctx context.Context, params ForkParams, progress func(Lau
 		CreatedAt: time.Now(),
 		Labels:    labels,
 		VM:        cloneVMSpecForFork(source.VM),
+		GUI:       true,
 	}
 
 	progress(LaunchEvent{Status: "forking disk"})

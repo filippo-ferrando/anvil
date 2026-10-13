@@ -79,6 +79,7 @@ const (
 	instancesPromptRemovePort
 	instancesPromptFork
 	instancesPromptSettings
+	instancesPromptGUI
 )
 
 // statsRefreshInterval is how often the selected running instance's live stats are re-polled; see maybeRefreshStats.
@@ -89,10 +90,12 @@ type instancesModel struct {
 	confirmDelete *anvilv1.Instance // non-nil while the delete confirmation overlay is up
 	loading       bool
 
-	prompt        instancesPrompt
-	promptTarget  *anvilv1.Instance
-	promptForm    simpleForm
-	lastShellUser string // remembered across shell/exec calls, pre-filled into the user field
+	prompt         instancesPrompt
+	promptTarget   *anvilv1.Instance
+	promptForm     simpleForm
+	lastShellUser  string // remembered across shell/exec calls, pre-filled into the user field
+	lastGUICommand string // remembered across GUI launches
+	lastGUIX11     bool
 
 	exporting   bool     // an export stream is in flight, blocking other keys
 	exportLines []string // the finished (or in-flight) export's progress transcript
@@ -225,6 +228,14 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case shellDoneMsg:
 		if msg.err != nil {
 			m.setStatus("shell: "+msg.err.Error(), true)
+		}
+		return m, nil
+
+	case guiLaunchedMsg:
+		if msg.err != nil {
+			m.setStatus("gui: "+msg.err.Error(), true)
+		} else {
+			m.setStatus(msg.output, false)
 		}
 		return m, nil
 
@@ -427,6 +438,18 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.instances.startPrompt(instancesPromptExec, inst, newSimpleForm("Exec", fields))
 		}
 		return m, nil
+	case "g":
+		if inst := m.selectedInstance(); inst != nil {
+			if !inst.GetGuiEnabled() {
+				m.setStatus(inst.GetName()+" was created before GUI app support, recreate it to use GUI apps", true)
+				return m, nil
+			}
+			m.instances.startPrompt(instancesPromptGUI, inst, newSimpleForm("GUI app", []formField{
+				textField("Command", "e.g. ghidraRun", m.instances.lastGUICommand),
+				toggleField("X11 app", "Java/Swing and other X11 apps need XWayland", m.instances.lastGUIX11),
+			}))
+		}
+		return m, nil
 	case "m":
 		if inst := m.selectedInstance(); inst != nil && inst.GetVm() != nil {
 			m.instances.startPrompt(instancesPromptMount, inst, newSimpleForm("Mount", []formField{
@@ -571,6 +594,16 @@ func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		ins.lastShellUser = user
 		return m.execInto(target, user, command)
 
+	case instancesPromptGUI:
+		command := ins.promptForm.Value("Command")
+		if command == "" {
+			return m, nil
+		}
+		x11 := ins.promptForm.Bool("X11 app")
+		ins.lastGUICommand, ins.lastGUIX11 = command, x11
+		m.setStatus("starting "+command+" in "+target.GetName()+"…", false)
+		return m, launchGUIApp(m.socketPath, m.client.Remote, target.GetName(), command, x11)
+
 	case instancesPromptShellUser:
 		user := ins.promptForm.Value("As user (optional, blank = default)")
 		ins.lastShellUser = user
@@ -705,7 +738,7 @@ func (m instancesModel) View() string {
 
 // instancesHelp is the Instances legend, most used actions first.
 var instancesHelp = []string{
-	"n", "launch", "s", "start/stop", "x", "shell", "e", "exec", "l", "logs", "d", "delete",
+	"n", "launch", "s", "start/stop", "x", "shell", "e", "exec", "g", "gui app", "l", "logs", "d", "delete",
 	"f", "fork", "u", "settings", "w", "wait cloud-init", "m/M", "mount/umount", "p/P", "add/rm port",
 	"E/i", "export/import", "r", "refresh", "esc", "menu",
 }
@@ -745,6 +778,11 @@ func (m instancesModel) detailView() string {
 		policy = "autostart  •  " + policy
 	}
 	b = append(b, detailRow("Policy", policy))
+	if inst.GetGuiEnabled() {
+		b = append(b, detailRow("GUI", "yes (g to run an app)"))
+	} else {
+		b = append(b, detailRow("GUI", "no, created before GUI app support"))
+	}
 	if sched := scheduleText(inst.GetVm().GetSnapshotSchedule()); sched != "" {
 		b = append(b, detailRow("Snaps", sched))
 	}
