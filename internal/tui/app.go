@@ -92,14 +92,15 @@ type model struct {
 // Run dials socketPath (on the ssh host remote, if set) and blocks running
 // the TUI until the user quits or an error occurs.
 func Run(socketPath, remote string) error {
+	addr := socketPath
 	dial := func() (*client.Client, error) { return client.Dial(socketPath) }
 	if remote != "" {
 		dial = func() (*client.Client, error) { return client.DialSSH(remote, socketPath) }
-		socketPath = remote + ":" + socketPath
+		addr = remote + ":" + socketPath
 	}
 	c, err := dial()
 	if err != nil {
-		return fmt.Errorf("tui: dialing anvild at %s: %w", socketPath, err)
+		return fmt.Errorf("tui: dialing anvild at %s: %w", addr, err)
 	}
 	defer c.Close()
 
@@ -113,7 +114,7 @@ func Run(socketPath, remote string) error {
 
 	m := model{
 		client:         c,
-		socket:         socketPath,
+		socket:         addr,
 		who:            who,
 		screen:         screenInstances,
 		sidebarFocused: true,
