@@ -78,8 +78,8 @@ func remoteBaseSHA(ctx context.Context, t target, imageRef, arch string) string 
 }
 
 // probeRemote asks t, in one SSH round trip, everything preflight and the disk
-// upload need to know. Any failure just leaves the matching field unset.
-func probeRemote(ctx context.Context, t target, spec *instance.Spec, destName string) remoteCaps {
+// upload need to know. A failing check leaves its field unset; only an ssh failure errors.
+func probeRemote(ctx context.Context, t target, spec *instance.Spec, destName string) (remoteCaps, error) {
 	var b strings.Builder
 	b.WriteString("echo arch=$(uname -m); " +
 		"echo anvil=$(command -v anvil); echo anvild=$(command -v anvild); " +
@@ -109,8 +109,11 @@ func probeRemote(ctx context.Context, t target, spec *instance.Spec, destName st
 	// Each line reports itself, so a failing step must not fail the probe.
 	b.WriteString("exit 0")
 
-	out, _ := sshRun(ctx, t, remoteSh(b.String()), nil)
-	return parseRemoteCaps(out)
+	out, err := sshRun(ctx, t, remoteSh(b.String()), nil)
+	if err != nil {
+		return remoteCaps{}, err
+	}
+	return parseRemoteCaps(out), nil
 }
 
 func parseRemoteCaps(out string) remoteCaps {

@@ -111,7 +111,10 @@ func TestPreflightContainer(t *testing.T) {
 // the only way to tell it still works on a real shell.
 func TestProbeRemoteLocally(t *testing.T) {
 	localSSH(t, nil)
-	caps := probeRemote(context.Background(), target{}, vmSpec(), "")
+	caps, err := probeRemote(context.Background(), target{}, vmSpec(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if caps.arch != hostArch() {
 		t.Errorf("probed arch %q, want %q", caps.arch, hostArch())
 	}
@@ -146,5 +149,14 @@ func TestPreflightRejectsUnusableTarget(t *testing.T) {
 	cannedProbe(t, "arch=x86_64\nanvil=/usr/bin/anvil\nanvild=/usr/bin/anvild\nqemu\nkvm\n")
 	if _, _, err := m.preflight(context.Background(), tgt, vmSpec(), "web"); err != nil {
 		t.Errorf("expected a usable target, got %v", err)
+	}
+}
+
+// An ssh failure must surface as itself, not as "no anvil on PATH".
+func TestPreflightReportsSSHFailure(t *testing.T) {
+	localSSH(t, func(string) string { return "echo 'Permission denied (publickey)' >&2; exit 255" })
+	_, _, err := (&Manager{}).preflight(context.Background(), target{User: "u", Host: "h"}, vmSpec(), "web")
+	if err == nil || !strings.Contains(err.Error(), "Permission denied") {
+		t.Fatalf("expected the ssh error, got %v", err)
 	}
 }

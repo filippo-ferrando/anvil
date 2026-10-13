@@ -12,7 +12,10 @@ import (
 // preflight checks t can actually run spec before anything is stopped or
 // transferred. It returns the probe result and any non-blocking warnings.
 func (m *Manager) preflight(ctx context.Context, t target, spec *instance.Spec, destName string) (remoteCaps, []string, error) {
-	caps := probeRemote(ctx, t, spec, destName)
+	caps, err := probeRemote(ctx, t, spec, destName)
+	if err != nil {
+		return caps, nil, err
+	}
 	if caps.anvil == "" || caps.anvild == "" {
 		return caps, nil, fmt.Errorf("migrate: %s@%s has no anvil/anvild on PATH, install anvil there first", t.User, t.Host)
 	}
