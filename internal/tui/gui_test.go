@@ -15,4 +15,10 @@ func TestGUIArgs(t *testing.T) {
 	if !slices.Equal(got, []string{"gui", "--detach", "dev", "--", "gimp"}) {
 		t.Fatalf("got %q", got)
 	}
+
+	got = guiExportArgs("", "me@far", "re-lab", "ghidra-gui", true)
+	want = []string{"--remote", "me@far", "gui", "export", "--x11", "re-lab", "--", "ghidra-gui"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %q", got)
+	}
 }

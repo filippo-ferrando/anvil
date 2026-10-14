@@ -338,7 +338,8 @@ func loadCmdForScreen(s screen, c *client.Client) tea.Cmd {
 	case screenMirrors:
 		return loadMirrors(c)
 	case screenMigration:
-		return loadHosts(c)
+		// Instances and intents feed the migrate form's Name suggestions.
+		return tea.Batch(loadHosts(c), loadInstances(c), loadIntents(c))
 	}
 	return nil
 }

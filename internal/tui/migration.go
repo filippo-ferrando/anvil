@@ -54,6 +54,9 @@ type migrationModel struct {
 	progressLines []string
 
 	panelHeight int // height the hosts list is pinned to
+
+	// Tab-completion candidates for the migrate form, filled as each list loads.
+	instanceNames, intentNames, hostAliases []string
 }
 
 func newMigrationModel() migrationModel {
@@ -75,7 +78,7 @@ func newAddHostForm(alias, target string) simpleForm {
 	return newSimpleForm("Add known host", []formField{
 		textField("Alias", "", alias),
 		textField("user@host[:port]", "", target),
-		textField("Identity path (optional)", "", ""),
+		pathField("Identity path (optional)", "", ""),
 		toggleField("Strict host key", "require a host key anvil already knows", false),
 	})
 }
@@ -88,6 +91,19 @@ func newMigrateForm() simpleForm {
 		toggleField("Best-effort", "intent only: keep whatever members succeed", false),
 		toggleField("Dry run", "check connectivity and report the plan only", false),
 	})
+}
+
+// applySuggestions offers instance and intent names for Name, and known host aliases for To.
+func (m *migrationModel) applySuggestions() {
+	names := append(append([]string(nil), m.instanceNames...), m.intentNames...)
+	for i := range m.migrateForm.fields {
+		switch m.migrateForm.fields[i].Label {
+		case "Name":
+			m.migrateForm.fields[i].Suggestions = names
+		case "To":
+			m.migrateForm.fields[i].Suggestions = m.hostAliases
+		}
+	}
 }
 
 func (m *migrationModel) setSize(width, height int) {
@@ -107,10 +123,36 @@ func (m model) updateMigration(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		items := make([]list.Item, len(msg.hosts))
+		aliases := make([]string, len(msg.hosts))
 		for i, h := range msg.hosts {
 			items[i] = hostItem{host: h}
+			aliases[i] = h.GetAlias()
 		}
 		m.migration.hosts.SetItems(items)
+		m.migration.hostAliases = aliases
+		m.migration.applySuggestions()
+		return m, nil
+
+	case instancesLoadedMsg:
+		if msg.err == nil {
+			names := make([]string, len(msg.instances))
+			for i, inst := range msg.instances {
+				names[i] = inst.GetName()
+			}
+			m.migration.instanceNames = names
+			m.migration.applySuggestions()
+		}
+		return m, nil
+
+	case intentsLoadedMsg:
+		if msg.err == nil {
+			names := make([]string, len(msg.intents))
+			for i, it := range msg.intents {
+				names[i] = it.GetName()
+			}
+			m.migration.intentNames = names
+			m.migration.applySuggestions()
+		}
 		return m, nil
 
 	case actionDoneMsg:

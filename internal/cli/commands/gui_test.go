@@ -16,12 +16,12 @@ func TestWaypipeArgs(t *testing.T) {
 	got := waypipeArgs(ssh, "ubuntu@localhost", "/opt/anvil", true, []string{"ghidraRun", "--flag"})
 	want := []string{"--remote-bin", "/opt/anvil/waypipe", "--xwls", "ssh",
 		"-p", "2222", "-o", "StrictHostKeyChecking=accept-new", "-J", "me@far", "-i", "/k",
-		"ubuntu@localhost", "ghidraRun", "--flag"}
+		"ubuntu@localhost", "env", "_JAVA_AWT_WM_NONREPARENTING=1", "ghidraRun", "--flag"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("got  %q\nwant %q", got, want)
 	}
-	if got := waypipeArgs(nil, "u@h", "/opt/anvil", false, []string{"app"}); slices.Contains(got, "--xwls") {
-		t.Fatalf("--xwls without x11: %q", got)
+	if got := waypipeArgs(nil, "u@h", "/opt/anvil", false, []string{"app"}); slices.Contains(got, "--xwls") || slices.Contains(got, "env") {
+		t.Fatalf("x11 settings without x11: %q", got)
 	}
 }
 

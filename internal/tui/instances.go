@@ -447,6 +447,7 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.instances.startPrompt(instancesPromptGUI, inst, newSimpleForm("GUI app", []formField{
 				textField("Command", "e.g. ghidraRun", m.instances.lastGUICommand),
 				toggleField("X11 app", "Java/Swing and other X11 apps need XWayland", m.instances.lastGUIX11),
+				toggleField("Add to desktop", "also add it to this desktop's app launcher", false),
 			}))
 		}
 		return m, nil
@@ -602,7 +603,7 @@ func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		x11 := ins.promptForm.Bool("X11 app")
 		ins.lastGUICommand, ins.lastGUIX11 = command, x11
 		m.setStatus("starting "+command+" in "+target.GetName()+"…", false)
-		return m, launchGUIApp(m.socketPath, m.client.Remote, target.GetName(), command, x11)
+		return m, launchGUIApp(m.socketPath, m.client.Remote, target.GetName(), command, x11, ins.promptForm.Bool("Add to desktop"))
 
 	case instancesPromptShellUser:
 		user := ins.promptForm.Value("As user (optional, blank = default)")

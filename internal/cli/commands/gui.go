@@ -32,7 +32,8 @@ func newGUICommand(flags *globalFlags) *cobra.Command {
 		Short: "Run a graphical app from an instance in a window on this desktop",
 		Long: "Run a graphical app inside a VM or container and show its windows on this host's " +
 			"Wayland desktop. A stopped instance is started first. X11 apps (Java/Swing ones like " +
-			"Ghidra, for example) need --x11. Only instances created by an anvil version with GUI " +
+			"Ghidra, for example) need --x11; in a VM it also sets _JAVA_AWT_WM_NONREPARENTING=1 so " +
+			"Java windows don't stay blank. Only instances created by an anvil version with GUI " +
 			"support can do this.\n\n" +
 			"A container connects straight to the host's compositor (GPU included); a VM goes " +
 			"through waypipe over SSH. Put `--` before the app's command if it has its own flags.",
@@ -127,8 +128,12 @@ func runVMGUI(c *client.Client, inst *anvilv1.Instance, session *anvilv1.GUISess
 	return cmd.Run()
 }
 
-// waypipeArgs builds `waypipe [--xwls] ssh <ssh args> <dest> <command>`, using the guest's
-// shipped waypipe so both ends run the same version.
+// x11JavaEnv makes Java/Swing apps draw under xwayland-satellite, which doesn't reparent
+// windows. Without it their windows stay blank.
+const x11JavaEnv = "_JAVA_AWT_WM_NONREPARENTING=1"
+
+// waypipeArgs builds `waypipe [--xwls] ssh <ssh args> <dest> [env <x11JavaEnv>] <command>`,
+// using the guest's shipped waypipe so both ends run the same version.
 func waypipeArgs(sshArgs []string, dest, guestToolsDir string, x11 bool, command []string) []string {
 	args := []string{"--remote-bin", path.Join(guestToolsDir, "waypipe")}
 	if x11 {
@@ -137,6 +142,9 @@ func waypipeArgs(sshArgs []string, dest, guestToolsDir string, x11 bool, command
 	args = append(args, "ssh")
 	args = append(args, sshArgs...)
 	args = append(args, dest)
+	if x11 {
+		args = append(args, "env", x11JavaEnv)
+	}
 	return append(args, command...)
 }
 
