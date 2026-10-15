@@ -1,115 +1,104 @@
-# GUI apps from instances (implementation plan)
+# GUI apps from instances
 
-Status: in progress. This file becomes the user guide once the feature is done.
+`anvil gui <name> -- <app>` runs a graphical app inside a VM or container and shows its
+windows on the host's Wayland desktop, like a native app. Linux hosts with a Wayland
+session only.
 
-`anvil gui <name> -- <app>` opens a graphical app running inside a VM or container as a
-native window on the host's Wayland compositor. Linux hosts and Wayland only.
+```
+anvil gui dev -- gnome-text-editor
+anvil gui --x11 re-lab -- ghidraRun
+anvil gui --detach dev -- firefox
+```
 
-## Decisions
+## Requirements
 
-| Topic | Decision |
+- A Wayland desktop session on the host running `anvil gui`. With `--x11`, the desktop
+  also needs XWayland.
+- An instance created by an anvil version with GUI support. Older instances get a clear
+  error: recreate them to use GUI apps. `anvil info` (`GUI` field) and the TUI detail
+  panel show whether an instance supports it.
+- VMs only: the guest agent (no `--no-guest-agent`), and the static `waypipe` and
+  `xwayland-satellite` that the packages install in `/usr/lib/anvil/gui`.
+
+A stopped instance is started first, and `anvil gui` waits for a VM's first boot to
+finish before running the app.
+
+## Flags
+
+| Flag | Meaning |
 |---|---|
-| VM transport | waypipe over the SSH path `anvil exec` already uses (works with `--remote`). |
-| Container transport | Per-instance relay directory bind-mounted at create, plus a local fd-passing relay run by `anvil gui`. |
-| X11 apps | Supported through XWayland, only with `--x11` (off by default). |
-| Default | Every instance created from this version on supports GUI apps. Older ones get a clear error. |
-| Exposure | Wayland/X11 sockets exist inside an instance only while `anvil gui` runs. |
-| GPU | Containers get `/dev/dri` (plus the render/video groups) at create when the host has it. Permanent, unlike the sockets. |
-| VM tools | Static `waypipe` and `xwayland-satellite` shipped with anvil, shared read-only into VMs over virtiofs. |
-| Xwayland in VMs | Installed through the guest agent on first `--x11` use. |
-| Stopped instance | `anvil gui` starts it (and waits for a VM to be ready) first. |
-| Desktop entries | `anvil gui export` writes a `.desktop` file, with the app's icon copied from the instance. |
-| `--remote` + container | Not supported in the first version. |
+| `--x11` | Also make X11 apps work, through XWayland. Needed for Java/Swing apps such as Ghidra. Off by default. |
+| `--detach` | Return right away. Output goes to `$XDG_STATE_HOME/anvil/gui/<name>.log`. |
+| `--user U` | User to run the app as (VM: SSH user, container: `docker exec --user`). |
+| `-i, --identity` | Private key for SSH instead of anvil's managed key (VM only). |
 
-## Shape
+Put `--` before the app's command when it has flags of its own.
+
+## How it works
+
+### Containers
+
+Every GUI-enabled container gets a per-instance directory, `/run/anvil/gui/<id>` on the
+host, bind-mounted at `/run/anvil-gui` (and its `x11` subdirectory over `/tmp/.X11-unix`).
+When the host has `/dev/dri`, the container also gets the GPU and the matching render/video
+groups at create time.
+
+`anvil gui` starts a small relay in that directory that forwards the host's Wayland (and,
+with `--x11`, X11) sockets, file descriptors included, then runs the app with
+`docker exec` and the right `WAYLAND_DISPLAY`/`DISPLAY`/`XAUTHORITY`. The sockets exist
+inside the container only while `anvil gui` runs, and the relay stays up as long as the
+app still has windows open.
+
+### VMs
+
+The app runs under `waypipe` over the same SSH path that `anvil exec` uses, so it works
+with `--remote` too. The host's `waypipe` and `xwayland-satellite` are shared read-only
+into the VM over virtiofs and mounted at `/opt/anvil` by the guest agent on first use, so
+both ends run the same version.
+
+The first `--x11` run installs Xwayland in the guest through the guest agent (apt, dnf,
+zypper, pacman or apk), which can take a few minutes. With `--x11`, the app also gets
+`_JAVA_AWT_WM_NONREPARENTING=1`, so Java windows don't stay blank.
+
+A VM started before the GUI tools were installed on the host needs a restart before
+`anvil gui` works for it.
+
+## Desktop entries
+
+`anvil gui export` adds an instance's app to the host's app launcher. The entry runs
+`anvil gui --detach`, so clicking it starts the instance if needed and opens the app.
 
 ```
-anvil gui <name> -- ghidraRun
-  |
-  +- gRPC InstanceService.PrepareGUI -> anvild: checks, starts, prepares, replies with session details
-  |
-  +- container: local relay  /run/anvil/gui/<id>/{wayland-0, x11/X0}  <->  real host sockets
-  |             then `docker exec -e WAYLAND_DISPLAY=... <cid> ghidraRun`
-  |
-  +- VM:        waypipe [--xwls] ssh <existing ssh args/jump> user@vm ghidraRun
+anvil gui export --x11 re-lab -- ghidraRun
+anvil gui export --title Inkscape --icon ~/icons/inkscape.svg dev -- inkscape
+anvil gui exports            # list them, -o json for scripts
+anvil gui unexport re-lab ghidrarun
 ```
 
-The daemon decides and prepares (directories, tools share, Xwayland install, start). The
-CLI only does what must run inside the desktop session: the socket relay and `waypipe`.
+The app's name and icon come from its own `.desktop` file inside the instance (read
+through the guest agent for a VM, Docker's archive API for a container). Without one, the
+command name and a generic icon are used. `--title` and `--icon` override them.
 
-## Phase 0: check the risky parts
+Entries are written to `~/.local/share/applications/anvil-<instance>-<app>.desktop`,
+icons to `~/.local/share/anvil/icons/`. An export made with `--remote` keeps it in the
+entry.
 
-1. Static `waypipe` (0.10+, lz4/zstd, no dmabuf/video) and `xwayland-satellite` built with musl.
-2. waypipe `--xwls` flag in the pinned version, and the guest finding `xwayland-satellite` over non-interactive SSH.
-3. Xlib/xcb in a container only looks at `/tmp/.X11-unix/X<n>`: a second bind over that directory.
-4. Xauthority cookie needs (GNOME, KDE) and `FamilyWild` acceptance.
+## TUI
 
-## Phase 1: API, domain, store
+On the Instances screen, `g` opens the GUI app form: command, an "X11 app" toggle, and an
+"Add to desktop" toggle that also runs `anvil gui export`. The app starts detached, so it
+keeps running after the TUI quits. The detail panel shows whether the instance supports
+GUI apps.
 
-- `anvil.proto`: `Instance.gui_enabled`; `rpc PrepareGUI(PrepareGUIRequest) returns (stream PrepareGUIProgress)`
-  (request: `name`, `x11`; last message: session details); `rpc GetGUIAppInfo`;
-  `LaunchRequest.gui_enabled` (internal, keeps the flag across migrate/import).
-- `instance.Spec.GUI`; `GUIPreparer` and `GUIAppInspector` capability interfaces.
-- `Manager`: sets `GUI` on new instances, Fork inherits it, `PrepareGUI` starts a stopped
-  instance (and waits for a VM), rejects `GUI == false`.
-- `config.GUIRelayDir(id)` = `/run/anvil/gui/<id>`, `config.GUIToolsDir()` = `/usr/lib/anvil/gui`
-  (`ANVIL_GUI_TOOLS` overrides it).
+## Limitations
 
-## Phase 2: container backend
+- Wayland hosts only, no plain X11 host session.
+- `--remote` works for VMs, not yet for containers.
+- The host GPU is passed through to containers only, VM apps get no GPU access.
 
-- Create with `GUI`: bind `GUIRelayDir(id)` to `/run/anvil-gui` and `GUIRelayDir(id)/x11`
-  to `/tmp/.X11-unix`; `/dev/dri` plus render/video group ids when present. Recreate keeps them.
-- Start makes both directories (0777, under the 0750 `/run/anvil`) before `docker start`,
-  since `/run` is empty after a reboot. Delete removes them.
-- `PrepareGUI` returns the paths and the container ID.
+## Building the tools
 
-## Phase 3: relay (`internal/gui/relay`)
-
-- `Serve`: unix listener, one upstream dial per connection, copies bytes and `SCM_RIGHTS`
-  fds together in one `sendmsg` per chunk. Sockets 0777, removed on exit.
-- `xauth`: reads the cookie for `:n` from `$XAUTHORITY`, writes it as `FamilyWild`.
-- `display`: finds the host Wayland socket and X display number.
-
-## Phase 4: `anvil gui` for containers
-
-`anvil gui <name> [--x11] [--detach] [--user U] -- <cmd>`: PrepareGUI, start relays,
-`docker exec` with `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR` (and `DISPLAY`, `XAUTHORITY` with
-`--x11`). `--detach` re-runs itself in a new session and logs to
-`$XDG_STATE_HOME/anvil/gui/<name>.log`.
-
-## Phase 5: VM backend
-
-- `qemu.Config.ToolsShare`: a `vhost-user-fs-pci` with tag `anviltools` on `pcie.0`, so it
-  doesn't use one of the 8 hot-plug ports.
-- Start runs a read-only virtiofsd for `GUIToolsDir()` when `GUI` is set and the dir exists.
-- Seed: fstab `anviltools /opt/anvil virtiofs ro,nofail 0 0`, symlinks into `/usr/local/bin`.
-- `PrepareGUI` (guest agent): mounts the share if missing, installs Xwayland for `--x11`
-  (package per distro, overridable by a catalog `xwayland_package` field).
-
-## Phase 6: `anvil gui` for VMs
-
-`waypipe [--xwls] ssh <commonSSHArgs> user@host <cmd>`, preferring the shipped host
-`waypipe` so both ends match.
-
-## Phase 7: desktop entries
-
-`anvil gui export|unexport|exports`. `GetGUIAppInfo` (daemon side, VM through the guest
-agent, container through Docker's archive API) finds the app's `.desktop` file and icon.
-Icon saved under `~/.local/share/icons/hicolor/<size>/apps/`, generic fallback, `--icon` wins.
-
-## Phase 8: TUI
-
-Key `g` on the instances screen: command plus X11 toggle, starts `anvil gui --detach`.
-Info panel shows GUI support.
-
-## Phase 9: packaging, docs
-
-`scripts/build-gui-tools.sh` + `make gui-tools`, binaries in `/usr/lib/anvil/gui/` for
-every package format, README, CLAUDE.md, `make man`.
-
-## Tests
-
-relay fd passing (inode check), xauth round trip, qemu args, seed merge, docker params,
-manager dispatch/start/flag, xwayland package mapping, `.desktop` matching and icon lookup,
-waypipe argv builder, `.desktop` rendering, plus integration tests that skip themselves
-without a compositor, docker or waypipe.
+`make gui-tools` (`scripts/build-gui-tools.sh`) builds static musl `waypipe` and
+`xwayland-satellite` in an Alpine container, into `build/gui-tools`. The Arch, deb and
+rpm packages ship them in `/usr/lib/anvil/gui`. `ANVIL_GUI_TOOLS=<dir>` in anvild's (and
+the CLI's) environment points at another directory, for development builds.

@@ -9,6 +9,15 @@ container mirrors, man pages, shell completions and the TUI.
 
 ### Recently done
 
+- **GUI apps from instances.** `anvil gui <name> [--x11] -- <app>` shows an app running in
+  a VM (waypipe over SSH, tools shared over virtiofs) or a container (fd-passing socket
+  relay, `/dev/dri` passed through) as a native Wayland window. `anvil gui
+  export|unexport|exports` manage desktop entries with the app's own name and icon. TUI:
+  `g` on the Instances screen. Packages ship static `waypipe`/`xwayland-satellite` in
+  `/usr/lib/anvil/gui` (`make gui-tools`). See `docs/gui.md`.
+- **TUI migrate form suggestions.** Name suggests instances and intents, To suggests known
+  host aliases; the add-host form completes the identity path.
+- **Migration preflight fixes** and a fix for `anvil tui` over `--remote`.
 - **Remote anvild over SSH.** `anvil --remote <[user@]host>` (or `ANVIL_REMOTE`), CLI and
   TUI alike, tunnels gRPC through `ssh <host> anvil dial-stdio`. Guest SSH hops through the
   host with `ssh -J`, container exec/cp go through `DOCKER_HOST=ssh://`, and paths sent to

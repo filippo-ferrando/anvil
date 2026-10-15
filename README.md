@@ -19,7 +19,7 @@ Anvil spins up cloud-init VMs and Docker containers from the same CLI, the same 
 and the same mental model. It's what I wish `multipass` was: not tied to Ubuntu, not VM-only,
 and actually able to group stuff together and move it between machines.
 
-No GUI, no login system, no cross-platform abstraction layer to drag around. Just a
+No GUI of its own, no login system, no cross-platform abstraction layer to drag around. Just a
 daemon, a CLI, a TUI, and real Linux primitives underneath (QEMU/QMP directly, no
 libvirt; the real Docker API, no SDK).
 
@@ -153,6 +153,20 @@ key anvil already knows instead, add the host with `anvil host add <alias> <user
 --strict-host-key`; adding the same alias again replaces it, so this can be turned on
 once the key is on record.
 
+**GUI apps**: run a graphical app from a VM or container as a native window on the
+host's Wayland desktop:
+
+```
+anvil gui dev -- gnome-text-editor
+anvil gui --x11 re-lab -- ghidraRun
+anvil gui export --x11 re-lab -- ghidraRun   # add it to the desktop's app launcher
+```
+
+A container talks to the host compositor through a relay (GPU included when the host has
+`/dev/dri`), a VM goes through `waypipe` over SSH. X11 apps work through XWayland with
+`--x11`. A stopped instance is started first. Only instances created by a version with
+GUI support can do this. See [docs/gui.md](docs/gui.md).
+
 `anvil list` and `anvil find` take `-o json` for scripts: the reply is printed as JSON
 with the field names from `anvil.proto`, instead of the table.
 
@@ -211,7 +225,11 @@ usually installed outside `PATH`, e.g. `/usr/lib/virtiofsd`).
 make proto          # regenerate api/gen/anvil/v1 from the .proto file
 make build          # builds ./anvil and ./anvild
 make man            # optional: man pages into man/man1 and man/man8
+make gui-tools      # optional: static waypipe/xwayland-satellite for `anvil gui` with VMs (needs docker)
 ```
+
+The packages install the GUI tools in `/usr/lib/anvil/gui`. For a source build, copy
+`build/gui-tools/*` there or point `ANVIL_GUI_TOOLS` at that directory.
 
 ## Quick start
 
@@ -240,11 +258,13 @@ Select an instance on the Instances screen and its detail panel shows a live CPU
 gauge, disk usage (or I/O rate for a container), network throughput, uptime, and address,
 sampled straight from the process itself (`/proc` + the tap device for a VM, Docker's own
 stats endpoint for a container), refreshed every couple of seconds, no guest agent
-required. From the same screen, `f` forks the selected VM and `E`/`i` export/import it.
+required. From the same screen, `f` forks the selected VM, `E`/`i` export/import it, and
+`g` runs a GUI app from it (optionally adding it to the desktop's app launcher).
 
 The Migration screen lists the known hosts beside a migrate form: `a` adds a host, `d`
 scans the local network over mDNS (`enter` on a result opens the add form prefilled),
-`t` tests one, `x` removes one, and `tab` moves over to the migrate form.
+`t` tests one, `x` removes one, and `tab` moves over to the migrate form, which
+suggests instance and intent names for Name and known host aliases for To.
 
 ### A sneak peek at the TUI
 
@@ -290,6 +310,7 @@ internal/
   migrate/       SSH-driven migration
   discovery/     mDNS announce and browse behind `anvil host discover`
   export/        bundles behind `anvil export` and `anvil import`
+  gui/           `anvil gui`: socket relay for containers, app name/icon lookup
   store/         bbolt-backed registry
   cli/commands/  cobra commands
   tui/           the Bubble Tea app
@@ -306,6 +327,7 @@ Anvil is young but everything above is real and working, not vaporware: VMs,
 containers, intents, migration, the TUI, and Arch/deb/rpm packaging all run today. A few things
 aren't there yet:
 
+- **`anvil gui`** needs a Wayland host session, and with `--remote` it only works for VMs.
 - **Podman** isn't wired up. `--engine podman` fails cleanly instead of pretending to
   work; Docker is the only engine right now.
 - The built-in image catalog's checksums are a work in progress: run

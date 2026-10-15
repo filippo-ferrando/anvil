@@ -92,6 +92,7 @@ func newInfoCommand(flags *globalFlags) *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "State:\t%s\n", stateLabel(inst.GetState()))
 				fmt.Fprintf(cmd.OutOrStdout(), "Autostart:\t%s\n", yesNo(inst.GetAutostart()))
 				fmt.Fprintf(cmd.OutOrStdout(), "Restart:\t%s\n", restartPolicyLabel(inst.GetRestartPolicy()))
+				fmt.Fprintf(cmd.OutOrStdout(), "GUI:\t%s\n", yesNo(inst.GetGuiEnabled()))
 				if intentName, role := inst.GetLabels()["intent"], inst.GetLabels()["role"]; intentName != "" {
 					fmt.Fprintf(cmd.OutOrStdout(), "Intent:\t%s (role: %s)\n", intentName, role)
 				}

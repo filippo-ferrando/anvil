@@ -17,6 +17,7 @@ make test    # go test ./...
 make vet     # go vet ./...
 make fmt     # gofmt -l -s . (lists files that need formatting; doesn't rewrite them)
 make man     # regenerate man/man1 from the live command tree, plus docs/man/anvild.8
+make gui-tools  # static waypipe/xwayland-satellite for `anvil gui` into build/gui-tools (needs docker)
 ```
 
 Single test / package:
@@ -34,7 +35,8 @@ and is `//go:build linux`, self-skips if `qemu-system-x86_64`/`qemu-img` aren't 
 
 Building from source needs Go 1.27+, `protoc`, and (Linux) `qemu-system-x86_64`,
 `qemu-img`, `xorriso` on `PATH`, plus `virtiofsd` (looked up on `PATH` and in
-`/usr/lib`, `/usr/libexec`).
+`/usr/lib`, `/usr/libexec`). `anvil gui` with VMs also needs the GUI tools in
+`/usr/lib/anvil/gui` (or `ANVIL_GUI_TOOLS`). Full feature notes: `docs/gui.md`.
 
 ## Architecture
 
@@ -82,6 +84,8 @@ internal/
   migrate/       SSH-driven cross-host migration
   discovery/     mDNS announce and browse behind `anvil host discover`
   export/        bundle export/import behind `anvil export` and `anvil import`
+  gui/           `anvil gui`: fd-passing socket relay + xauth (gui/relay), app .desktop/icon lookup (gui/appinfo)
+  config/        fixed on-disk paths (run/state/cache dirs, GUI relay and tools dirs)
   intent/apply/  the compare-and-apply engine behind `anvil apply`
   store/         bbolt-backed registry (instances, intents, images, mirrors, hosts, cloud-init)
   cli/commands/  cobra commands (one file per command/command group)
@@ -89,7 +93,8 @@ internal/
 data/distros/    built-in VM image catalog (embedded in the binary)
 catalogues/      official extra catalogue (distro manifests + cloud-init templates), a git
                  submodule consumed via `anvil mirror add` / `cloud-init import-repo`, not embedded
-scripts/         verify-catalog.sh (checksums), release-notes.sh (used by the release workflow)
+scripts/         verify-catalog.sh (checksums), release-notes.sh (used by the release workflow),
+                 build-gui-tools.sh (static GUI tools, used by `make gui-tools` and releases)
 packaging/       PKGBUILD/deb/rpm build scripts, systemd unit, sysusers/tmpfiles rules
 ```
 
@@ -97,8 +102,8 @@ packaging/       PKGBUILD/deb/rpm build scripts, systemd unit, sysusers/tmpfiles
 
 `internal/instance/backend.go` defines the core `Backend` interface (Create/Start/Stop/
 Delete/Status/Logs) that both the QEMU/vz backend and the Docker backend implement.
-Optional capabilities (mount, port-forward, snapshot, fork) are separate interfaces
-(`Mounter`, `PortForwarder`, `Snapshotter`, `Forker`) that a backend implements only if
+Optional capabilities (mount, port-forward, snapshot, fork, GUI apps) are separate interfaces
+(`Mounter`, `PortForwarder`, `Snapshotter`, `Forker`, `GUIPreparer`, `GuestFileReader`) that a backend implements only if
 it supports that operation, so a container backend has no `Snapshotter`.
 `internal/instance/manager.go`'s `Manager` type-asserts against these before calling
 them. When adding a capability to one backend, extend this interface set rather than

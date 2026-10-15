@@ -16,9 +16,9 @@ just build a request and send it over that socket.
 It drives QEMU processes directly over QMP for VMs (no libvirt) and talks to
 Docker's real HTTP API for containers (no SDK). It takes no command-line
 flags or subcommands and its on-disk layout is fixed. Its runtime behavior is
-controlled through the requests it receives over the socket, with two
+controlled through the requests it receives over the socket, with a few
 exceptions read from its environment, described under ENVIRONMENT:
-\fBANVIL_MDNS\fR and \fBANVIL_METRICS\fR.
+\fBANVIL_MDNS\fR, \fBANVIL_METRICS\fR and \fBANVIL_GUI_TOOLS\fR.
 
 On startup it creates its run, state, and cache directories if missing,
 opens its registry, reconciles instance and intent-network state against
@@ -86,6 +86,19 @@ target.
 Downloaded and checksum-verified base VM images.
 .RE
 .PP
+\fB/run/anvil/gui/\fIid\fB/\fP
+.RS 4
+A GUI-enabled container's relay directory, bind-mounted at \fB/run/anvil-gui\fR
+inside it. \fBanvil gui\fR puts the display sockets here only while it runs.
+.RE
+.PP
+\fB/usr/lib/anvil/gui/\fP
+.RS 4
+Static \fBwaypipe\fR and \fBxwayland-satellite\fR, shared read-only into
+GUI-enabled VMs over virtiofs for \fBanvil gui\fR. When missing, VMs still
+boot, without GUI app support.
+.RE
+.PP
 \fB/etc/anvil/\fP
 .RS 4
 Reserved for daemon configuration; unused today.
@@ -108,6 +121,12 @@ socket. Unset, the default, serves nothing. The endpoint has no access
 control, so bind it to loopback or a socket unless the network is trusted.
 Each scrape reports every instance's state and the live stats of the running
 ones, the same numbers as \fBanvil stats\fR.
+.RE
+.PP
+\fBANVIL_GUI_TOOLS\fP
+.RS 4
+Directory holding the GUI tools shared into VMs, instead of
+\fB/usr/lib/anvil/gui\fR. Meant for development builds.
 .RE
 
 .SH RUNNING
