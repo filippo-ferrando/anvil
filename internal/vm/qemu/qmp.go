@@ -5,6 +5,7 @@ package qemu
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -398,7 +399,7 @@ const DiskDriveID = "disk0"
 // existing qcow2 already backed by the same base image. The copy reflects the disk as
 // it was when this returns; call WaitJob with jobID for the copy to finish.
 func (c *QMPClient) StartTopBackup(ctx context.Context, drive, targetPath, jobID string) error {
-	node := jobID + "-target"
+	node := backupTargetNode(jobID)
 	if _, err := c.Execute(ctx, "blockdev-add", map[string]any{
 		"driver":    "qcow2",
 		"node-name": node,
@@ -419,13 +420,20 @@ func (c *QMPClient) StartTopBackup(ctx context.Context, drive, targetPath, jobID
 	return nil
 }
 
+// backupTargetNode names a backup job's target node. QEMU caps node names at 31 characters,
+// which a job ID holding an instance ID already exceeds, so the name is a short hash of it.
+func backupTargetNode(jobID string) string {
+	sum := sha256.Sum256([]byte(jobID))
+	return fmt.Sprintf("target-%x", sum[:8])
+}
+
 // FinishTopBackup waits for a StartTopBackup job, then releases it and its target node.
 // progress, if set, gets the job's completion percentage now and then.
 func (c *QMPClient) FinishTopBackup(ctx context.Context, jobID string, progress func(pct int)) error {
 	defer func() {
 		cleanup := context.WithoutCancel(ctx)
 		_, _ = c.Execute(cleanup, "job-dismiss", map[string]string{"id": jobID})
-		_, _ = c.Execute(cleanup, "blockdev-del", map[string]string{"node-name": jobID + "-target"})
+		_, _ = c.Execute(cleanup, "blockdev-del", map[string]string{"node-name": backupTargetNode(jobID)})
 	}()
 	lastPct := -1
 	for {

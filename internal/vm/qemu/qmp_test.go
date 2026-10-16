@@ -161,3 +161,15 @@ func TestExecuteConcurrentCommandsEachGetTheirOwnReply(t *testing.T) {
 		}
 	}
 }
+
+// TestBackupTargetNodeFitsQEMULimit covers a fork's job ID, which holds a full
+// instance ID: QEMU rejects node names over 31 characters.
+func TestBackupTargetNodeFitsQEMULimit(t *testing.T) {
+	a := backupTargetNode("fork-01KXYZ0ABCDEFGHJKMNPQRSTVW")
+	if len(a) > 31 {
+		t.Errorf("node name %q is %d characters, QEMU allows 31", a, len(a))
+	}
+	if a == backupTargetNode("fork-01KXYZ0ABCDEFGHJKMNPQRSTVX") {
+		t.Error("different jobs should get different node names")
+	}
+}
