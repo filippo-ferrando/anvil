@@ -23,11 +23,20 @@ jobs:
       image: alpine:3.22
     steps:
       - name: Install job tools
-        run: apk add --no-cache bash nodejs git file coreutils
+        # tar and zstd: actions/cache needs GNU tar, Alpine's busybox one lacks its options.
+        run: apk add --no-cache bash nodejs git file coreutils tar zstd
 
       - uses: actions/checkout@v7
 
+      # The script pins every version, so its hash names the binaries it builds.
+      - id: gui-cache
+        uses: actions/cache@v4
+        with:
+          path: build/gui-tools
+          key: gui-tools-${{ runner.arch }}-${{ hashFiles('scripts/build-gui-tools.sh') }}
+
       - name: Build static waypipe + xwayland-satellite
+        if: steps.gui-cache.outputs.cache-hit != 'true'
         run: scripts/build-gui-tools.sh build/gui-tools
 
       - uses: actions/upload-artifact@v3
