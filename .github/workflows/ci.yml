@@ -18,8 +18,19 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # The QEMU and Docker integration tests skip themselves when their tools
-      # are missing, so the runner needs nothing extra installed.
+      # The QEMU tests run under TCG, so no /dev/kvm is needed. Docker tests still
+      # skip themselves when the runner has no dockerd.
+      - name: Install QEMU and test tools
+        run: |
+          sudo=""
+          [ "$(id -u)" = "0" ] || sudo=sudo
+          $sudo apt-get update
+          $sudo apt-get install -y qemu-system-x86 qemu-utils xorriso virtiofsd zstd openssh-client
+          if docker info >/dev/null 2>&1; then
+            docker pull busybox:latest
+            docker pull alpine:3.22
+          fi
+
       - name: Check formatting
         run: |
           unformatted=$(gofmt -l -s .)

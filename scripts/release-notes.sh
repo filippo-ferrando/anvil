@@ -3,6 +3,7 @@
 # subjects since the previous tag.
 #
 # Usage: scripts/release-notes.sh <tag>   (e.g. v1.0.11, defaults to HEAD)
+# NOTES_NO_INSTALL=1 leaves out the install section (used by changelog.sh).
 set -euo pipefail
 
 tag="${1:-HEAD}"
@@ -10,7 +11,8 @@ prev="$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)"
 range="${prev:+$prev..}$tag"
 version="${tag#v}"
 
-subjects="$(git log --no-merges --format='%s (%h)' "$range")"
+# CHANGELOG.md updates made by the release workflow are not release content.
+subjects="$(git log --no-merges --format='%s (%h)' "$range" | grep -v '^chore(release):' || true)"
 
 # section <title> <regex> [-v]: lists commits matching (or with -v, not matching) the regex.
 section() {
@@ -25,6 +27,8 @@ section "Features" '^feat(\([^)]*\))?:'
 section "Fixes" '^fix(\([^)]*\))?:'
 section "Other changes" '^(chore|refactor|docs|perf|test|build|ci)(\([^)]*\))?:'
 section "Uncategorized" '^(feat|fix|chore|refactor|docs|perf|test|build|ci)(\([^)]*\))?!?:' -v
+
+[[ -n "${NOTES_NO_INSTALL:-}" ]] && exit 0
 
 cat <<EOF
 ### Install

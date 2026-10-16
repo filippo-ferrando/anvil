@@ -1,0 +1,41 @@
+name: Bug report
+description: Something in anvil or anvild does not work as documented.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command run, what it printed, and what was expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        anvil launch --kind vm debian-13 --name box
+        anvil mount box ./src /src
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Instance kind
+      options: ["VM", "Container", "Both", "Not instance related"]
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Output of `anvil version`, host distro and kernel, `qemu-system-x86_64 --version` and `docker version` when relevant, and whether `--remote` was used.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Daemon logs
+      description: The relevant part of `journalctl -u anvild`.
+      render: text

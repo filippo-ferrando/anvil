@@ -4,6 +4,8 @@
 
 **A Multipass-style VM & container manager that doesn't stop at VMs, doesn't stop at Ubuntu, and doesn't stop at one machine.**
 
+[![CI](https://git.fferrando.cc/rdfilippo/anvil/actions/workflows/ci.yml/badge.svg)](https://git.fferrando.cc/rdfilippo/anvil/actions?workflow=ci.yml)
+[![Release packages](https://git.fferrando.cc/rdfilippo/anvil/actions/workflows/release.yml/badge.svg)](https://git.fferrando.cc/rdfilippo/anvil/actions?workflow=release.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE.md)
 [![Go Version](https://img.shields.io/badge/go-1.27%2B-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20(in%20progress)-lightgrey)](#status--limitations)
@@ -243,6 +245,10 @@ mirrors and template repos work.
 
 ## Install
 
+Prebuilt Arch, deb and rpm packages are attached to the
+[latest release](https://git.fferrando.cc/rdfilippo/anvil/releases/latest), with the
+install commands in its notes. To build the packages instead:
+
 ### Arch Linux
 
 Clone the repo, then from its root:
@@ -352,6 +358,7 @@ internal/
   discovery/     mDNS announce and browse behind `anvil host discover`
   export/        bundles behind `anvil export` and `anvil import`
   gui/           `anvil gui`: socket relay for containers, app name/icon lookup
+  config/        fixed on-disk paths (run, state, cache, GUI tools)
   store/         bbolt-backed registry
   cli/commands/  cobra commands
   tui/           the Bubble Tea app
@@ -359,7 +366,7 @@ api/proto/       the gRPC API definition
 data/distros/    the built-in VM image catalog
 catalog/         the official extra catalogue (git submodule)
 packaging/       PKGBUILD, deb/rpm build scripts, systemd unit, sysusers/tmpfiles rules
-scripts/         catalog checksum check, release notes from commit subjects
+scripts/         catalog checksum check, release notes and changelog from commit subjects, static GUI tools build
 ```
 
 ## Documentation
@@ -397,12 +404,17 @@ aren't there yet:
   `scripts/verify-catalog.sh` if you want to double-check before you trust it blindly, or
   point `anvil mirror add` at your own verified manifest instead.
 
+The CLI, the gRPC API and the on-disk formats can still change between releases until
+the planned feature set is settled. What's planned is in [PLAN.md](PLAN.md), what changed
+in each release is in [CHANGELOG.md](CHANGELOG.md).
+
 ## Contributing
 
 Issues and PRs are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md). If you're touching
 daemon logic, keep it in `internal/` behind the gRPC boundary, the CLI and TUI are meant
 to stay dumb clients, that's what keeps them in sync with each other for free. Security
-issues: [SECURITY.md](SECURITY.md).
+issues: [SECURITY.md](SECURITY.md). Everyone taking part follows the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 

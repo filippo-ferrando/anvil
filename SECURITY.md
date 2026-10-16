@@ -7,8 +7,8 @@ supported.
 
 ## Reporting a vulnerability
 
-Do not open a public issue for a vulnerability. Open a private report to the maintainer
-on the project's forge, with the affected version, the steps to reproduce and the
+Do not open a public issue for a vulnerability. Send a report to
+ferrandodfilippo+anvil@ik.me with the affected version, the steps to reproduce and the
 impact. A first reply is sent within a week.
 
 ## Security model

@@ -6,7 +6,7 @@ Go 1.27+, `protoc`, and on Linux `qemu-system-x86_64`, `qemu-img`, `xorriso` and
 `virtiofsd`. Docker is only needed for the container backend and its tests.
 
 ```
-git clone --recurse-submodules <repo-url>
+git clone --recurse-submodules https://github.com/filippo-ferrando/anvil.git
 make proto build
 make test vet fmt
 ```
@@ -33,11 +33,13 @@ a change to a backend.
 - `gofmt -s`, `go vet` clean.
 - Comments and docs: plain language, at most two lines per comment, no em-dashes, no
   "we", "you" or "I".
-- Commit subjects follow `type: summary` (`feat:`, `fix:`, `docs:`, ...); release notes are
-  built from them by `scripts/release-notes.sh`.
+- Commit subjects follow `type: summary` (`feat:`, `fix:`, `docs:`, ...); release notes and
+  `CHANGELOG.md` are built from them by `scripts/release-notes.sh` and `scripts/changelog.sh`.
+
+Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Reporting bugs
 
-Include the output of `anvil version`, the host distro and kernel, the
-command, and the relevant part of `journalctl -u anvild`. Security issues go through
+The bug report template asks for the output of `anvil version`, the host distro and
+kernel, the command, and the relevant part of `journalctl -u anvild`. Security issues go through
 [SECURITY.md](SECURITY.md) instead.

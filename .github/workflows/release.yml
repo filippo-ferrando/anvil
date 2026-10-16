@@ -210,3 +210,24 @@ jobs:
 
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  changelog:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      # Rebuilt from every tag each time, so a failed run is fixed by the next one.
+      - name: Update CHANGELOG.md on main
+        run: |
+          git fetch --tags --force
+          scripts/changelog.sh > CHANGELOG.md
+          git diff --quiet -- CHANGELOG.md && exit 0
+          git config user.name "anvil-release"
+          git config user.email "ferrandodfilippo+anvil@ik.me"
+          git add CHANGELOG.md
+          git commit -m "chore(release): changelog for $GITHUB_REF_NAME [skip ci]"
+          git push origin HEAD:main
