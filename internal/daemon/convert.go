@@ -72,6 +72,7 @@ func vmSpecFromPB(v *anvilv1.VMSpec) *instance.VMSpec {
 		SourceDiskBaseSHA256: v.GetSourceDiskBaseSha256(),
 		SourceBaseImagePath:  v.GetSourceBaseImagePath(),
 		NoGuestAgent:         v.GetNoGuestAgent(),
+		MACAddress:           v.GetMacAddress(),
 	}
 	for _, m := range v.GetMounts() {
 		spec.Mounts = append(spec.Mounts, instance.Mount{
@@ -137,6 +138,7 @@ func vmSpecToPB(v *instance.VMSpec) *anvilv1.VMSpec {
 		SourceBaseImagePath:  v.SourceBaseImagePath,
 		NoGuestAgent:         v.NoGuestAgent,
 		SnapshotSchedule:     snapshotScheduleToPB(v.SnapshotSchedule),
+		MacAddress:           v.MACAddress,
 	}
 	for _, m := range v.Mounts {
 		pb.Mounts = append(pb.Mounts, &anvilv1.Mount{

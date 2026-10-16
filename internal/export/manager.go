@@ -139,6 +139,7 @@ func (m *Manager) Export(ctx context.Context, p ExportParams, progress func(stat
 				CloudInitContent: m.resolveCloudInit(v),
 				SSHPublicKeys:    v.SSHPublicKeys,
 				DiskFile:         "disks/" + spec.ID + ".qcow2",
+				MACAddress:       v.MAC(spec.ID),
 			}
 			// A disk with no base image (one adopted from a flattened migration) has
 			// no checksum to record, which only means the import can't cross-check it.
@@ -335,12 +336,30 @@ func (m *Manager) Import(ctx context.Context, p ImportParams, progress func(stat
 		}
 	}
 
+	// destName follows a rename: a standalone instance takes p.Name, and an intent
+	// member named "<intent>-<role>" follows its renamed intent.
+	destName := func(mem Member) string {
+		switch {
+		case manifest.IntentName == "" && p.Name != "":
+			return p.Name
+		case intentName != manifest.IntentName && mem.Name == manifest.IntentName+"-"+mem.Role:
+			return intentName + "-" + mem.Role
+		}
+		return mem.Name
+	}
+	// Checked up front, before any member's data is moved into place.
+	for _, mem := range manifest.Members {
+		name := destName(mem)
+		if _, err := m.Instances.Info([]string{name}); err == nil {
+			return Result{}, fmt.Errorf("import: an instance named %q already exists (purge it, or import with --name)", name)
+		} else if !errors.Is(err, instance.ErrNotFound) {
+			return Result{}, fmt.Errorf("import: checking whether %q exists: %w", name, err)
+		}
+	}
+
 	result := Result{IntentName: intentName}
 	for _, mem := range manifest.Members {
-		destName := mem.Name
-		if manifest.IntentName == "" && p.Name != "" {
-			destName = p.Name
-		}
+		destName := destName(mem)
 		progress(fmt.Sprintf("importing %q", destName))
 
 		params := instance.LaunchParams{Name: destName}
@@ -408,6 +427,7 @@ func (m *Manager) fillLaunchParams(ctx context.Context, params *instance.LaunchP
 			CloudInitUserData: mem.VM.CloudInitContent,
 			SSHPublicKeys:     mem.VM.SSHPublicKeys,
 			SourceDiskPath:    diskPath,
+			MACAddress:        mem.VM.MACAddress,
 		}
 		for _, p := range mem.VM.Ports {
 			v.Ports = append(v.Ports, instance.PortMapping{HostPort: p.HostPort, GuestPort: p.GuestPort, Protocol: p.Protocol})

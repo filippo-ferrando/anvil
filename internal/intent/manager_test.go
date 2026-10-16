@@ -63,7 +63,7 @@ func (f *fakeInstances) GetByID(id string) (*instance.Spec, error) {
 	}
 	return spec, nil
 }
-func (f *fakeInstances) Delete(ctx context.Context, names []string, purge bool) error {
+func (f *fakeInstances) Delete(ctx context.Context, names []string) error {
 	return nil
 }
 

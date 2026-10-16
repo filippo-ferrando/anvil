@@ -1,0 +1,7 @@
+. "$(dirname "$0")/../lib.sh"
+say "pack a whole intent into one file, restore it anywhere"
+run "$ANVIL export shop -o /tmp/shop.tar.zst"
+run "ls -lh /tmp/shop.tar.zst"
+run "$ANVIL intent delete shop --purge-members"
+run "$ANVIL import /tmp/shop.tar.zst --name shop2"
+run "$ANVIL intent list"

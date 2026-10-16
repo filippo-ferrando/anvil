@@ -119,7 +119,7 @@ func (f *fakes) Start(ctx context.Context, names []string) error {
 	return nil
 }
 
-func (f *fakes) Delete(ctx context.Context, names []string, purge bool) error {
+func (f *fakes) Delete(ctx context.Context, names []string) error {
 	f.log = append(f.log, "delete "+strings.Join(names, ","))
 	return nil
 }

@@ -100,6 +100,9 @@ func (s *IntentServer) Apply(req *anvilv1.IntentApplyRequest, stream anvilv1.Int
 	if err != nil {
 		return sendErr(err)
 	}
+	if err := checkCallerOwns(stream.Context(), m.VolumePaths()...); err != nil {
+		return sendErr(err)
+	}
 	opts := apply.Options{
 		DryRun:      req.GetDryRun(),
 		Prune:       req.GetPrune(),

@@ -1,5 +1,6 @@
 # Complete anvil.yaml example: every field `anvil apply` accepts.
 # Apply with: anvil apply -f docs/example.yaml --dry-run
+# Volume host paths (/srv/shop/...) must exist and be owned by the caller, even for a dry run.
 # Field reference and apply rules: docs/apply.md
 
 intent: shop # intent name, required; members resolve each other as <role>.shop.anvil

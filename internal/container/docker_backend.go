@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/container/docker"
+	"git.fferrando.cc/rdfilippo/anvil/internal/hostpath"
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 )
@@ -208,6 +209,12 @@ func (b *DockerBackend) Start(ctx context.Context, spec *instance.Spec) error {
 		// /run is empty after a reboot; a missing bind source would make Docker create it root-owned.
 		if _, err := ensureGUIDirs(spec.ID); err != nil {
 			return err
+		}
+	}
+	// Docker resolves bind sources again on every start, as root.
+	for _, v := range spec.Container.Volumes {
+		if err := hostpath.CheckResolved(v.HostPath); err != nil {
+			return fmt.Errorf("docker: starting %s: volume %w", spec.Name, err)
 		}
 	}
 	b.clearExpectedExit(spec.Container.ContainerID)

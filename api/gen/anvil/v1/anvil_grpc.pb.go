@@ -26,7 +26,6 @@ const (
 	InstanceService_Start_FullMethodName         = "/anvil.v1.InstanceService/Start"
 	InstanceService_Stop_FullMethodName          = "/anvil.v1.InstanceService/Stop"
 	InstanceService_Delete_FullMethodName        = "/anvil.v1.InstanceService/Delete"
-	InstanceService_Purge_FullMethodName         = "/anvil.v1.InstanceService/Purge"
 	InstanceService_Logs_FullMethodName          = "/anvil.v1.InstanceService/Logs"
 	InstanceService_Mount_FullMethodName         = "/anvil.v1.InstanceService/Mount"
 	InstanceService_Umount_FullMethodName        = "/anvil.v1.InstanceService/Umount"
@@ -38,6 +37,7 @@ const (
 	InstanceService_Update_FullMethodName        = "/anvil.v1.InstanceService/Update"
 	InstanceService_PrepareGUI_FullMethodName    = "/anvil.v1.InstanceService/PrepareGUI"
 	InstanceService_GetGUIAppInfo_FullMethodName = "/anvil.v1.InstanceService/GetGUIAppInfo"
+	InstanceService_Version_FullMethodName       = "/anvil.v1.InstanceService/Version"
 )
 
 // InstanceServiceClient is the client API for InstanceService service.
@@ -55,7 +55,6 @@ type InstanceServiceClient interface {
 	Start(ctx context.Context, in *StartRequest, opts ...grpc.CallOption) (*StartReply, error)
 	Stop(ctx context.Context, in *StopRequest, opts ...grpc.CallOption) (*StopReply, error)
 	Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteReply, error)
-	Purge(ctx context.Context, in *PurgeRequest, opts ...grpc.CallOption) (*PurgeReply, error)
 	Logs(ctx context.Context, in *LogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogChunk], error)
 	Mount(ctx context.Context, in *MountRequest, opts ...grpc.CallOption) (*MountReply, error)
 	Umount(ctx context.Context, in *UmountRequest, opts ...grpc.CallOption) (*UmountReply, error)
@@ -79,6 +78,8 @@ type InstanceServiceClient interface {
 	PrepareGUI(ctx context.Context, in *PrepareGUIRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PrepareGUIProgress], error)
 	// GetGUIAppInfo finds an app's desktop entry name and icon inside a GUI-enabled instance.
 	GetGUIAppInfo(ctx context.Context, in *GUIAppInfoRequest, opts ...grpc.CallOption) (*GUIAppInfoReply, error)
+	// Version reports the daemon's build version.
+	Version(ctx context.Context, in *VersionRequest, opts ...grpc.CallOption) (*VersionReply, error)
 }
 
 type instanceServiceClient struct {
@@ -171,16 +172,6 @@ func (c *instanceServiceClient) Delete(ctx context.Context, in *DeleteRequest, o
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeleteReply)
 	err := c.cc.Invoke(ctx, InstanceService_Delete_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *instanceServiceClient) Purge(ctx context.Context, in *PurgeRequest, opts ...grpc.CallOption) (*PurgeReply, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PurgeReply)
-	err := c.cc.Invoke(ctx, InstanceService_Purge_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -333,6 +324,16 @@ func (c *instanceServiceClient) GetGUIAppInfo(ctx context.Context, in *GUIAppInf
 	return out, nil
 }
 
+func (c *instanceServiceClient) Version(ctx context.Context, in *VersionRequest, opts ...grpc.CallOption) (*VersionReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VersionReply)
+	err := c.cc.Invoke(ctx, InstanceService_Version_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // InstanceServiceServer is the server API for InstanceService service.
 // All implementations must embed UnimplementedInstanceServiceServer
 // for forward compatibility.
@@ -348,7 +349,6 @@ type InstanceServiceServer interface {
 	Start(context.Context, *StartRequest) (*StartReply, error)
 	Stop(context.Context, *StopRequest) (*StopReply, error)
 	Delete(context.Context, *DeleteRequest) (*DeleteReply, error)
-	Purge(context.Context, *PurgeRequest) (*PurgeReply, error)
 	Logs(*LogsRequest, grpc.ServerStreamingServer[LogChunk]) error
 	Mount(context.Context, *MountRequest) (*MountReply, error)
 	Umount(context.Context, *UmountRequest) (*UmountReply, error)
@@ -372,6 +372,8 @@ type InstanceServiceServer interface {
 	PrepareGUI(*PrepareGUIRequest, grpc.ServerStreamingServer[PrepareGUIProgress]) error
 	// GetGUIAppInfo finds an app's desktop entry name and icon inside a GUI-enabled instance.
 	GetGUIAppInfo(context.Context, *GUIAppInfoRequest) (*GUIAppInfoReply, error)
+	// Version reports the daemon's build version.
+	Version(context.Context, *VersionRequest) (*VersionReply, error)
 	mustEmbedUnimplementedInstanceServiceServer()
 }
 
@@ -402,9 +404,6 @@ func (UnimplementedInstanceServiceServer) Stop(context.Context, *StopRequest) (*
 }
 func (UnimplementedInstanceServiceServer) Delete(context.Context, *DeleteRequest) (*DeleteReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
-}
-func (UnimplementedInstanceServiceServer) Purge(context.Context, *PurgeRequest) (*PurgeReply, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Purge not implemented")
 }
 func (UnimplementedInstanceServiceServer) Logs(*LogsRequest, grpc.ServerStreamingServer[LogChunk]) error {
 	return status.Errorf(codes.Unimplemented, "method Logs not implemented")
@@ -438,6 +437,9 @@ func (UnimplementedInstanceServiceServer) PrepareGUI(*PrepareGUIRequest, grpc.Se
 }
 func (UnimplementedInstanceServiceServer) GetGUIAppInfo(context.Context, *GUIAppInfoRequest) (*GUIAppInfoReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetGUIAppInfo not implemented")
+}
+func (UnimplementedInstanceServiceServer) Version(context.Context, *VersionRequest) (*VersionReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Version not implemented")
 }
 func (UnimplementedInstanceServiceServer) mustEmbedUnimplementedInstanceServiceServer() {}
 func (UnimplementedInstanceServiceServer) testEmbeddedByValue()                         {}
@@ -568,24 +570,6 @@ func _InstanceService_Delete_Handler(srv interface{}, ctx context.Context, dec f
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(InstanceServiceServer).Delete(ctx, req.(*DeleteRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _InstanceService_Purge_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PurgeRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(InstanceServiceServer).Purge(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: InstanceService_Purge_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(InstanceServiceServer).Purge(ctx, req.(*PurgeRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -760,6 +744,24 @@ func _InstanceService_GetGUIAppInfo_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InstanceService_Version_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(VersionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InstanceServiceServer).Version(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InstanceService_Version_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InstanceServiceServer).Version(ctx, req.(*VersionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // InstanceService_ServiceDesc is the grpc.ServiceDesc for InstanceService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -788,10 +790,6 @@ var InstanceService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _InstanceService_Delete_Handler,
 		},
 		{
-			MethodName: "Purge",
-			Handler:    _InstanceService_Purge_Handler,
-		},
-		{
 			MethodName: "Mount",
 			Handler:    _InstanceService_Mount_Handler,
 		},
@@ -818,6 +816,10 @@ var InstanceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetGUIAppInfo",
 			Handler:    _InstanceService_GetGUIAppInfo_Handler,
+		},
+		{
+			MethodName: "Version",
+			Handler:    _InstanceService_Version_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

@@ -106,6 +106,7 @@ func launchRequestFromPayload(pl payload.Payload) (*anvilv1.LaunchRequest, error
 			SourceDiskPath:       pl.VM.RemoteDiskPath,
 			SourceDiskBaseSha256: pl.VM.BaseSHA256,
 			SourceBaseImagePath:  pl.VM.RemoteBaseImagePath,
+			MacAddress:           pl.VM.MACAddress,
 		}
 		for _, m := range pl.VM.Mounts {
 			req.Vm.Mounts = append(req.Vm.Mounts, &anvilv1.Mount{

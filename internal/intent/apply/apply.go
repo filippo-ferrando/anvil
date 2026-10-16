@@ -19,7 +19,7 @@ import (
 type Instances interface {
 	GetByID(id string) (*instance.Spec, error)
 	Start(ctx context.Context, names []string) error
-	Delete(ctx context.Context, names []string, purge bool) error
+	Delete(ctx context.Context, names []string) error
 	Update(ctx context.Context, name string, p instance.UpdateParams) (instance.UpdateResult, error)
 	WaitReady(ctx context.Context, name string, progress func(status string)) error
 }
@@ -270,7 +270,7 @@ func (a *Applier) run(ctx context.Context, m *Manifest, s Step, opts Options, pr
 
 	if s.Action == ActionDelete || s.Action == ActionRecreate {
 		say("deleting %s", s.Name)
-		if err := a.Instances.Delete(ctx, []string{s.current.Name}, true); err != nil {
+		if err := a.Instances.Delete(ctx, []string{s.current.Name}); err != nil {
 			return err
 		}
 		s.staleID = s.current.ID

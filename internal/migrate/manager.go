@@ -33,7 +33,7 @@ type Store interface {
 type Instances interface {
 	Info(names []string) ([]*instance.Spec, error)
 	Stop(ctx context.Context, names []string, force bool, timeout time.Duration) error
-	Delete(ctx context.Context, names []string, purge bool) error
+	Delete(ctx context.Context, names []string) error
 
 	// GetByID resolves an intent member's InstanceID to its full spec.
 	GetByID(id string) (*instance.Spec, error)
@@ -275,7 +275,7 @@ func (m *Manager) migrateInstance(ctx context.Context, t target, spec *instance.
 	if !p.Copy {
 		// Only delete the source after the target has confirmed success.
 		progress("deleting source instance")
-		if err := m.Instances.Delete(ctx, []string{spec.Name}, true); err != nil {
+		if err := m.Instances.Delete(ctx, []string{spec.Name}); err != nil {
 			return "", fmt.Errorf("migrate: succeeded on target (new id %s) but failed to delete source: %w", newID, err)
 		}
 	}
@@ -408,7 +408,7 @@ func (m *Manager) migrateIntent(ctx context.Context, t target, it store.Intent, 
 		// Deleted one at a time so a failure on one member doesn't stop
 		// the rest from being cleaned up.
 		for _, s := range succeeded {
-			if err := m.Instances.Delete(ctx, []string{s.name}, true); err != nil {
+			if err := m.Instances.Delete(ctx, []string{s.name}); err != nil {
 				progress(fmt.Sprintf("warning: %q migrated successfully but failed to delete source: %v", s.name, err))
 				results[s.idx].Err = fmt.Errorf("migrated successfully but failed to delete source: %w", err)
 				continue
@@ -568,6 +568,7 @@ func (m *Manager) buildVMPayload(ctx context.Context, spec *instance.Spec, t tar
 		BaseSHA256:          baseSHA,
 		RemoteBaseImagePath: remoteBase,
 		Mounts:              mounts,
+		MACAddress:          spec.VM.MAC(spec.ID),
 	}
 	return nil
 }

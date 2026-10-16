@@ -347,7 +347,7 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// The delete confirmation overlay eats every key: y=delete, p=purge, else cancel.
+	// The delete confirmation overlay eats every key: y=delete, p=delete with base image, else cancel.
 	if m.instances.confirmDelete != nil {
 		inst := m.instances.confirmDelete
 		switch msg.String() {
@@ -719,8 +719,8 @@ func (m instancesModel) View() string {
 	if m.confirmDelete != nil {
 		return styleBox.BorderForeground(colorWarn).Render(
 			styleWarn.Bold(true).Render(fmt.Sprintf("⚠  Delete %q?", m.confirmDelete.GetName()))+"\n\n"+
-				styleSubtitle.Render("y keeps the data so it can be recovered, p removes it for good.")) + "\n\n" +
-			helpBar("y", "delete (recoverable)", "p", "delete permanently", "any other key", "cancel")
+				styleSubtitle.Render("The disk is removed either way. p also removes the base image if nothing else uses it.")) + "\n\n" +
+			helpBar("y", "delete", "p", "delete with base image", "any other key", "cancel")
 	}
 	if m.prompt != instancesPromptNone {
 		return m.promptForm.View()

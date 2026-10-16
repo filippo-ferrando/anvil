@@ -1,0 +1,7 @@
+. "$(dirname "$0")/../lib.sh"
+say "a VM and a container, same CLI"
+run "$ANVIL launch --kind vm debian-12 --name box --wait"
+run "$ANVIL launch --kind container nginx:alpine --name web -p 8080:80"
+run "$ANVIL list"
+run "$ANVIL exec box -- uname -a"
+run "curl -sI localhost:8080 | head -1"

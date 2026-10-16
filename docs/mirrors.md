@@ -363,10 +363,10 @@ and overwrites the matching saved configs by name.
 
 ## The official catalogue
 
-The `catalogues/` git submodule holds the official catalogue repo: `distros_x86_64.json`
+The `catalog/` git submodule holds the official catalogue repo: `distros_x86_64.json`
 and `distros_aarch64.json` are VM mirror manifests, and `cloudinits/` is a template repo.
 None of it is embedded in the binary; add it like any other source, with the URLs listed
-in `catalogues/README.md`:
+in `catalog/README.md`:
 
 ```
 anvil mirror add --kind vm --manifest-url <distros manifest url> anvil-catalogue

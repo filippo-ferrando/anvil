@@ -5,11 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/intent"
+	"git.fferrando.cc/rdfilippo/anvil/internal/version"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
 )
 
 // Server implements anvilv1.InstanceServiceServer against an
@@ -18,10 +21,11 @@ type Server struct {
 	anvilv1.UnimplementedInstanceServiceServer
 	Manager *instance.Manager
 	Intents *intent.Manager
+	Vault   *image.Vault // base image cache, for Delete's purge
 }
 
-func NewServer(mgr *instance.Manager, intents *intent.Manager) *Server {
-	return &Server{Manager: mgr, Intents: intents}
+func NewServer(mgr *instance.Manager, intents *intent.Manager, vault *image.Vault) *Server {
+	return &Server{Manager: mgr, Intents: intents, Vault: vault}
 }
 
 // launchProgressSender is the subset of *anvilv1.InstanceService_LaunchServer
@@ -50,11 +54,15 @@ func (s *Server) Launch(req *anvilv1.LaunchRequest, stream anvilv1.InstanceServi
 		sendLaunchEvent(stream, instance.LaunchEvent{Err: err})
 		return err
 	}
+	ctx := stream.Context()
+	if err := checkCallerOwns(ctx, sharedPaths(params)...); err != nil {
+		sendLaunchEvent(stream, instance.LaunchEvent{Err: err})
+		return err
+	}
 	if err := adoptStagedData(&params); err != nil {
 		sendLaunchEvent(stream, instance.LaunchEvent{Err: err})
 		return err
 	}
-	ctx := stream.Context()
 	wait := req.GetWait() && !params.NoStart
 
 	// With wait, the final Instance event is held back until the guest is ready.
@@ -161,9 +169,19 @@ func (s *Server) Delete(ctx context.Context, req *anvilv1.DeleteRequest) (*anvil
 	// block deletion or intent cleanup of the others.
 	var errs []error
 	for _, spec := range specs {
-		if err := s.Manager.Delete(ctx, []string{spec.Name}, req.GetPurge()); err != nil {
+		// Read before the disk is gone: the overlay names the base image it sits on.
+		var base string
+		if req.GetPurge() && spec.VM != nil && spec.VM.DiskPath != "" {
+			base, _ = image.BackingFile(spec.VM.DiskPath)
+		}
+		if err := s.Manager.Delete(ctx, []string{spec.Name}); err != nil {
 			errs = append(errs, err)
 			continue
+		}
+		if base != "" {
+			if err := s.pruneBaseImage(base); err != nil {
+				errs = append(errs, err)
+			}
 		}
 
 		// Best-effort cleanup of the deleted instance's intent membership.
@@ -182,11 +200,30 @@ func (s *Server) Delete(ctx context.Context, req *anvilv1.DeleteRequest) (*anvil
 	return &anvilv1.DeleteReply{}, nil
 }
 
-func (s *Server) Purge(ctx context.Context, req *anvilv1.PurgeRequest) (*anvilv1.PurgeReply, error) {
-	if err := s.Manager.Purge(req.GetNames()); err != nil {
-		return nil, err
+// pruneBaseImage removes path from the base image cache when no VM's disk sits on it.
+// A base outside the cache (one that came with a migrated disk) left with the instance dir.
+// ponytail: no lock against a launch making an overlay on path right now; add one in
+// image.Vault if a purge racing a launch of the same image ever shows up.
+func (s *Server) pruneBaseImage(path string) error {
+	cached, err := s.Vault.List()
+	if err != nil {
+		return err
 	}
-	return &anvilv1.PurgeReply{}, nil
+	for _, img := range cached {
+		if !samePath(img.Path, path) {
+			continue
+		}
+		specs, err := s.Manager.List(instance.KindVM)
+		if err != nil {
+			return err
+		}
+		if users := usersOf(img.Path, specs); len(users) > 0 {
+			log.Printf("daemon: keeping base image %s, still used by %s", img.ID, strings.Join(users, ", "))
+			return nil
+		}
+		return s.Vault.Delete(img.Path)
+	}
+	return nil
 }
 
 func (s *Server) Logs(req *anvilv1.LogsRequest, stream anvilv1.InstanceService_LogsServer) error {
@@ -196,7 +233,11 @@ func (s *Server) Logs(req *anvilv1.LogsRequest, stream anvilv1.InstanceService_L
 }
 
 func (s *Server) Mount(ctx context.Context, req *anvilv1.MountRequest) (*anvilv1.MountReply, error) {
-	if err := s.Manager.Mount(ctx, req.GetName(), req.GetHostPath(), req.GetGuestPath(), req.GetReadOnly()); err != nil {
+	hostPath := req.GetHostPath()
+	if err := checkCallerOwns(ctx, &hostPath); err != nil {
+		return nil, err
+	}
+	if err := s.Manager.Mount(ctx, req.GetName(), hostPath, req.GetGuestPath(), req.GetReadOnly()); err != nil {
 		return nil, err
 	}
 	return &anvilv1.MountReply{}, nil
@@ -299,4 +340,9 @@ func (s *Server) Update(ctx context.Context, req *anvilv1.UpdateRequest) (*anvil
 		return nil, wrapErr(err)
 	}
 	return &anvilv1.UpdateReply{Instance: specToPB(res.Spec), RestartPending: res.RestartPending, Notes: res.Notes}, nil
+}
+
+func (s *Server) Version(ctx context.Context, req *anvilv1.VersionRequest) (*anvilv1.VersionReply, error) {
+	v, commit := version.Get()
+	return &anvilv1.VersionReply{Version: v, Commit: commit}, nil
 }

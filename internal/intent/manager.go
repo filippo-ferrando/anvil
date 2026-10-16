@@ -32,7 +32,7 @@ type Store interface {
 type Instances interface {
 	Launch(ctx context.Context, params instance.LaunchParams, progress func(instance.LaunchEvent)) error
 	GetByID(id string) (*instance.Spec, error)
-	Delete(ctx context.Context, names []string, purge bool) error
+	Delete(ctx context.Context, names []string) error
 }
 
 // Networker creates and manages the shared bridge network for one intent.
@@ -399,7 +399,7 @@ func (m *Manager) Delete(ctx context.Context, name string, purgeMembers bool) (s
 			names = append(names, spec.Name)
 		}
 		if len(names) > 0 {
-			if err := m.Instances.Delete(ctx, names, true); err != nil {
+			if err := m.Instances.Delete(ctx, names); err != nil {
 				return store.Intent{}, fmt.Errorf("intent: purging members of %q: %w", name, err)
 			}
 		}

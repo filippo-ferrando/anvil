@@ -45,7 +45,7 @@ anvil (CLI + TUI, one binary)  ──gRPC over a unix socket──▶  anvild (d
                                                                   │
                                                                   ├─ QEMU processes, driven over QMP
                                                                   ├─ Docker's real HTTP API
-                                                                  ├─ bbolt (instances / intents / images / mirrors)
+                                                                  ├─ bbolt (instances / intents / mirrors / hosts)
                                                                   └─ SSH, for migration to another anvild
 ```
 
@@ -87,11 +87,11 @@ internal/
   gui/           `anvil gui`: fd-passing socket relay + xauth (gui/relay), app .desktop/icon lookup (gui/appinfo)
   config/        fixed on-disk paths (run/state/cache dirs, GUI relay and tools dirs)
   intent/apply/  the compare-and-apply engine behind `anvil apply`
-  store/         bbolt-backed registry (instances, intents, images, mirrors, hosts, cloud-init)
+  store/         bbolt-backed registry (instances, intents, mirrors, hosts, cloud-init)
   cli/commands/  cobra commands (one file per command/command group)
   tui/           the Bubble Tea app
 data/distros/    built-in VM image catalog (embedded in the binary)
-catalogues/      official extra catalogue (distro manifests + cloud-init templates), a git
+catalog/         official extra catalogue (distro manifests + cloud-init templates), a git
                  submodule consumed via `anvil mirror add` / `cloud-init import-repo`, not embedded
 scripts/         verify-catalog.sh (checksums), release-notes.sh (used by the release workflow),
                  build-gui-tools.sh (static GUI tools, used by `make gui-tools` and releases)
@@ -114,7 +114,7 @@ adding backend-specific branching in the daemon or manager.
 `newVMBackend` is defined per-platform via build tags (`cmd/anvild/platform_linux.go`,
 `platform_darwin.go`): Linux builds compile in `internal/vm` (QEMU), darwin builds
 compile in `internal/vm/vz` (Virtualization.framework, currently unimplemented). Despite
-this scaffolding, the README describes Anvil as Linux-only today, so treat darwin/`vz` as
+this scaffolding, the vz backend is still a stub: basic macOS support is in progress, so treat darwin/`vz` as
 in-progress, not a supported target.
 
 ### Mirrors vs. cloud-init template repos

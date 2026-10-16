@@ -47,7 +47,6 @@ over a unix socket.`,
 		newStartCommand(flags),
 		newStopCommand(flags),
 		newDeleteCommand(flags),
-		newPurgeCommand(flags),
 		newCloudInitCommand(flags),
 		newMirrorCommand(flags),
 		newShellCommand(flags),
@@ -74,6 +73,7 @@ over a unix socket.`,
 		newGUICommand(flags),
 		newTuiCommand(flags),
 		newDialStdioCommand(flags),
+		newVersionCommand(flags),
 	)
 	root.AddCommand(newManCommand(root))
 	return root

@@ -46,6 +46,9 @@ type VM struct {
 
 	// Mounts are the guest's shared folders, recreated on the target.
 	Mounts []Mount
+
+	// MACAddress is kept, since the guest's network config inside the disk matches on it.
+	MACAddress string
 }
 
 // Mount is one folder shared into a VM's guest, with its contents.

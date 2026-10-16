@@ -6,10 +6,12 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE.md)
 [![Go Version](https://img.shields.io/badge/go-1.27%2B-00ADD8?logo=go&logoColor=white)](go.mod)
-[![Platform](https://img.shields.io/badge/platform-linux-lightgrey?logo=linux&logoColor=white)](#)
+[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20(in%20progress)-lightgrey)](#status--limitations)
 [![Status](https://img.shields.io/badge/status-early--stage-orange)](#status--limitations)
 [![TUI](https://img.shields.io/badge/TUI-Bubble%20Tea-ff69b4)](https://github.com/charmbracelet/bubbletea)
 [![gRPC](https://img.shields.io/badge/api-gRPC-4285F4)](api/proto/anvil/v1/anvil.proto)
+
+<img src="docs/demo/gifs/01-launch.gif" alt="anvil launching a VM and a container" width="820">
 
 </div>
 
@@ -19,18 +21,21 @@ Anvil spins up cloud-init VMs and Docker containers from the same CLI, the same 
 and the same mental model. It's what I wish `multipass` was: not tied to Ubuntu, not VM-only,
 and actually able to group stuff together and move it between machines.
 
-No GUI of its own, no login system, no cross-platform abstraction layer to drag around. Just a
-daemon, a CLI, a TUI, and real Linux primitives underneath (QEMU/QMP directly, no
-libvirt; the real Docker API, no SDK).
+No GUI of its own, no login system, no heavy abstraction layer to drag around. Just a
+daemon, a CLI, a TUI, and the real primitives underneath (QEMU/QMP directly, no libvirt;
+the real Docker API, no SDK; Apple's Virtualization.framework on macOS, in progress).
 
 ## Table of contents
 
 - [Why](#why)
+- [See it in action](#see-it-in-action)
+- [How it compares](#how-it-compares)
 - [Features](#features)
 - [Install](#install)
 - [Quick start](#quick-start)
 - [The TUI](#the-tui)
 - [How it's built](#how-its-built)
+- [Documentation](#documentation)
 - [Status & limitations](#status--limitations)
 - [Contributing](#contributing)
 - [License](#license)
@@ -46,12 +51,55 @@ But a few things about it kept getting in the way:
 - **No grouping.** There's no way to say "these three things are actually one app" and
   manage them as a unit.
 - **No mobility.** Moving a VM to another machine isn't really a supported idea.
-- **A GUI and cross-platform support** that add a lot of surface area if all you actually
-  run is Linux.
+- **A heavy GUI** that adds a lot of surface area when a terminal is where the work
+  happens anyway.
 
 Anvil is a from-scratch Go rewrite that fixes exactly those five things and nothing else.
-It's Linux-only on purpose, that's what makes "just spawn QEMU and talk to the real
-Docker API" possible without a platform abstraction layer getting in the way.
+Each platform gets a thin backend on its native hypervisor instead of a lowest-common-
+denominator layer: QEMU/KVM driven over QMP on Linux, Apple's Virtualization.framework
+on macOS (basic support in progress, see [Status](#status--limitations)).
+
+## See it in action
+
+| | |
+|---|---|
+| **Snapshots**, taken live, restored in seconds<br><img src="docs/demo/gifs/02-snapshot.gif" width="400"> | **Fork** a running VM, sharing its base image<br><img src="docs/demo/gifs/03-fork.gif" width="400"> |
+| **Intents**: a VM and a container as one app, with DNS<br><img src="docs/demo/gifs/04-intent.gif" width="400"> | **Export / import** a whole intent as one file<br><img src="docs/demo/gifs/05-export.gif" width="400"> |
+
+The TUI, end to end:
+
+<img src="docs/demo/gifs/tui.gif" alt="anvil tui" width="820">
+
+All recordings are [asciinema](https://asciinema.org) casts rendered to GIF, reproducible
+with [`docs/demo/record.sh`](docs/demo/README.md).
+
+## How it compares
+
+| | Anvil | Multipass | Incus / LXD | Vagrant | Lima | Docker Compose |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| Full VMs | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| OCI (Docker) containers | ✅ | ❌ | ✅ ¹ | ➖ ² | ➖ ³ | ✅ |
+| VMs + containers in one group, shared DNS | ✅ | ❌ | ➖ ⁴ | ❌ | ❌ | ❌ |
+| Declarative multi-instance file | ✅ | ❌ | ➖ ⁵ | ✅ | ❌ | ✅ |
+| Many distros out of the box | ✅ | ➖ | ✅ | ✅ | ✅ | n/a |
+| Snapshots | ✅ | ✅ | ✅ | ✅ | ➖ | ❌ |
+| Move to another host | ✅ cold, over SSH | ❌ | ✅ via an Incus remote, live or cold | ❌ | ❌ | ❌ |
+| Export to a single file | ✅ | ❌ | ✅ | ✅ (box) | ❌ | ❌ |
+| TUI | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Guest GUI apps on the host desktop | ✅ Wayland, app launcher export | ❌ | ➖ by hand | ➖ X11 over SSH | ❌ | ➖ by hand |
+| Host OS | Linux, macOS (WIP) | Linux, macOS, Windows | Linux | Linux, macOS, Windows | macOS, Linux | Linux, macOS, Windows |
+| Maturity | young, one maintainer | mature | mature | mature | mature | mature |
+
+<sub>¹ Incus 6.3+ runs OCI images as app containers. ² Through the Docker provider, one
+provider per machine. ³ Containers run inside the Lima VM (containerd/nerdctl), not
+managed as instances. ⁴ Through a shared network and projects, wired by hand. ⁵ Through
+profiles, preseeds or the Terraform provider. Based on upstream docs as of late 2026;
+corrections welcome.</sub>
+
+Short version: Incus is the closest and far more mature; pick it for clusters and live
+migration. Anvil fits when there is already a Docker host and a few Linux boxes reachable
+over SSH, and VMs and containers need to live side by side without setting up a cluster.
+The longer write-up is in [docs/comparison.md](docs/comparison.md).
 
 ## Features
 
@@ -188,7 +236,7 @@ anvil cloud-init import-repo <url>
 ```
 
 The official catalogue (extra distro manifests for x86_64 and aarch64, plus cloud-init
-templates) is its own repo, checked out here as the `catalogues/` git submodule. Its
+templates) is its own repo, checked out here as the `catalog/` git submodule. Its
 README has the exact URLs to pass to the two commands above. `git submodule update
 --init` fetches it after a clone. See [docs/mirrors.md](docs/mirrors.md) for how
 mirrors and template repos work.
@@ -280,7 +328,7 @@ anvil (CLI + TUI, one binary)  ──gRPC over a unix socket──▶  anvild (d
                                                                   │
                                                                   ├─ QEMU processes, driven over QMP
                                                                   ├─ Docker's real HTTP API
-                                                                  ├─ bbolt (instances / intents / images / mirrors)
+                                                                  ├─ bbolt (instances / intents / mirrors / hosts)
                                                                   └─ SSH, for migration to another anvild
 ```
 
@@ -316,10 +364,29 @@ internal/
   tui/           the Bubble Tea app
 api/proto/       the gRPC API definition
 data/distros/    the built-in VM image catalog
-catalogues/      the official extra catalogue (git submodule)
+catalog/         the official extra catalogue (git submodule)
 packaging/       PKGBUILD, deb/rpm build scripts, systemd unit, sysusers/tmpfiles rules
 scripts/         catalog checksum check, release notes from commit subjects
 ```
+
+## Documentation
+
+| Topic | Doc |
+|---|---|
+| Design, components, trade-offs | [docs/architecture.md](docs/architecture.md) |
+| Instance states, restart policies, guest agent | [docs/lifecycle.md](docs/lifecycle.md) |
+| Networking, port forwards, intent bridges | [docs/networking.md](docs/networking.md) |
+| Intent DNS | [docs/intent-dns.md](docs/intent-dns.md) |
+| Declarative intents (`anvil apply`) | [docs/apply.md](docs/apply.md) |
+| Snapshots and fork | [docs/snapshots-and-fork.md](docs/snapshots-and-fork.md) |
+| Export and import bundles | [docs/export-import.md](docs/export-import.md) |
+| Migration between hosts | [docs/migration.md](docs/migration.md) |
+| Mirrors and cloud-init repos | [docs/mirrors.md](docs/mirrors.md) |
+| aarch64 guests on x86_64 | [docs/aarch64-on-x86.md](docs/aarch64-on-x86.md) |
+| The TUI, screen by screen | [docs/tui.md](docs/tui.md) |
+| GUI apps from instances (`anvil gui`) | [docs/gui.md](docs/gui.md) |
+| Security model | [docs/security.md](docs/security.md) |
+| Comparison with similar tools | [docs/comparison.md](docs/comparison.md) |
 
 ## Status & limitations
 
@@ -327,6 +394,9 @@ Anvil is young but everything above is real and working, not vaporware: VMs,
 containers, intents, migration, the TUI, and Arch/deb/rpm packaging all run today. A few things
 aren't there yet:
 
+- **macOS** support (Apple Virtualization.framework, `internal/vm/vz`) is being built.
+  The daemon compiles for darwin, but the VM backend is still a stub; Linux is the only
+  host that runs VMs today.
 - **`anvil gui`** needs a Wayland host session, and with `--remote` it only works for VMs.
 - **Podman** isn't wired up. `--engine podman` fails cleanly instead of pretending to
   work; Docker is the only engine right now.
@@ -336,9 +406,10 @@ aren't there yet:
 
 ## Contributing
 
-Issues and PRs are welcome. If you're touching daemon logic, keep it in `internal/`
-behind the gRPC boundary, the CLI and TUI are meant to stay dumb clients, that's what
-keeps them in sync with each other for free.
+Issues and PRs are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md). If you're touching
+daemon logic, keep it in `internal/` behind the gRPC boundary, the CLI and TUI are meant
+to stay dumb clients, that's what keeps them in sync with each other for free. Security
+issues: [SECURITY.md](SECURITY.md).
 
 ## License
 

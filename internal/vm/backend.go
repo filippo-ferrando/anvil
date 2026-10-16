@@ -7,7 +7,6 @@ package vm
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"io"
 	"log"
@@ -119,6 +118,13 @@ func (b *Backend) Create(ctx context.Context, spec *instance.Spec, progress func
 		return fmt.Errorf("vm: Create called with a nil VMSpec")
 	}
 	v := spec.VM
+
+	if v.MACAddress != "" {
+		if _, err := net.ParseMAC(v.MACAddress); err != nil {
+			return fmt.Errorf("vm: invalid MAC address %q: %w", v.MACAddress, err)
+		}
+	}
+	v.MACAddress = v.MAC(spec.ID)
 
 	dir := config.InstanceDir(spec.ID)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -361,10 +367,19 @@ func (b *Backend) ExportDiskDelta(ctx context.Context, spec *instance.Spec, dest
 	return nil
 }
 
-// PrepareImportedDisk rebases an imported disk's backing file onto this
-// host's own base image, since it still points at its original export host.
+// PrepareImportedDisk rebases an imported disk's backing file onto this host's own
+// base image, since it still points at its original export host. A disk with no base is left as is.
 // A non-empty baseSHA256 must match that base image, or the disk is rejected.
 func (b *Backend) PrepareImportedDisk(ctx context.Context, imageRef, arch, diskPath, baseSHA256 string) error {
+	// A flattened disk (e.g. one adopted from a migration) holds every block itself.
+	// Giving it a base would make its unallocated blocks read the base's data instead of zeros.
+	backing, err := image.BackingFile(diskPath)
+	if err != nil {
+		return fmt.Errorf("vm: inspecting imported disk: %w", err)
+	}
+	if backing == "" {
+		return nil
+	}
 	catalog, err := b.EffectiveCatalog()
 	if err != nil {
 		return err
@@ -635,7 +650,7 @@ func (b *Backend) buildSeed(spec *instance.Spec) error {
 	metaData := fmt.Sprintf("instance-id: %s-gen%d\nlocal-hostname: %s\n", spec.ID, v.Generation, spec.Name)
 
 	seedPath := filepath.Join(dir, "seed.iso")
-	seed := cloudinit.Seed{UserData: userData, MetaData: metaData, NetworkConfig: bridgeNetworkConfig(v, macFromInstanceID(spec.ID))}
+	seed := cloudinit.Seed{UserData: userData, MetaData: metaData, NetworkConfig: bridgeNetworkConfig(v, v.MAC(spec.ID))}
 	if err := b.Seed.Build(seed, seedPath); err != nil {
 		return fmt.Errorf("vm: building cloud-init seed: %w", err)
 	}
@@ -699,7 +714,7 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 			return fmt.Errorf("vm: attaching to bridge %s: %w", v.BridgeInterface, err)
 		}
 		cfg.BridgeTapDevice = deviceName
-		cfg.MACAddress = macFromInstanceID(spec.ID)
+		cfg.MACAddress = v.MAC(spec.ID)
 		v.SSHPort = 0
 	} else {
 		// Standalone instance: SLIRP with an SSH host-forward plus any
@@ -1240,13 +1255,6 @@ func bridgeNetworkConfig(v *instance.VMSpec, mac string) string {
 		}
 	}
 	return cfg
-}
-
-// macFromInstanceID derives a deterministic MAC address from id, within
-// QEMU's locally-administered OUI (52:54:00).
-func macFromInstanceID(id string) string {
-	sum := sha256.Sum256([]byte(id))
-	return fmt.Sprintf("52:54:00:%02x:%02x:%02x", sum[0], sum[1], sum[2])
 }
 
 func kvmAvailable() bool {

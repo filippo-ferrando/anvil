@@ -29,14 +29,22 @@ func NewManager(registry Registry, backends map[Kind]Backend) *Manager {
 	return m
 }
 
-// Reconcile re-derives the live state of every running/starting instance from its backend.
-// Call once at daemon startup, before serving requests.
+// Reconcile re-derives the live state of every running/starting instance from its backend,
+// and removes records left deleted by older versions. Call once at startup, before serving requests.
 func (m *Manager) Reconcile(ctx context.Context) error {
 	specs, err := m.registry.List("")
 	if err != nil {
 		return fmt.Errorf("instance: listing instances to reconcile: %w", err)
 	}
 	for _, spec := range specs {
+		if spec.State == StateDeleted {
+			// Left by versions whose delete kept the record (and, briefly, the disk).
+			log.Printf("instance: removing %s, left deleted by an older version", spec.Name)
+			if err := m.Delete(ctx, []string{spec.Name}); err != nil {
+				log.Printf("instance: %v", err)
+			}
+			continue
+		}
 		if spec.State != StateRunning && spec.State != StateStarting {
 			continue
 		}
@@ -286,6 +294,7 @@ func cloneVMSpecForFork(v *VMSpec) *VMSpec {
 	clone.DNSSearch = nil
 	clone.SourceDiskPath = ""
 	clone.SourceDiskBaseSHA256 = ""
+	clone.MACAddress = "" // derived again from the fork's own ID
 	return &clone
 }
 
@@ -565,9 +574,9 @@ func (m *Manager) Stop(ctx context.Context, names []string, force bool, timeout 
 	})
 }
 
-// Delete tears down each named instance's backend resources, keeping the
-// registry record (as StateDeleted) unless purge is true; every name is attempted even if an earlier one fails.
-func (m *Manager) Delete(ctx context.Context, names []string, purge bool) error {
+// Delete tears down each named instance's backend resources (disk, container) and
+// removes its record; every name is attempted even if an earlier one fails.
+func (m *Manager) Delete(ctx context.Context, names []string) error {
 	specs, err := m.resolve(names)
 	if err != nil {
 		return err
@@ -579,37 +588,14 @@ func (m *Manager) Delete(ctx context.Context, names []string, purge bool) error 
 			errs = append(errs, err)
 			continue
 		}
+		m.restarts.cancel(spec.ID)
 		if err := b.Delete(ctx, spec); err != nil {
 			errs = append(errs, fmt.Errorf("instance: deleting %s: %w", spec.Name, err))
 			continue
 		}
-		if purge {
-			if err := m.registry.DeleteByID(spec.ID); err != nil {
-				errs = append(errs, err)
-			}
-			continue
-		}
-		spec.State = StateDeleted
-		if err := m.registry.PutInstance(spec); err != nil {
+		if err := m.registry.DeleteByID(spec.ID); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
-}
-
-// Purge permanently removes records already in StateDeleted; an empty names list purges all of them.
-func (m *Manager) Purge(names []string) error {
-	specs, err := m.resolve(names)
-	if err != nil {
-		return err
-	}
-	for _, spec := range specs {
-		if spec.State != StateDeleted {
-			continue
-		}
-		if err := m.registry.DeleteByID(spec.ID); err != nil {
-			return err
-		}
-	}
-	return nil
 }

@@ -37,7 +37,7 @@ func newMigrateRollbackCommand(flags *globalFlags) *cobra.Command {
 			}
 			defer c.Close()
 
-			_, err = c.Delete(cmd.Context(), &anvilv1.DeleteRequest{Names: names, Purge: true})
+			_, err = c.Delete(cmd.Context(), &anvilv1.DeleteRequest{Names: names})
 			return err
 		},
 	}

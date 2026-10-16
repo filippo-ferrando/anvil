@@ -1,0 +1,9 @@
+# The intent 04-intent.sh creates by hand, as a file: apply's plan keeps both members.
+intent: shop
+members:
+  app:
+    kind: vm
+    image: debian-12
+  cache:
+    kind: container
+    image: redis:7

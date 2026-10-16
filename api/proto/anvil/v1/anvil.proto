@@ -17,7 +17,6 @@ service InstanceService {
   rpc Start(StartRequest) returns (StartReply);
   rpc Stop(StopRequest) returns (StopReply);
   rpc Delete(DeleteRequest) returns (DeleteReply);
-  rpc Purge(PurgeRequest) returns (PurgeReply);
   rpc Logs(LogsRequest) returns (stream LogChunk);
   rpc Mount(MountRequest) returns (MountReply);
   rpc Umount(UmountRequest) returns (UmountReply);
@@ -48,6 +47,9 @@ service InstanceService {
 
   // GetGUIAppInfo finds an app's desktop entry name and icon inside a GUI-enabled instance.
   rpc GetGUIAppInfo(GUIAppInfoRequest) returns (GUIAppInfoReply);
+
+  // Version reports the daemon's build version.
+  rpc Version(VersionRequest) returns (VersionReply);
 }
 
 message PrepareGUIRequest {
@@ -185,7 +187,7 @@ enum State {
   STATE_RUNNING = 3;
   STATE_STOPPING = 4;
   STATE_DELETING = 5;
-  STATE_DELETED = 6;
+  STATE_DELETED = 6; // left by older versions only; anvild removes such records at startup
   STATE_ERROR = 7;
 }
 
@@ -234,6 +236,10 @@ message VMSpec {
   // Set with source_disk_base_sha256 when the base image itself travelled with the
   // disk, because the target didn't have it cached. Adopted before the rebase.
   string source_base_image_path = 22;
+
+  // The guest NIC's MAC address. Kept across migration and import, since the guest's
+  // network config matches on it. Empty on input means derived from the instance ID.
+  string mac_address = 23;
 }
 
 // Mount is one host directory shared into a VM's guest over virtiofs.
@@ -412,16 +418,11 @@ message StopReply {}
 
 message DeleteRequest {
   repeated string names = 1;
+  // Also removes a VM's cached base image when no other instance uses it.
   bool purge = 2;
 }
 
 message DeleteReply {}
-
-message PurgeRequest {
-  repeated string names = 1; // empty means purge everything pending
-}
-
-message PurgeReply {}
 
 message LogsRequest {
   string name = 1;
@@ -1011,4 +1012,11 @@ message SnapshotInfo {
 
 message SnapshotListReply {
   repeated SnapshotInfo snapshots = 1;
+}
+
+message VersionRequest {}
+
+message VersionReply {
+  string version = 1; // module version from git, e.g. "v1.1.1", "+dirty" for a modified tree
+  string commit = 2;  // short VCS revision, empty when built outside git
 }

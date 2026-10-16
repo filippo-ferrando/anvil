@@ -25,7 +25,7 @@ container mirrors, man pages, shell completions and the TUI.
 - **JSON output.** `anvil list` and `anvil find` take `-o json` (default `table`), printed
   with `protojson` and the field names from `anvil.proto`.
 - **Official catalogue as a submodule.** Extra distro manifests and cloud-init templates
-  live in their own repo, checked out at `catalogues/`, for `anvil mirror add` and
+  live in their own repo, checked out at `catalog/`, for `anvil mirror add` and
   `anvil cloud-init import-repo`.
 - **Neovim integration removed.** `integrations/nvim` is gone; the CLI and TUI are the
   only clients.

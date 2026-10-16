@@ -1,13 +1,21 @@
 package hostpath
 
 import (
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
 
-// MoveDir relocates src to dst, falling back to a recursive copy when a plain rename can't cross
-// filesystems (src and dst can live under different XDG dirs); same idiom as internal/vm.Backend.adoptMigratedDisk.
+// MoveDir relocates src to dst, falling back to a recursive copy across filesystems. An existing
+// dst is an error: the copy would merge into it and overwrite another instance's files.
 func MoveDir(src, dst string) error {
+	if _, err := os.Lstat(dst); err == nil {
+		return fmt.Errorf("%s already exists, refusing to overwrite it", dst)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
 		return err
 	}

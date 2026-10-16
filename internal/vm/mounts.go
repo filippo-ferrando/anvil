@@ -262,6 +262,10 @@ func (b *Backend) umountLive(ctx context.Context, spec *instance.Spec, proc *qem
 func (b *Backend) startVirtiofsds(spec *instance.Spec) ([]qemu.Mount, error) {
 	var mounts []qemu.Mount
 	for _, m := range spec.VM.Mounts {
+		if err := hostpath.CheckResolved(m.HostPath); err != nil {
+			b.killVirtiofsds(spec.ID)
+			return nil, fmt.Errorf("vm: shared folder %w", err)
+		}
 		sock := virtiofsSocket(spec.ID, m.Tag)
 		d, err := qemu.StartVirtiofsd(m.HostPath, sock, m.ReadOnly, virtiofsLog(spec.ID, m.Tag))
 		if err != nil {

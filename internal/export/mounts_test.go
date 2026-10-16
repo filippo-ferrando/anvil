@@ -7,9 +7,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"git.fferrando.cc/rdfilippo/anvil/internal/config"
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 )
@@ -17,9 +19,10 @@ import (
 // fakeInstances answers Export's lookups with one fixed spec and records the
 // stop/start calls it makes around the archiving.
 type fakeInstances struct {
-	spec    *instance.Spec
-	stopped bool
-	started bool
+	spec     *instance.Spec
+	stopped  bool
+	started  bool
+	launched int
 }
 
 func (f *fakeInstances) Info(names []string) ([]*instance.Spec, error) {
@@ -35,6 +38,7 @@ func (f *fakeInstances) Stop(context.Context, []string, bool, time.Duration) err
 	return nil
 }
 func (f *fakeInstances) Launch(context.Context, instance.LaunchParams, func(instance.LaunchEvent)) error {
+	f.launched++
 	return nil
 }
 
@@ -132,5 +136,39 @@ func TestExportArchivesVMMounts(t *testing.T) {
 	}
 	if string(data) != "keep me" {
 		t.Errorf("archived contents are %q, want %q", data, "keep me")
+	}
+}
+
+// TestImportRefusesTakenName covers an import whose name is taken: it fails before any
+// data is moved into place, where it could overwrite the existing instance's folders.
+func TestImportRefusesTakenName(t *testing.T) {
+	if _, err := exec.LookPath("zstd"); err != nil {
+		t.Skip("zstd not installed, skipping")
+	}
+	probe, err := os.MkdirTemp(config.ExportStagingDir(), "probe-*")
+	if err != nil {
+		t.Skipf("import stages under %s, not writable here: %v", config.ExportStagingDir(), err)
+	}
+	_ = os.Remove(probe)
+	dir := t.TempDir()
+	diskPath := filepath.Join(dir, "disk.qcow2")
+	if err := os.WriteFile(diskPath, []byte("fake qcow2"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	spec := &instance.Spec{ID: "01JTEST", Name: "web", Kind: instance.KindVM,
+		VM: &instance.VMSpec{ImageRef: "test-distro", Arch: "x86_64", DiskPath: diskPath}}
+	instances := &fakeInstances{spec: spec}
+	m := NewManager(fakeStore{}, instances, nil, fakeVMImporter{})
+
+	bundle := filepath.Join(dir, "web.tar.zst")
+	if err := m.Export(context.Background(), ExportParams{Name: "web", OutputPath: bundle}, func(string) {}); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	_, err = m.Import(context.Background(), ImportParams{BundlePath: bundle}, func(string) {})
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected the import to fail on the taken name, got %v", err)
+	}
+	if instances.launched != 0 {
+		t.Error("nothing should be launched")
 	}
 }

@@ -1,0 +1,8 @@
+. "$(dirname "$0")/../lib.sh"
+say "point-in-time checkpoints, taken live"
+run "$ANVIL snapshot create box clean"
+run "$ANVIL exec box -- sudo rm -rf /etc/motd /usr/share/doc"
+run "$ANVIL snapshot restore box clean"
+run "$ANVIL exec box -- ls /usr/share/doc | head -3"
+run "$ANVIL snapshot schedule box --every 6h --keep 4"
+run "$ANVIL snapshot list box"

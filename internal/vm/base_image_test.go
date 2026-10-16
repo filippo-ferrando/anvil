@@ -199,3 +199,21 @@ func TestPrepareImportedDiskChecksBase(t *testing.T) {
 		t.Errorf("imported disk points at %s, want %s", backing, base)
 	}
 }
+
+// TestPrepareImportedDiskLeavesFlatDiskAlone covers a bundle disk with no base image:
+// rebasing it would make its unallocated blocks read the base's data instead of zeros.
+func TestPrepareImportedDiskLeavesFlatDiskAlone(t *testing.T) {
+	requireQemuImg(t)
+	dir := t.TempDir()
+	b, _, _ := testCatalog(t, dir)
+	disk := filepath.Join(dir, "flat.qcow2")
+	run(t, "qemu-img", "create", "-f", "qcow2", disk, "64M")
+
+	// The catalog's image can't be downloaded, so reaching for it would fail.
+	if err := b.PrepareImportedDisk(context.Background(), "test-distro", "x86_64", disk, ""); err != nil {
+		t.Fatalf("PrepareImportedDisk: %v", err)
+	}
+	if backing, err := image.BackingFile(disk); err != nil || backing != "" {
+		t.Errorf("flat disk got backing file %q (%v)", backing, err)
+	}
+}

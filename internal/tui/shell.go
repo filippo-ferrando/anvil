@@ -25,10 +25,16 @@ var ttyCompatSSHArgs = []string{
 	"-o", "WarnWeakCrypto=no-pq-kex",
 }
 
-// shellInto suspends the TUI and execs an interactive ssh session into inst.
-// user overrides the image's default user; blank keeps that default.
+// shellInto suspends the TUI and opens an interactive shell in inst: ssh for a VM,
+// where user overrides the image's default user, and docker/podman exec for a container.
 func (m model) shellInto(inst *anvilv1.Instance, user string) (tea.Model, tea.Cmd) {
-	cmd, err := buildShellCommand(m.client, inst, user, nil)
+	var cmd *exec.Cmd
+	var err error
+	if inst.GetContainer() != nil {
+		cmd, err = buildContainerExecCommand(m.client, inst, []string{"/bin/sh"})
+	} else {
+		cmd, err = buildShellCommand(m.client, inst, user, nil)
+	}
 	if err != nil {
 		m.setStatus(err.Error(), true)
 		return m, nil

@@ -51,6 +51,21 @@ type Member struct {
 	container *instance.ContainerSpec
 }
 
+// VolumePaths returns a pointer to every container volume's host path, so the
+// daemon can check and resolve them before anything is applied.
+func (m *Manifest) VolumePaths() []*string {
+	var paths []*string
+	for _, mem := range m.Members {
+		if mem.container == nil {
+			continue
+		}
+		for i := range mem.container.Volumes {
+			paths = append(paths, &mem.container.Volumes[i].HostPath)
+		}
+	}
+	return paths
+}
+
 // Defaults match `anvil launch`.
 const (
 	defaultCPUs      = 1

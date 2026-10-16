@@ -2,6 +2,7 @@
 package instance
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"strconv"
 	"strings"
@@ -186,6 +187,20 @@ type VMSpec struct {
 
 	// SnapshotSchedule is nil when no scheduled snapshots are set up.
 	SnapshotSchedule *SnapshotSchedule
+
+	// MACAddress is the guest NIC's address, see MAC. It travels with the disk on migration
+	// and import, because the guest's network config matches on it.
+	MACAddress string
+}
+
+// MAC returns MACAddress, or for a VM created before it was stored, the address
+// derived from the instance ID inside QEMU's locally administered 52:54:00 prefix.
+func (v *VMSpec) MAC(instanceID string) string {
+	if v.MACAddress != "" {
+		return v.MACAddress
+	}
+	sum := sha256.Sum256([]byte(instanceID))
+	return fmt.Sprintf("52:54:00:%02x:%02x:%02x", sum[0], sum[1], sum[2])
 }
 
 // Mount is one host directory shared into the guest over virtiofs.

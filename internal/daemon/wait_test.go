@@ -53,7 +53,7 @@ func newTestServer(t *testing.T, b instance.Backend) *Server {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	return NewServer(instance.NewManager(db, map[instance.Kind]instance.Backend{instance.KindVM: b}), nil)
+	return NewServer(instance.NewManager(db, map[instance.Kind]instance.Backend{instance.KindVM: b}), nil, nil)
 }
 
 func TestLaunchWaitHoldsInstanceEventUntilReady(t *testing.T) {

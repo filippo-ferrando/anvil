@@ -26,6 +26,7 @@ import (
 	"git.fferrando.cc/rdfilippo/anvil/internal/intent/dns"
 	"git.fferrando.cc/rdfilippo/anvil/internal/migrate"
 	"git.fferrando.cc/rdfilippo/anvil/internal/store"
+	"git.fferrando.cc/rdfilippo/anvil/internal/version"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
 )
 
@@ -47,6 +48,9 @@ func main() {
 func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	v, commit := version.Get()
+	log.Printf("anvild: starting %s (%s)", v, commit)
 
 	for _, dir := range []string{config.RunDir, config.StateDir, config.CacheDir, config.PreparedImageDir(), config.CloudInitDir(), config.MigrateStagingDir(), config.ExportStagingDir()} {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -131,7 +135,7 @@ func run() error {
 	_ = os.Chmod(socketPath, 0o660)
 
 	grpcServer := grpc.NewServer()
-	anvilv1.RegisterInstanceServiceServer(grpcServer, daemon.NewServer(mgr, intentMgr))
+	anvilv1.RegisterInstanceServiceServer(grpcServer, daemon.NewServer(mgr, intentMgr, vault))
 	anvilv1.RegisterCloudInitServiceServer(grpcServer, daemon.NewCloudInitServer(db))
 	anvilv1.RegisterMirrorServiceServer(grpcServer, daemon.NewMirrorServer(db))
 	anvilv1.RegisterImageServiceServer(grpcServer, daemon.NewImageServer(db, vault, vmBackend, containerBackend))
@@ -142,7 +146,7 @@ func run() error {
 	anvilv1.RegisterSnapshotServiceServer(grpcServer, daemon.NewSnapshotServer(mgr))
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- grpcServer.Serve(lis) }()
+	go func() { errCh <- grpcServer.Serve(daemon.CallerListener(lis)) }()
 
 	// Both need the intent networks reconciled above; neither blocks serving requests.
 	go mgr.Autostart(ctx)

@@ -34,6 +34,27 @@ func adoptStagedData(params *instance.LaunchParams) error {
 	return nil
 }
 
+// sharedPaths returns the host paths params shares into its instance, except data a
+// migration staged: that is moved into the daemon's own state dir instead.
+func sharedPaths(params instance.LaunchParams) []*string {
+	var paths []*string
+	if params.VM != nil {
+		for i := range params.VM.Mounts {
+			if params.VM.Mounts[i].SourceDataPath == "" {
+				paths = append(paths, &params.VM.Mounts[i].HostPath)
+			}
+		}
+	}
+	if params.Container != nil {
+		for i := range params.Container.Volumes {
+			if params.Container.Volumes[i].SourceDataPath == "" {
+				paths = append(paths, &params.Container.Volumes[i].HostPath)
+			}
+		}
+	}
+	return paths
+}
+
 func adoptOne(stagedPath, hostPath *string, dest string) error {
 	if *stagedPath == "" {
 		return nil

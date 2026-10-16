@@ -291,13 +291,13 @@ func stopInstance(c *client.Client, name string) tea.Cmd {
 	}
 }
 
-// deleteInstance deletes an instance; purge also removes it outright rather than leaving it recoverable.
+// deleteInstance deletes an instance; purge also removes its unused base image.
 func deleteInstance(c *client.Client, name string, purge bool) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.Delete(context.Background(), &anvilv1.DeleteRequest{Names: []string{name}, Purge: purge})
 		verb := "deleted"
 		if purge {
-			verb = "deleted permanently"
+			verb = "deleted with its base image"
 		}
 		return actionDoneMsg{screen: screenInstances, verb: verb, err: err}
 	}
