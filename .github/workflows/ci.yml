@@ -25,7 +25,10 @@ jobs:
           sudo=""
           [ "$(id -u)" = "0" ] || sudo=sudo
           $sudo apt-get update
-          $sudo apt-get install -y qemu-system-x86 qemu-utils xorriso virtiofsd zstd openssh-client
+          pkgs="qemu-system-x86 qemu-utils xorriso zstd openssh-client"
+          # Debian bookworm has no virtiofsd package; the virtiofs tests skip without it.
+          apt-cache show virtiofsd >/dev/null 2>&1 && pkgs="$pkgs virtiofsd"
+          $sudo apt-get install -y $pkgs
           if docker info >/dev/null 2>&1; then
             docker pull busybox:latest
             docker pull alpine:3.22
