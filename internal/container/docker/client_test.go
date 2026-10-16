@@ -533,8 +533,8 @@ func TestPullImageStreamsProgressAndSucceeds(t *testing.T) {
 		gotPath = r.URL.Path + "?" + r.URL.RawQuery
 		w.WriteHeader(http.StatusOK)
 		enc := json.NewEncoder(w)
-		_ = enc.Encode(map[string]string{"status": "Pulling from library/nginx"})
-		_ = enc.Encode(map[string]string{"status": "Download complete"})
+		_ = enc.Encode(map[string]string{"status": "Pulling from library/nginx", "id": "alpine"})
+		_ = enc.Encode(map[string]string{"status": "Digest: sha256:abc"})
 	}))
 
 	var statuses []string
@@ -542,41 +542,54 @@ func TestPullImageStreamsProgressAndSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PullImage: %v", err)
 	}
-	if len(statuses) != 2 {
-		t.Errorf("expected 2 progress lines, got %v", statuses)
+	// Image-level lines are not layers: only the final summary comes through.
+	if len(statuses) != 1 || statuses[0] != "pulling nginx:alpine: done, 0 layers" {
+		t.Errorf("unexpected progress lines: %v", statuses)
 	}
 	if !strings.Contains(gotPath, "/images/create?fromImage=nginx&tag=alpine") {
 		t.Errorf("unexpected request path: %s", gotPath)
 	}
 }
 
-func TestPullImageCollapsesRepeatedLayerStatusButKeepsTransitions(t *testing.T) {
+// TestPullImageSumsLayersIntoOneLine covers interleaved layer updates, as Docker sends
+// them: they become one line per update, all with the same "pulling <ref>" key.
+func TestPullImageSumsLayersIntoOneLine(t *testing.T) {
 	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		enc := json.NewEncoder(w)
-		// Same layer and status repeated five times, then two transitions.
-		_ = enc.Encode(map[string]string{"id": "abc123", "status": "Pulling fs layer"})
-		for i := 0; i < 5; i++ {
-			_ = enc.Encode(map[string]string{"id": "abc123", "status": "Downloading", "progress": "[=>] 1MB/5MB"})
+		layer := func(id, status string, cur, total int64) {
+			_ = enc.Encode(map[string]any{"id": id, "status": status,
+				"progressDetail": map[string]int64{"current": cur, "total": total}})
 		}
-		_ = enc.Encode(map[string]string{"id": "abc123", "status": "Pull complete"})
+		layer("aaa", "Pulling fs layer", 0, 0)
+		layer("bbb", "Pulling fs layer", 0, 0)
+		layer("aaa", "Downloading", 1024, 4096)
+		layer("bbb", "Downloading", 2048, 4096)
+		layer("aaa", "Pull complete", 0, 0)
+		layer("bbb", "Pull complete", 0, 0)
 	}))
 
 	var statuses []string
 	if err := c.PullImage(t.Context(), "nginx:alpine", func(s string) { statuses = append(statuses, s) }); err != nil {
 		t.Fatalf("PullImage: %v", err)
 	}
-	if len(statuses) != 3 {
-		t.Fatalf("expected 3 forwarded lines (2 transitions + first Downloading), got %d: %v", len(statuses), statuses)
+	for _, s := range statuses {
+		if !strings.HasPrefix(s, "pulling nginx:alpine: ") {
+			t.Errorf("every line should share one key, got %q", s)
+		}
 	}
-	if statuses[0] != "abc123: Pulling fs layer" {
-		t.Errorf("unexpected first line: %q", statuses[0])
+	if got := statuses[len(statuses)-1]; got != "pulling nginx:alpine: done, 2 layers, 8.0 KiB" {
+		t.Errorf("unexpected final line: %q", got)
 	}
-	if !strings.HasPrefix(statuses[1], "abc123: Downloading") {
-		t.Errorf("unexpected second line: %q", statuses[1])
+}
+
+func TestPullStatus(t *testing.T) {
+	layers := map[string]*pullLayer{
+		"aaa": {current: 1024, total: 4096},
+		"bbb": {current: 4096, total: 4096, done: true},
 	}
-	if statuses[2] != "abc123: Pull complete" {
-		t.Errorf("unexpected third line: %q", statuses[2])
+	if got := pullStatus("redis:7", layers, false); got != "pulling redis:7: 62% (5.0 KiB / 8.0 KiB), 1/2 layers" {
+		t.Errorf("pullStatus = %q", got)
 	}
 }
 

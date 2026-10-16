@@ -14,6 +14,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"git.fferrando.cc/rdfilippo/anvil/internal/progress"
 )
 
 const (
@@ -333,12 +335,17 @@ func splitImageRef(ref string) (repo, tag string) {
 	return ref, "latest"
 }
 
-// pullProgressInterval throttles repeated progress updates for a layer
-// whose status hasn't changed.
+// pullProgressInterval throttles pull progress updates.
 const pullProgressInterval = 500 * time.Millisecond
 
-// PullImage pulls ref from its registry, same as `docker pull`. onProgress,
-// if non-nil, receives a status line per layer as it changes.
+// pullLayer is one image layer's download progress.
+type pullLayer struct {
+	current, total int64
+	done           bool
+}
+
+// PullImage pulls ref from its registry, same as `docker pull`. onProgress, if non-nil,
+// receives one status line for the whole pull: bytes and layers, summed over every layer.
 func (c *Client) PullImage(ctx context.Context, ref string, onProgress func(status string)) error {
 	repo, tag := splitImageRef(ref)
 	path := "/images/create?fromImage=" + url.QueryEscape(repo) + "&tag=" + url.QueryEscape(tag)
@@ -351,22 +358,30 @@ func (c *Client) PullImage(ctx context.Context, ref string, onProgress func(stat
 		return fmt.Errorf("docker: pulling %s: %w", ref, statusError(resp))
 	}
 
-	type layerState struct {
-		status   string
-		lastSent time.Time
+	layers := map[string]*pullLayer{}
+	var lastSent time.Time
+	report := func(final bool) {
+		if onProgress == nil || (!final && time.Since(lastSent) < pullProgressInterval) {
+			return
+		}
+		lastSent = time.Now()
+		onProgress(pullStatus(ref, layers, final))
 	}
-	layers := make(map[string]*layerState)
 
 	dec := json.NewDecoder(resp.Body)
 	for {
 		var line struct {
-			Status   string `json:"status"`
-			ID       string `json:"id,omitempty"`
-			Progress string `json:"progress,omitempty"`
-			Error    string `json:"error"`
+			Status         string `json:"status"`
+			ID             string `json:"id,omitempty"`
+			ProgressDetail struct {
+				Current int64 `json:"current"`
+				Total   int64 `json:"total"`
+			} `json:"progressDetail"`
+			Error string `json:"error"`
 		}
 		if err := dec.Decode(&line); err != nil {
 			if err == io.EOF {
+				report(true)
 				return nil
 			}
 			return fmt.Errorf("docker: reading pull progress for %s: %w", ref, err)
@@ -374,34 +389,54 @@ func (c *Client) PullImage(ctx context.Context, ref string, onProgress func(stat
 		if line.Error != "" {
 			return fmt.Errorf("docker: pulling %s: %s", ref, line.Error)
 		}
-		if onProgress == nil || line.Status == "" {
-			continue
-		}
-
-		text := func() string {
-			if line.Progress != "" {
-				return line.Status + " " + line.Progress
+		// Image-level lines ("Pulling from ...", "Digest: ...") carry no layer progress.
+		l := layers[line.ID]
+		switch line.Status {
+		case "Pulling fs layer", "Waiting", "Downloading", "Verifying Checksum", "Download complete",
+			"Extracting", "Pull complete", "Already exists":
+			if l == nil {
+				l = &pullLayer{}
+				layers[line.ID] = l
 			}
-			return line.Status
-		}()
-		if line.ID == "" {
-			// An image-level line, not tied to a specific layer.
-			onProgress(text)
+		default:
 			continue
 		}
-
-		st, ok := layers[line.ID]
-		if !ok {
-			st = &layerState{}
-			layers[line.ID] = st
+		switch line.Status {
+		case "Downloading":
+			l.current, l.total = line.ProgressDetail.Current, line.ProgressDetail.Total
+		case "Verifying Checksum", "Download complete", "Extracting":
+			l.current = l.total
+		case "Pull complete", "Already exists":
+			l.current, l.done = l.total, true
 		}
-		statusChanged := st.status != line.Status
-		st.status = line.Status
-		if statusChanged || time.Since(st.lastSent) >= pullProgressInterval {
-			onProgress(line.ID + ": " + text)
-			st.lastSent = time.Now()
+		report(false)
+	}
+}
+
+// pullStatus sums layers into one line. Every update shares the "pulling <ref>" key, so a
+// client redraws a single line instead of printing one per layer.
+func pullStatus(ref string, layers map[string]*pullLayer, final bool) string {
+	var current, total int64
+	done := 0
+	for _, l := range layers {
+		current += l.current
+		total += l.total
+		if l.done {
+			done++
 		}
 	}
+	if final {
+		s := fmt.Sprintf("pulling %s: done, %d layers", ref, len(layers))
+		if total > 0 {
+			s += ", " + progress.Bytes(total)
+		}
+		return s
+	}
+	s := "pulling " + ref + ": "
+	if total > 0 {
+		s += fmt.Sprintf("%d%% (%s / %s), ", current*100/total, progress.Bytes(current), progress.Bytes(total))
+	}
+	return s + fmt.Sprintf("%d/%d layers", done, len(layers))
 }
 
 // CreateContainer creates (but does not start) a container, returning its

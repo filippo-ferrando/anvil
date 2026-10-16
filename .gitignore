@@ -11,5 +11,5 @@
 /packaging/deb/*.deb
 /packaging/rpm/*.rpm
 /packaging/rpm/*.src.rpm
-/**.cast
+**.cast
 __pycache__/

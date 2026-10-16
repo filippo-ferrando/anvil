@@ -121,6 +121,7 @@ func injectGuestKeys(ctx context.Context, c *client.Client, name, to string) err
 			"-p", fmt.Sprintf("%d", port),
 			"-i", identity,
 			"-o", "StrictHostKeyChecking=accept-new",
+			"-o", "LogLevel=ERROR", // hides the "Permanently added" notice of accept-new
 			"-o", "UserKnownHostsFile=" + knownHosts,
 		}
 		args = append(args, c.JumpArgs()...)

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"git.fferrando.cc/rdfilippo/anvil/internal/progress"
 )
 
 // downloadDedup collapses concurrent requests for the same destination
@@ -266,21 +268,7 @@ func (p *progressReader) Read(b []byte) (int, error) {
 func (p *progressReader) status() string {
 	if p.total > 0 {
 		pct := float64(p.read) / float64(p.total) * 100
-		return fmt.Sprintf("%s: %.0f%% (%s / %s)", p.label, pct, humanBytes(p.read), humanBytes(p.total))
+		return fmt.Sprintf("%s: %.0f%% (%s / %s)", p.label, pct, progress.Bytes(p.read), progress.Bytes(p.total))
 	}
-	return fmt.Sprintf("%s: %s", p.label, humanBytes(p.read))
-}
-
-// humanBytes renders a byte count like "512.0 MiB".
-func humanBytes(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-	div, exp := int64(unit), 0
-	for v := n / unit; v >= unit; v /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+	return fmt.Sprintf("%s: %s", p.label, progress.Bytes(p.read))
 }

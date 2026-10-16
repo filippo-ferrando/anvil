@@ -120,6 +120,7 @@ func commonSSHArgs(target sshTarget, portFlag, identity string) ([]string, error
 	args := []string{
 		portFlag, fmt.Sprintf("%d", target.Port),
 		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "LogLevel=ERROR", // hides the "Permanently added" notice of accept-new
 		"-o", "UserKnownHostsFile=" + knownHosts,
 	}
 	args = append(args, ttyCompatSSHArgs...)

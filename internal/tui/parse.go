@@ -4,26 +4,45 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/progress"
 )
 
-// progressKey returns the part of status before the first ": ", or the whole string if there isn't one.
-func progressKey(status string) string {
-	if idx := strings.Index(status, ": "); idx != -1 {
-		return status[:idx]
-	}
-	return status
-}
-
 // appendProgressLine appends status to lines, replacing the last line instead
-// of adding a new one when it shares the same progressKey.
+// of adding a new one when it shares the same progress.Key.
 func appendProgressLine(lines []string, status string) []string {
-	if len(lines) > 0 && progressKey(lines[len(lines)-1]) == progressKey(status) {
+	if len(lines) > 0 && progress.Key(lines[len(lines)-1]) == progress.Key(status) {
 		lines[len(lines)-1] = status
 		return lines
 	}
 	return append(lines, status)
+}
+
+// stepStart returns since when status continues the last line's step, else now: the start
+// of the step that progressView times. Call it before appendProgressLine.
+func stepStart(lines []string, status string, since time.Time) time.Time {
+	if len(lines) > 0 && progress.Key(lines[len(lines)-1]) == progress.Key(status) {
+		return since
+	}
+	return time.Now()
+}
+
+// progressView renders a transcript with a bar on every percentage. While running, the last
+// line also shows a spinner and its step's time, redrawn by the one-second tick.
+func progressView(lines []string, running bool, since time.Time) string {
+	var b strings.Builder
+	for i, line := range lines {
+		if running && i == len(lines)-1 {
+			elapsed := time.Since(since)
+			line = progress.Live(line, elapsed, int(elapsed.Seconds()))
+		} else {
+			line = progress.Bar(line)
+		}
+		b.WriteString(line + "\n")
+	}
+	return b.String()
 }
 
 // The launch form's env/volumes/ports fields are each one comma-separated text field.

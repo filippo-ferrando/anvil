@@ -110,6 +110,7 @@ func buildShellCommand(c *client.Client, inst *anvilv1.Instance, user string, co
 		"-p", fmt.Sprintf("%d", port),
 		"-i", identity,
 		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "LogLevel=ERROR", // hides the "Permanently added" notice of accept-new
 		"-o", "UserKnownHostsFile=" + knownHosts,
 	}
 	args = append(args, ttyCompatSSHArgs...)

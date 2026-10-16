@@ -108,6 +108,7 @@ type instancesModel struct {
 
 	waiting    bool               // a WaitReady stream is in flight; only esc (cancel) works
 	waitLines  []string           // the finished (or in-flight) wait's progress transcript
+	waitSince  time.Time          // when the last wait line's step began
 	waitCancel context.CancelFunc // ends the in-flight wait
 
 	detailWidth  int // width of the detail panel next to the list
@@ -289,6 +290,7 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case waitStreamMsg:
 		if msg.status != "" {
+			m.instances.waitSince = stepStart(m.instances.waitLines, msg.status, m.instances.waitSince)
 			m.instances.waitLines = appendProgressLine(m.instances.waitLines, msg.status)
 		}
 		if msg.done {
@@ -695,10 +697,7 @@ func (m instancesModel) View() string {
 		return s
 	}
 	if m.waiting || len(m.waitLines) > 0 {
-		s := styleTitle.Render(" Waiting for first-boot setup… ") + "\n\n"
-		for _, line := range m.waitLines {
-			s += line + "\n"
-		}
+		s := styleTitle.Render(" Waiting for first-boot setup… ") + "\n\n" + progressView(m.waitLines, m.waiting, m.waitSince)
 		if m.waiting {
 			s += "\n" + helpBar("esc", "stop waiting")
 		} else {

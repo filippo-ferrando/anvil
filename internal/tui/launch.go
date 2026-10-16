@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
@@ -29,6 +30,7 @@ type launchModel struct {
 	form          simpleForm
 	launching     bool
 	progressLines []string
+	stepSince     time.Time // when the last progress line's step began
 
 	// Ad hoc cloud-init editing (VM only, ctrl+e): distinguishes "never
 	// opened the editor" from "opened it and saved empty content", since an empty override is still a deliberate choice.
@@ -198,6 +200,7 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case launchStreamMsg:
 		if msg.status != "" {
+			m.launch.stepSince = stepStart(m.launch.progressLines, msg.status, m.launch.stepSince)
 			m.launch.progressLines = appendProgressLine(m.launch.progressLines, msg.status)
 		}
 		if msg.err != nil {
@@ -381,11 +384,7 @@ func (m model) updateLaunchCloudInitEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 
 func (m launchModel) View() string {
 	if m.launching {
-		s := styleTitle.Render(" Launching… ") + "\n\n"
-		for _, line := range m.progressLines {
-			s += line + "\n"
-		}
-		return s
+		return styleTitle.Render(" Launching… ") + "\n\n" + progressView(m.progressLines, true, m.stepSince)
 	}
 	if m.editingCloudInit {
 		body := m.cloudInitEditor.View()
