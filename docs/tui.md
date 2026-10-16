@@ -123,7 +123,7 @@ guest IPs (VM), and gauges for CPU, memory, disk usage (VM) or disk read/write r
 |-----|--------|
 | `n` | Open the Launch takeover. |
 | `s` | Stop the selected instance if it is running, otherwise start it. Stop uses the daemon's default 30 s graceful timeout. |
-| `x` | Open a shell in a VM: asks for a user (blank means the image's default user), then suspends the TUI and runs `ssh` into the VM until the session ends. On a container the key currently ends in an "isn't a VM" error; `e` works there. |
+| `x` | Open a shell in a VM: asks for a user (blank means the image's default user), then suspends the TUI and runs `ssh` into the VM until the session ends. On a container it opens `/bin/sh` through `docker exec`, like `anvil shell`. |
 | `e` | Run one command: asks for the command (and a user, for a VM), then runs it over `ssh` for a VM or `docker exec -it` for a container. |
 | `l` | Open the Logs takeover. |
 | `d` | Delete, after a confirmation: `y`/`enter` deletes, `p` also removes the base image if no other VM uses it, any other key cancels. |

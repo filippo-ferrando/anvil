@@ -62,7 +62,7 @@ on macOS (basic support in progress, see [Status](#status--limitations)).
 ## See it in action
 
 | | |
-|---|---|
+| --- | --- |
 | **Snapshots**, taken live, restored in seconds<br><img src="docs/demo/gifs/02-snapshot.gif" width="400"> | **Fork** a running VM, sharing its base image<br><img src="docs/demo/gifs/03-fork.gif" width="400"> |
 | **Intents**: a VM and a container as one app, with DNS<br><img src="docs/demo/gifs/04-intent.gif" width="400"> | **Export / import** a whole intent as one file<br><img src="docs/demo/gifs/05-export.gif" width="400"> |
 
@@ -76,7 +76,7 @@ with [`docs/demo/record.sh`](docs/demo/README.md).
 ## How it compares
 
 | | Anvil | Multipass | Incus / LXD | Vagrant | Lima | Docker Compose |
-|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| --- | :-: | :-: | :-: | :-: | :-: | :-: |
 | Full VMs | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | OCI (Docker) containers | ✅ | ❌ | ✅ ¹ | ➖ ² | ➖ ³ | ✅ |
 | VMs + containers in one group, shared DNS | ✅ | ❌ | ➖ ⁴ | ❌ | ❌ | ❌ |
@@ -314,13 +314,6 @@ scans the local network over mDNS (`enter` on a result opens the add form prefil
 `t` tests one, `x` removes one, and `tab` moves over to the migrate form, which
 suggests instance and intent names for Name and known host aliases for To.
 
-### A sneak peek at the TUI
-
-![instances](docs/screenshots/instances.png)
-![vm logs](docs/screenshots/instances_logs.png)
-![images](docs/screenshots/images.png)
-![cloud-init](docs/screenshots/cloud_inits.png)
-
 ## How it's built
 
 ```
@@ -372,7 +365,7 @@ scripts/         catalog checksum check, release notes from commit subjects
 ## Documentation
 
 | Topic | Doc |
-|---|---|
+| --- | --- |
 | Design, components, trade-offs | [docs/architecture.md](docs/architecture.md) |
 | Instance states, restart policies, guest agent | [docs/lifecycle.md](docs/lifecycle.md) |
 | Networking, port forwards, intent bridges | [docs/networking.md](docs/networking.md) |

@@ -78,6 +78,7 @@ class Screen:
         self.cursor_visible = True
         self.state, self.buf = "text", ""
         self.dirty = True
+        self.used_cols = self.used_rows = 0  # furthest cell ever written or reached, for cropping
 
     def _grid(self):
         return [self._line() for _ in range(self.rows)]
@@ -160,6 +161,9 @@ class Screen:
         self.wrap_pending = False
         row = self.grid[self.y]
         row[self.x] = [ch, self.style.copy()]
+        if ch != " ":
+            self.used_cols = max(self.used_cols, self.x + width)
+            self.used_rows = max(self.used_rows, self.y + 1)
         if width == 2 and self.x + 1 < self.cols:
             row[self.x + 1] = ["", self.style.copy()]
         self.x += width
@@ -329,7 +333,7 @@ class Screen:
 
 class Renderer:
     def __init__(self, cols, rows, font_path, bold_path, size):
-        self.size = size
+        self.cols, self.rows, self.size = cols, rows, size
         self.font = ImageFont.truetype(font_path, size)
         self.bold = ImageFont.truetype(bold_path, size) if bold_path else self.font
         ascent, descent = self.font.getmetrics()
@@ -348,7 +352,8 @@ class Renderer:
     def render(self, screen):
         img = Image.new("RGB", (self.width, self.height), BG)
         draw = ImageDraw.Draw(img)
-        for r, row in enumerate(screen.grid):
+        for r, row in enumerate(screen.grid[:self.rows]):
+            row = row[:self.cols]
             y = self.pad + r * self.ch
             c = 0
             while c < len(row):
@@ -374,7 +379,8 @@ class Renderer:
                             draw.text((x + i * self.cw, y + self.ascent_pad), cell[0], font=f, fill=fg)
         if screen.cursor_visible and screen.alt is None:
             x, y = self.pad + screen.x * self.cw, self.pad + screen.y * self.ch
-            draw.rectangle([x, y, x + self.cw - 1, y + self.ch - 1], outline=FG)
+            if screen.x < self.cols and screen.y < self.rows:
+                draw.rectangle([x, y, x + self.cw - 1, y + self.ch - 1], outline=FG)
         return img.tobytes()
 
     def draw_shape(self, draw, x, y, ch, fg, bg):
@@ -468,6 +474,7 @@ def main():
     ap.add_argument("--fps", type=int, default=15)
     ap.add_argument("--font", help="monospace TTF/OTF file, defaults to fontconfig's monospace")
     ap.add_argument("--hold", type=float, default=2.0, help="seconds to keep the last frame")
+    ap.add_argument("--no-crop", action="store_true", help="keep the whole recorded terminal, empty space included")
     args = ap.parse_args()
 
     font = args.font or font_file("monospace")
@@ -476,8 +483,16 @@ def main():
     bold = None if args.font else font_file("monospace:bold")
 
     cols, rows, events = read_cast(args.cast)
+    view_cols, view_rows = cols, rows
+    if not args.no_crop:
+        # A big terminal leaves most of each frame empty: keep the part the cast ever used.
+        probe = Screen(cols, rows)
+        for _, data in events:
+            probe.feed(data)
+            probe.used_rows = max(probe.used_rows, probe.y + 1)
+        view_cols, view_rows = min(cols, probe.used_cols + 1), min(rows, probe.used_rows)
     screen = Screen(cols, rows)
-    renderer = Renderer(cols, rows, font, bold, args.font_size)
+    renderer = Renderer(view_cols, view_rows, font, bold, args.font_size)
     end = (events[-1][0] if events else 0) + args.hold
     size = f"{renderer.width}x{renderer.height}"
 
@@ -502,10 +517,10 @@ def main():
             sys.exit("cast2gif: ffmpeg failed writing frames")
         subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", video,
                         "-vf", "palettegen=stats_mode=full:reserve_transparent=0", palette], check=True)
-        # mpdecimate drops identical frames, so the GIF stores one frame per change.
+        # Repeated frames stay: diff_mode stores each as a tiny update, and dropping them
+        # would also drop the hold on the last frame, which nothing after it would time.
         subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", video, "-i", palette,
-                        "-lavfi", "[0:v]mpdecimate=hi=1:lo=1:frac=0[v];[v][1:v]paletteuse=dither=none:diff_mode=rectangle",
-                        "-fps_mode", "vfr", "-loop", "0", args.gif], check=True)
+                        "-lavfi", "paletteuse=dither=none:diff_mode=rectangle", "-loop", "0", args.gif], check=True)
 
 
 if __name__ == "__main__":
