@@ -13,7 +13,8 @@ import (
 )
 
 // virtiofsdCandidates lists where distros install virtiofsd, which is usually not on PATH.
-var virtiofsdCandidates = []string{"/usr/lib/virtiofsd", "/usr/libexec/virtiofsd", "/usr/lib/qemu/virtiofsd"}
+// /usr/lib/qemu/virtiofsd is left out: it is the legacy C daemon with different flags.
+var virtiofsdCandidates = []string{"/usr/lib/virtiofsd", "/usr/libexec/virtiofsd"}
 
 // VirtiofsdPath finds the virtiofsd binary, on PATH or in a distro's libexec dir.
 func VirtiofsdPath() (string, error) {
