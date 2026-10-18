@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 )
@@ -28,9 +30,29 @@ func newStatsCommand(flags *globalFlags) *cobra.Command {
 			defer c.Close()
 
 			out := cmd.OutOrStdout()
-			clearScreen := watch && isTerminalWriter(out)
-			for {
+			if !watch {
 				reply, err := c.Stats(cmd.Context(), &anvilv1.StatsRequest{Name: args[0]})
+				if err != nil {
+					return err
+				}
+				printStats(out, args[0], reply.GetStats())
+				return nil
+			}
+
+			stream, err := c.StreamStats(cmd.Context(), &anvilv1.StreamStatsRequest{Name: args[0], IntervalMs: int32(interval.Milliseconds())})
+			if err != nil {
+				return err
+			}
+			clearScreen := isTerminalWriter(out)
+			for {
+				reply, err := stream.Recv()
+				if err == io.EOF {
+					fmt.Fprintf(out, "%s is not running\n", args[0])
+					return nil
+				}
+				if status.Code(err) == codes.Canceled {
+					return nil
+				}
 				if err != nil {
 					return err
 				}
@@ -38,14 +60,6 @@ func newStatsCommand(flags *globalFlags) *cobra.Command {
 					fmt.Fprint(out, "\033[H\033[2J")
 				}
 				printStats(out, args[0], reply.GetStats())
-				if !watch {
-					return nil
-				}
-				select {
-				case <-cmd.Context().Done():
-					return nil
-				case <-time.After(interval):
-				}
 			}
 		},
 	}

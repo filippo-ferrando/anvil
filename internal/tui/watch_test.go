@@ -49,3 +49,19 @@ func TestWatchErrorSchedulesRetry(t *testing.T) {
 		t.Error("expected a retry to be scheduled after the stream broke")
 	}
 }
+
+func TestWatchReloadsEventsScreen(t *testing.T) {
+	m := model{screen: screenEvents, watchReloadPending: true}
+	if _, cmd := m.Update(watchReloadMsg{}); cmd == nil {
+		t.Error("expected the Events screen to reload on instance changes")
+	}
+}
+
+func TestStaleStatsStreamIgnored(t *testing.T) {
+	m := model{instances: newInstancesModel()}
+	m.instances.statsStreaming, m.instances.statsGen = "web", 2
+	next, cmd := m.Update(statsStreamMsg{gen: 1, err: errors.New("canceled")})
+	if cmd != nil || next.(model).instances.statsStreaming != "web" {
+		t.Error("a reply from a closed stream must not touch the open one")
+	}
+}

@@ -29,6 +29,12 @@ service InstanceService {
   // Stats returns a live resource-usage snapshot for a running instance.
   rpc Stats(StatsRequest) returns (StatsReply);
 
+  // StreamStats sends a Stats snapshot every interval. The stream ends cleanly once the instance stops.
+  rpc StreamStats(StreamStatsRequest) returns (stream StatsReply);
+
+  // Events streams the persisted event log, oldest first; with follow, new events as they happen.
+  rpc Events(EventsRequest) returns (stream InstanceEvent);
+
   // Watch streams instance changes (create, state/config change, delete) as they happen.
   // Events are change hints: a client that falls far behind may miss some.
   rpc Watch(WatchRequest) returns (stream WatchEvent);
@@ -172,6 +178,30 @@ message InstanceStats {
 
 message StatsReply {
   InstanceStats stats = 1;
+}
+
+message StreamStatsRequest {
+  string name = 1;
+  int32 interval_ms = 2; // 0 defaults to 2000; values under 500 are raised to 500
+}
+
+message EventsRequest {
+  string name = 1;  // only this instance's events; empty for every instance
+  int32 limit = 2;  // send only the newest limit stored events; 0 sends all of them
+  bool follow = 3;  // after the stored events, keep sending new ones
+}
+
+// InstanceEvent is one entry of the event log: an operation on an instance, or a change made outside anvil.
+message InstanceEvent {
+  uint64 seq = 1;          // grows by one per event, oldest first
+  int64 time_unix = 2;
+  string instance_id = 3;  // empty when the operation failed before an instance existed
+  string instance_name = 4;
+  Kind kind = 5;
+  string action = 6;       // e.g. "launch", "start", "stop", "exit", "restart", "snapshot-create"
+  string actor = 7;        // the caller's user name, or "anvild" for the daemon's own actions
+  string message = 8;
+  string error = 9;        // set when the operation failed
 }
 
 enum Kind {

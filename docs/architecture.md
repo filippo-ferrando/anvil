@@ -285,6 +285,7 @@ daemon on the same file fails to start rather than corrupting it. Values are JSO
 | `cloud_init_configs` | template name | user-data content and modification time | `cloudinit.go` |
 | `mirrors` | mirror name | VM manifest (URL plus cached JSON) or container registry rewrite, priority, enabled flag | `mirrors.go` |
 | `hosts` | host alias | SSH target `user@host[:port]`, optional identity path, `StrictHostKey` | `hosts.go` |
+| `events` | big-endian sequence number | event log entry: time, instance ID and name, action, actor, message, error; newest 10000 kept | `events.go` |
 
 Each instance and intent write updates the record and its name index in one bbolt
 transaction. Reads always return a fresh copy decoded from JSON, so callers never share
@@ -331,6 +332,10 @@ burst of events.
 `Server.Watch` (`internal/daemon/server.go`) subscribes before listing existing
 instances when `include_existing` is set, so no change between the list and the
 subscription is lost (a change may be seen twice instead).
+
+`InstanceService.Events` is the persisted counterpart: the event log behind `anvil events`
+(see `docs/lifecycle.md`). With `follow` it also subscribes before reading the stored
+events, and skips live events whose sequence number was already sent.
 
 ## 7. Concurrency
 

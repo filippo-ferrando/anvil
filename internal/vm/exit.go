@@ -15,7 +15,7 @@ var _ instance.ExitNotifier = (*Backend)(nil)
 // instanceDir is config.InstanceDir, swappable so tests can keep instance files in a temp dir.
 var instanceDir = config.InstanceDir
 
-func (b *Backend) SetExitHook(hook func(instanceID string, state instance.State)) {
+func (b *Backend) SetExitHook(hook func(instanceID string, state instance.State, reason string)) {
 	b.mu.Lock()
 	b.exitHook = hook
 	b.mu.Unlock()
@@ -35,14 +35,14 @@ func (b *Backend) watchExit(instanceID, networkMode string, proc *qemu.Process) 
 		return // Stop is handling it, or a newer process replaced this one
 	}
 
-	state := instance.StateStopped
+	state, reason := instance.StateStopped, "exited on its own (guest powered off)"
 	if !proc.ExitedCleanly() {
-		state = instance.StateError
+		state, reason = instance.StateError, "QEMU exited on its own ("+proc.ExitStatus()+")"
 	}
 	log.Printf("vm: %s exited on its own, now %s", instanceID, state)
 	b.releaseStopped(instanceID, networkMode, proc)
 	if hook != nil {
-		hook(instanceID, state)
+		hook(instanceID, state, reason)
 	}
 }
 

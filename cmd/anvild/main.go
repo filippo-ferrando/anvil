@@ -134,7 +134,7 @@ func run() error {
 	// Grants access to non-root CLI/TUI users via the "anvil" group; best-effort.
 	_ = os.Chmod(socketPath, 0o660)
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(daemon.ActorInterceptors()...)
 	anvilv1.RegisterInstanceServiceServer(grpcServer, daemon.NewServer(mgr, intentMgr, vault))
 	anvilv1.RegisterCloudInitServiceServer(grpcServer, daemon.NewCloudInitServer(db))
 	anvilv1.RegisterMirrorServiceServer(grpcServer, daemon.NewMirrorServer(db))

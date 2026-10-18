@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -82,9 +83,6 @@ const (
 	instancesPromptGUI
 )
 
-// statsRefreshInterval is how often the selected running instance's live stats are re-polled; see maybeRefreshStats.
-const statsRefreshInterval = 2 * time.Second
-
 type instancesModel struct {
 	list          list.Model
 	confirmDelete *anvilv1.Instance // non-nil while the delete confirmation overlay is up
@@ -115,12 +113,18 @@ type instancesModel struct {
 	panelHeight  int // shared height for both side-by-side panels
 	contentWidth int // full width given to this screen, for wrapping the help bar
 
-	// Live stats for whichever instance is selected; see maybeRefreshStats/statsLoadedMsg. statsFor names which
+	// Live stats for whichever instance is selected; see syncStatsStream/statsStreamMsg. statsFor names which
 	// instance stats/statsErr belong to, so a stale reply is never shown against the wrong row.
 	stats          *anvilv1.InstanceStats
 	statsFor       string
 	statsErr       string
-	statsFetchedAt time.Time
+	statsStreaming string             // instance the open stats stream is for, "" when none is open
+	statsGen       int                // bumped per stream, see statsStreamMsg
+	statsCancel    context.CancelFunc // closes the open stream
+
+	// Recent events of the selected instance, for the detail panel; eventsFor names which.
+	events    []*anvilv1.InstanceEvent
+	eventsFor string
 }
 
 func newInstancesModel() instancesModel {
@@ -175,18 +179,41 @@ func (ins *instancesModel) selected() *anvilv1.Instance {
 	return item.inst
 }
 
-// maybeRefreshStats returns a Cmd to (re)fetch the selected running instance's live stats, if one is due.
-// Returns nil otherwise: nothing selected, selection isn't running, or the last fetch is still fresh.
-func (ins *instancesModel) maybeRefreshStats(c *client.Client) tea.Cmd {
-	inst := ins.selected()
-	if inst == nil || inst.GetState() != anvilv1.State_STATE_RUNNING {
+// syncStatsStream keeps one stats stream open for the selected instance while it runs,
+// closing the stream of a previous selection. Returns nil when nothing changes.
+func (ins *instancesModel) syncStatsStream(c *client.Client) tea.Cmd {
+	want := ""
+	if inst := ins.selected(); inst != nil && inst.GetState() == anvilv1.State_STATE_RUNNING {
+		want = inst.GetName()
+	}
+	if want == ins.statsStreaming {
 		return nil
 	}
-	if inst.GetName() == ins.statsFor && time.Since(ins.statsFetchedAt) < statsRefreshInterval {
+	ins.closeStatsStream()
+	ins.stats, ins.statsErr, ins.statsFor = nil, "", ""
+	if want == "" {
 		return nil
 	}
-	ins.statsFetchedAt = time.Now()
-	return loadStats(c, inst.GetName())
+	ctx, cancel := context.WithCancel(context.Background())
+	ins.statsStreaming, ins.statsCancel = want, cancel
+	ins.statsGen++
+	return openStatsStream(ctx, c, ins.statsGen, want)
+}
+
+func (ins *instancesModel) closeStatsStream() {
+	if ins.statsCancel != nil {
+		ins.statsCancel()
+	}
+	ins.statsStreaming, ins.statsCancel = "", nil
+}
+
+// reloadSelected refreshes what the detail panel shows live for the selected instance.
+func (m *model) reloadSelected() tea.Cmd {
+	cmds := []tea.Cmd{m.instances.syncStatsStream(m.client)}
+	if inst := m.instances.selected(); inst != nil {
+		cmds = append(cmds, loadInstanceEvents(m.client, inst.GetName()))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -202,20 +229,30 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items[i] = instanceItem{inst: inst}
 		}
 		m.instances.list.SetItems(items)
-		return m, nil
+		return m, m.reloadSelected()
 
-	case statsLoadedMsg:
-		if inst := m.instances.selected(); inst == nil || inst.GetName() != msg.name {
-			return m, nil // stale: selection has since moved on
+	case statsStreamMsg:
+		ins := &m.instances
+		if msg.gen != ins.statsGen || ins.statsStreaming == "" {
+			return m, nil // stale: that stream was closed after the selection moved on
 		}
-		m.instances.statsFor = msg.name
+		name := ins.statsStreaming
 		if msg.err != nil {
-			m.instances.stats = nil
-			m.instances.statsErr = msg.err.Error()
-		} else {
-			m.instances.stats = msg.stats
-			m.instances.statsErr = ""
+			// io.EOF: the instance stopped; the next instance list shows it, and reopens on a restart.
+			ins.closeStatsStream()
+			if msg.err != io.EOF && status.Code(msg.err) != codes.Canceled {
+				ins.stats, ins.statsFor, ins.statsErr = nil, name, msg.err.Error()
+			}
+			return m, nil
 		}
+		ins.stats, ins.statsFor, ins.statsErr = msg.stats, name, ""
+		return m, recvStats(msg.gen, msg.stream)
+
+	case instanceEventsLoadedMsg:
+		if inst := m.instances.selected(); inst == nil || inst.GetName() != msg.name || msg.err != nil {
+			return m, nil // stale, or an older daemon without the event log
+		}
+		m.instances.events, m.instances.eventsFor = msg.events, msg.name
 		return m, nil
 
 	case actionDoneMsg:
@@ -526,13 +563,8 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.instances.list, cmd = m.instances.list.Update(msg)
 	if inst := m.instances.selected(); inst != nil && inst.GetName() != prevName {
-		// Selection moved: drop the old stats immediately instead of leaving them shown against the new
-		// selection, and kick off a fresh fetch right away instead of waiting for the next 1s tick.
-		m.instances.stats, m.instances.statsErr, m.instances.statsFor = nil, "", ""
-		if inst.GetState() == anvilv1.State_STATE_RUNNING {
-			m.instances.statsFetchedAt = time.Now()
-			return m, tea.Batch(cmd, loadStats(m.client, inst.GetName()))
-		}
+		m.instances.events, m.instances.eventsFor = nil, ""
+		return m, tea.Batch(cmd, m.reloadSelected())
 	}
 	return m, cmd
 }
@@ -743,9 +775,42 @@ var instancesHelp = []string{
 	"E/i", "export/import", "r", "refresh", "esc", "menu",
 }
 
-// detailView renders the right-hand panel: the selected instance's static
-// info plus, while it's running, live CPU/memory/disk/network gauges.
+// detailView renders the right-hand panel: detailInfo, then as many of the selected
+// instance's recent events as fit below it, newest first.
 func (m instancesModel) detailView() string {
+	info := m.detailInfo()
+	inst := m.selected()
+	if inst == nil || m.eventsFor != inst.GetName() || len(m.events) == 0 {
+		return info
+	}
+	room := m.panelHeight - lipgloss.Height(lipgloss.NewStyle().Width(m.detailWidth).Render(info)) - 2
+	if room <= 0 {
+		return info
+	}
+	rows := []string{info, "", styleSubtitle.Render("Recent events")}
+	row := lipgloss.NewStyle().MaxWidth(m.detailWidth)
+	for i := len(m.events) - 1; i >= 0 && room > 0; i, room = i-1, room-1 {
+		rows = append(rows, row.Render(eventRow(m.events[i])))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+}
+
+// eventRow renders one event on a single line, with a failure in the error color.
+func eventRow(ev *anvilv1.InstanceEvent) string {
+	at := time.Unix(ev.GetTimeUnix(), 0).Format("01-02 15:04")
+	line := styleFieldLabel.Render(at) + " " + ev.GetAction() + styleSubtitle.Render(" by "+ev.GetActor())
+	if msg := ev.GetMessage(); msg != "" {
+		line += " " + msg
+	}
+	if e := ev.GetError(); e != "" {
+		line += " " + styleError.Render("failed: "+e)
+	}
+	return line
+}
+
+// detailInfo is the selected instance's static info plus, while it's running,
+// live CPU/memory/disk/network gauges.
+func (m instancesModel) detailInfo() string {
 	inst := m.selected()
 	if inst == nil {
 		if m.loading {

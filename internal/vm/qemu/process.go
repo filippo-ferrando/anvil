@@ -113,6 +113,14 @@ func (p *Process) ExitedCleanly() bool {
 	return p.cmd.ProcessState.Success()
 }
 
+// ExitStatus describes how the process ended, e.g. "exit status 1" or "signal: killed".
+func (p *Process) ExitStatus() string {
+	if p.cmd == nil || p.cmd.ProcessState == nil {
+		return "unknown"
+	}
+	return p.cmd.ProcessState.String()
+}
+
 // Exited is closed once the process is gone.
 func (p *Process) Exited() <-chan struct{} {
 	return p.exited

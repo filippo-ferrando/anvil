@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Resizer is implemented by a Backend that can grow an instance's disk (VM only).
@@ -52,6 +53,12 @@ func (m *Manager) Update(ctx context.Context, name string, p UpdateParams) (Upda
 	if err != nil {
 		return UpdateResult{}, err
 	}
+	res, err := m.update(ctx, spec, p)
+	m.record(ctx, spec, "update", strings.Join(res.Notes, "; "), err)
+	return res, err
+}
+
+func (m *Manager) update(ctx context.Context, spec *Spec, p UpdateParams) (UpdateResult, error) {
 	if (p.CPUs != nil || p.MemoryMiB != nil || p.DiskGiB != nil) && spec.VM == nil {
 		return UpdateResult{}, fmt.Errorf("instance: CPU, memory and disk can only be changed on a VM")
 	}

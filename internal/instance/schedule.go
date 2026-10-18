@@ -89,7 +89,9 @@ func (m *Manager) takeScheduledSnapshot(ctx context.Context, spec *Spec, now tim
 		return fmt.Errorf("instance: %s instances don't support snapshots", spec.Kind)
 	}
 	name := ScheduledSnapshotPrefix + now.UTC().Format("20060102-150405")
-	if err := sn.CreateSnapshot(ctx, spec, name); err != nil {
+	err := sn.CreateSnapshot(ctx, spec, name)
+	m.record(ctx, spec, "snapshot-create", "scheduled: "+name, err)
+	if err != nil {
 		return err
 	}
 	snaps, err := sn.ListSnapshots(ctx, spec)
@@ -97,7 +99,9 @@ func (m *Manager) takeScheduledSnapshot(ctx context.Context, spec *Spec, now tim
 		return fmt.Errorf("listing snapshots to prune: %w", err)
 	}
 	for _, old := range snapshotsToPrune(snaps, spec.VM.SnapshotSchedule.Keep) {
-		if err := sn.DeleteSnapshot(ctx, spec, old); err != nil {
+		err := sn.DeleteSnapshot(ctx, spec, old)
+		m.record(ctx, spec, "snapshot-delete", "pruned by schedule: "+old, err)
+		if err != nil {
 			return fmt.Errorf("pruning %s: %w", old, err)
 		}
 	}

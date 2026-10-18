@@ -88,7 +88,7 @@ func watchedBackend(t *testing.T, specs specList) (*fakeDocker, *DockerBackend, 
 	fd, client := startFakeDocker(t)
 	b := &DockerBackend{Client: client, Registry: specs}
 	got := make(chan stateRecord, 8)
-	b.SetExitHook(func(id string, state instance.State) { got <- stateRecord{id, state} })
+	b.SetExitHook(func(id string, state instance.State, _ string) { got <- stateRecord{id, state} })
 	t.Cleanup(b.Close)
 	return fd, b, got
 }
@@ -172,7 +172,7 @@ func TestExitsMissedWhileDisconnectedAreReconciled(t *testing.T) {
 		containerSpec("db", "c-db", instance.StateRunning),
 	}}
 	got := make(chan stateRecord, 8)
-	b.SetExitHook(func(id string, state instance.State) { got <- stateRecord{id, state} })
+	b.SetExitHook(func(id string, state instance.State, _ string) { got <- stateRecord{id, state} })
 	defer b.Close()
 
 	if r := nextRecord(t, got); r.id != "web" || r.state != instance.StateError {

@@ -58,7 +58,7 @@ type Backend struct {
 	// Guarded by mu, like running.
 	virtiofs map[string]map[string]*qemu.Virtiofsd // instance ID -> mount tag -> its virtiofsd
 	stopping map[string]struct{}                   // instance ID -> Stop in progress, so its exit isn't reported
-	exitHook func(instanceID string, state instance.State)
+	exitHook func(instanceID string, state instance.State, reason string)
 }
 
 var (

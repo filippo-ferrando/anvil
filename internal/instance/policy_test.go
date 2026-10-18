@@ -18,7 +18,7 @@ type recordingBackend struct {
 	startErr error
 	resized  map[string]int64
 	snaps    map[string][]Snapshot
-	hook     func(string, State)
+	hook     func(string, State, string)
 }
 
 func (b *recordingBackend) Start(_ context.Context, s *Spec) error {
@@ -28,7 +28,7 @@ func (b *recordingBackend) Start(_ context.Context, s *Spec) error {
 	return b.startErr
 }
 
-func (b *recordingBackend) SetExitHook(hook func(string, State)) { b.hook = hook }
+func (b *recordingBackend) SetExitHook(hook func(string, State, string)) { b.hook = hook }
 
 func (b *recordingBackend) ResizeDisk(_ context.Context, s *Spec, gib int64) (string, error) {
 	if b.resized == nil {
@@ -121,12 +121,12 @@ func TestOnFailureRestartsCrashedInstance(t *testing.T) {
 	m, rb, reg := newPolicyManager(t, &Spec{ID: "01", Name: "web", Kind: KindVM, State: StateRunning,
 		RestartPolicy: RestartPolicy{Mode: RestartOnFailure}})
 
-	rb.hook("01", StateStopped) // a clean exit doesn't count as a failure
+	rb.hook("01", StateStopped, "test") // a clean exit doesn't count as a failure
 	if pendingRestart(m, "01") {
 		t.Fatal("on-failure must not restart after a clean exit")
 	}
 	_ = reg.PutInstance(&Spec{ID: "01", Name: "web", Kind: KindVM, State: StateRunning, RestartPolicy: RestartPolicy{Mode: RestartOnFailure}})
-	rb.hook("01", StateError)
+	rb.hook("01", StateError, "test")
 	if !pendingRestart(m, "01") {
 		t.Fatal("expected a pending restart after a crash")
 	}
@@ -142,7 +142,7 @@ func TestOnFailureRestartsCrashedInstance(t *testing.T) {
 func TestAlwaysRestartsAfterPoweroffButNotAfterStop(t *testing.T) {
 	m, rb, _ := newPolicyManager(t, &Spec{ID: "01", Name: "web", Kind: KindVM, State: StateRunning,
 		RestartPolicy: RestartPolicy{Mode: RestartAlways}})
-	rb.hook("01", StateStopped)
+	rb.hook("01", StateStopped, "test")
 	if !pendingRestart(m, "01") {
 		t.Fatal("always must restart after a guest poweroff")
 	}
@@ -164,7 +164,7 @@ func TestOnFailureGivesUpAfterMaxRetries(t *testing.T) {
 	spec := &Spec{ID: "01", Name: "web", Kind: KindVM, State: StateRunning, RestartPolicy: RestartPolicy{Mode: RestartOnFailure, MaxRetries: 2}}
 	m, rb, reg := newPolicyManager(t, spec)
 	rb.startErr = errors.New("boom")
-	rb.hook("01", StateError)
+	rb.hook("01", StateError, "test")
 	for i := 0; i < 5; i++ {
 		if !pendingRestart(m, "01") {
 			break

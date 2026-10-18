@@ -32,7 +32,7 @@ func TestRealDockerExitDetection(t *testing.T) {
 
 	b := &DockerBackend{Client: client, Registry: specList{crash, sleeper}}
 	got := make(chan stateRecord, 8)
-	b.SetExitHook(func(id string, state instance.State) { got <- stateRecord{id, state} })
+	b.SetExitHook(func(id string, state instance.State, _ string) { got <- stateRecord{id, state} })
 	defer b.Close()
 	time.Sleep(200 * time.Millisecond) // let the event stream connect
 

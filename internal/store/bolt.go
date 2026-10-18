@@ -1,5 +1,5 @@
 // Package store is anvil's bbolt-backed registry for instances, intents,
-// hosts, mirrors, and cloud-init configs.
+// hosts, mirrors, cloud-init configs, and the event log.
 package store
 
 import (
@@ -64,7 +64,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: opening %s: %w", path, err)
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		for _, bucket := range [][]byte{bucketInstances, bucketInstanceNames, bucketCloudInit, bucketMirrors, bucketIntents, bucketIntentNames, bucketHosts} {
+		for _, bucket := range [][]byte{bucketInstances, bucketInstanceNames, bucketCloudInit, bucketMirrors, bucketIntents, bucketIntentNames, bucketHosts, bucketEvents} {
 			if _, err := tx.CreateBucketIfNotExists(bucket); err != nil {
 				return err
 			}

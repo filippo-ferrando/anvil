@@ -38,14 +38,14 @@ path must then be absolute on the remote host.
 - **Header**: local `user@hostname`, the socket (or `host:socket` with `--remote`), the
   daemon state (`connecting…`, `daemon connected`, `daemon unreachable`, taken from the
   last instance list request), the running/total instance count and a clock.
-- **Sidebar**: the seven screens of `screenOrder` in `internal/tui/app.go`. The entry with
+- **Sidebar**: the eight screens of `screenOrder` in `internal/tui/app.go`. The entry with
   the arrow is the active screen; it is highlighted when the sidebar itself has focus.
 - **Status line**: the result of the last action. A success stays 4 s, an error 10 s; known
   errors get a `hint:` line under them (`friendlyError`).
 
 The TUI subscribes to the daemon's `Watch` stream. Any instance change (a launch, a stop,
 a VM that powered itself off, a guest agent report) reloads the Instances, Snapshots and
-Intents screens; bursts of events are merged into one reload after 200 ms. If the stream
+Intents and Events screens; bursts of events are merged into one reload after 200 ms. If the stream
 breaks (for example the daemon restarted), it is retried every 5 s and the TUI keeps
 working without it.
 
@@ -57,7 +57,7 @@ and **Logs** (`l` on Instances).
 | Key | Action |
 |-----|--------|
 | `ctrl+c` | Quit, from any screen, even during a launch. |
-| `alt+1` … `alt+7` | Jump to that sidebar entry, focused on its content. Not in the Launch and Logs takeovers. This is checked before any form, so it also leaves a half-filled form. |
+| `alt+1` … `alt+8` | Jump to that sidebar entry, focused on its content. Not in the Launch and Logs takeovers. This is checked before any form, so it also leaves a half-filled form. |
 
 ### Sidebar (when it has focus)
 
@@ -67,7 +67,7 @@ and **Logs** (`l` on Instances).
 | `↓` `j` `tab` | Next screen (wraps around). |
 | `home` `g` / `end` `G` | First / last screen. |
 | `enter` `→` `l` | Move focus into the screen's content. |
-| `1` … `7` | Jump to that screen, focused on its content. |
+| `1` … `8` | Jump to that screen, focused on its content. |
 | `q` | Quit. |
 
 Inside a screen, `esc` or `q` gives focus back to the sidebar when no form, confirmation
@@ -114,10 +114,12 @@ address (a bridged VM's static IP, otherwise the first IP the guest agent report
 
 The detail panel shows kind, state, image, creation time, size (vCPUs, memory, disk) for
 a VM, the autostart flag and restart policy, the snapshot schedule, the intent and role,
-port forwards and mounts. For a running instance it adds live data, re-fetched every 2 s
-for the selected row only: address, uptime, the guest agent state, cloud-init state and
+port forwards and mounts. For a running instance it adds live data, streamed every 2 s
+for the selected row only (`StreamStats`): address, uptime, the guest agent state, cloud-init state and
 guest IPs (VM), and gauges for CPU, memory, disk usage (VM) or disk read/write rate
 (container), and network rate (shown as "not available" for a SLIRP VM).
+Under that, as many of the instance's recent events as fit, newest first, with the user
+who caused each one and any error (see `anvil events`).
 
 | Key | Action |
 |-----|--------|
@@ -290,3 +292,14 @@ host alias or `user@host[:port]`, and the Copy, Best-effort and Dry run toggles)
 
 During a migration keys are ignored. When it ends, `tab` returns to the host list and
 `esc` or `q` returns to the sidebar.
+
+## 8. Events
+
+The event log (`anvil events`), newest first: time, instance, action, the user who caused
+it (or `anvild`) and the message or error. A failed operation is marked `✕`. The newest
+500 events are loaded when the screen opens and again after instance changes.
+
+| Key | Action |
+|-----|--------|
+| `r` | Reload. |
+| `esc` `q` | Back to the sidebar. |

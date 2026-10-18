@@ -87,7 +87,7 @@ func TestGuestAgentRealBoot(t *testing.T) {
 
 	b := NewBackend(nil, nil, noMirrors{})
 	exits := make(chan instance.State, 1)
-	b.SetExitHook(func(_ string, state instance.State) { exits <- state })
+	b.SetExitHook(func(_ string, state instance.State, _ string) { exits <- state })
 
 	mounts, err := b.startVirtiofsds(spec)
 	if err != nil {

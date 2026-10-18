@@ -20,12 +20,25 @@ type instancesLoadedMsg struct {
 	err       error
 }
 
-// statsLoadedMsg carries one instance's live resource-usage snapshot back
-// from a Stats RPC call. name lets the handler ignore a stale reply that arrives after the user selects a different instance.
-type statsLoadedMsg struct {
-	name  string
-	stats *anvilv1.InstanceStats
-	err   error
+// statsStreamMsg carries one snapshot from a StreamStats stream. gen names the stream, so
+// replies from a stream closed after a selection change are ignored. io.EOF: the instance stopped.
+type statsStreamMsg struct {
+	gen    int
+	stream anvilv1.InstanceService_StreamStatsClient
+	stats  *anvilv1.InstanceStats
+	err    error
+}
+
+// eventsLoadedMsg feeds the Events screen; instanceEventsLoadedMsg the Instances detail panel.
+type eventsLoadedMsg struct {
+	events []*anvilv1.InstanceEvent
+	err    error
+}
+
+type instanceEventsLoadedMsg struct {
+	name   string
+	events []*anvilv1.InstanceEvent
+	err    error
 }
 
 type actionDoneMsg struct {
@@ -221,15 +234,60 @@ func loadInstances(c *client.Client) tea.Cmd {
 	}
 }
 
-// loadStats fetches name's live resource-usage snapshot. The RPC takes
-// ~200ms (the daemon samples twice for a rate): fine for a periodic poll but would stutter the UI if called inline.
-func loadStats(c *client.Client, name string) tea.Cmd {
+// openStatsStream starts streaming name's live stats until ctx is cancelled or the instance stops.
+func openStatsStream(ctx context.Context, c *client.Client, gen int, name string) tea.Cmd {
 	return func() tea.Msg {
-		reply, err := c.Stats(context.Background(), &anvilv1.StatsRequest{Name: name})
+		stream, err := c.StreamStats(ctx, &anvilv1.StreamStatsRequest{Name: name})
 		if err != nil {
-			return statsLoadedMsg{name: name, err: err}
+			return statsStreamMsg{gen: gen, err: err}
 		}
-		return statsLoadedMsg{name: name, stats: reply.GetStats()}
+		return recvStats(gen, stream)()
+	}
+}
+
+func recvStats(gen int, stream anvilv1.InstanceService_StreamStatsClient) tea.Cmd {
+	return func() tea.Msg {
+		reply, err := stream.Recv()
+		return statsStreamMsg{gen: gen, stream: stream, stats: reply.GetStats(), err: err}
+	}
+}
+
+// fetchEvents reads the newest limit stored events of name (all instances when empty).
+func fetchEvents(c *client.Client, name string, limit int32) ([]*anvilv1.InstanceEvent, error) {
+	stream, err := c.Events(context.Background(), &anvilv1.EventsRequest{Name: name, Limit: limit})
+	if err != nil {
+		return nil, err
+	}
+	var out []*anvilv1.InstanceEvent
+	for {
+		ev, err := stream.Recv()
+		if err == io.EOF {
+			return out, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ev)
+	}
+}
+
+// eventsScreenLimit and detailEventsLimit cap how many events the Events screen and the detail panel fetch.
+const (
+	eventsScreenLimit = 500
+	detailEventsLimit = 50
+)
+
+func loadEvents(c *client.Client) tea.Cmd {
+	return func() tea.Msg {
+		events, err := fetchEvents(c, "", eventsScreenLimit)
+		return eventsLoadedMsg{events: events, err: err}
+	}
+}
+
+func loadInstanceEvents(c *client.Client, name string) tea.Cmd {
+	return func() tea.Msg {
+		events, err := fetchEvents(c, name, detailEventsLimit)
+		return instanceEventsLoadedMsg{name: name, events: events, err: err}
 	}
 }
 

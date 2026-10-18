@@ -129,8 +129,9 @@ type ReadyWaiter interface {
 
 // ExitNotifier is implemented by a Backend that notices an instance changing state without
 // anvil asking: stopping (guest poweroff, crash) or, for a container, being started again from outside.
+// The hook's reason says what happened, for the event log.
 type ExitNotifier interface {
-	SetExitHook(hook func(instanceID string, state State))
+	SetExitHook(hook func(instanceID string, state State, reason string))
 }
 
 // GUISession is what a client needs to connect an instance's apps to the host's display.

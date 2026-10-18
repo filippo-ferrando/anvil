@@ -63,3 +63,16 @@ func TestPrintGuestInfo(t *testing.T) {
 		t.Errorf("expected nothing for a stopped VM, got %q", buf.String())
 	}
 }
+
+func TestFormatEvent(t *testing.T) {
+	ok := formatEvent(&anvilv1.InstanceEvent{InstanceName: "web", Action: "stop", Actor: "alice", Message: "forced"})
+	for _, want := range []string{"web", "stop", "alice", "forced"} {
+		if !strings.Contains(ok, want) {
+			t.Errorf("expected %q in %q", want, ok)
+		}
+	}
+	failed := formatEvent(&anvilv1.InstanceEvent{InstanceName: "web", Action: "start", Error: "no qemu"})
+	if !strings.Contains(failed, "failed: no qemu") {
+		t.Errorf("expected the error in %q", failed)
+	}
+}

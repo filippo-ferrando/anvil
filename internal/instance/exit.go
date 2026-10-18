@@ -1,6 +1,9 @@
 package instance
 
-import "log"
+import (
+	"context"
+	"log"
+)
 
 // hookExits records instances that change state on their own, which also emits a Watch event.
 func (m *Manager) hookExits() {
@@ -16,7 +19,7 @@ func (m *Manager) hookExits() {
 // recordExit applies a state change made outside anvil. A stop only moves a running
 // instance and a start only a stopped or errored one: any other record was already
 // changed by whoever stopped, started or deleted it through anvil, and is left alone.
-func (m *Manager) recordExit(instanceID string, state State) {
+func (m *Manager) recordExit(instanceID string, state State, reason string) {
 	spec, err := m.registry.GetByID(instanceID)
 	if err != nil {
 		return
@@ -32,6 +35,11 @@ func (m *Manager) recordExit(instanceID string, state State) {
 		log.Printf("instance: recording %s's new state %s: %v", spec.Name, state, err)
 		return
 	}
+	action := "exit"
+	if state == StateRunning {
+		action = "start"
+	}
+	m.record(context.Background(), spec, action, reason, nil)
 	if state != StateRunning {
 		m.maybeRestart(spec)
 	}

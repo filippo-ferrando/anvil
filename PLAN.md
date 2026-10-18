@@ -9,6 +9,15 @@ container mirrors, man pages, shell completions and the TUI.
 
 ### Recently done
 
+- **Event log.** `anvil events [name] [-f] [-n N] [-o table|json]` shows what happened to
+  instances: launch, fork, start, stop, delete, settings, mounts, ports and snapshots run
+  through anvil (with the caller's user name and any error), exits and starts outside anvil
+  (with the reason), and the daemon's own autostarts, policy restarts and scheduled
+  snapshots. anvild keeps the newest 10000 events in bbolt. TUI: an Events screen and the
+  selected instance's recent events in the Instances detail panel.
+- **Streaming stats.** `InstanceService.StreamStats` sends stats on an interval and ends
+  once the instance stops. The TUI detail panel and `anvil stats --watch` use it instead of
+  polling `Stats`.
 - **GUI apps from instances.** `anvil gui <name> [--x11] -- <app>` shows an app running in
   a VM (waypipe over SSH, tools shared over virtiofs) or a container (fd-passing socket
   relay, `/dev/dri` passed through) as a native Wayland window. `anvil gui
@@ -200,14 +209,6 @@ and keeps the host strictly in line with every `anvil.yaml` found in it, recursi
 
 - **Live migration.** QMP `migrate` through an SSH tunnel, to move a running VM with a short
   pause instead of a stop, copy and start.
-
-## Discovery and observability
-
-### Event history
-
-- A small persisted event log (`anvil events`) for create/start/stop/migrate/failure, on
-  top of the live `Watch` stream.
-- Streaming stats over `Watch` or a sibling RPC, so the TUI stops polling `Stats` every 2s.
 
 ## Platforms
 

@@ -32,6 +32,8 @@ const (
 	InstanceService_AddPort_FullMethodName       = "/anvil.v1.InstanceService/AddPort"
 	InstanceService_RemovePort_FullMethodName    = "/anvil.v1.InstanceService/RemovePort"
 	InstanceService_Stats_FullMethodName         = "/anvil.v1.InstanceService/Stats"
+	InstanceService_StreamStats_FullMethodName   = "/anvil.v1.InstanceService/StreamStats"
+	InstanceService_Events_FullMethodName        = "/anvil.v1.InstanceService/Events"
 	InstanceService_Watch_FullMethodName         = "/anvil.v1.InstanceService/Watch"
 	InstanceService_WaitReady_FullMethodName     = "/anvil.v1.InstanceService/WaitReady"
 	InstanceService_Update_FullMethodName        = "/anvil.v1.InstanceService/Update"
@@ -64,6 +66,10 @@ type InstanceServiceClient interface {
 	RemovePort(ctx context.Context, in *RemovePortRequest, opts ...grpc.CallOption) (*RemovePortReply, error)
 	// Stats returns a live resource-usage snapshot for a running instance.
 	Stats(ctx context.Context, in *StatsRequest, opts ...grpc.CallOption) (*StatsReply, error)
+	// StreamStats sends a Stats snapshot every interval. The stream ends cleanly once the instance stops.
+	StreamStats(ctx context.Context, in *StreamStatsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[StatsReply], error)
+	// Events streams the persisted event log, oldest first; with follow, new events as they happen.
+	Events(ctx context.Context, in *EventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[InstanceEvent], error)
 	// Watch streams instance changes (create, state/config change, delete) as they happen.
 	// Events are change hints: a client that falls far behind may miss some.
 	Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchEvent], error)
@@ -247,9 +253,47 @@ func (c *instanceServiceClient) Stats(ctx context.Context, in *StatsRequest, opt
 	return out, nil
 }
 
+func (c *instanceServiceClient) StreamStats(ctx context.Context, in *StreamStatsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[StatsReply], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &InstanceService_ServiceDesc.Streams[3], InstanceService_StreamStats_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[StreamStatsRequest, StatsReply]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type InstanceService_StreamStatsClient = grpc.ServerStreamingClient[StatsReply]
+
+func (c *instanceServiceClient) Events(ctx context.Context, in *EventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[InstanceEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &InstanceService_ServiceDesc.Streams[4], InstanceService_Events_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[EventsRequest, InstanceEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type InstanceService_EventsClient = grpc.ServerStreamingClient[InstanceEvent]
+
 func (c *instanceServiceClient) Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &InstanceService_ServiceDesc.Streams[3], InstanceService_Watch_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &InstanceService_ServiceDesc.Streams[5], InstanceService_Watch_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +312,7 @@ type InstanceService_WatchClient = grpc.ServerStreamingClient[WatchEvent]
 
 func (c *instanceServiceClient) WaitReady(ctx context.Context, in *WaitReadyRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LaunchProgress], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &InstanceService_ServiceDesc.Streams[4], InstanceService_WaitReady_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &InstanceService_ServiceDesc.Streams[6], InstanceService_WaitReady_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +341,7 @@ func (c *instanceServiceClient) Update(ctx context.Context, in *UpdateRequest, o
 
 func (c *instanceServiceClient) PrepareGUI(ctx context.Context, in *PrepareGUIRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PrepareGUIProgress], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &InstanceService_ServiceDesc.Streams[5], InstanceService_PrepareGUI_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &InstanceService_ServiceDesc.Streams[7], InstanceService_PrepareGUI_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -358,6 +402,10 @@ type InstanceServiceServer interface {
 	RemovePort(context.Context, *RemovePortRequest) (*RemovePortReply, error)
 	// Stats returns a live resource-usage snapshot for a running instance.
 	Stats(context.Context, *StatsRequest) (*StatsReply, error)
+	// StreamStats sends a Stats snapshot every interval. The stream ends cleanly once the instance stops.
+	StreamStats(*StreamStatsRequest, grpc.ServerStreamingServer[StatsReply]) error
+	// Events streams the persisted event log, oldest first; with follow, new events as they happen.
+	Events(*EventsRequest, grpc.ServerStreamingServer[InstanceEvent]) error
 	// Watch streams instance changes (create, state/config change, delete) as they happen.
 	// Events are change hints: a client that falls far behind may miss some.
 	Watch(*WatchRequest, grpc.ServerStreamingServer[WatchEvent]) error
@@ -422,6 +470,12 @@ func (UnimplementedInstanceServiceServer) RemovePort(context.Context, *RemovePor
 }
 func (UnimplementedInstanceServiceServer) Stats(context.Context, *StatsRequest) (*StatsReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Stats not implemented")
+}
+func (UnimplementedInstanceServiceServer) StreamStats(*StreamStatsRequest, grpc.ServerStreamingServer[StatsReply]) error {
+	return status.Errorf(codes.Unimplemented, "method StreamStats not implemented")
+}
+func (UnimplementedInstanceServiceServer) Events(*EventsRequest, grpc.ServerStreamingServer[InstanceEvent]) error {
+	return status.Errorf(codes.Unimplemented, "method Events not implemented")
 }
 func (UnimplementedInstanceServiceServer) Watch(*WatchRequest, grpc.ServerStreamingServer[WatchEvent]) error {
 	return status.Errorf(codes.Unimplemented, "method Watch not implemented")
@@ -675,6 +729,28 @@ func _InstanceService_Stats_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InstanceService_StreamStats_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(StreamStatsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(InstanceServiceServer).StreamStats(m, &grpc.GenericServerStream[StreamStatsRequest, StatsReply]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type InstanceService_StreamStatsServer = grpc.ServerStreamingServer[StatsReply]
+
+func _InstanceService_Events_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(EventsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(InstanceServiceServer).Events(m, &grpc.GenericServerStream[EventsRequest, InstanceEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type InstanceService_EventsServer = grpc.ServerStreamingServer[InstanceEvent]
+
 func _InstanceService_Watch_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(WatchRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -836,6 +912,16 @@ var InstanceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Logs",
 			Handler:       _InstanceService_Logs_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "StreamStats",
+			Handler:       _InstanceService_StreamStats_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "Events",
+			Handler:       _InstanceService_Events_Handler,
 			ServerStreams: true,
 		},
 		{

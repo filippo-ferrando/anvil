@@ -30,7 +30,7 @@ const (
 type exitWatch struct {
 	mu       sync.Mutex
 	expected map[string]time.Time // container ID -> when anvil asked it to stop
-	hook     func(instanceID string, state instance.State)
+	hook     func(instanceID string, state instance.State, reason string)
 	once     sync.Once
 	stop     context.CancelFunc
 }
@@ -39,7 +39,7 @@ var _ instance.ExitNotifier = (*DockerBackend)(nil)
 
 // SetExitHook starts following Docker's events, so a container that stops without
 // anvil asking (crash, `docker stop`, dockerd restart) is reported through hook.
-func (b *DockerBackend) SetExitHook(hook func(instanceID string, state instance.State)) {
+func (b *DockerBackend) SetExitHook(hook func(instanceID string, state instance.State, reason string)) {
 	b.exits.mu.Lock()
 	b.exits.hook = hook
 	b.exits.mu.Unlock()
@@ -180,7 +180,7 @@ func (b *DockerBackend) report(containerID string, state instance.State, why str
 			if spec.State != state {
 				log.Printf("docker: %s %s, now %s", spec.Name, why, state)
 			}
-			hook(spec.ID, state)
+			hook(spec.ID, state, why)
 			return
 		}
 	}

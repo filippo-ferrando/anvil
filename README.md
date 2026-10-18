@@ -303,7 +303,7 @@ version runs the daemon as an unprivileged system user instead, see [Install](#i
 ## The TUI
 
 `anvil tui` gives you a sidebar-driven view over Instances, Snapshots, Images, Intents,
-Cloud-Init, Mirrors, and Migration, over the exact same gRPC API the CLI uses
+Cloud-Init, Mirrors, Migration, and Events, over the exact same gRPC API the CLI uses
 (`anvil stats <name>` is the CLI's own window into the same data). Shell/exec sessions
 hand the real terminal off to `ssh`/`docker exec` and back, logs stream live, and launch progress redraws in place
 instead of scrolling your terminal into oblivion.

@@ -60,7 +60,10 @@ func TestScreenForDigit(t *testing.T) {
 	if s, ok := screenForDigit("1"); !ok || s != screenOrder[0] {
 		t.Errorf("1 -> %v, %v", s, ok)
 	}
-	for _, k := range []string{"0", "8", "a", "12"} {
+	if s, ok := screenForDigit("8"); !ok || s != screenEvents {
+		t.Errorf("8 -> %v, %v", s, ok)
+	}
+	for _, k := range []string{"0", "9", "a", "12"} {
 		if _, ok := screenForDigit(k); ok {
 			t.Errorf("%q should not map to a screen", k)
 		}

@@ -37,12 +37,13 @@ const (
 	screenCloudInit
 	screenMirrors
 	screenMigration
+	screenEvents
 	screenLaunch // full-screen takeover reached via Instances' "n"
 	screenLogs   // full-screen takeover reached via Instances' "l"
 )
 
 // screenOrder is the sidebar's own list, top to bottom.
-var screenOrder = []screen{screenInstances, screenSnapshots, screenImages, screenIntents, screenCloudInit, screenMirrors, screenMigration}
+var screenOrder = []screen{screenInstances, screenSnapshots, screenImages, screenIntents, screenCloudInit, screenMirrors, screenMigration, screenEvents}
 
 var screenLabels = map[screen]string{
 	screenInstances: "Instances",
@@ -52,6 +53,7 @@ var screenLabels = map[screen]string{
 	screenCloudInit: "Cloud-Init",
 	screenMirrors:   "Mirrors",
 	screenMigration: "Migration",
+	screenEvents:    "Events",
 }
 
 const (
@@ -86,6 +88,7 @@ type model struct {
 	cloudInit cloudInitModel
 	mirrors   mirrorsModel
 	migration migrationModel
+	events    eventsModel
 
 	watchReloadPending bool // a reload triggered by a Watch event is already scheduled
 }
@@ -128,6 +131,7 @@ func Run(socketPath, remote string) error {
 		cloudInit:      newCloudInitModel(),
 		mirrors:        newMirrorsModel(),
 		migration:      newMigrationModel(),
+		events:         newEventsModel(),
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
@@ -150,13 +154,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.status != "" && time.Since(m.statusSetAt) > visible {
 			m.status = ""
 		}
-		cmds := []tea.Cmd{tickCmd()}
-		if m.screen == screenInstances {
-			if cmd := m.instances.maybeRefreshStats(m.client); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-		}
-		return m, tea.Batch(cmds...)
+		return m, tickCmd()
 	case watchEventMsg:
 		if msg.err != nil {
 			// Daemon restarted or too old for Watch: try again later, the TUI still works without it.
@@ -174,7 +172,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case watchReloadMsg:
 		m.watchReloadPending = false
 		switch m.screen {
-		case screenInstances, screenSnapshots, screenIntents:
+		case screenInstances, screenSnapshots, screenIntents, screenEvents:
 			return m, loadCmdForScreen(m.screen, m.client)
 		}
 		return m, nil
@@ -188,6 +186,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.intents.list.SetSize(contentWidth-2, h)
 		m.cloudInit.setSize(contentWidth, h)
 		m.mirrors.list.SetSize(contentWidth-2, h)
+		m.events.list.SetSize(contentWidth-2, h-1) // -1: the help bar under the list
 		m.migration.setSize(contentWidth, h)
 		m.migration.migrateForm.SetHeight(h - 2)
 		// launch/logs are full-width takeovers, not squeezed by the sidebar.
@@ -216,8 +215,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Replies to long-running requests go to the screen that made them, even after the user moved on.
 	switch msg.(type) {
-	case waitStreamMsg:
+	case waitStreamMsg, statsStreamMsg, instanceEventsLoadedMsg:
 		return m.updateInstances(msg)
+	case eventsLoadedMsg:
+		return m.updateEvents(msg)
 	case imageChecksumMsg:
 		return m.updateImages(msg)
 	case applyStreamMsg:
@@ -264,6 +265,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateMirrors(msg)
 	case screenMigration:
 		return m.updateMigration(msg)
+	case screenEvents:
+		return m.updateEvents(msg)
 	}
 	return m, nil
 }
@@ -340,6 +343,8 @@ func loadCmdForScreen(s screen, c *client.Client) tea.Cmd {
 	case screenMigration:
 		// Instances and intents feed the migrate form's Name suggestions.
 		return tea.Batch(loadHosts(c), loadInstances(c), loadIntents(c))
+	case screenEvents:
+		return loadEvents(c)
 	}
 	return nil
 }
@@ -431,6 +436,8 @@ func (m model) screenView() string {
 		return m.mirrors.View()
 	case screenMigration:
 		return m.migration.View()
+	case screenEvents:
+		return m.events.View()
 	}
 	return ""
 }
@@ -453,9 +460,9 @@ func (m model) sidebarView() string {
 	b.WriteString("\n")
 	var keys []string
 	if m.sidebarFocused {
-		keys = helpItems("↑↓", "move", "1-7", "jump", "enter", "open", "q", "quit")
+		keys = helpItems("↑↓", "move", "1-8", "jump", "enter", "open", "q", "quit")
 	} else {
-		keys = helpItems("esc", "menu", "alt+1-7", "jump")
+		keys = helpItems("esc", "menu", "alt+1-8", "jump")
 	}
 	for _, k := range keys {
 		b.WriteString(" " + k + "\n")

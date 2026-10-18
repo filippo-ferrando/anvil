@@ -22,7 +22,7 @@ var (
 )
 
 // SetExitHook passes hook to every engine that can notice containers exiting on their own.
-func (b *Backend) SetExitHook(hook func(instanceID string, state instance.State)) {
+func (b *Backend) SetExitHook(hook func(instanceID string, state instance.State, reason string)) {
 	for _, eng := range []instance.Backend{b.Docker, b.Podman} {
 		if en, ok := eng.(instance.ExitNotifier); ok {
 			en.SetExitHook(hook)

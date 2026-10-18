@@ -61,7 +61,7 @@ func hookedBackend(t *testing.T) (*Backend, chan exitRecord) {
 
 	b := NewBackend(nil, nil, noMirrors{})
 	exits := make(chan exitRecord, 4)
-	b.SetExitHook(func(id string, state instance.State) { exits <- exitRecord{id, state} })
+	b.SetExitHook(func(id string, state instance.State, _ string) { exits <- exitRecord{id, state} })
 	return b, exits
 }
 

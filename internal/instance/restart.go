@@ -2,6 +2,7 @@ package instance
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -95,6 +96,7 @@ func (m *Manager) maybeRestart(spec *Spec) {
 	n := t.attempts[spec.ID]
 	if p := spec.RestartPolicy; p.Mode == RestartOnFailure && p.MaxRetries > 0 && n >= p.MaxRetries {
 		log.Printf("instance: %s failed %d times in a row, not restarting it again", spec.Name, n)
+		m.record(context.Background(), spec, "restart", "", fmt.Errorf("failed %d times in a row, not restarting it again", n))
 		return
 	}
 	delay := restartDelay(n)
@@ -117,7 +119,9 @@ func (m *Manager) restartNow(id string) {
 	if err != nil || !wantsRestart(spec) {
 		return
 	}
-	if err := m.startForPolicy(spec); err != nil {
+	err = m.startForPolicy(spec)
+	m.record(context.Background(), spec, "restart", "policy "+spec.RestartPolicy.String(), err)
+	if err != nil {
 		log.Printf("instance: restarting %s: %v", spec.Name, err)
 		spec.State = StateError
 		m.maybeRestart(spec) // try again, later
@@ -159,7 +163,7 @@ func (m *Manager) Autostart(ctx context.Context) {
 		return
 	}
 	log.Printf("instance: autostarting %v", names)
-	if err := m.Start(ctx, names); err != nil {
+	if err := m.start(ctx, names, "autostart"); err != nil {
 		log.Printf("instance: autostart: %v", err)
 	}
 }

@@ -339,6 +339,34 @@ seed. Editing a saved config can therefore change what a later reseed of an exis
 contains, and deleting or renaming one that a VM still references makes that reseed fail.
 The server does not check references or validate the YAML on save.
 
+## The event log: `anvil events`
+
+The manager records one event per operation and per outside change
+(`internal/instance/history.go`), in the `events` bbolt bucket (`internal/store/events.go`).
+The newest 10000 are kept: each new event past that drops the oldest.
+
+| Action | Recorded when |
+|--------|---------------|
+| `launch`, `fork` | an instance is created; a failure is recorded without an instance ID |
+| `start`, `stop`, `delete` | through anvil, one event per instance; `start` also for a container started outside anvil |
+| `autostart` | `Manager.Autostart` starts an instance when anvild starts |
+| `exit` | an instance stops outside anvil (with the backend's reason), or is found stopped at Reconcile |
+| `restart` | the restart policy restarts an instance, or gives up after `on-failure:N` |
+| `update` | `anvil set`, with the applied changes |
+| `mount`, `umount`, `port-add`, `port-remove` | the matching commands |
+| `snapshot-create`, `snapshot-restore`, `snapshot-delete` | manual snapshots, and the scheduler's snapshots and prunes |
+
+The actor is the caller's user name, read from the unix socket peer credentials by a gRPC
+interceptor (`internal/daemon/events.go`), or `anvild` for what the daemon does on its own.
+A failed operation is recorded with its error. Writing the event never fails the operation.
+
+```
+anvil events               # newest 100 events, all instances
+anvil events web -n 0      # every stored event of web
+anvil events -f            # then keep printing new events
+anvil events -o json       # one InstanceEvent JSON object per event
+```
+
 ## Where state lives on disk
 
 The paths come from `internal/config` (`paths.go` plus `paths_linux.go`):
