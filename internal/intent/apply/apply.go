@@ -199,6 +199,9 @@ func diff(mem Member, cur *instance.Spec) (replace []string, upd instance.Update
 		if want.CloudInitUserData != have.CloudInitUserData || want.CloudInitName != have.CloudInitName {
 			replace = append(replace, "cloud-init changed")
 		}
+		if want.HypervisorOf() != have.HypervisorOf() {
+			replace = append(replace, was("hypervisor", have.HypervisorOf(), want.HypervisorOf()))
+		}
 		if want.NoGuestAgent != have.NoGuestAgent {
 			replace = append(replace, was("no_guest_agent", have.NoGuestAgent, want.NoGuestAgent))
 		}

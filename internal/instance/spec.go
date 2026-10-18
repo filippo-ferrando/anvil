@@ -191,6 +191,25 @@ type VMSpec struct {
 	// MACAddress is the guest NIC's address, see MAC. It travels with the disk on migration
 	// and import, because the guest's network config matches on it.
 	MACAddress string
+
+	// Hypervisor runs this VM; empty means VMHypervisorQEMU.
+	Hypervisor VMHypervisor
+}
+
+// VMHypervisor selects which hypervisor runs a VMSpec.
+type VMHypervisor string
+
+const (
+	VMHypervisorQEMU        VMHypervisor = "qemu"
+	VMHypervisorFirecracker VMHypervisor = "firecracker"
+)
+
+// HypervisorOf returns v's hypervisor, defaulting an unset one to QEMU.
+func (v *VMSpec) HypervisorOf() VMHypervisor {
+	if v.Hypervisor == "" {
+		return VMHypervisorQEMU
+	}
+	return v.Hypervisor
 }
 
 // MAC returns MACAddress, or for a VM created before it was stored, the address

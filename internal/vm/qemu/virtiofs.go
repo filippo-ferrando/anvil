@@ -93,7 +93,7 @@ func startVirtiofsd(bin, sharedDir, socketPath string, readOnly bool, sandbox, l
 		}
 		select {
 		case <-v.exited:
-			return nil, fmt.Errorf("virtiofsd exited early (see %s)", logPath)
+			return nil, fmt.Errorf("virtiofsd exited early: %s (see %s)", lastLogLine(logPath), logPath)
 		case <-deadline:
 			v.Kill()
 			return nil, fmt.Errorf("socket %s never appeared", socketPath)
@@ -126,4 +126,11 @@ func (v *Virtiofsd) WaitExit(ctx context.Context, timeout time.Duration) bool {
 	case <-ctx.Done():
 		return false
 	}
+}
+
+// lastLogLine returns the last non-empty line of the virtiofsd log, usually the reason it quit.
+func lastLogLine(logPath string) string {
+	data, _ := os.ReadFile(logPath)
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	return lines[len(lines)-1]
 }

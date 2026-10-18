@@ -73,6 +73,7 @@ func vmSpecFromPB(v *anvilv1.VMSpec) *instance.VMSpec {
 		SourceBaseImagePath:  v.GetSourceBaseImagePath(),
 		NoGuestAgent:         v.GetNoGuestAgent(),
 		MACAddress:           v.GetMacAddress(),
+		Hypervisor:           vmHypervisorFromPB(v.GetHypervisor()),
 	}
 	for _, m := range v.GetMounts() {
 		spec.Mounts = append(spec.Mounts, instance.Mount{
@@ -139,6 +140,7 @@ func vmSpecToPB(v *instance.VMSpec) *anvilv1.VMSpec {
 		NoGuestAgent:         v.NoGuestAgent,
 		SnapshotSchedule:     snapshotScheduleToPB(v.SnapshotSchedule),
 		MacAddress:           v.MACAddress,
+		Hypervisor:           vmHypervisorToPB(v.Hypervisor),
 	}
 	for _, m := range v.Mounts {
 		pb.Mounts = append(pb.Mounts, &anvilv1.Mount{
@@ -151,6 +153,28 @@ func vmSpecToPB(v *instance.VMSpec) *anvilv1.VMSpec {
 	}
 	pb.Ports = portsToPB(v.Ports)
 	return pb
+}
+
+func vmHypervisorFromPB(h anvilv1.VmHypervisor) instance.VMHypervisor {
+	switch h {
+	case anvilv1.VmHypervisor_VM_HYPERVISOR_QEMU:
+		return instance.VMHypervisorQEMU
+	case anvilv1.VmHypervisor_VM_HYPERVISOR_FIRECRACKER:
+		return instance.VMHypervisorFirecracker
+	default:
+		return ""
+	}
+}
+
+func vmHypervisorToPB(h instance.VMHypervisor) anvilv1.VmHypervisor {
+	switch h {
+	case instance.VMHypervisorQEMU, "":
+		return anvilv1.VmHypervisor_VM_HYPERVISOR_QEMU
+	case instance.VMHypervisorFirecracker:
+		return anvilv1.VmHypervisor_VM_HYPERVISOR_FIRECRACKER
+	default:
+		return anvilv1.VmHypervisor_VM_HYPERVISOR_UNSPECIFIED
+	}
 }
 
 func containerEngineFromPB(e anvilv1.ContainerEngine) instance.ContainerEngine {

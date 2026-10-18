@@ -57,10 +57,11 @@ members:
     image: debian-12
     cloud_init_name: worker-setup # a saved template, see `anvil cloud-init list`
     no_guest_agent: true # skip qemu-guest-agent: no guest IPs, agent shutdown or precise cloud-init status
+    hypervisor: qemu # or firecracker; qemu when left out
     depends_on: [app]
     restart: "no"
 
 # VMs take no ports: a VM in an intent has its own address on the intent network.
 # Container-only fields (engine, env, entrypoint, command, volumes, ports) are errors on a VM,
 # and VM-only fields (cpus, memory, disk, cloud_init, cloud_init_name, ssh_keys,
-# no_guest_agent) are errors on a container. Unknown fields are errors too.
+# no_guest_agent, hypervisor) are errors on a container. Unknown fields are errors too.

@@ -26,6 +26,7 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 		sshKeys       []string
 		noStart       bool
 		engineStr     string
+		hypervisorStr string
 		envVars       []string
 		volumes       []string
 		publish       []string
@@ -85,6 +86,13 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 			if defaultUser != "" && kind != anvilv1.Kind_KIND_VM {
 				return fmt.Errorf("--default-user only applies to --kind vm")
 			}
+			if hypervisorStr != "" && kind != anvilv1.Kind_KIND_VM {
+				return fmt.Errorf("--hypervisor only applies to --kind vm")
+			}
+			hypervisor, err := parseVMHypervisor(hypervisorStr)
+			if err != nil {
+				return err
+			}
 			if noGuestAgent && kind != anvilv1.Kind_KIND_VM {
 				return fmt.Errorf("--no-guest-agent only applies to --kind vm")
 			}
@@ -140,6 +148,7 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 					SourceDiskPath:    fromDisk,
 					DefaultUser:       defaultUser,
 					NoGuestAgent:      noGuestAgent,
+					Hypervisor:        hypervisor,
 				}
 
 			case anvilv1.Kind_KIND_CONTAINER:
@@ -199,6 +208,7 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 	cmd.Flags().StringArrayVar(&sshKeys, "ssh-key", nil, "additional SSH public key to authorize, on top of anvil's own managed key "+
 		"(always authorized by default): a literal key, or a path to a .pub file; repeatable (VM only)")
 	cmd.Flags().StringVar(&engineStr, "engine", "", `container engine: "docker" or "podman" (container only; defaults to docker, the only one implemented so far)`)
+	cmd.Flags().StringVar(&hypervisorStr, "hypervisor", "", `VM hypervisor: "qemu" (default) or "firecracker" (VM only)`)
 	cmd.Flags().StringArrayVarP(&envVars, "env", "e", nil, "environment variable KEY=VALUE (container only, repeatable)")
 	cmd.Flags().StringArrayVarP(&volumes, "volume", "v", nil, "bind mount <host-path>:<container-path>[:ro] (container only, repeatable)")
 	cmd.Flags().StringArrayVarP(&publish, "publish", "p", nil, "publish <host-port>:<guest-port>[/tcp|udp] (repeatable; a bridged --intent VM already has its own reachable address, so this only applies to a standalone VM or a container)")
@@ -226,6 +236,19 @@ func parseContainerEngine(s string) (anvilv1.ContainerEngine, error) {
 		return anvilv1.ContainerEngine_CONTAINER_ENGINE_PODMAN, nil
 	default:
 		return 0, fmt.Errorf(`--engine must be "docker" or "podman"`)
+	}
+}
+
+func parseVMHypervisor(s string) (anvilv1.VmHypervisor, error) {
+	switch s {
+	case "":
+		return anvilv1.VmHypervisor_VM_HYPERVISOR_UNSPECIFIED, nil
+	case "qemu":
+		return anvilv1.VmHypervisor_VM_HYPERVISOR_QEMU, nil
+	case "firecracker":
+		return anvilv1.VmHypervisor_VM_HYPERVISOR_FIRECRACKER, nil
+	default:
+		return 0, fmt.Errorf(`--hypervisor must be "qemu" or "firecracker"`)
 	}
 }
 

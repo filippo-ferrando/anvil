@@ -130,35 +130,123 @@ container mirrors, man pages, shell completions and the TUI.
 
 ## VM hypervisors
 
-### Firecracker backend
+### Firecracker backend (in progress)
 
-QEMU is the only VM hypervisor on Linux right now. Firecracker microVMs should be a
-second one, with the same lifecycle, commands, TUI screens and intent membership as QEMU
-VMs. The only visible difference is a `--hypervisor firecracker` flag (default `qemu`).
+QEMU is the only VM hypervisor on Linux right now. Firecracker microVMs are being added as
+a second one, with the same lifecycle, commands, TUI screens and intent membership as QEMU
+VMs. The only visible difference is `--hypervisor firecracker` (default `qemu`).
 
-- **Selection.** Add a `Hypervisor` field to `VMSpec` and a `VmHypervisor` enum in the
-  proto, set up the same way as `ContainerEngine`. The Manager still sees one `KindVM`
-  backend, which hands each call to QEMU or Firecracker based on the spec.
-- **Process control.** Code lives in `internal/vm/firecracker`: start the `firecracker`
-  binary per VM (optionally under `jailer`) and drive it over its REST API on a unix
-  socket, the same way QMP is used for QEMU.
-- **Images.** Firecracker boots an uncompressed kernel plus a raw rootfs, not a qcow2
-  cloud image. The catalog needs a kernel per distro, and qcow2 bases have to be converted
-  to raw (or ext4) disks on pull -> use a dedicated "cache" to store the firecracker images.
-- **cloud-init.** No CD-ROM device exists, so the NoCloud seed goes on a second virtio-blk
-  drive, or through MMDS. The cloud-init library and `--wait` should work unchanged.
-- **catalog**. create a dedicated Firecracker catalog with the same distros, versions and checksums as the QEMU
-  catalog.
-- **Networking.** No SLIRP, only tap devices. Intent VMs plug the tap into the intent
-  bridge as they do today. Standalone VMs need a small per-host bridge plus DNAT rules
-  (or a userspace proxy) for the SSH port and `anvil port` forwards.
-- **Gaps to decide.** No virtiofs, so `anvil mount` either returns a clear "not
-  supported on firecracker" error or falls back to a block-device share. Snapshots
-  use Firecracker's own full-VM snapshot API, and fork, export/import and migration
-  must carry the kernel and hypervisor type in the bundle. Unsupported operations
-  return a clear error rather than doing nothing, like `--engine podman` does today.
-- **Tests.** A spawn integration test like `spawn_integration_test.go` that skips when
-  `firecracker` or `/dev/kvm` is missing, plus unit tests for the REST client.
+Host requirements: `firecracker` and `jailer` (Arch: `extra/firecracker`, 1.17+ for
+bzImage and virtio-mem), `/dev/kvm`, `qemu-img` (qcow2 to raw), `nft`. Dev and tests also
+need a guest kernel: `ANVIL_FC_KERNEL=<path>` overrides the catalog kernel.
+
+#### Decisions
+
+- **Dispatch.** `instance.VMSpec.Hypervisor` (`qemu` when empty) and a `VmHypervisor` proto
+  enum, set up like `ContainerEngine`. The Manager still sees one `KindVM` backend:
+  `vm.Hypervisors` hands each call to the QEMU `vm.Backend` or the Firecracker
+  `vm.FCBackend` and returns a clear error for an operation one of them lacks. Both live in
+  `internal/vm` and share the cloud-init merge, guest agent polling and log code.
+  `internal/vm/firecracker` only holds process control and the REST client, like `qemu/`.
+- **Kernel.** One anvil-built kernel per arch, everything built in, no modules: Firecracker's
+  6.18 guest config plus btrfs, xfs, iso9660, overlayfs, netfilter, NFS client, vsock,
+  virtio-mem, SELinux/AppArmor. Built by `scripts/build-fc-kernel.sh` (docker, like
+  `build-gui-tools.sh`), published as a compressed bzImage release asset, not packaged:
+  anvild downloads it on the first Firecracker launch into the Firecracker cache, like a
+  distro image (catalog URL + sha256, mirrors apply, `ANVIL_FC_KERNEL` overrides it).
+  Kernel updates inside the guest have no effect.
+- **Catalog.** `data/distros/firecracker.json`: the kernel per arch (url, sha256, version)
+  plus one entry per supported distro id (same ids as the QEMU catalog, so the same image
+  URL, checksum and mirrors apply) with Firecracker-only fields such as extra kernel args
+  (`rootflags=subvol=root` for Fedora's btrfs).
+- **Disks.** Raw only. The qcow2 base is converted once into a Firecracker cache
+  (`/var/cache/anvil/images/firecracker/<id>-<arch>.raw`, plus the kernel). An instance
+  disk is a reflink copy (btrfs/xfs, falls back to a sparse copy), grown with truncate.
+  The root partition is found from the GPT at conversion time and passed as
+  `root=PARTUUID=...`, no initrd.
+- **cloud-init.** The existing NoCloud seed ISO is attached as a second, read-only
+  virtio-blk drive. Library, `--wait` and mounts logic stay unchanged.
+- **Guest agent.** qemu-guest-agent over vsock: cloud-init installs it with a drop-in that
+  runs `qemu-ga -m vsock-listen -p 3:1024` (OpenRC: conf.d), and the host side dials
+  Firecracker's vsock unix socket with `CONNECT 1024`. Same QGA client otherwise, so IPs,
+  clean shutdown, `--wait`, guest-exec and fsfreeze all work.
+- **Networking.** Intent VMs plug their tap into the intent bridge as QEMU does.
+  Standalone VMs get a tap on an anvil-owned `anvil-fc0` bridge (a /24), masquerade in an
+  anvil-owned nftables table, a static IP through the seed's network-config, and DNS through
+  the intent DNS forwarder on the gateway. SSH and `anvil port` forwards are a small TCP/UDP
+  proxy in anvild listening on all interfaces (like SLIRP hostfwd), re-created on Reconcile.
+  Packaging adds a sysctl.d file for `net.ipv4.ip_forward`.
+- **Mounts.** A userspace NFSv3 server in anvild (`github.com/willscott/go-nfs`), one
+  export per mount, bound to the gateway and answering only that VM's IP. Mount/umount go
+  live through the guest agent; cloud-init installs the NFS client.
+- **GUI.** The tools dir goes in as a read-only ISO drive instead of virtiofs.
+- **Snapshots.** Disk-only, as for QEMU (restore never resumes RAM): a reflink copy of the
+  disk under `snapshots/<name>.raw`. Live: pause over the API, fsfreeze through the agent,
+  copy, thaw, resume. Firecracker's own memory snapshot API isn't needed.
+- **Resize.** Disk grows live (truncate + `PATCH /drives`, then growpart through the agent).
+  Memory grows/shrinks live through virtio-mem up to a boot-time maximum. vCPUs apply at the
+  next start (Firecracker has no vCPU hotplug).
+- **Export/migration.** Bundles stay qcow2: raw is converted on export and back on import;
+  the delta path uses `qemu-img convert -B` against the raw base. The hypervisor travels
+  in the spec; the kernel is resolved from the target's catalog.
+- **Jailer.** Used when present. The unit gains the capabilities jailer needs
+  (`CAP_SYS_ADMIN CAP_SYS_CHROOT CAP_MKNOD CAP_SETUID CAP_SETGID CAP_CHOWN
+  CAP_DAC_OVERRIDE`); disks and kernel are hard-linked into the chroot.
+
+#### Phases
+
+Each phase ends buildable, with its tests, and is ticked here when done.
+
+1. [x] **Selection plumbing.** Proto enum + `VMSpec.hypervisor`, `instance.VMHypervisor`,
+   convert.go, `anvil launch --hypervisor`, `anvil.yaml` `hypervisor:`, TUI launch form
+   field, `vm.Hypervisors` dispatcher (Firecracker returns "not implemented yet"), list/info
+   show the hypervisor.
+2. [x] **`internal/vm/firecracker`.** REST client (machine-config, boot-source, drives,
+   network-interfaces, vsock, actions, vm state, PATCH drives, memory hotplug), process
+   spawn/attach/stop, vsock dialer. Unit tests against an httptest unix socket; spawn
+   integration test that skips without `firecracker`, `/dev/kvm` or `ANVIL_FC_KERNEL`.
+3. [ ] **Kernel and images.** `scripts/build-fc-kernel.sh` + config fragment, `make fc-kernel`,
+   `firecracker.json` catalog, raw conversion cache with GPT root lookup, reflink disk copy.
+   CI caches the built kernel keyed on kernel version + config fragment + build script hash
+   (same pattern as the build-gui cache from a03c738), so it only rebuilds when one changes.
+4. [ ] **Lifecycle.** `FCBackend` Create/Start/Stop/Delete/Status/Logs/Reconcile, exit
+   watch, seed drive, console log, guest agent over vsock, WaitReady, GuestInfo, intent
+   bridge networking, Stats.
+5. [ ] **Standalone networking.** `anvil-fc0` bridge, nftables masquerade, IPAM, DNS zone,
+   port proxy, AddPort/RemovePort, packaging sysctl.
+6. [ ] **Disk and resources.** Snapshots, scheduled snapshots, fork, disk resize, live
+   memory, CPUs at next start.
+7. [ ] **Mounts and GUI.** NFS server and live mount/umount, GUI tools drive, PrepareGUI.
+8. [ ] **Export, import, migration.** Hypervisor-aware disk conversion on both ends.
+9. [ ] **Jailer and packaging.** Jailer chroot, unit capabilities, firecracker optdepend in
+   all three package formats, docs (`docs/firecracker.md`), man pages.
+
+#### Status notes
+
+(Updated at the end of each phase: what landed, what's left, anything surprising.)
+
+- **Phase 1 (done).** `VmHypervisor` enum + `VMSpec.hypervisor` (field 24), `instance.VMHypervisor`
+  with `VMSpec.HypervisorOf()` (empty = qemu, so stored VMs need no migration), converters,
+  `anvil launch --hypervisor`, `hypervisor:` in `anvil.yaml` (a change means recreate), TUI
+  launch form field and "VM (firecracker)" in the detail panel, list ENGINE column and
+  `anvil info` show the hypervisor. `vm.Hypervisors` (`internal/vm/hypervisors.go`) is now
+  the KindVM backend; its `Firecracker` field is nil, so firecracker launches fail with "isn't
+  implemented yet". A missing capability fails with "<op> isn't supported on firecracker".
+  Left for phase 8: export/migration calls are QEMU-only in the dispatcher,
+  `PrepareImportedDisk` has no spec so it can't pick a hypervisor, and the migration target's
+  `anvil launch --from-disk` call must pass `--hypervisor`. Fork keeps the source's
+  hypervisor through `cloneVMSpecForFork`, with `NetworkMode` "slirp" meaning standalone.
+- **Phase 2 (done, real-VM test pending a kernel).** `internal/vm/firecracker`: `Config`
+  (`--config-file` JSON: boot source, machine config, drives with `partuuid`, network
+  interfaces, vsock, memory-hotplug, entropy), so the VM boots on spawn with no pre-boot API
+  calls. `Client` covers the runtime calls only: `Info`, `SendCtrlAltDel`, `Pause`/`Resume`,
+  `UpdateDrive` (PATCH, picks up a grown file), `MemoryHotplug`/`SetMemoryHotplug`.
+  `Process` mirrors `qemu.Process` (Spawn, Attach by `/proc/<pid>/cmdline`, WaitAPI, Exited,
+  Stop = Ctrl+Alt+Del then SIGKILL). Serial console is firecracker's stdout (`console.log`),
+  its own log plus stderr go to `firecracker.log`. `DialVsock` does the `CONNECT <port>`
+  handshake; `qemu.GuestAgent.Dial` lets the QGA client run over it.
+  To check in phase 4 with a real guest: whether a guest `poweroff` (agent `guest-shutdown`
+  mode powerdown) makes firecracker exit, or the agent has to use mode `reboot`.
 
 ## Container engines
 

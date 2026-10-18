@@ -69,7 +69,9 @@ func TestParseErrors(t *testing.T) {
 		"unknown dep":   "intent: x\nmembers:\n  a: {kind: container, image: u, depends_on: [b]}\n",
 		"cycle": "intent: x\nmembers:\n  a: {kind: container, image: u, depends_on: [b]}\n" +
 			"  b: {kind: container, image: u, depends_on: [a]}\n",
-		"ssh key path": "intent: x\nmembers:\n  a: {kind: vm, image: u, ssh_keys: [~/.ssh/id.pub]}\n",
+		"bad hypervisor": "intent: x\nmembers:\n  a: {kind: vm, image: u, hypervisor: xen}\n",
+		"ct hypervisor":  "intent: x\nmembers:\n  a: {kind: container, image: u, hypervisor: qemu}\n",
+		"ssh key path":   "intent: x\nmembers:\n  a: {kind: vm, image: u, ssh_keys: [~/.ssh/id.pub]}\n",
 	}
 	for name, s := range cases {
 		if _, err := Parse([]byte(s)); err == nil {
@@ -284,5 +286,22 @@ func TestDocsExampleParses(t *testing.T) {
 	}
 	if len(m.Members) != 4 {
 		t.Fatalf("got %d members, want 4", len(m.Members))
+	}
+}
+
+func TestApplyHypervisorChange(t *testing.T) {
+	m := mustParse(t, sample)
+	f := &fakes{}
+	// A VM stored before hypervisors existed has none set, which means qemu: no change.
+	f.member(m, "app", instance.StateRunning).VM.Hypervisor = ""
+	steps, err := runApply(t, f, m, Options{DryRun: true})
+	if err != nil || steps["app"].Action != ActionKeep {
+		t.Fatalf("err = %v, app action = %s (%v); want keep", err, steps["app"].Action, steps["app"].Changes)
+	}
+
+	f.specs["id-app"].VM.Hypervisor = instance.VMHypervisorFirecracker
+	steps, _ = runApply(t, f, m, Options{DryRun: true})
+	if steps["app"].Action != ActionRecreate {
+		t.Fatalf("app action = %s, want recreate after a hypervisor change", steps["app"].Action)
 	}
 }

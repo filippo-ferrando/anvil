@@ -820,6 +820,9 @@ func (m instancesModel) detailInfo() string {
 	}
 
 	kind, image := "VM", inst.GetVm().GetImageRef()
+	if inst.GetVm().GetHypervisor() == anvilv1.VmHypervisor_VM_HYPERVISOR_FIRECRACKER {
+		kind = "VM (firecracker)"
+	}
 	if inst.GetKind() == anvilv1.Kind_KIND_CONTAINER {
 		kind, image = "Container", inst.GetContainer().GetImageRef()
 	}

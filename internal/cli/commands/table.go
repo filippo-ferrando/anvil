@@ -57,6 +57,13 @@ func engineLabel(e anvilv1.ContainerEngine) string {
 	}
 }
 
+func hypervisorLabel(h anvilv1.VmHypervisor) string {
+	if h == anvilv1.VmHypervisor_VM_HYPERVISOR_FIRECRACKER {
+		return "firecracker"
+	}
+	return "qemu" // unset defaults to qemu
+}
+
 func stateLabel(s anvilv1.State) string {
 	switch s {
 	case anvilv1.State_STATE_STOPPED:
@@ -130,6 +137,7 @@ func printInstanceTable(w io.Writer, instances []*anvilv1.Instance) {
 		engine := "-"
 		if inst.GetVm() != nil {
 			image = inst.GetVm().GetImageRef()
+			engine = hypervisorLabel(inst.GetVm().GetHypervisor())
 		} else if c := inst.GetContainer(); c != nil {
 			image = c.GetImageRef()
 			engine = engineLabel(c.GetEngine())

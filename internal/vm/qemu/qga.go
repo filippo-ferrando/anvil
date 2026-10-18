@@ -30,7 +30,9 @@ const qgaCallTimeout = 3 * time.Second
 // virtio-serial channel. QEMU accepts one client at a time, so calls are serialized.
 type GuestAgent struct {
 	SocketPath string
-	mu         sync.Mutex
+	// Dial, if set, replaces the unix socket dial (Firecracker reaches the agent over vsock).
+	Dial func(ctx context.Context) (net.Conn, error)
+	mu   sync.Mutex
 }
 
 func NewGuestAgent(socketPath string) *GuestAgent {
@@ -68,11 +70,7 @@ func (a *GuestAgent) Do(ctx context.Context, fn func(c *QGAConn) error) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if _, err := os.Stat(a.SocketPath); err != nil {
-		return ErrAgentUnavailable
-	}
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "unix", a.SocketPath)
+	conn, err := a.dial(ctx)
 	if err != nil {
 		return ErrAgentUnavailable
 	}
@@ -86,6 +84,17 @@ func (a *GuestAgent) Do(ctx context.Context, fn func(c *QGAConn) error) error {
 		return ErrAgentUnavailable
 	}
 	return fn(c)
+}
+
+func (a *GuestAgent) dial(ctx context.Context) (net.Conn, error) {
+	if a.Dial != nil {
+		return a.Dial(ctx)
+	}
+	if _, err := os.Stat(a.SocketPath); err != nil {
+		return nil, err
+	}
+	var d net.Dialer
+	return d.DialContext(ctx, "unix", a.SocketPath)
 }
 
 // sync flushes whatever an earlier client left half-read on the channel. The agent

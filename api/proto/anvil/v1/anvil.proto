@@ -270,6 +270,15 @@ message VMSpec {
   // The guest NIC's MAC address. Kept across migration and import, since the guest's
   // network config matches on it. Empty on input means derived from the instance ID.
   string mac_address = 23;
+
+  // Which hypervisor runs this VM; unspecified means QEMU.
+  VmHypervisor hypervisor = 24;
+}
+
+enum VmHypervisor {
+  VM_HYPERVISOR_UNSPECIFIED = 0;
+  VM_HYPERVISOR_QEMU = 1;
+  VM_HYPERVISOR_FIRECRACKER = 2;
 }
 
 // Mount is one host directory shared into a VM's guest over virtiofs.

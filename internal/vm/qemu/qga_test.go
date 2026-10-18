@@ -208,3 +208,24 @@ func TestGuestAgentUnavailable(t *testing.T) {
 		t.Fatalf("expected ErrAgentUnavailable for a silent socket, got %v", err)
 	}
 }
+
+func TestGuestAgentCustomDial(t *testing.T) {
+	fa := startFakeAgent(t)
+	dialed := 0
+	agent := &GuestAgent{Dial: func(ctx context.Context) (net.Conn, error) {
+		dialed++
+		var d net.Dialer
+		return d.DialContext(ctx, "unix", fa.socket)
+	}}
+	if err := agent.Do(context.Background(), func(c *QGAConn) error { _, err := c.NetworkInterfaces(); return err }); err != nil {
+		t.Fatal(err)
+	}
+	if dialed != 1 {
+		t.Fatalf("Dial called %d times, want 1", dialed)
+	}
+
+	agent.Dial = func(context.Context) (net.Conn, error) { return nil, errors.New("no listener") }
+	if err := agent.Do(context.Background(), func(*QGAConn) error { return nil }); !errors.Is(err, ErrAgentUnavailable) {
+		t.Fatalf("err = %v, want ErrAgentUnavailable when Dial fails", err)
+	}
+}

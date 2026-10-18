@@ -98,6 +98,7 @@ func newInfoCommand(flags *globalFlags) *cobra.Command {
 				}
 				if vmSpec := inst.GetVm(); vmSpec != nil {
 					fmt.Fprintf(cmd.OutOrStdout(), "Image:\t%s\n", vmSpec.GetImageRef())
+					fmt.Fprintf(cmd.OutOrStdout(), "Hypervisor:\t%s\n", hypervisorLabel(vmSpec.GetHypervisor()))
 					fmt.Fprintf(cmd.OutOrStdout(), "CPUs:\t%d\n", vmSpec.GetCpus())
 					fmt.Fprintf(cmd.OutOrStdout(), "Memory:\t%d MiB\n", vmSpec.GetMemoryMib())
 					fmt.Fprintf(cmd.OutOrStdout(), "Disk:\t%d GiB\n", vmSpec.GetDiskGib())

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -22,6 +23,7 @@ const cloudInitNameField = "Cloud-init name (optional)"
 // VM-only toggles, shared the same way as cloudInitNameField.
 const (
 	guestAgentField = "Guest agent"
+	hypervisorField = "Hypervisor"
 	waitField       = "Wait for cloud-init"
 )
 
@@ -109,7 +111,10 @@ func launchFields(kind string, values map[string]string) []formField {
 	}
 
 	if kind == "vm" {
+		hypervisor := textField(hypervisorField, "qemu or firecracker", v(hypervisorField, "qemu"))
+		hypervisor.Suggestions = []string{"qemu", "firecracker"}
 		fields = append(fields,
+			hypervisor,
 			textField("Disk GiB", "", v("Disk GiB", "8")),
 			textField(cloudInitNameField, "a saved library entry, or ctrl+e to edit ad hoc for just this launch", v(cloudInitNameField, "")),
 			toggleField(guestAgentField, "install qemu-guest-agent: guest IPs, clean shutdown, cloud-init status", true),
@@ -466,6 +471,10 @@ func buildLaunchRequest(m launchModel) (*anvilv1.LaunchRequest, error) {
 	if err != nil {
 		return nil, err
 	}
+	hypervisor, err := parseHypervisorField(form.Value(hypervisorField))
+	if err != nil {
+		return nil, err
+	}
 	pub, err := sshkey.EnsureDefaultPublic()
 	if err != nil {
 		return nil, err
@@ -478,6 +487,7 @@ func buildLaunchRequest(m launchModel) (*anvilv1.LaunchRequest, error) {
 		SshPublicKeys: []string{pub},
 		Ports:         ports,
 		NoGuestAgent:  !form.Bool(guestAgentField),
+		Hypervisor:    hypervisor,
 	}
 	req.Wait = form.Bool(waitField)
 	// The ad hoc editor, when used, always wins over the saved-library name:
@@ -488,6 +498,17 @@ func buildLaunchRequest(m launchModel) (*anvilv1.LaunchRequest, error) {
 		req.Vm.CloudInitName = form.Value(cloudInitNameField)
 	}
 	return req, nil
+}
+
+func parseHypervisorField(s string) (anvilv1.VmHypervisor, error) {
+	switch strings.TrimSpace(s) {
+	case "", "qemu":
+		return anvilv1.VmHypervisor_VM_HYPERVISOR_QEMU, nil
+	case "firecracker":
+		return anvilv1.VmHypervisor_VM_HYPERVISOR_FIRECRACKER, nil
+	default:
+		return 0, errors.New("hypervisor must be qemu or firecracker")
+	}
 }
 
 // startLaunchStream opens the Launch RPC and receives its first event.

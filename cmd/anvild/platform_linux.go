@@ -8,8 +8,8 @@ import (
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
 )
 
-// newVMBackend constructs this platform's VM backend: Linux builds get the
-// QEMU backend (internal/vm), darwin builds get vz (internal/vm/vz); exactly one is compiled in.
+// newVMBackend constructs this platform's VM backend: Linux builds get QEMU and Firecracker
+// behind internal/vm.Hypervisors, darwin builds get vz (internal/vm/vz).
 func newVMBackend(catalog *image.Catalog, vault *image.Vault, db *store.Store) VMBackend {
-	return vm.NewBackend(catalog, vault, db)
+	return vm.NewHypervisors(vm.NewBackend(catalog, vault, db))
 }
