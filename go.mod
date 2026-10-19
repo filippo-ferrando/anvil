@@ -8,11 +8,12 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/charmbracelet/x/term v0.2.2
-	github.com/go-git/go-billy/v5 v5.6.0
+	github.com/go-git/go-billy/v5 v5.9.0
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/spf13/cobra v1.10.2
 	github.com/vishvananda/netlink v1.3.1
 	github.com/willscott/go-nfs v0.0.4
+	github.com/willscott/go-nfs-client v0.0.0-20240104095149-b44639837b00
 	go.etcd.io/bbolt v1.5.0
 	golang.org/x/net v0.58.0
 	golang.org/x/sys v0.47.0
@@ -30,7 +31,7 @@ require (
 	github.com/clipperhouse/stringish v0.1.1 // indirect
 	github.com/clipperhouse/uax29/v2 v2.5.0 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.6 // indirect
-	github.com/cyphar/filepath-securejoin v0.2.5 // indirect
+	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
@@ -48,7 +49,6 @@ require (
 	github.com/sahilm/fuzzy v0.1.1 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
-	github.com/willscott/go-nfs-client v0.0.0-20240104095149-b44639837b00 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/text v0.41.0 // indirect
