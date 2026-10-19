@@ -63,6 +63,10 @@ zypper, pacman or apk), which can take a few minutes. With `--x11`, the app also
 A VM started before the GUI tools were installed on the host needs a restart before
 `anvil gui` works for it.
 
+A Firecracker VM has no virtiofs: the tools dir is packed once into a read-only ISO
+(`/var/cache/anvil/images/firecracker/gui-tools.iso`, rebuilt when the tools change),
+attached as a drive at start and mounted by its label (`anviltools`).
+
 ## Desktop entries
 
 `anvil gui export` adds an instance's app to the host's app launcher. The entry runs

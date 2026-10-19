@@ -4,6 +4,7 @@ set -e
 
 systemd-sysusers anvil.conf
 systemd-tmpfiles --create anvil.conf
+sysctl -q -p /usr/lib/sysctl.d/60-anvil.conf || true
 
 # Fix ownership left behind by an older build that ran anvild as root.
 chown -R anvil:anvil /var/lib/anvil /var/cache/anvil 2>/dev/null || true

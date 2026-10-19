@@ -99,7 +99,7 @@ func TestFstabLine(t *testing.T) {
 }
 
 func TestMergeMountsNothingToDo(t *testing.T) {
-	out, err := mergeMounts("#cloud-config\n{}\n", nil, 0)
+	out, err := mergeMounts("#cloud-config\n{}\n", nil, 0, fstabLine)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestMergeMountsNothingToDo(t *testing.T) {
 
 func TestMergeMountsKeepsExistingBootcmd(t *testing.T) {
 	existing := "#cloud-config\nbootcmd:\n  - echo existing\n"
-	out, err := mergeMounts(existing, []instance.Mount{{Tag: "mount0", GuestPath: "/mnt/a"}}, 1)
+	out, err := mergeMounts(existing, []instance.Mount{{Tag: "mount0", GuestPath: "/mnt/a"}}, 1, fstabLine)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestMountsBootScriptRewritesFstabOncePerGeneration(t *testing.T) {
 		{Tag: "mount0", GuestPath: "/mnt/old"},
 		{Tag: "mount1", GuestPath: "/mnt/ro", ReadOnly: true},
 	}
-	out, err := mergeMounts("", mounts, 3)
+	out, err := mergeMounts("", mounts, 3, fstabLine)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestMountsBootScriptRewritesFstabOncePerGeneration(t *testing.T) {
 func TestMountLiveScriptReplacesItsOwnLine(t *testing.T) {
 	g := newGuestShell(t, "UUID=abc / ext4 defaults 0 1\nmount4 /old virtiofs defaults,nofail 0 0\nmount40 /other virtiofs defaults,nofail 0 0\n")
 	m := instance.Mount{Tag: "mount4", GuestPath: "/data"}
-	g.run(mountLiveScript(m))
+	g.run(mountLiveScript(m, fstabLine(m)))
 	want := "UUID=abc / ext4 defaults 0 1\nmount40 /other virtiofs defaults,nofail 0 0\nmount4 /data virtiofs defaults,nofail 0 0\n"
 	if got := g.fstabContent(); got != want {
 		t.Errorf("fstab:\n%s\nwant:\n%s", got, want)

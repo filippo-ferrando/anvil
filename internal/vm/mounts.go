@@ -23,8 +23,12 @@ const mountFSVirtiofs = "virtiofs"
 // mountsGenMarker records, inside the guest, which Generation last rewrote anvil's fstab lines.
 const mountsGenMarker = "/var/lib/anvil-mounts.gen"
 
-// anvilFstabPattern (sed -E) matches every fstab line anvil ever wrote for a mount, 9p or virtiofs.
-const anvilFstabPattern = `^mount[0-9]+[[:space:]].*[[:space:]](9p|virtiofs)[[:space:]]`
+// anvilFstabPattern (sed -E, inside a /.../ address) matches every fstab line anvil ever wrote
+// for a mount: 9p and virtiofs ones start with the tag, Firecracker's NFS ones with "<gateway>:/<tag>".
+const anvilFstabPattern = `^([0-9.]+:\/)?mount[0-9]+[[:space:]].*[[:space:]](9p|virtiofs|nfs)[[:space:]]`
+
+// tagLinePattern (sed -E) matches the fstab line of one mount tag, either kind.
+func tagLinePattern(tag string) string { return `^([0-9.]+:\/)?` + tag + `[[:space:]]` }
 
 // unplugTimeout bounds how long a live umount waits for the guest to release the device.
 // Linux's PCIe hot-plug driver alone waits 5 seconds before it does.
@@ -48,9 +52,10 @@ func fstabLine(m instance.Mount) string {
 	return fmt.Sprintf("%s %s virtiofs %s 0 0", m.Tag, path, opts)
 }
 
-// mergeMounts adds a bootcmd that keeps the guest's fstab in line with mounts. The fstab is
-// only rewritten once per generation, so mounts changed live since then survive reboots.
-func mergeMounts(existing string, mounts []instance.Mount, generation int) (string, error) {
+// mergeMounts adds a bootcmd that keeps the guest's fstab in line with mounts, each written
+// by line. The fstab is only rewritten once per generation, so mounts changed live since
+// then survive reboots.
+func mergeMounts(existing string, mounts []instance.Mount, generation int, line func(instance.Mount) string) (string, error) {
 	if len(mounts) == 0 && generation == 0 {
 		return existing, nil
 	}
@@ -65,7 +70,7 @@ func mergeMounts(existing string, mounts []instance.Mount, generation int) (stri
 		"  sed -E -i '/" + anvilFstabPattern + "/d' /etc/fstab",
 	}
 	for _, m := range mounts {
-		lines = append(lines, "  echo "+shQuote(fstabLine(m))+" >> /etc/fstab")
+		lines = append(lines, "  echo "+shQuote(line(m))+" >> /etc/fstab")
 	}
 	lines = append(lines, "  mkdir -p "+filepath.Dir(mountsGenMarker)+" && echo "+gen+" > "+mountsGenMarker, "fi")
 	for _, m := range mounts {
@@ -78,15 +83,15 @@ func mergeMounts(existing string, mounts []instance.Mount, generation int) (stri
 	return encodeCloudConfig(doc)
 }
 
-// mountLiveScript mounts m in a running guest right after its device was hot-plugged,
-// retrying while the guest kernel is still bringing the device up.
-func mountLiveScript(m instance.Mount) string {
+// mountLiveScript adds m's fstab line and mounts it in a running guest, retrying while the
+// guest kernel is still bringing a hot-plugged device up.
+func mountLiveScript(m instance.Mount, line string) string {
 	q := shQuote(m.GuestPath)
 	return strings.Join([]string{
 		"set -e",
 		"mkdir -p " + q,
-		"sed -E -i '/^" + m.Tag + "[[:space:]]/d' /etc/fstab",
-		"echo " + shQuote(fstabLine(m)) + " >> /etc/fstab",
+		"sed -E -i '/" + tagLinePattern(m.Tag) + "/d' /etc/fstab",
+		"echo " + shQuote(line) + " >> /etc/fstab",
 		"i=0",
 		"until mount " + q + " 2>/dev/null; do",
 		"  i=$((i+1))",
@@ -102,7 +107,7 @@ func umountLiveScript(m instance.Mount) string {
 	return strings.Join([]string{
 		"set -e",
 		"if mountpoint -q " + q + "; then umount " + q + "; fi",
-		"sed -E -i '/^" + m.Tag + "[[:space:]]/d' /etc/fstab",
+		"sed -E -i '/" + tagLinePattern(m.Tag) + "/d' /etc/fstab",
 	}, "\n")
 }
 
@@ -205,7 +210,7 @@ func (b *Backend) liveMountTarget(ctx context.Context, spec *instance.Spec) (*qe
 }
 
 // guestExec runs script with /bin/sh in the guest, failing on a non-zero exit.
-func (b *Backend) guestExec(ctx context.Context, instanceID, script string) (qemu.ExecResult, error) {
+func (b *guestTracker) guestExec(ctx context.Context, instanceID, script string) (qemu.ExecResult, error) {
 	var res qemu.ExecResult
 	err := b.agentFor(instanceID).Do(ctx, func(c *qemu.QGAConn) error {
 		var err error
@@ -231,7 +236,7 @@ func (b *Backend) mountLive(ctx context.Context, spec *instance.Spec, proc *qemu
 		d.Kill()
 		return fmt.Errorf("vm: %w", err)
 	}
-	if _, err := b.guestExec(ctx, spec.ID, mountLiveScript(m)); err != nil {
+	if _, err := b.guestExec(ctx, spec.ID, mountLiveScript(m, fstabLine(m))); err != nil {
 		if rmErr := proc.QMP.RemoveVirtiofs(context.WithoutCancel(ctx), m.Tag, unplugTimeout); rmErr != nil {
 			log.Printf("vm: rolling back virtiofs device %s on %s: %v", m.Tag, spec.Name, rmErr)
 		}

@@ -86,7 +86,7 @@ func fcTestBackend(t *testing.T) *FCBackend {
 		t.Fatal(err)
 	}
 	run(t, "qemu-img", "create", "-f", "qcow2", cached, "64M")
-	return NewFCBackend(NewBackend(catalog, vault, noMirrors{}), filepath.Join(root, "firecracker"))
+	return NewFCBackend(NewBackend(catalog, vault, noMirrors{}), filepath.Join(root, "firecracker"), nil)
 }
 
 func TestFCBackendCreate(t *testing.T) {
@@ -109,6 +109,13 @@ func TestFCBackendCreate(t *testing.T) {
 	if _, err := os.Stat(v.SeedISOPath); err != nil {
 		t.Errorf("seed: %v", err)
 	}
+	if v.StaticIP != "10.254.254.2/24" || v.Gateway != "10.254.254.1" || len(v.DNSServers) != 1 || v.DNSServers[0] != v.Gateway {
+		t.Errorf("standalone network = ip %q gw %q dns %v", v.StaticIP, v.Gateway, v.DNSServers)
+	}
+	// The seed's network-config pins that address to the VM's MAC.
+	if cfg := bridgeNetworkConfig(v, v.MACAddress); !strings.Contains(cfg, "10.254.254.2/24") || !strings.Contains(cfg, v.MACAddress) {
+		t.Errorf("network-config:\n%s", cfg)
+	}
 
 	other := &instance.Spec{ID: "FC2", Name: "fc2", Kind: instance.KindVM, VM: &instance.VMSpec{
 		ImageRef: "qemu-only", Hypervisor: instance.VMHypervisorFirecracker,
@@ -128,5 +135,72 @@ func TestFCBackendCreate(t *testing.T) {
 	}
 	if _, err := os.Stat(instanceDir("FC1")); !os.IsNotExist(err) {
 		t.Error("Delete left the instance dir")
+	}
+}
+
+func TestFCIPAM(t *testing.T) {
+	subnet, _, err := fcNetwork()
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing := fakeInstances{
+		{ID: "A", VM: &instance.VMSpec{StaticIP: "10.254.254.2/24"}},
+		// An intent member's address is on another bridge and doesn't count.
+		{ID: "B", VM: &instance.VMSpec{StaticIP: "10.254.254.3/24", NetworkMode: "bridge"}},
+	}
+	a := fcIPAM{instances: existing}
+	first, err := a.allocate("C", subnet)
+	if err != nil || first != "10.254.254.3/24" {
+		t.Fatalf("first = %q, %v", first, err)
+	}
+	// Not saved yet, but still taken for the next Create.
+	if second, _ := a.allocate("D", subnet); second != "10.254.254.4/24" {
+		t.Fatalf("second = %q, want the next address", second)
+	}
+	if again, _ := a.allocate("C", subnet); again != first {
+		t.Fatalf("asking again for C = %q, want its own %q", again, first)
+	}
+	a.release("C")
+	if reused, _ := a.allocate("E", subnet); reused != first {
+		t.Fatalf("after release = %q, want %q back", reused, first)
+	}
+
+	t.Setenv(fcSubnetEnv, "192.168.77.9/24")
+	if subnet, gw, err := fcNetwork(); err != nil || subnet.String() != "192.168.77.0/24" || gw.String() != "192.168.77.1" {
+		t.Fatalf("override = %v %v %v", subnet, gw, err)
+	}
+	t.Setenv(fcSubnetEnv, "10.0.0.0/16")
+	if _, _, err := fcNetwork(); err == nil {
+		t.Fatal("expected only a /24 to be accepted")
+	}
+}
+
+type fakeInstances []*instance.Spec
+
+func (f fakeInstances) List(instance.Kind) ([]*instance.Spec, error) { return f, nil }
+
+func TestFCNetworkRules(t *testing.T) {
+	subnet, _, _ := fcNetwork()
+	rules := fcNftRules(FCBridge, subnet)
+	for _, want := range []string{
+		"delete table ip anvil",
+		"ip saddr 10.254.254.0/24 ip daddr != 10.254.254.0/24 masquerade",
+		`iifname "anvil-fc0" accept`,
+		`oifname "anvil-fc0" ct state established,related accept`,
+	} {
+		if !strings.Contains(rules, want) {
+			t.Errorf("nft rules lack %q:\n%s", want, rules)
+		}
+	}
+	if nft, err := exec.LookPath("nft"); err == nil {
+		// nft -c only parses and checks; it changes nothing.
+		cmd := exec.Command(nft, "-c", "-f", "-")
+		cmd.Stdin = strings.NewReader(rules)
+		if out, err := cmd.CombinedOutput(); err != nil && !strings.Contains(string(out), "Operation not permitted") {
+			t.Errorf("nft -c rejects the rules: %v: %s", err, out)
+		}
+	}
+	if r := dockerUserRules(FCBridge); len(r) != 2 || r[0][1] != FCBridge {
+		t.Errorf("DOCKER-USER rules = %v", r)
 	}
 }

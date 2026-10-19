@@ -7,13 +7,13 @@
         "arch": "x86_64",
         "version": "6.18.57",
         "url": "https://git.fferrando.cc/rdfilippo/anvil/releases/download/fc-kernel-6.18.57/anvil-fc-kernel-6.18.57-x86_64",
-        "sha256": ""
+        "sha256": "1148f2e1e0333d50e1e957dd907defce76b5fafb77cdb9151c3cc5e65fa2e139"
       },
       {
         "arch": "aarch64",
         "version": "6.18.57",
         "url": "https://git.fferrando.cc/rdfilippo/anvil/releases/download/fc-kernel-6.18.57/anvil-fc-kernel-6.18.57-aarch64",
-        "sha256": ""
+        "sha256": "28002ef6d8810c039c6f05eee24a1c41b87d18284f9dd82c14485f25a4c0c6ba"
       }
     ],
     "distros": [

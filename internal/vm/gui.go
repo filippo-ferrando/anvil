@@ -51,16 +51,19 @@ func (b *Backend) startToolsShare(spec *instance.Spec) *qemu.Mount {
 	return &qemu.Mount{Tag: gui.ToolsTag, SocketPath: sock}
 }
 
-// guiToolsScript mounts the tools share (if it isn't yet) and puts the tools on the default PATH,
-// where waypipe looks for xwayland-satellite.
-func guiToolsScript() string {
+// virtiofsToolsMount mounts a QEMU VM's tools share at the guest tools dir.
+var virtiofsToolsMount = "mount -t virtiofs -o ro " + gui.ToolsTag + " " + gui.GuestToolsDir
+
+// guiToolsScript mounts the tools (if they aren't yet) with mountCmd and puts them on the
+// default PATH, where waypipe looks for xwayland-satellite.
+func guiToolsScript(mountCmd string) string {
 	d := gui.GuestToolsDir
 	return strings.Join([]string{
 		"set -e",
 		guestPath,
 		"if ! grep -qs ' " + d + " ' /proc/mounts; then",
 		"  mkdir -p " + d,
-		"  mount -t virtiofs -o ro " + gui.ToolsTag + " " + d,
+		"  " + mountCmd,
 		"fi",
 		"mkdir -p /usr/local/bin",
 		"for f in waypipe xwayland-satellite; do ln -sf " + d + "/$f /usr/local/bin/$f; done",
@@ -98,6 +101,11 @@ func (b *Backend) PrepareGUI(ctx context.Context, spec *instance.Spec, x11 bool,
 	if !running {
 		return instance.GUISession{}, fmt.Errorf("vm: %s isn't running", spec.Name)
 	}
+	return b.prepareGUI(ctx, spec, virtiofsToolsMount, x11, progress)
+}
+
+// prepareGUI is PrepareGUI for a running VM, with mountCmd mounting its tools in the guest.
+func (b *guestTracker) prepareGUI(ctx context.Context, spec *instance.Spec, mountCmd string, x11 bool, progress func(status string)) (instance.GUISession, error) {
 	if spec.VM.NoGuestAgent {
 		return instance.GUISession{}, fmt.Errorf("vm: %s was launched without the guest agent, which `anvil gui` needs", spec.Name)
 	}
@@ -105,7 +113,7 @@ func (b *Backend) PrepareGUI(ctx context.Context, spec *instance.Spec, x11 bool,
 		return instance.GUISession{}, fmt.Errorf("vm: GUI tools (waypipe, xwayland-satellite) aren't installed in %s on this host", config.GUIToolsDir())
 	}
 
-	if _, err := b.guestExec(ctx, spec.ID, guiToolsScript()); err != nil {
+	if _, err := b.guestExec(ctx, spec.ID, guiToolsScript(mountCmd)); err != nil {
 		return instance.GUISession{}, fmt.Errorf("vm: mounting the GUI tools in %s (restart it if it was started before the tools were installed): %w", spec.Name, err)
 	}
 	if x11 {
@@ -122,7 +130,7 @@ func (b *Backend) PrepareGUI(ctx context.Context, spec *instance.Spec, x11 bool,
 }
 
 // ListGuestDir lists dir in the guest through the agent.
-func (b *Backend) ListGuestDir(ctx context.Context, spec *instance.Spec, dir string) ([]string, error) {
+func (b *guestTracker) ListGuestDir(ctx context.Context, spec *instance.Spec, dir string) ([]string, error) {
 	res, err := b.guestExec(ctx, spec.ID, "ls -1A -- "+shQuote(dir)+" 2>/dev/null || true")
 	if err != nil {
 		return nil, fmt.Errorf("vm: listing %s in %s: %w", dir, spec.Name, err)
@@ -131,7 +139,7 @@ func (b *Backend) ListGuestDir(ctx context.Context, spec *instance.Spec, dir str
 }
 
 // ReadGuestFile reads path in the guest through the agent. A file the guest can't open counts as missing.
-func (b *Backend) ReadGuestFile(ctx context.Context, spec *instance.Spec, path string) ([]byte, bool, error) {
+func (b *guestTracker) ReadGuestFile(ctx context.Context, spec *instance.Spec, path string) ([]byte, bool, error) {
 	var data []byte
 	var ok bool
 	err := b.agentFor(spec.ID).Do(ctx, func(c *qemu.QGAConn) error {

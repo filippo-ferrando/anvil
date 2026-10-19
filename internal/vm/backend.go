@@ -631,7 +631,11 @@ func (b *Backend) buildSeed(spec *instance.Spec) error {
 	if err != nil {
 		return fmt.Errorf("vm: preparing cloud-init user-data: %w", err)
 	}
-	userData, err = mergeMounts(userData, v.Mounts, v.Generation)
+	line := fstabLine
+	if v.HypervisorOf() == instance.VMHypervisorFirecracker {
+		line = func(m instance.Mount) string { return nfsFstabLine(v.Gateway, m) }
+	}
+	userData, err = mergeMounts(userData, v.Mounts, v.Generation, line)
 	if err != nil {
 		return fmt.Errorf("vm: preparing cloud-init user-data: %w", err)
 	}
@@ -1288,10 +1292,10 @@ func mergeFirecrackerGuest(existing string, agent bool) (string, error) {
 	return encodeCloudConfig(doc)
 }
 
-// bridgeNetworkConfig returns a cloud-init network-config statically
-// assigning v.StaticIP/v.Gateway to mac, or "" when not on a bridge.
+// bridgeNetworkConfig returns a cloud-init network-config statically assigning
+// v.StaticIP/v.Gateway to mac, or "" when v has no static address (SLIRP).
 func bridgeNetworkConfig(v *instance.VMSpec, mac string) string {
-	if v.NetworkMode != "bridge" || v.StaticIP == "" {
+	if v.StaticIP == "" {
 		return ""
 	}
 	cfg := fmt.Sprintf(`network:

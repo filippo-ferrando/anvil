@@ -178,9 +178,9 @@ need a guest kernel: `ANVIL_FC_KERNEL=<path>` overrides the catalog kernel.
   the intent DNS forwarder on the gateway. SSH and `anvil port` forwards are a small TCP/UDP
   proxy in anvild listening on all interfaces (like SLIRP hostfwd), re-created on Reconcile.
   Packaging adds a sysctl.d file for `net.ipv4.ip_forward`.
-- **Mounts.** A userspace NFSv3 server in anvild (`github.com/willscott/go-nfs`), one
-  export per mount, bound to the gateway and answering only that VM's IP. Mount/umount go
-  live through the guest agent; cloud-init installs the NFS client.
+- **Mounts.** A userspace NFSv3 server in anvild (`github.com/willscott/go-nfs`) on a fixed
+  port of each gateway, one server per VM picked by source address. Mount/umount go live
+  through the guest agent; the fstab line needs no NFS client package in the guest.
 - **GUI.** The tools dir goes in as a read-only ISO drive instead of virtiofs.
 - **Snapshots.** Disk-only, as for QEMU (restore never resumes RAM): a reflink copy of the
   disk under `snapshots/<name>.raw`. Live: pause over the API, fsfreeze through the agent,
@@ -214,11 +214,11 @@ Each phase ends buildable, with its tests, and is ticked here when done.
 4. [x] **Lifecycle.** `FCBackend` Create/Start/Stop/Delete/Status/Logs/Reconcile, exit
    watch, seed drive, console log, guest agent over vsock, WaitReady, GuestInfo, intent
    bridge networking, Stats.
-5. [ ] **Standalone networking.** `anvil-fc0` bridge, nftables masquerade, IPAM, DNS zone,
+5. [x] **Standalone networking.** `anvil-fc0` bridge, nftables masquerade, IPAM, DNS zone,
    port proxy, AddPort/RemovePort, packaging sysctl.
-6. [ ] **Disk and resources.** Snapshots, scheduled snapshots, fork, disk resize, live
+6. [x] **Disk and resources.** Snapshots, scheduled snapshots, fork, disk resize, live
    memory, CPUs at next start.
-7. [ ] **Mounts and GUI.** NFS server and live mount/umount, GUI tools drive, PrepareGUI.
+7. [x] **Mounts and GUI.** NFS server and live mount/umount, GUI tools drive, PrepareGUI.
 8. [ ] **Export, import, migration.** Hypervisor-aware disk conversion on both ends.
 9. [ ] **Jailer and packaging.** Jailer chroot, unit capabilities, firecracker optdepend in
    all three package formats, docs (`docs/firecracker.md`), man pages.
@@ -260,8 +260,8 @@ Each phase ends buildable, with its tests, and is ticked here when done.
   `fc-kernel-*` (and by hand), caches `build/fc-kernel` keyed on the script + fragment hash,
   and publishes the kernels plus `SHA256SUMS` as that tag's release.
   `data/distros/firecracker.json` (embedded as `distros.FirecrackerRaw`): kernel per arch
-  (URL assumes the Forgejo release `fc-kernel-6.18.57`, **sha256 still empty until the first
-  build is published**) and every main-catalog distro id, Fedora with
+  (Forgejo release `fc-kernel-6.18.57`, sha256 from its `SHA256SUMS`, also in the
+  `catalog/` files) and every main-catalog distro id, Fedora with
   `rootflags=subvol=root`. Distros other than the ones tested in phase 4 are unverified.
   `internal/vm/image/firecracker.go`: `FCCatalog`, `FCCache` (`config.FirecrackerImageDir()`,
   `/var/cache/anvil/images/firecracker`) with `Kernel` (downloaded on first use through the
@@ -276,7 +276,7 @@ Each phase ends buildable, with its tests, and is ticked here when done.
   and `firecracker_aarch64.json` (the `-arm` ids), documented in its README and
   `docs/mirrors.md`.
   Open: `anvil image list/delete` don't show the raw copies and kernels yet.
-- **Phase 4 (done, real boot pending the anvil kernel).** `vm.FCBackend`
+- **Phase 4 (done, verified).** `vm.FCBackend`
   (`internal/vm/fc_backend.go`), registered as `Hypervisors.Firecracker` in
   `cmd/anvild/platform_linux.go`. Create: checks the distro is in the Firecracker catalog,
   downloads the kernel (first launch only), converts the base to raw, reflink-clones
@@ -300,6 +300,81 @@ Each phase ends buildable, with its tests, and is ticked here when done.
   Tests: `TestMergeFirecrackerGuest`, `TestFCBackendCreate` (local catalog, no firecracker
   needed), `TestFirecrackerRealBoot` (needs `ANVIL_E2E_IMAGE` + `ANVIL_FC_KERNEL`, the anvil
   kernel: Firecracker's CI kernel has no partition table support).
+  Verified with the published kernel: `TestSpawnRealProcessLifecycle` and
+  `TestFirecrackerRealBoot` on Ubuntu 26.04 and Debian 13 (boot by PARTUUID, cloud-init
+  done, reconcile, Ctrl+Alt+Del stop in under 4s). Found and fixed: a config without drives
+  was written as `"drives": null`, which firecracker rejects.
+  Still to check through a real anvild: the guest agent over vsock (needs the guest to
+  install qemu-guest-agent, so network) and the intent bridge path.
+- **Phase 5 (done, verified in a network namespace).** `internal/vm/fcnet.go`: bridge
+  `anvil-fc0` (`10.254.254.0/24`, `ANVIL_FC_SUBNET` overrides, /24 only) created through
+  netlink on the first standalone start, `table ip anvil` in nftables (masquerade +
+  forward accept, recreated whole via `nft -f -`), two `iptables` rules in `DOCKER-USER`
+  when that chain exists (Docker's FORWARD drop wins over any accept elsewhere), a log line
+  when `ip_forward` is off. `fcIPAM` picks addresses from the registry (`Instances`, the
+  store) plus Creates not saved yet, reusing `intent/ipam` (126 per host). Create stores
+  `StaticIP`/`Gateway`/`DNSServers` (= gateway); `bridgeNetworkConfig` now keys on
+  `StaticIP` alone. `NetworkMode` stays standalone and `SSHPort` is set, so `anvil shell`,
+  `--publish` and `anvil port` behave as with SLIRP. `proxy.go`: TCP (half-close aware)
+  and UDP (per-client flows, 2 min idle) proxies on all interfaces, started before the
+  spawn, closed on release, restarted on Reconcile on the same SSH port when free.
+  `FCBackend` implements `PortForwarder` (live). DNS: `vm.FCDNSZone()`, a forward-only zone
+  on the gateway, added to the intent DNS server through `platformDNSZones()` in
+  `cmd/anvild`. Packaging: `packaging/common/anvil.sysctl` ->
+  `/usr/lib/sysctl.d/60-anvil.conf` in all three formats, applied in post-install.
+  `docs/networking.md` has a "Standalone Firecracker VMs" section.
+  Tests: proxy TCP/UDP, IPAM, nft rules (`nft -c` when allowed), Create's network fields;
+  `TestFirecrackerRealBoot` now checks SSH through the proxy, a live AddPort/RemovePort and
+  the proxies after Reconcile. It skips without CAP_NET_ADMIN; run it as
+  `unshare --user --map-root-user --net <compiled test binary> -test.run TestFirecrackerRealBoot`
+  to keep the bridge and nft table off the host.
+  Unverified: whether `iptables` agrees to run as the anvil user with only
+  CAP_NET_ADMIN (the DOCKER-USER rules are best-effort and log on failure); `nftables`
+  isn't a package dependency yet (phase 9, with firecracker itself). A forked
+  Firecracker VM gets a new address in phase 6 (`Fork`).
+- **Phase 6 (done, verified in a network namespace).** `internal/vm/fc_disk.go`.
+  Snapshots are reflink copies of the disk at `snapshots/<name>.raw` (disk only, like the
+  QEMU ones: restore boots fresh, `HasVMState` false). `copyDisk` pauses a running VM over the
+  API around the copy, with fsfreeze/thaw through the agent when it's connected (resume and
+  thaw run even if the caller's ctx is gone). Restore copies next to the disk and renames over
+  it, stopping and restarting a running VM. Scheduled snapshots need nothing more: the
+  scheduler goes through `Snapshotter`. Fork uses the same copy, then `assignAddress` (shared
+  with Create) and a new seed. `ResizeDisk` truncates and, while running,
+  `PATCH /drives/rootfs` plus the same growpart/resizefs script through the agent.
+  `SetCPUsLive` always answers `ErrNeedsRestart` (no vCPU hotplug in firecracker).
+  `SetMemoryLive`: Start now books a virtio-mem region up to the host's memory
+  (`fcHotplugMiB`, whole 128 MiB slots, x86_64 only like QEMU) and boots with
+  `memhp_default_state=online_movable`; the live change sets `requested_size_mib` and waits
+  through `settleVirtioMem`, now shared with QEMU (as is `guestExec`, moved to `guestTracker`).
+  Raw disks have no backing file, so `image delete` and `delete --purge` ignore them; the raw
+  cache isn't pruned yet (phase 9 with `anvil image`).
+  Tests: `fc_disk_test.go` (snapshots, fork, resize and restart-needed answers on a stopped
+  VM); `TestFirecrackerRealBoot` now also does a live snapshot, a live fork, a live disk grow,
+  +512 MiB through virtio-mem (works over MMIO, no PCI needed) and a restore of a running VM.
+- **Phase 7 (done, verified in a network namespace).** Mounts: `internal/vm/nfs.go`, a
+  `nfsHub` with one real listener per gateway on `fcNFSPort` (20490, fixed because the
+  guest's fstab names it) handing each connection to the per-VM `go-nfs` server for its
+  source address (`connQueue`); closed otherwise. Each VM's server has its own caching
+  handler, so handles never cross VMs. Exports are `/<tag>` -> `hostFS` (go-billy BoundOS +
+  chmod/chtimes kept inside the root, chown ignored) or `readOnlyFS`. go-nfs quirks found:
+  it builds a root handle even for a refused mount (crashes on a nil fs, so `refusedFS`),
+  has no exclusive create (the Linux client falls back on its own) and logs that as an
+  error (its log level is set to fatal). `internal/vm/fc_mounts.go`: `nfsFstabLine`
+  (`<gw>:/<tag> <path> nfs vers=3,...,port=20490,mountport=20490,nolock,addr=,mountaddr=`,
+  works with only the kernel client, no nfs-common), exports at Start/Reconcile, dropped on
+  release, `Mount`/`Umount` live through the agent or via `reseedAndRestart`. Shared with
+  QEMU now: `mergeMounts(..., line)`, `mountLiveScript(m, line)`, `tagLinePattern`, and
+  `anvilFstabPattern` also matching NFS lines (`/` escaped: it sits in a sed address).
+  GUI: `fc_gui.go` packs `config.GUIToolsDir()` into `gui-tools.iso` in the Firecracker
+  cache (rebuilt when a tool is newer), attached read-only at start; `PrepareGUI`,
+  `ListGuestDir` and `ReadGuestFile` are shared through `guestTracker`, only the tools
+  mount command differs (`blkid -L anviltools || findfs`).
+  Docs: `docs/gui.md`, `docs/security.md` (3.8 and new 3.8.1).
+  Tests: `nfs_test.go` (a real NFS client through the hub: write, chmod, read-only refusal,
+  unknown tag, forgotten VM and foreign address closed), `fc_gui_test.go` (ISO label and
+  rebuild), the fstab script tests; `TestFirecrackerRealBoot` boots with a mount and the
+  tools drive and the guest copies a tool through the share.
+  Not verified yet (needs the agent, so a real anvild): live mount/umount and `anvil gui`.
 
 ## Container engines
 

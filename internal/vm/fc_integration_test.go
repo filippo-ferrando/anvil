@@ -4,11 +4,16 @@ package vm
 
 import (
 	"context"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/vishvananda/netlink"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
@@ -16,9 +21,11 @@ import (
 
 // TestFirecrackerRealBoot boots the cloud image in ANVIL_E2E_IMAGE (a qcow2) under
 // firecracker with the kernel in ANVIL_FC_KERNEL, through FCBackend: create, start,
-// cloud-init done (read from the console, the VM has no network yet), stats, a stop
-// through Ctrl+Alt+Del, and a reconcile of a VM left running. ANVIL_FC_KERNEL_ARGS adds
-// kernel arguments, e.g. rootflags=subvol=root for Fedora.
+// cloud-init done (read from the console), SSH through the port proxy, a live port
+// forward, stats, a reconcile of a VM left running and a stop through Ctrl+Alt+Del.
+// ANVIL_FC_KERNEL_ARGS adds kernel arguments, e.g. rootflags=subvol=root for Fedora.
+// The standalone bridge needs CAP_NET_ADMIN: run it under `unshare -rn` to keep it off
+// the host's network.
 func TestFirecrackerRealBoot(t *testing.T) {
 	baseImage, kernel := os.Getenv("ANVIL_E2E_IMAGE"), os.Getenv(image.KernelEnv)
 	if baseImage == "" || kernel == "" {
@@ -28,6 +35,14 @@ func TestFirecrackerRealBoot(t *testing.T) {
 		if _, err := exec.LookPath(bin); err != nil {
 			t.Skipf("%s not installed, skipping", bin)
 		}
+	}
+
+	if err := ensureFCNetwork(); err != nil {
+		t.Skipf("can't set up the standalone bridge (needs CAP_NET_ADMIN, try unshare -rn): %v", err)
+	}
+	// In a fresh network namespace loopback starts down; the proxies listen on it.
+	if lo, err := netlink.LinkByName("lo"); err == nil {
+		_ = netlink.LinkSetUp(lo)
 	}
 
 	// Short paths: unix sockets live here and are limited to 108 bytes.
@@ -59,14 +74,33 @@ func TestFirecrackerRealBoot(t *testing.T) {
 	if err := os.Symlink(baseImage, cached); err != nil {
 		t.Fatal(err)
 	}
-	b := NewFCBackend(NewBackend(catalog, vault, noMirrors{}), filepath.Join(root, "fc"))
+	b := NewFCBackend(NewBackend(catalog, vault, noMirrors{}), filepath.Join(root, "fc"), nil)
 	exits := make(chan instance.State, 1)
 	b.SetExitHook(func(_ string, state instance.State, _ string) { exits <- state })
 
+	// A boot-time NFS mount and the GUI tools drive: the guest copies a tool through the
+	// share, so the host sees both worked.
+	share := filepath.Join(root, "share")
+	tools := filepath.Join(root, "tools")
+	for _, d := range []string{share, tools} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(tools, "waypipe"), []byte("fake waypipe\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ANVIL_GUI_TOOLS", tools)
+	guestScript := "set -e; mkdir -p /opt/anvil; " + fcToolsMount +
+		"; cp /opt/anvil/waypipe /mnt/share/waypipe-copy; echo ok > /mnt/share/from-guest"
+
 	const id = "FCE2E"
-	spec := &instance.Spec{ID: id, Name: "fc-e2e", Kind: instance.KindVM, VM: &instance.VMSpec{
+	spec := &instance.Spec{ID: id, Name: "fc-e2e", Kind: instance.KindVM, GUI: true, VM: &instance.VMSpec{
 		ImageRef: "e2e", CPUs: 2, MemoryMiB: 1024, DiskGiB: 10, NoGuestAgent: true,
-		Hypervisor: instance.VMHypervisorFirecracker,
+		Hypervisor:        instance.VMHypervisorFirecracker,
+		CloudInitUserData: "#cloud-config\nruncmd:\n  - [sh, -c, " + strconv.Quote(guestScript) + "]\n",
+		Mounts:            []instance.Mount{{HostPath: share, GuestPath: "/mnt/share", Tag: "mount0"}},
+		NextMountIndex:    1,
 	}}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -93,15 +127,73 @@ func TestFirecrackerRealBoot(t *testing.T) {
 		t.Fatalf("WaitReady: %v", err)
 	}
 	t.Log("cloud-init finished")
-	if stats, err := b.Stats(ctx, spec); err != nil || stats.MemUsedBytes == 0 {
+	for file, want := range map[string]string{"from-guest": "ok\n", "waypipe-copy": "fake waypipe\n"} {
+		if data, err := os.ReadFile(filepath.Join(share, file)); err != nil || string(data) != want {
+			t.Errorf("%s through the NFS share = %q, %v; want %q", file, data, err, want)
+		}
+	}
+	if stats, err := b.Stats(ctx, spec); err != nil || stats.MemUsedBytes == 0 || !stats.NetAvailable {
 		t.Errorf("Stats = %+v, %v", stats, err)
 	}
 
+	sshBanner(t, spec.VM.SSHPort)
+	free, err := startPortProxy("tcp", 0, "127.0.0.1:1") // borrow a free port number
+	if err != nil {
+		t.Fatal(err)
+	}
+	free.Close()
+	if err := b.AddPort(ctx, spec, instance.PortMapping{HostPort: free.HostPort, GuestPort: 22}); err != nil {
+		t.Fatalf("AddPort: %v", err)
+	}
+	sshBanner(t, free.HostPort)
+	if err := b.RemovePort(ctx, spec, free.HostPort, "tcp"); err != nil {
+		t.Fatalf("RemovePort: %v", err)
+	}
+
+	// Phase 6 on a running VM: snapshot and fork pause it for a reflink copy.
+	if err := b.CreateSnapshot(ctx, spec, "live"); err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+	if st, _ := b.Status(ctx, spec); st != instance.StateRunning {
+		t.Fatalf("Status after a live snapshot = %v, want running again", st)
+	}
+	forkClone := *spec.VM
+	forkClone.DiskPath, forkClone.SeedISOPath, forkClone.StaticIP, forkClone.MACAddress = "", "", "", ""
+	forkClone.NetworkMode = "slirp"
+	fork := &instance.Spec{ID: "FCFORK", Name: "fc-fork", Kind: instance.KindVM, VM: &forkClone}
+	if err := b.Fork(ctx, spec, fork, nil); err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	defer b.Delete(context.Background(), fork)
+	if note, err := b.ResizeDisk(ctx, spec, 12); err != nil || !strings.Contains(note, "live") {
+		t.Fatalf("ResizeDisk = %q, %v", note, err)
+	}
+	note, err := b.SetMemoryLive(ctx, spec, spec.VM.MemoryMiB+512)
+	if err != nil {
+		t.Fatalf("SetMemoryLive: %v", err)
+	}
+	t.Log(note)
+	if err := b.RestoreSnapshot(ctx, spec, "live"); err != nil {
+		t.Fatalf("RestoreSnapshot on a running VM: %v", err)
+	}
+	if st, _ := b.Status(ctx, spec); st != instance.StateRunning {
+		t.Fatalf("Status after restore = %v, want running", st)
+	}
+	sshBanner(t, spec.VM.SSHPort)
+
 	// A new backend, as after an anvild restart, takes the running VM over.
-	b2 := NewFCBackend(b.QEMU, b.Cache.Dir)
+	// Its proxies and mount server died with the old anvild, so b's go first.
+	b.closeProxies(id)
+	b.unexportMounts(id)
+	for _, l := range b.nfs.listeners {
+		l.Close()
+	}
+	b2 := NewFCBackend(b.QEMU, b.Cache.Dir, nil)
 	if st, err := b2.Reconcile(ctx, spec); err != nil || st != instance.StateRunning {
 		t.Fatalf("Reconcile = %v, %v; want running", st, err)
 	}
+	sshBanner(t, spec.VM.SSHPort)
+	b2.closeProxies(id)
 	b2.mu.Lock()
 	delete(b2.running, id) // b stays the one that stops it
 	b2.mu.Unlock()
@@ -122,5 +214,27 @@ func TestFirecrackerRealBoot(t *testing.T) {
 	case st := <-exits:
 		t.Errorf("Stop was reported as an outside exit (%s)", st)
 	default:
+	}
+}
+
+// sshBanner checks the guest's sshd answers through host port, retrying while it starts.
+func sshBanner(t *testing.T, port int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Minute)
+	for {
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 5*time.Second)
+		if err == nil {
+			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			buf := make([]byte, 64)
+			n, _ := conn.Read(buf)
+			conn.Close()
+			if strings.HasPrefix(string(buf[:n]), "SSH-2.0") {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no SSH banner through port %d: %v", port, err)
+		}
+		time.Sleep(time.Second)
 	}
 }

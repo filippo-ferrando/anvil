@@ -66,6 +66,9 @@ const GuestCID = 3
 
 // WriteFile writes cfg as JSON to path.
 func (cfg Config) WriteFile(path string) error {
+	if cfg.Drives == nil {
+		cfg.Drives = []Drive{} // firecracker rejects "drives": null
+	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("firecracker: encoding config: %w", err)

@@ -11,7 +11,7 @@ import (
 )
 
 func TestGUIToolsScript(t *testing.T) {
-	s := guiToolsScript()
+	s := guiToolsScript(virtiofsToolsMount)
 	for _, want := range []string{
 		"mount -t virtiofs -o ro anviltools /opt/anvil",
 		"grep -qs ' /opt/anvil ' /proc/mounts",

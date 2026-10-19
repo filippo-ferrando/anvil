@@ -111,7 +111,7 @@ Several RPCs take host paths, and the daemon acts on them with its own permissio
 
 | RPC | Path | Check in the code |
 |---|---|---|
-| `Mount`, `Launch` (VM shares) | directory shared into a VM over virtiofs | resolved, must be a directory owned by the caller (root and the daemon user are exempt); checked again at every VM start (`internal/daemon/caller.go`, `internal/vm/mounts.go`) |
+| `Mount`, `Launch` (VM shares) | directory shared into a VM over virtiofs (NFS for Firecracker) | resolved, must be a directory owned by the caller (root and the daemon user are exempt); checked again at every VM start (`internal/daemon/caller.go`, `internal/vm/mounts.go`) |
 | `Launch`, `IntentService.Apply` (container) | volume host paths | same rule, checked again at every container start (`internal/container/docker_backend.go`) |
 | `Launch` (VM) | `source_disk_path`, `source_base_image_path` (used by migration and import) | none; the file is moved into the instance directory (`adoptMigratedDisk` in `internal/vm/backend.go`) |
 | `Launch` | staged migration folders | base name must start with `anvil-migrate-data-` (`migrate.IsStagedDataPath`, used by `internal/daemon/staged_data.go`); the folder is then moved |
@@ -199,6 +199,24 @@ Migration runs entirely as the daemon user on the source host (`internal/migrate
   them on all host addresses.
 - **Intent members** sit on a per-intent Linux bridge with addresses from the intent's
   subnet, reachable from the host.
+- **Standalone Firecracker VMs** sit on the `anvil-fc0` bridge. Their SSH forward and
+  `--publish` ports are proxies inside anvild listening on all host addresses, the same
+  exposure as QEMU's hostfwd (`internal/vm/proxy.go`).
+
+### 3.8.1 Firecracker mounts over NFS
+
+Firecracker has no virtiofs, so anvild serves `anvil mount` shares to Firecracker guests
+over NFSv3 (`internal/vm/nfs.go`) on TCP port 20490 of each gateway address that has
+such guests, never on other host addresses. A connection is handed to the server of the
+VM whose address it comes from and closed otherwise; each VM has its own server, so file
+handles of one VM's shares never resolve for another. Paths, symlinks included, stay
+inside the shared directory (go-billy's BoundOS). A read-only share refuses every change
+host-side, whatever the guest mounts it as. Files keep the anvil user's ownership (chown
+is ignored, like root squash).
+
+The check is by source address. Guests on the same bridge are not isolated from each
+other at layer 2, so a guest that takes over another's address on its bridge could reach
+that VM's shares.
 
 ### 3.9 Intent DNS
 

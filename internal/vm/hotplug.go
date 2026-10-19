@@ -210,33 +210,37 @@ func (b *Backend) SetMemoryLive(ctx context.Context, spec *instance.Spec, memory
 
 	extraMiB := memoryMiB - rt.BootMemoryMiB
 	extraMiB -= extraMiB % qemu.VirtioMemBlockMiB
-	want := extraMiB << 20
-	if err := proc.QMP.SetVirtioMemRequested(ctx, want); err != nil {
+	if err := proc.QMP.SetVirtioMemRequested(ctx, extraMiB<<20); err != nil {
 		return "", fmt.Errorf("vm: %w", err)
 	}
-	agent := false
-	if info, _ := b.GuestInfo(spec); info.AgentConnected {
-		agent = true
-	}
+	return b.settleVirtioMem(ctx, spec, rt.BootMemoryMiB, extraMiB, func(ctx context.Context) (int64, error) {
+		size, err := proc.QMP.VirtioMemSize(ctx)
+		return size >> 20, err
+	})
+}
 
+// settleVirtioMem waits for the guest to plug or unplug virtio-mem memory until it holds
+// wantMiB on top of bootMiB, reading the plugged size in MiB through size.
+func (b *guestTracker) settleVirtioMem(ctx context.Context, spec *instance.Spec, bootMiB, wantMiB int64, size func(context.Context) (int64, error)) (string, error) {
 	start, lastChange, prev := time.Now(), time.Now(), int64(-1)
-	var size int64
+	var got int64
 	for {
-		size, err = proc.QMP.VirtioMemSize(ctx)
+		var err error
+		got, err = size(ctx)
 		if err != nil {
 			return "", fmt.Errorf("vm: %w", err)
 		}
-		if size == want {
+		if got == wantMiB {
 			break
 		}
-		if size != prev {
-			prev, lastChange = size, time.Now()
+		if got != prev {
+			prev, lastChange = got, time.Now()
 		}
-		if size < want && time.Since(start) > hotplugWait {
-			return "", needsRestart("the guest took only %d of %d MiB (does its kernel have virtio-mem?)", size>>20, extraMiB)
+		if got < wantMiB && time.Since(start) > hotplugWait {
+			return "", needsRestart("the guest took only %d of %d MiB (does its kernel have virtio-mem?)", got, wantMiB)
 		}
 		// Memory still in use can't be given back; once the guest stops releasing, settle for what it freed.
-		if size > want && time.Since(lastChange) > shrinkSettle {
+		if got > wantMiB && time.Since(lastChange) > shrinkSettle {
 			break
 		}
 		select {
@@ -245,12 +249,12 @@ func (b *Backend) SetMemoryLive(ctx context.Context, spec *instance.Spec, memory
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
-	if agent {
+	if info, _ := b.GuestInfo(spec); info.AgentConnected {
 		// Some distros leave added memory offline until told otherwise.
 		_ = b.agentFor(spec.ID).Do(ctx, func(c *qemu.QGAConn) error { return c.OnlineAllMemory() })
 	}
-	note := fmt.Sprintf("memory set to %d MiB live", rt.BootMemoryMiB+extraMiB)
-	if kept := (size - want) >> 20; kept > 0 {
+	note := fmt.Sprintf("memory set to %d MiB live", bootMiB+wantMiB)
+	if kept := got - wantMiB; kept > 0 {
 		// The virtio-mem driver keeps retrying in the background.
 		note += fmt.Sprintf("; the guest still holds %d MiB it can't free yet", kept)
 	}

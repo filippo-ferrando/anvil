@@ -103,6 +103,27 @@ backend owns the instance:
   remove, create with the new `PortBindings`, and start again if it was running
   (`internal/container/docker_backend.go`).
 
+## Standalone Firecracker VMs
+
+Firecracker has no SLIRP, so a standalone `--hypervisor firecracker` VM gets a tap on
+`anvil-fc0`, a bridge anvild creates on the first such start (`10.254.254.0/24`, or the
+/24 in `ANVIL_FC_SUBNET` from anvild's environment when that collides with a host network).
+
+- **Address.** A free static address from the subnet, picked at create time and written
+  into the seed's network-config, so the guest keeps it across restarts.
+- **Outbound.** Masquerade in anvil's own nftables table (`table ip anvil`), plus two
+  rules in Docker's `DOCKER-USER` chain when Docker is installed, since Docker's FORWARD
+  policy drops everything it doesn't know. Needs `net.ipv4.ip_forward=1`; the packages ship
+  `/usr/lib/sysctl.d/60-anvil.conf` for it.
+- **DNS.** anvild answers on the bridge gateway and forwards to the host's resolvers, the
+  same server intent networks use.
+- **SSH and `anvil port`.** A TCP/UDP proxy inside anvild listens on the host port (all
+  interfaces, like SLIRP's hostfwd) and forwards to the guest, so `anvil shell`,
+  `--publish` and `anvil port` work the same as for a QEMU VM. After an anvild restart the
+  proxies come back on the same ports.
+
+A Firecracker VM in an intent plugs its tap into the intent bridge like a QEMU VM does.
+
 ## Containers
 
 Containers are created through Docker's HTTP API (`internal/container/docker/client.go`).

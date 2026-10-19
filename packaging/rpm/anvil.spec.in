@@ -85,6 +85,8 @@ install -Dm755 packaging/common/post-install.sh %{buildroot}/usr/lib/anvil/post-
 install -Dm644 packaging/common/anvild.service %{buildroot}/usr/lib/systemd/system/anvild.service
 install -Dm644 packaging/common/anvil.sysusers %{buildroot}/usr/lib/sysusers.d/anvil.conf
 install -Dm644 packaging/common/anvil.tmpfiles %{buildroot}/usr/lib/tmpfiles.d/anvil.conf
+/usr/lib/sysctl.d/60-anvil.conf
+install -Dm644 packaging/common/anvil.sysctl %{buildroot}/usr/lib/sysctl.d/60-anvil.conf
 
 # Hand-written, not generated: anvild takes no flags/subcommands, so
 # there's no command tree for `anvil man`'s equivalent to walk.

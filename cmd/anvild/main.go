@@ -98,7 +98,10 @@ func run() error {
 
 	// Serves "<role>.<intent>.anvil" on each intent's gateway. The periodic
 	// refresh retries binds (e.g. a bridge not up yet) and picks up new container addresses.
-	dnsServer := dns.NewServer(intentMgr.DNSZones)
+	dnsServer := dns.NewServer(func(ctx context.Context) ([]dns.Zone, error) {
+		zones, err := intentMgr.DNSZones(ctx)
+		return append(zones, platformDNSZones()...), err
+	})
 	intentMgr.DNS = dnsServer
 	go dnsServer.Run(ctx, 30*time.Second)
 	// Announces this host to `anvil host discover` on the same network. It

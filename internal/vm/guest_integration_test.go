@@ -75,7 +75,7 @@ func TestGuestAgentRealBoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if userData, err = mergeMounts(userData, spec.VM.Mounts, 0); err != nil {
+	if userData, err = mergeMounts(userData, spec.VM.Mounts, 0, fstabLine); err != nil {
 		t.Fatal(err)
 	}
 	seedPath := filepath.Join(dir, "seed.iso")

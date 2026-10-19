@@ -147,4 +147,12 @@ func TestConfigWriteFile(t *testing.T) {
 	if d := got["drives"].([]any)[0].(map[string]any); d["partuuid"] != "abc" || d["is_read_only"] != false {
 		t.Errorf("drive = %v", d)
 	}
+
+	if err := (Config{}).WriteFile(path); err != nil {
+		t.Fatal(err)
+	}
+	data, _ = os.ReadFile(path)
+	if !strings.Contains(string(data), `"drives": []`) {
+		t.Errorf("a config without drives must list none, not null: %s", data)
+	}
 }
