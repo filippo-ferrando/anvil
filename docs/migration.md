@@ -246,6 +246,21 @@ The comparison is by content hash and not by image name, because two hosts can c
 different builds under the same distro name. Rebasing a delta onto a different base would
 silently corrupt the guest filesystem, so a mismatch has to fall back to sending the base.
 
+**Firecracker VMs** have a raw disk, but it travels the same way (`internal/vm/fc_transfer.go`):
+flattened to qcow2, or as a qcow2 delta on top of the raw copy of the base
+(`-B <base.raw> -F raw`). The raw copy is just the base qcow2's disk content, so the base
+qcow2's checksum still identifies it, and the target rebuilds an identical raw copy from its
+own base. The target's `Create` rebases a delta onto that copy and converts the result back
+to a raw `disk.raw`. The payload carries the hypervisor, and for a standalone Firecracker VM
+its address: the guest's network config inside the disk names it, and a migrated disk boots
+without a new seed, so the target keeps the same address. When it can't (another
+Firecracker VM there holds it, or it's outside the target's `ANVIL_FC_SUBNET`), the target
+assigns a new one and boots the disk with a new seed, as `anvil fork` does, so cloud-init
+runs again in the guest. The target needs `firecracker` and a kernel for that arch.
+Preflight refuses, before any upload, a target whose anvil has no `--hypervisor`, with no
+`firecracker` or `/dev/kvm`, or of another arch (no emulation). A missing QEMU doesn't
+matter for a Firecracker VM.
+
 ### 6. Upload
 
 `uploadDisk` in `transfer.go` copies the file to `/var/tmp` on the target:

@@ -63,18 +63,24 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			continue
 		}
 
+		sshPort := 0
+		if spec.VM != nil {
+			sshPort = spec.VM.SSHPort
+		}
 		newState, rErr := reconciler.Reconcile(ctx, spec)
 		if rErr != nil {
 			log.Printf("instance: reconciling %s (%s): %v", spec.Name, spec.ID, rErr)
 		}
-		if newState == spec.State {
+		// A reattached VM can come back on another SSH port when its old one was taken.
+		if newState == spec.State && (spec.VM == nil || spec.VM.SSHPort == sshPort) {
 			continue
 		}
+		stateChanged := newState != spec.State
 		spec.State = newState
 		if err := m.registry.PutInstance(spec); err != nil {
 			return fmt.Errorf("instance: persisting reconciled state for %s: %w", spec.Name, err)
 		}
-		if newState != StateRunning {
+		if stateChanged && newState != StateRunning {
 			m.record(ctx, spec, "exit", "found "+string(newState)+" when anvild started", nil)
 		}
 	}
@@ -131,6 +137,9 @@ type LaunchEvent struct {
 // Launch provisions (and, unless params.NoStart, starts) a new instance, reporting progress.
 func (m *Manager) Launch(ctx context.Context, params LaunchParams, progress func(LaunchEvent)) error {
 	b, err := m.backendFor(params.Kind)
+	if err == nil && params.VM != nil {
+		err = CheckHypervisor(params.VM.Hypervisor)
+	}
 	if err != nil {
 		progress(LaunchEvent{Err: err})
 		return err

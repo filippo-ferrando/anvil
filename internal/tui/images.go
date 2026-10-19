@@ -24,6 +24,12 @@ func (i cachedImageItem) Description() string {
 		inUse = fmt.Sprintf("in use by %d instance(s)", n)
 	}
 	desc := fmt.Sprintf("%s  •  %s  •  %s", i.image.GetArch(), humanBytesTUI(i.image.GetSizeBytes()), inUse)
+	switch i.image.GetKind() {
+	case "firecracker-raw":
+		desc = "firecracker raw copy  •  " + desc
+	case "firecracker-kernel":
+		desc = "firecracker kernel  •  " + desc
+	}
 	if i.sha256 != "" {
 		desc += "  •  sha256 " + i.sha256[:12] + "…"
 	}
@@ -35,8 +41,12 @@ type catalogItem struct{ entry *anvilv1.CatalogEntry }
 func (i catalogItem) FilterValue() string { return i.entry.GetId() }
 func (i catalogItem) Title() string       { return i.entry.GetId() }
 func (i catalogItem) Description() string {
-	return fmt.Sprintf("%s %s  •  %s  •  min disk %d GiB  •  user %s",
+	desc := fmt.Sprintf("%s %s  •  %s  •  min disk %d GiB  •  user %s",
 		i.entry.GetDistro(), i.entry.GetVersion(), i.entry.GetArch(), i.entry.GetMinDiskGib(), i.entry.GetDefaultUser())
+	if i.entry.GetFirecracker() {
+		desc += "  •  firecracker"
+	}
+	return desc
 }
 
 type containerImageItem struct{ image *anvilv1.ContainerImage }
@@ -181,7 +191,7 @@ func (m model) updateImages(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		for i, it := range m.images.cached.Items() {
-			if item, ok := it.(cachedImageItem); ok && item.image.GetId() == msg.id && item.image.GetArch() == msg.arch {
+			if item, ok := it.(cachedImageItem); ok && isBaseImage(item.image) && item.image.GetId() == msg.id && item.image.GetArch() == msg.arch {
 				item.sha256 = msg.sum
 				m.images.cached.SetItem(i, item)
 			}
@@ -212,9 +222,9 @@ func (m model) updateImagesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if im.confirmDelete != nil {
 		switch msg.String() {
 		case "y", "enter":
-			id := im.confirmDelete.GetId()
+			img := im.confirmDelete
 			im.confirmDelete = nil
-			return m, deleteCachedImage(m.client, id)
+			return m, deleteCachedImage(m.client, img.GetId(), img.GetArch(), img.GetKind())
 		default:
 			im.confirmDelete = nil
 			return m, nil
@@ -255,6 +265,10 @@ func (m model) updateImagesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "h":
 		if im.mode == imagesModeVM && !im.focusCatalog {
 			if item, ok := im.cached.SelectedItem().(cachedImageItem); ok {
+				if !isBaseImage(item.image) {
+					m.setStatus("checksum covers base images only", true)
+					return m, nil
+				}
 				m.setStatus("hashing "+item.image.GetId()+"…", false)
 				return m, loadImageChecksum(m.client, item.image.GetId(), item.image.GetArch())
 			}
@@ -288,7 +302,11 @@ func (m model) updateImagesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m imagesModel) View() string {
 	if m.confirmDelete != nil {
-		return styleWarn.Render(fmt.Sprintf("Delete cached image %q? (only the download, not any distro entry)", m.confirmDelete.GetId())) +
+		note := "only the download, not any distro entry"
+		if isBaseImage(m.confirmDelete) {
+			note += "; its firecracker raw copy goes too"
+		}
+		return styleWarn.Render(fmt.Sprintf("Delete cached image %q? (%s)", m.confirmDelete.GetId(), note)) +
 			"\n\n" + helpBar("y", "confirm", "any other key", "cancel")
 	}
 	if m.confirmDeleteContainer != nil {
@@ -330,4 +348,9 @@ func imagesModeTabs(mode imagesMode) string {
 		return styleMenuItemSelected.Render(vmTab) + " " + styleMenuItem.Render(containerTab)
 	}
 	return styleMenuItem.Render(vmTab) + " " + styleMenuItemSelected.Render(containerTab)
+}
+
+// isBaseImage reports whether img is a downloaded qcow2 base, not a raw copy or kernel.
+func isBaseImage(img *anvilv1.CachedImage) bool {
+	return img.GetKind() == "" || img.GetKind() == "base"
 }

@@ -106,3 +106,16 @@ func TestWithMirrorsLowerPriorityDoesNotOverride(t *testing.T) {
 		t.Errorf("expected the built-in (priority 0) entry to win over a lower-priority mirror, got URL %q", entry.URL)
 	}
 }
+
+// Ids, arches and kernel versions become cache file names, so a mirror can't use them to
+// write outside the cache dir.
+func TestLoadManifestRejectsPathsInNames(t *testing.T) {
+	for _, raw := range []string{
+		`{"schema_version": 1, "distros": [{"id": "../../etc/x", "arch": "x86_64"}]}`,
+		`{"schema_version": 1, "distros": [], "firecracker": {"kernels": [{"version": "6.18", "arch": "../x"}]}}`,
+	} {
+		if _, err := loadManifest([]byte(raw), 0); err == nil {
+			t.Errorf("accepted %s", raw)
+		}
+	}
+}

@@ -29,6 +29,14 @@ func DBPath() string { return filepath.Join(StateDir, "anvil.db") }
 // InstanceDir is where a single instance's mutable, non-registry state lives.
 func InstanceDir(id string) string { return filepath.Join(StateDir, "instances", id) }
 
+// JailerDir holds the jailer's per-VM chroots, on the same filesystem as the instance disks
+// so they can be hard-linked in.
+func JailerDir() string { return filepath.Join(StateDir, "jailer") }
+
+// JailerExe is the jailer copy with file capabilities that anvild.service prepares, runnable
+// only by the anvil user. Firecracker then starts without anvild's capabilities.
+func JailerExe() string { return filepath.Join(StateDir+"-jailer", "jailer") }
+
 // PreparedImageDir holds downloaded and checksum-verified base images.
 func PreparedImageDir() string { return filepath.Join(CacheDir, "images", "prepared") }
 

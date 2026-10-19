@@ -18,7 +18,8 @@ Docker's real HTTP API for containers (no SDK). It takes no command-line
 flags or subcommands and its on-disk layout is fixed. Its runtime behavior is
 controlled through the requests it receives over the socket, with a few
 exceptions read from its environment, described under ENVIRONMENT:
-\fBANVIL_MDNS\fR, \fBANVIL_METRICS\fR and \fBANVIL_GUI_TOOLS\fR.
+\fBANVIL_MDNS\fR, \fBANVIL_METRICS\fR, \fBANVIL_GUI_TOOLS\fR and the
+\fBANVIL_FC_*\fR ones for Firecracker VMs.
 
 On startup it creates its run, state, and cache directories if missing,
 opens its registry, reconciles instance and intent-network state against
@@ -127,6 +128,25 @@ ones, the same numbers as \fBanvil stats\fR.
 .RS 4
 Directory holding the GUI tools shared into VMs, instead of
 \fB/usr/lib/anvil/gui\fR. Meant for development builds.
+.RE
+.PP
+\fBANVIL_FC_KERNEL\fP
+.RS 4
+Path of the guest kernel Firecracker VMs boot, instead of the catalog's,
+which is otherwise downloaded on the first Firecracker launch.
+.RE
+.PP
+\fBANVIL_FC_SUBNET\fP
+.RS 4
+The IPv4 /24 of the \fBanvil-fc0\fR bridge standalone Firecracker VMs sit
+on, instead of \fB10.254.254.0/24\fR, for a host that already uses it.
+.RE
+.PP
+\fBANVIL_FC_JAILER\fP
+.RS 4
+Set to \fBoff\fR to run firecracker directly instead of under its jailer,
+which needs capabilities the unit may not grant. Anything else, including
+unset, uses the jailer when it is installed.
 .RE
 
 .SH RUNNING

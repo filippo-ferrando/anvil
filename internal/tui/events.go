@@ -53,12 +53,24 @@ func (m model) updateEvents(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus("listing events: "+msg.err.Error(), true)
 			return m, nil
 		}
+		atTop := m.events.list.Index() == 0
+		var selected uint64
+		if it, ok := m.events.list.SelectedItem().(eventItem); ok {
+			selected = it.ev.GetSeq()
+		}
 		// Newest first.
 		items := make([]list.Item, len(msg.events))
 		for i, ev := range msg.events {
 			items[len(items)-1-i] = eventItem{ev: ev}
 		}
 		m.events.list.SetItems(items)
+		// New events land on top: the cursor follows them from the top, else stays on its event.
+		for i, it := range items {
+			if !atTop && it.(eventItem).ev.GetSeq() == selected {
+				m.events.list.Select(i)
+				break
+			}
+		}
 		return m, nil
 
 	case tea.KeyMsg:

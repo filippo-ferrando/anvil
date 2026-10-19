@@ -65,6 +65,7 @@ func parseMemberFlags(vmSpecs, containerSpecs []string) ([]memberFlag, error) {
 
 func newIntentCreateCommand(flags *globalFlags) *cobra.Command {
 	var vmSpecs, containerSpecs []string
+	var hypervisor string
 	cmd := &cobra.Command{
 		Use:   "create <name>",
 		Short: "Create a new intent with one or more members",
@@ -72,6 +73,10 @@ func newIntentCreateCommand(flags *globalFlags) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			members, err := parseMemberFlags(vmSpecs, containerSpecs)
+			if err != nil {
+				return err
+			}
+			hv, err := parseVMHypervisor(hypervisor)
 			if err != nil {
 				return err
 			}
@@ -94,7 +99,7 @@ func newIntentCreateCommand(flags *globalFlags) *cobra.Command {
 				return fmt.Errorf("intent: checking whether %q already exists: %w", name, err)
 			}
 			for _, m := range members {
-				if err := launchMember(cmd, c, name, m); err != nil {
+				if err := launchMember(cmd, c, name, m, hv); err != nil {
 					return err
 				}
 			}
@@ -103,11 +108,13 @@ func newIntentCreateCommand(flags *globalFlags) *cobra.Command {
 	}
 	cmd.Flags().StringArrayVar(&vmSpecs, "vm", nil, "VM member as <role>:<image>, repeatable")
 	cmd.Flags().StringArrayVar(&containerSpecs, "container", nil, "container member as <role>:<image>, repeatable")
+	cmd.Flags().StringVar(&hypervisor, "hypervisor", "", `hypervisor for the --vm members: "qemu" (default) or "firecracker"`)
 	return cmd
 }
 
 func newIntentAddCommand(flags *globalFlags) *cobra.Command {
 	var vmSpecs, containerSpecs []string
+	var hypervisor string
 	cmd := &cobra.Command{
 		Use:   "add <name>",
 		Short: "Add one or more members to an existing intent",
@@ -115,6 +122,10 @@ func newIntentAddCommand(flags *globalFlags) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			members, err := parseMemberFlags(vmSpecs, containerSpecs)
+			if err != nil {
+				return err
+			}
+			hv, err := parseVMHypervisor(hypervisor)
 			if err != nil {
 				return err
 			}
@@ -135,7 +146,7 @@ func newIntentAddCommand(flags *globalFlags) *cobra.Command {
 				return fmt.Errorf("intent: looking up %q: %w", name, err)
 			}
 			for _, m := range members {
-				if err := launchMember(cmd, c, name, m); err != nil {
+				if err := launchMember(cmd, c, name, m, hv); err != nil {
 					return err
 				}
 			}
@@ -144,11 +155,12 @@ func newIntentAddCommand(flags *globalFlags) *cobra.Command {
 	}
 	cmd.Flags().StringArrayVar(&vmSpecs, "vm", nil, "VM member as <role>:<image>, repeatable")
 	cmd.Flags().StringArrayVar(&containerSpecs, "container", nil, "container member as <role>:<image>, repeatable")
+	cmd.Flags().StringVar(&hypervisor, "hypervisor", "", `hypervisor for the --vm members: "qemu" (default) or "firecracker"`)
 	return cmd
 }
 
 // launchMember runs one member through the streaming Launch RPC, tagged with intentName/role.
-func launchMember(cmd *cobra.Command, c *client.Client, intentName string, m memberFlag) error {
+func launchMember(cmd *cobra.Command, c *client.Client, intentName string, m memberFlag, hv anvilv1.VmHypervisor) error {
 	req := &anvilv1.LaunchRequest{
 		Name:       intentName + "-" + m.role,
 		Kind:       m.kind,
@@ -161,7 +173,7 @@ func launchMember(cmd *cobra.Command, c *client.Client, intentName string, m mem
 		if err != nil {
 			return err
 		}
-		req.Vm = &anvilv1.VMSpec{ImageRef: m.image, Cpus: 1, MemoryMib: 1024, SshPublicKeys: resolvedKeys}
+		req.Vm = &anvilv1.VMSpec{ImageRef: m.image, Cpus: 1, MemoryMib: 1024, SshPublicKeys: resolvedKeys, Hypervisor: hv}
 	case anvilv1.Kind_KIND_CONTAINER:
 		req.Container = &anvilv1.ContainerSpec{ImageRef: m.image}
 	}
@@ -170,7 +182,7 @@ func launchMember(cmd *cobra.Command, c *client.Client, intentName string, m mem
 	if err != nil {
 		return err
 	}
-	return streamLaunchProgress(cmd.OutOrStdout(), stream)
+	return streamLaunchProgress(cmd.OutOrStdout(), hypervisorCheck{stream, req.GetVm().GetHypervisor()})
 }
 
 func newIntentListCommand(flags *globalFlags) *cobra.Command {

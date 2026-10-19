@@ -20,6 +20,11 @@ type runtimeState struct {
 	BootMemoryMiB int64 `json:"boot_memory_mib,omitempty"`
 	MaxCPUs       int   `json:"max_cpus,omitempty"`
 	MaxMemoryMiB  int64 `json:"max_memory_mib,omitempty"`
+
+	// Jailed is set for a firecracker started under the jailer, whose files live in its jail.
+	Jailed bool `json:"jailed,omitempty"`
+	// JailExec is the firecracker binary the jail ran, whose file name is part of the jail path.
+	JailExec string `json:"jail_exec,omitempty"`
 }
 
 func runtimeStatePath(instanceDir string) string {

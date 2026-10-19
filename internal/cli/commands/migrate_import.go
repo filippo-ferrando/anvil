@@ -96,6 +96,10 @@ func launchRequestFromPayload(pl payload.Payload) (*anvilv1.LaunchRequest, error
 		if pl.VM == nil {
 			return nil, fmt.Errorf("payload has no VM spec")
 		}
+		hypervisor, err := parseVMHypervisor(pl.VM.Hypervisor)
+		if err != nil {
+			return nil, fmt.Errorf("payload hypervisor %q: want qemu or firecracker (is this anvil older than the source's?)", pl.VM.Hypervisor)
+		}
 		req.Kind = anvilv1.Kind_KIND_VM
 		req.Vm = &anvilv1.VMSpec{
 			ImageRef:             pl.VM.ImageRef,
@@ -107,6 +111,8 @@ func launchRequestFromPayload(pl payload.Payload) (*anvilv1.LaunchRequest, error
 			SourceDiskBaseSha256: pl.VM.BaseSHA256,
 			SourceBaseImagePath:  pl.VM.RemoteBaseImagePath,
 			MacAddress:           pl.VM.MACAddress,
+			Hypervisor:           hypervisor,
+			StaticIp:             pl.VM.StaticIP,
 		}
 		for _, m := range pl.VM.Mounts {
 			req.Vm.Mounts = append(req.Vm.Mounts, &anvilv1.Mount{

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"git.fferrando.cc/rdfilippo/anvil/data/distros"
@@ -34,6 +35,9 @@ type DistroEntry struct {
 	SHA256      string `json:"sha256"`
 	MinDiskGiB  int64  `json:"min_disk_gib"`
 	DefaultUser string `json:"default_user"` // account cloud-init sets up by default
+
+	// Firecracker is filled in by Catalog.List from the firecracker section, never read from JSON.
+	Firecracker bool `json:"-"`
 }
 
 // Manifest is the on-disk shape of both the embedded default catalog and
@@ -84,10 +88,16 @@ func loadManifest(raw []byte, priority int) (*Catalog, error) {
 	}
 	c := &Catalog{entries: make([]catalogEntry, len(m.Distros))}
 	for i, e := range m.Distros {
+		if err := checkPathPart(e.ID, e.Arch); err != nil {
+			return nil, err
+		}
 		c.entries[i] = catalogEntry{DistroEntry: e, Priority: priority}
 	}
 	if fc := m.Firecracker; fc != nil {
 		for _, k := range fc.Kernels {
+			if err := checkPathPart(k.Version, k.Arch); err != nil {
+				return nil, err
+			}
 			c.fcKernels = append(c.fcKernels, prioritized[FCKernel]{k, priority})
 		}
 		for _, d := range fc.Distros {
@@ -95,6 +105,17 @@ func loadManifest(raw []byte, priority int) (*Catalog, error) {
 		}
 	}
 	return c, nil
+}
+
+// checkPathPart rejects manifest values that end up in cache file names but could leave the
+// cache dir ("../x", "a/b").
+func checkPathPart(parts ...string) error {
+	for _, p := range parts {
+		if strings.ContainsAny(p, `/\`) || p == "." || p == ".." {
+			return fmt.Errorf("image: manifest value %q can't be part of a file name", p)
+		}
+	}
+	return nil
 }
 
 // FetchManifest downloads and validates a mirror manifest from url,
@@ -159,6 +180,8 @@ func (c *Catalog) List() []DistroEntry {
 	winners := c.winners()
 	out := make([]DistroEntry, 0, len(winners))
 	for _, e := range winners {
+		_, err := c.FirecrackerDistro(e.ID)
+		e.DistroEntry.Firecracker = err == nil
 		out = append(out, e.DistroEntry)
 	}
 	return out

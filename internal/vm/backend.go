@@ -368,6 +368,12 @@ func (b *Backend) ExportDiskDelta(ctx context.Context, spec *instance.Spec, dest
 	return nil
 }
 
+// ExportDiskFile returns the file an export bundle carries for spec: its overlay as it is,
+// backed by the base image. dir is unused, nothing is written.
+func (b *Backend) ExportDiskFile(ctx context.Context, spec *instance.Spec, dir string) (string, error) {
+	return spec.VM.DiskPath, nil
+}
+
 // PrepareImportedDisk rebases an imported disk's backing file onto this host's own
 // base image, since it still points at its original export host. A disk with no base is left as is.
 // A non-empty baseSHA256 must match that base image, or the disk is rejected.

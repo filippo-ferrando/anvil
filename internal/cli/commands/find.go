@@ -53,10 +53,10 @@ func newFindCommand(flags *globalFlags) *cobra.Command {
 			}
 
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "ID\tDISTRO\tVERSION\tARCH\tMIN DISK\tDEFAULT USER")
+			fmt.Fprintln(tw, "ID\tDISTRO\tVERSION\tARCH\tMIN DISK\tDEFAULT USER\tFIRECRACKER")
 			for _, e := range entries {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d GiB\t%s\n",
-					e.GetId(), e.GetDistro(), e.GetVersion(), e.GetArch(), e.GetMinDiskGib(), e.GetDefaultUser())
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d GiB\t%s\t%s\n",
+					e.GetId(), e.GetDistro(), e.GetVersion(), e.GetArch(), e.GetMinDiskGib(), e.GetDefaultUser(), yesNo(e.GetFirecracker()))
 			}
 			return tw.Flush()
 		},

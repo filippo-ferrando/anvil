@@ -50,6 +50,7 @@ type launchModel struct {
 // launchSuggestions holds autocomplete candidates for the launch form.
 type launchSuggestions struct {
 	vmImages        []string // catalog ids ∪ already-cached ids
+	fcImages        []string // the subset of vmImages Firecracker can boot
 	containerImages []string // repo:tag refs of already-pulled images
 	intents         []string // existing intent names
 	cloudInits      []string // saved cloud-init library entries
@@ -58,9 +59,12 @@ type launchSuggestions struct {
 
 // imagesFor returns the Image-field candidates relevant to kind: a VM's
 // image ref and a container's image ref come from different namespaces (a vault catalog id vs. a Docker repo:tag).
-func (s launchSuggestions) imagesFor(kind string) []string {
+func (s launchSuggestions) imagesFor(kind, hypervisor string) []string {
 	if kind == "container" {
 		return s.containerImages
+	}
+	if strings.TrimSpace(hypervisor) == "firecracker" {
+		return s.fcImages
 	}
 	return s.vmImages
 }
@@ -142,7 +146,7 @@ func launchFields(kind string, values map[string]string) []formField {
 // applySuggestions pushes m.suggest's current candidate lists into the
 // already-built fields in place: reconstructing them via launchFields instead would cost the user's in-progress typing and focus on every load reply.
 func (m *launchModel) applySuggestions() {
-	m.setFieldSuggestions("Image", m.suggest.imagesFor(m.kind))
+	m.setFieldSuggestions("Image", m.suggest.imagesFor(m.kind, m.form.Value(hypervisorField)))
 	m.setFieldSuggestions("Intent name (optional)", m.suggest.intents)
 	m.setFieldSuggestions(cloudInitNameField, m.suggest.cloudInits)
 	m.setFieldSuggestions("Role (optional, needs intent)", m.suggest.roles)
@@ -222,7 +226,7 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		return m, receiveLaunchEvent(msg.stream)
+		return m, receiveLaunchEvent(msg.stream, msg.want)
 
 	case cloudInitContentLoadedMsg:
 		if !m.launch.loadingCloudInit {
@@ -263,21 +267,33 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case catalogLoadedMsg:
 		if msg.err == nil {
-			ids := make([]string, 0, len(msg.entries))
+			var ids, fc []string
 			for _, e := range msg.entries {
 				ids = append(ids, e.GetId())
+				if e.GetFirecracker() {
+					fc = append(fc, e.GetId())
+				}
 			}
 			m.launch.suggest.vmImages = mergeUnique(m.launch.suggest.vmImages, ids)
+			m.launch.suggest.fcImages = mergeUnique(m.launch.suggest.fcImages, fc)
 			m.launch.applySuggestions()
 		}
 		return m, nil
 	case cachedImagesLoadedMsg:
 		if msg.err == nil {
-			ids := make([]string, 0, len(msg.images))
+			var ids, fc []string
 			for _, im := range msg.images {
-				ids = append(ids, im.GetId())
+				switch im.GetKind() {
+				case "firecracker-kernel":
+					// A kernel file isn't a launchable image.
+				case "firecracker-raw":
+					fc = append(fc, im.GetId())
+				default:
+					ids = append(ids, im.GetId())
+				}
 			}
 			m.launch.suggest.vmImages = mergeUnique(m.launch.suggest.vmImages, ids)
+			m.launch.suggest.fcImages = mergeUnique(m.launch.suggest.fcImages, fc)
 			m.launch.applySuggestions()
 		}
 		return m, nil
@@ -326,6 +342,7 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		var submitted, cancelled bool
 		m.launch.form, submitted, cancelled = m.launch.form.update(msg)
+		m.launch.applySuggestions() // the Image candidates follow the Hypervisor field
 		if cancelled {
 			m.screen = screenInstances
 			return m, tea.ClearScreen
@@ -518,11 +535,13 @@ func startLaunchStream(c *client.Client, req *anvilv1.LaunchRequest) tea.Cmd {
 		if err != nil {
 			return launchStreamMsg{err: err, done: true}
 		}
-		return receiveLaunchEvent(stream)()
+		return receiveLaunchEvent(stream, req.GetVm().GetHypervisor())()
 	}
 }
 
-func receiveLaunchEvent(stream anvilv1.InstanceService_LaunchClient) tea.Cmd {
+// receiveLaunchEvent reads the next event. want is the hypervisor asked for: an older anvild
+// drops the field and runs QEMU, which the final instance then shows.
+func receiveLaunchEvent(stream anvilv1.InstanceService_LaunchClient, want anvilv1.VmHypervisor) tea.Cmd {
 	return func() tea.Msg {
 		ev, err := stream.Recv()
 		if err != nil {
@@ -533,13 +552,17 @@ func receiveLaunchEvent(stream anvilv1.InstanceService_LaunchClient) tea.Cmd {
 		}
 		switch e := ev.GetEvent().(type) {
 		case *anvilv1.LaunchProgress_Status:
-			return launchStreamMsg{stream: stream, status: e.Status}
+			return launchStreamMsg{stream: stream, status: e.Status, want: want}
 		case *anvilv1.LaunchProgress_Error:
 			return launchStreamMsg{err: fmt.Errorf("%s", e.Error), done: true}
 		case *anvilv1.LaunchProgress_Instance:
+			if want == anvilv1.VmHypervisor_VM_HYPERVISOR_FIRECRACKER && e.Instance.GetVm().GetHypervisor() != want {
+				return launchStreamMsg{err: fmt.Errorf("anvild launched %s with QEMU: it predates firecracker support; upgrade it, then delete %s and launch again",
+					e.Instance.GetName(), e.Instance.GetName()), done: true}
+			}
 			return launchStreamMsg{instance: e.Instance, done: true}
 		default:
-			return launchStreamMsg{stream: stream}
+			return launchStreamMsg{stream: stream, want: want}
 		}
 	}
 }

@@ -18,6 +18,7 @@ make vet     # go vet ./...
 make fmt     # gofmt -l -s . (lists files that need formatting; doesn't rewrite them)
 make man     # regenerate man/man1 from the live command tree, plus docs/man/anvild.8
 make gui-tools  # static waypipe/xwayland-satellite for `anvil gui` into build/gui-tools (needs docker)
+make fc-kernel  # anvil's Firecracker guest kernel into build/fc-kernel (needs docker, ARCH=aarch64 for arm64)
 ```
 
 Single test / package:
@@ -37,6 +38,8 @@ Building from source needs Go 1.27+, `protoc`, and (Linux) `qemu-system-x86_64`,
 `qemu-img`, `xorriso` on `PATH`, plus `virtiofsd` (looked up on `PATH` and in
 `/usr/lib`, `/usr/libexec`). `anvil gui` with VMs also needs the GUI tools in
 `/usr/lib/anvil/gui` (or `ANVIL_GUI_TOOLS`). Full feature notes: `docs/gui.md`.
+Firecracker VMs also need `firecracker`/`jailer` and `nft`; their real-VM tests need
+`ANVIL_FC_KERNEL` and `ANVIL_E2E_IMAGE` (see `docs/firecracker.md`).
 
 ## Architecture
 
@@ -75,7 +78,9 @@ internal/
   daemon/        gRPC service implementation (one *_server.go per resource area), plus
                  the optional Prometheus /metrics endpoint (metrics.go, ANVIL_METRICS)
   instance/      domain model + Backend interface + the Manager that dispatches to it
-  vm/            QEMU backend (Linux): process mgmt, QMP, cloud-init, image catalog
+  vm/            VM backends (Linux): QEMU (backend.go) and Firecracker (fc_*.go) behind
+                 Hypervisors (hypervisors.go), cloud-init, image catalog
+  vm/firecracker/  Firecracker process, REST API client, vsock, jailer
   vm/vz/         Apple Virtualization.framework backend (darwin), a stub, not implemented yet
   container/docker/   Docker backend
   container/      the Backend that picks an engine; Podman is rejected, not implemented (see PLAN.md)
@@ -94,7 +99,8 @@ data/distros/    built-in VM image catalog (embedded in the binary)
 catalog/         official extra catalogue (distro manifests + cloud-init templates), a git
                  submodule consumed via `anvil mirror add` / `cloud-init import-repo`, not embedded
 scripts/         verify-catalog.sh (checksums), release-notes.sh (used by the release workflow),
-                 build-gui-tools.sh (static GUI tools, used by `make gui-tools` and releases)
+                 build-gui-tools.sh (static GUI tools, used by `make gui-tools` and releases),
+                 build-fc-kernel.sh + fc-kernel.config (the Firecracker guest kernel, `make fc-kernel`)
 packaging/       PKGBUILD/deb/rpm build scripts, systemd unit, sysusers/tmpfiles rules
 ```
 

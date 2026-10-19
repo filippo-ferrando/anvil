@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -27,10 +28,22 @@ type ImageServer struct {
 	Vault      *image.Vault
 	Backend    VMCatalog
 	Containers *container.Backend
+	// FC lists Firecracker's raw copies and kernels next to the base images.
+	FC *image.FCCache
 }
 
-func NewImageServer(s *store.Store, v *image.Vault, backend VMCatalog, containers *container.Backend) *ImageServer {
-	return &ImageServer{Store: s, Vault: v, Backend: backend, Containers: containers}
+func NewImageServer(s *store.Store, v *image.Vault, backend VMCatalog, containers *container.Backend, fc *image.FCCache) *ImageServer {
+	return &ImageServer{Store: s, Vault: v, Backend: backend, Containers: containers, FC: fc}
+}
+
+// cachedImages lists base images first, then Firecracker's raw copies and kernels.
+func (s *ImageServer) cachedImages() ([]image.CachedImage, error) {
+	cached, err := s.Vault.List()
+	if err != nil || s.FC == nil {
+		return cached, err
+	}
+	fc, err := s.FC.List()
+	return append(cached, fc...), err
 }
 
 func (s *ImageServer) Catalog(ctx context.Context, req *anvilv1.CatalogRequest) (*anvilv1.CatalogReply, error) {
@@ -48,13 +61,14 @@ func (s *ImageServer) Catalog(ctx context.Context, req *anvilv1.CatalogRequest) 
 			Arch:        e.Arch,
 			MinDiskGib:  e.MinDiskGiB,
 			DefaultUser: e.DefaultUser,
+			Firecracker: e.Firecracker,
 		})
 	}
 	return reply, nil
 }
 
 func (s *ImageServer) List(ctx context.Context, req *anvilv1.ImageListRequest) (*anvilv1.ImageListReply, error) {
-	cached, err := s.Vault.List()
+	cached, err := s.cachedImages()
 	if err != nil {
 		return nil, err
 	}
@@ -65,20 +79,23 @@ func (s *ImageServer) List(ctx context.Context, req *anvilv1.ImageListRequest) (
 
 	reply := &anvilv1.ImageListReply{}
 	for _, img := range cached {
-		users := usersOf(img.Path, specs)
+		users := usersOf(img.Path, specs, s.Vault)
 		reply.Images = append(reply.Images, &anvilv1.CachedImage{
 			Id:        img.ID,
 			Arch:      img.Arch,
 			Path:      img.Path,
 			SizeBytes: img.SizeBytes,
 			RefCount:  int32(len(users)),
+			Kind:      img.Kind,
 		})
 	}
 	return reply, nil
 }
 
+// Delete removes a cached image. Deleting a base also removes its raw copy; a raw copy or
+// a kernel can go on its own, and comes back the next time a Firecracker VM needs it.
 func (s *ImageServer) Delete(ctx context.Context, req *anvilv1.ImageDeleteRequest) (*anvilv1.ImageDeleteReply, error) {
-	cached, err := s.Vault.List()
+	cached, err := s.cachedImages()
 	if err != nil {
 		return nil, err
 	}
@@ -91,10 +108,19 @@ func (s *ImageServer) Delete(ctx context.Context, req *anvilv1.ImageDeleteReques
 		if req.GetArch() != "" && cached[i].Arch != req.GetArch() {
 			continue
 		}
+		if req.GetKind() != "" && cached[i].Kind != req.GetKind() {
+			continue
+		}
 		target = &cached[i]
 		break
 	}
 	if target == nil {
+		switch req.GetKind() {
+		case "", image.ImageKindBase, image.ImageKindFirecrackerRaw, image.ImageKindFirecrackerKernel:
+		default:
+			return nil, fmt.Errorf("image: unknown kind %q (want %s, %s or %s)", req.GetKind(),
+				image.ImageKindBase, image.ImageKindFirecrackerRaw, image.ImageKindFirecrackerKernel)
+		}
 		return nil, fmt.Errorf("image: no cached image matching id %q", req.GetId())
 	}
 
@@ -103,12 +129,18 @@ func (s *ImageServer) Delete(ctx context.Context, req *anvilv1.ImageDeleteReques
 		if err != nil {
 			return nil, err
 		}
-		if users := usersOf(target.Path, specs); len(users) > 0 {
+		if users := usersOf(target.Path, specs, s.Vault); len(users) > 0 {
 			return nil, fmt.Errorf("image: %q is still used by instance(s) %s; pass --force to delete anyway (this will break their disks)",
 				req.GetId(), strings.Join(users, ", "))
 		}
 	}
 
+	if target.Kind != image.ImageKindBase {
+		if err := os.Remove(target.Path); err != nil {
+			return nil, fmt.Errorf("image: deleting %s: %w", target.Path, err)
+		}
+		return &anvilv1.ImageDeleteReply{}, nil
+	}
 	if err := s.Vault.Delete(target.Path); err != nil {
 		return nil, err
 	}
@@ -141,21 +173,31 @@ func (s *ImageServer) DeleteContainerImage(ctx context.Context, req *anvilv1.Con
 	return &anvilv1.ContainerImageDeleteReply{}, nil
 }
 
-// usersOf returns the names of specs whose disk's backing file is imagePath.
-func usersOf(imagePath string, specs []*instance.Spec) (names []string) {
+// usersOf returns the names of specs whose disk sits on the base image at imagePath.
+func usersOf(imagePath string, specs []*instance.Spec, vault *image.Vault) (names []string) {
 	for _, spec := range specs {
-		if spec.VM == nil || spec.VM.DiskPath == "" {
-			continue
-		}
-		backing, err := image.BackingFile(spec.VM.DiskPath)
-		if err != nil || backing == "" {
-			continue
-		}
-		if samePath(backing, imagePath) {
+		if base := baseImageOf(spec, vault); base != "" && samePath(base, imagePath) {
 			names = append(names, spec.Name)
 		}
 	}
 	return names
+}
+
+// baseImageOf is the base image spec's disk was made from: a QEMU overlay's backing file, or
+// for a Firecracker disk (a full copy, no backing file) the vault's image of the same name.
+func baseImageOf(spec *instance.Spec, vault *image.Vault) string {
+	if spec.VM == nil || spec.VM.DiskPath == "" {
+		return ""
+	}
+	if spec.VM.HypervisorOf() == instance.VMHypervisorFirecracker {
+		if vault == nil {
+			return ""
+		}
+		path, _ := vault.CachedPath(image.DistroEntry{ID: spec.VM.ImageRef, Arch: spec.VM.Arch})
+		return path
+	}
+	backing, _ := image.BackingFile(spec.VM.DiskPath)
+	return backing
 }
 
 // samePath reports whether a and b refer to the same file, resolving

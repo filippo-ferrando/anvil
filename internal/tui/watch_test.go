@@ -3,6 +3,8 @@ package tui
 import (
 	"errors"
 	"testing"
+
+	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 )
 
 func TestWatchEventsCollapseIntoOneReload(t *testing.T) {
@@ -63,5 +65,28 @@ func TestStaleStatsStreamIgnored(t *testing.T) {
 	next, cmd := m.Update(statsStreamMsg{gen: 1, err: errors.New("canceled")})
 	if cmd != nil || next.(model).instances.statsStreaming != "web" {
 		t.Error("a reply from a closed stream must not touch the open one")
+	}
+}
+
+func TestStatsStreamClosedOffInstancesScreen(t *testing.T) {
+	m := instancesModelWith(&anvilv1.Instance{Name: "web", State: anvilv1.State_STATE_RUNNING})
+	m.instances.statsStreaming = "web"
+	next, _ := m.jumpTo(screenSnapshots)
+	next, _ = next.(model).Update(watchReloadMsg{})
+	if got := next.(model).instances.statsStreaming; got != "" {
+		t.Errorf("stats stream still open for %q off the Instances screen", got)
+	}
+}
+
+func TestEventsKeepSelectionAcrossReload(t *testing.T) {
+	m := model{screen: screenEvents, events: newEventsModel()}
+	m.events.list.SetSize(80, 40)
+	evs := []*anvilv1.InstanceEvent{{Seq: 1}, {Seq: 2}, {Seq: 3}}
+	next, _ := m.Update(eventsLoadedMsg{events: evs})
+	m = next.(model)
+	m.events.list.Select(1) // seq 2
+	next, _ = m.Update(eventsLoadedMsg{events: append(evs, &anvilv1.InstanceEvent{Seq: 4})})
+	if it := next.(model).events.list.SelectedItem().(eventItem); it.ev.GetSeq() != 2 {
+		t.Errorf("selection moved to seq %d, want 2", it.ev.GetSeq())
 	}
 }

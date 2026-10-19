@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // FCKernel is anvil's Firecracker guest kernel for one arch.
@@ -119,6 +120,37 @@ func (c *FCCache) RawBase(ctx context.Context, entry DistroEntry, progress func(
 	return dest, nil
 }
 
+// List returns the raw copies and kernels in the cache. A kernel's ID is its file name.
+func (c *FCCache) List() ([]CachedImage, error) {
+	entries, err := os.ReadDir(c.Dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("image: listing %s: %w", c.Dir, err)
+	}
+	var out []CachedImage
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		img := CachedImage{Path: filepath.Join(c.Dir, e.Name()), SizeBytes: info.Size()}
+		switch name := e.Name(); {
+		case strings.HasSuffix(name, ".raw"):
+			img.ID, img.Arch = parseCachedFilename(strings.TrimSuffix(name, ".raw") + ".qcow2")
+			img.Kind = ImageKindFirecrackerRaw
+		case strings.HasPrefix(name, "anvil-fc-kernel-"):
+			img.ID, img.Kind = name, ImageKindFirecrackerKernel
+			img.Arch = name[strings.LastIndex(name, "-")+1:]
+		default:
+			continue // temp files, the GUI tools ISO
+		}
+		out = append(out, img)
+	}
+	return out, nil
+}
+
 // fresh reports whether path exists and is at least as new as source.
 func fresh(path, source string) bool {
 	dst, err := os.Stat(path)
@@ -127,6 +159,16 @@ func fresh(path, source string) bool {
 	}
 	src, err := os.Stat(source)
 	return err == nil && !dst.ModTime().Before(src.ModTime())
+}
+
+// ReflinkDisk copies src to dst only when the filesystem can share the blocks, so it's
+// instant; otherwise it fails and leaves no dst.
+func ReflinkDisk(ctx context.Context, src, dst string) error {
+	if out, err := exec.CommandContext(ctx, "cp", "--reflink=always", src, dst).CombinedOutput(); err != nil {
+		_ = os.Remove(dst)
+		return fmt.Errorf("image: copy-on-write copy of %s: %w: %s", src, err, out)
+	}
+	return nil
 }
 
 // CloneDisk copies src to dst as a reflink where the filesystem supports it (btrfs,

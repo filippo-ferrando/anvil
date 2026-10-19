@@ -49,6 +49,8 @@ func preflightVM(spec *instance.Spec, caps remoteCaps) (fatal, warn []string) {
 		arch = "x86_64"
 	}
 	switch {
+	case spec.VM.HypervisorOf() == instance.VMHypervisorFirecracker:
+		fatal = append(fatal, preflightFC(caps, arch)...)
 	case !caps.qemu:
 		fatal = append(fatal, fmt.Sprintf("%s is not installed there (the VM's arch is %s, the target's is %s)",
 			qemuBinary(arch), arch, caps.arch))
@@ -77,6 +79,24 @@ func preflightVM(spec *instance.Spec, caps remoteCaps) (fatal, warn []string) {
 		warn = append(warn, fmt.Sprintf("%d shared folder(s) are not directories anvild can read, so they are not shared on the target", skipped))
 	}
 	return fatal, warn
+}
+
+// preflightFC lists what stops t from running a Firecracker VM: there is no emulation
+// fallback. A guest whose address doesn't fit the target's subnet gets a new one there.
+func preflightFC(caps remoteCaps, arch string) (fatal []string) {
+	if !caps.fcCLI {
+		fatal = append(fatal, "the anvil there has no Firecracker support (no launch --hypervisor), upgrade it first")
+	}
+	if !caps.fc {
+		fatal = append(fatal, "firecracker is not installed there")
+	}
+	if !caps.kvm {
+		fatal = append(fatal, "the target has no /dev/kvm, and Firecracker cannot run without it")
+	}
+	if caps.arch != "" && caps.arch != arch {
+		fatal = append(fatal, fmt.Sprintf("the target is %s and the VM is %s, and Firecracker cannot emulate another arch", caps.arch, arch))
+	}
+	return fatal
 }
 
 func preflightContainer(spec *instance.Spec, caps remoteCaps) (fatal, warn []string) {

@@ -214,3 +214,21 @@ func TestFCCacheKernelOverride(t *testing.T) {
 		t.Fatalf("Kernel = %q, %v; want the %s path", got, err, KernelEnv)
 	}
 }
+
+func TestCatalogListMarksFirecracker(t *testing.T) {
+	base, err := LoadEmbedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := base.WithMirrors([]MirrorManifest{{ManifestJSON: `{"schema_version": 1,
+		"distros": [{"id": "qemu-only", "arch": "x86_64", "url": "http://x/"}]}`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range c.List() {
+		want := e.ID != "qemu-only"
+		if e.Firecracker != want {
+			t.Errorf("%s: Firecracker = %v, want %v", e.ID, e.Firecracker, want)
+		}
+	}
+}

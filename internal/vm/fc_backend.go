@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"git.fferrando.cc/rdfilippo/anvil/internal/config"
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/firecracker"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
@@ -30,6 +31,10 @@ type FCBackend struct {
 	QEMU      *Backend
 	Cache     *image.FCCache
 	Networker Networker
+
+	// Jailer, when set, is the jailer binary that runs firecracker chrooted in ChrootBase.
+	Jailer     string
+	ChrootBase string
 
 	guestTracker
 
@@ -47,6 +52,8 @@ type FCBackend struct {
 	// nfs serves `anvil mount` shares; exported is which guest address each VM's are served to.
 	nfs      *nfsHub
 	exported map[string]netip.Addr // guarded by mu
+
+	paths map[string]fcInstancePaths // running VMs' files, jailed or not; guarded by mu
 }
 
 var (
@@ -62,23 +69,27 @@ var (
 // NewFCBackend shares qemuBackend's catalog and vault; instances is where standalone
 // addresses already in use are read from.
 func NewFCBackend(qemuBackend *Backend, cacheDir string, instances Instances) *FCBackend {
-	return &FCBackend{
-		QEMU:      qemuBackend,
-		Cache:     &image.FCCache{Dir: cacheDir, Vault: qemuBackend.Vault},
-		Networker: network.LinuxBridge{},
-		guestTracker: newGuestTracker(func(id string) *qemu.GuestAgent {
-			return &qemu.GuestAgent{Dial: func(ctx context.Context) (net.Conn, error) {
-				return firecracker.DialVsock(ctx, fcPaths(id).vsock, fcAgentPort)
-			}}
-		}, "reboot"), // a guest poweroff doesn't end firecracker on x86_64, a reboot does
-		running:  make(map[string]*firecracker.Process),
-		starting: make(map[string]struct{}),
-		stopping: make(map[string]struct{}),
-		ipam:     fcIPAM{instances: instances},
-		proxies:  make(map[string]map[string]*portProxy),
-		nfs:      newNFSHub(),
-		exported: make(map[string]netip.Addr),
+	b := &FCBackend{
+		QEMU:       qemuBackend,
+		Cache:      &image.FCCache{Dir: cacheDir, Vault: qemuBackend.Vault},
+		Networker:  network.LinuxBridge{},
+		Jailer:     jailerExe(),
+		ChrootBase: config.JailerDir(),
+		running:    make(map[string]*firecracker.Process),
+		starting:   make(map[string]struct{}),
+		stopping:   make(map[string]struct{}),
+		ipam:       fcIPAM{instances: instances},
+		proxies:    make(map[string]map[string]*portProxy),
+		nfs:        newNFSHub(),
+		exported:   make(map[string]netip.Addr),
+		paths:      make(map[string]fcInstancePaths),
 	}
+	b.guestTracker = newGuestTracker(func(id string) *qemu.GuestAgent {
+		return &qemu.GuestAgent{Dial: func(ctx context.Context) (net.Conn, error) {
+			return firecracker.DialVsock(ctx, b.pathsOf(id).vsock, fcAgentPort)
+		}}
+	}, "reboot") // a guest poweroff doesn't end firecracker on x86_64, a reboot does
+	return b
 }
 
 // standalone reports whether v sits on FCBridge rather than an intent's bridge.
@@ -90,19 +101,6 @@ var fcLookPath = exec.LookPath
 type fcInstancePaths struct {
 	firecracker.Paths
 	vsock string
-}
-
-func fcPaths(instanceID string) fcInstancePaths {
-	dir := instanceDir(instanceID)
-	return fcInstancePaths{
-		Paths: firecracker.Paths{
-			APISocket:  filepath.Join(dir, "firecracker.sock"),
-			ConfigFile: filepath.Join(dir, "firecracker.json"),
-			ConsoleLog: filepath.Join(dir, "console.log"),
-			LogFile:    filepath.Join(dir, "firecracker.log"),
-		},
-		vsock: filepath.Join(dir, "vsock.sock"),
-	}
 }
 
 // fcBootArgs is the guest kernel command line; Firecracker adds root= from the drive's partuuid.
@@ -135,9 +133,6 @@ func (b *FCBackend) Create(ctx context.Context, spec *instance.Spec, progress fu
 		return fmt.Errorf("vm: Create called with a nil VMSpec")
 	}
 	v := spec.VM
-	if v.SourceDiskPath != "" {
-		return fmt.Errorf("vm: migrating or importing a firecracker VM isn't supported yet")
-	}
 	if _, err := fcLookPath(firecracker.Binary); err != nil {
 		return fmt.Errorf("vm: firecracker isn't installed on this host: %w", err)
 	}
@@ -153,11 +148,30 @@ func (b *FCBackend) Create(ctx context.Context, spec *instance.Spec, progress fu
 		return err
 	}
 	v.Arch = entry.Arch
-	v.DefaultUser = entry.DefaultUser
+	adopting := v.SourceDiskPath != ""
+	if !adopting || v.DefaultUser == "" {
+		v.DefaultUser = entry.DefaultUser
+	}
 
+	reseed := !adopting
 	if standalone(v) {
-		if err := b.assignAddress(spec); err != nil {
-			return err
+		// A migrated or imported guest keeps the address configured inside its disk. When it
+		// can't (a copy next to its original, another subnet, none recorded), it gets a new
+		// one through a new seed, the way a fork does.
+		keep := adopting && v.StaticIP != ""
+		if keep {
+			if kerr := b.keepAddress(spec); kerr != nil {
+				if progress != nil {
+					progress(fmt.Sprintf("can't keep address %s (%v), assigning a new one", stripCIDR(v.StaticIP), kerr))
+				}
+				keep = false
+			}
+		}
+		if !keep {
+			reseed = true
+			if err = b.assignAddress(spec); err != nil {
+				return err
+			}
 		}
 		defer func() {
 			if err != nil {
@@ -174,6 +188,12 @@ func (b *FCBackend) Create(ctx context.Context, spec *instance.Spec, progress fu
 	if _, err := b.Cache.Kernel(ctx, kernel, progress); err != nil {
 		return fmt.Errorf("vm: preparing the firecracker kernel: %w", err)
 	}
+	if adopting {
+		if err := b.adoptDisk(ctx, spec, dir, progress); err != nil || !reseed {
+			return err
+		}
+		return b.QEMU.buildSeed(spec)
+	}
 	raw, err := b.Cache.RawBase(ctx, entry, progress)
 	if err != nil {
 		return fmt.Errorf("vm: preparing disk: %w", err)
@@ -182,6 +202,12 @@ func (b *FCBackend) Create(ctx context.Context, spec *instance.Spec, progress fu
 		progress("creating disk")
 	}
 	diskPath := filepath.Join(dir, "disk.raw")
+	// Without copy-on-write the disk is a full-size copy, too big to leave behind.
+	defer func() {
+		if err != nil {
+			_ = os.Remove(diskPath)
+		}
+	}()
 	if err := image.CloneDisk(ctx, raw, diskPath, v.DiskGiB); err != nil {
 		return fmt.Errorf("vm: preparing disk: %w", err)
 	}
@@ -231,14 +257,32 @@ func (b *FCBackend) Start(ctx context.Context, spec *instance.Spec) error {
 		return fmt.Errorf("vm: finding the root partition: %w", err)
 	}
 
-	paths := fcPaths(spec.ID)
+	paths := fcPathsFor(spec.ID, b.newJail(spec.ID))
+	if err := prepareJail(spec.ID, paths); err != nil {
+		return err
+	}
+	jailOK := false
+	defer func() {
+		if !jailOK {
+			removeJail(paths)
+		}
+	}()
+	// Inside a jail firecracker only sees files linked into it, by their in-jail paths.
+	vmKernel, err := jailFile(paths, kernelPath, "vmlinux", true)
+	if err != nil {
+		return err
+	}
+	vmDisk, err := jailFile(paths, v.DiskPath, "disk.raw", false)
+	if err != nil {
+		return err
+	}
 	cfg := firecracker.Config{
-		BootSource:    firecracker.BootSource{KernelImagePath: kernelPath, BootArgs: fcBootArgs(distro.KernelArgs)},
+		BootSource:    firecracker.BootSource{KernelImagePath: vmKernel, BootArgs: fcBootArgs(distro.KernelArgs)},
 		MachineConfig: firecracker.MachineConfig{VCPUCount: max(v.CPUs, 1), MemSizeMiB: v.MemoryMiB},
 		Drives: []firecracker.Drive{
-			{DriveID: fcRootDrive, PathOnHost: v.DiskPath, IsRootDevice: true, PartUUID: partUUID, Discard: true},
+			{DriveID: fcRootDrive, PathOnHost: vmDisk, IsRootDevice: true, PartUUID: partUUID, Discard: true},
 		},
-		Vsock:   &firecracker.Vsock{GuestCID: firecracker.GuestCID, UDSPath: paths.vsock},
+		Vsock:   &firecracker.Vsock{GuestCID: firecracker.GuestCID, UDSPath: paths.InVMM(paths.vsock)},
 		Entropy: &struct{}{},
 	}
 	hotplugMiB := fcHotplugMiB(v.Arch, v.CPUs, v.MemoryMiB)
@@ -246,11 +290,19 @@ func (b *FCBackend) Start(ctx context.Context, spec *instance.Spec) error {
 		cfg.MemoryHotplug = &firecracker.MemoryHotplug{TotalSizeMiB: hotplugMiB}
 	}
 	if v.SeedISOPath != "" {
-		cfg.Drives = append(cfg.Drives, firecracker.Drive{DriveID: "seed", PathOnHost: v.SeedISOPath, IsReadOnly: true})
+		seed, err := jailFile(paths, v.SeedISOPath, "seed.iso", true)
+		if err != nil {
+			return err
+		}
+		cfg.Drives = append(cfg.Drives, firecracker.Drive{DriveID: "seed", PathOnHost: seed, IsReadOnly: true})
 	}
 	// A missing tools dir or a failed pack only costs GUI support, so the VM still boots.
 	if spec.GUI && toolsAvailable() {
-		if iso, err := b.toolsISO(); err != nil {
+		iso, err := b.toolsISO()
+		if err == nil {
+			iso, err = jailFile(paths, iso, "gui-tools.iso", true)
+		}
+		if err != nil {
 			log.Printf("vm: %s: %v", spec.Name, err)
 		} else {
 			cfg.Drives = append(cfg.Drives, firecracker.Drive{DriveID: "guitools", PathOnHost: iso, IsReadOnly: true})
@@ -267,6 +319,8 @@ func (b *FCBackend) Start(ctx context.Context, spec *instance.Spec) error {
 		}
 		bridge = FCBridge
 	}
+	// A tap left by a firecracker that died while anvild was down would make Attach fail.
+	_ = b.Networker.Detach(spec.ID)
 	tap, err := b.Networker.Attach(spec.ID, bridge)
 	if err != nil {
 		return fmt.Errorf("vm: attaching to bridge %s: %w", bridge, err)
@@ -275,7 +329,14 @@ func (b *FCBackend) Start(ctx context.Context, spec *instance.Spec) error {
 	unwind := func() {
 		b.closeProxies(spec.ID)
 		b.unexportMounts(spec.ID)
+		dropGuestFilter(spec.ID)
 		_ = b.Networker.Detach(spec.ID)
+	}
+	if standalone(v) {
+		if err := runNft(fcGuestFilter(spec.ID, tap, v.MAC(spec.ID), stripCIDR(v.StaticIP))); err != nil {
+			unwind()
+			return err
+		}
 	}
 	if err := b.exportMounts(spec); err != nil {
 		unwind()
@@ -307,13 +368,19 @@ func (b *FCBackend) Start(ctx context.Context, spec *instance.Spec) error {
 		unwind()
 		return fmt.Errorf("vm: %w", err)
 	}
-	rt := runtimeState{Pid: proc.Pid(), StartedAt: time.Now(), BootMemoryMiB: v.MemoryMiB, MaxMemoryMiB: v.MemoryMiB + hotplugMiB}
+	jailOK = true
+	rt := runtimeState{Pid: proc.Pid(), StartedAt: time.Now(), BootMemoryMiB: v.MemoryMiB, MaxMemoryMiB: v.MemoryMiB + hotplugMiB,
+		Jailed: paths.Jail != nil}
+	if paths.Jail != nil {
+		rt.JailExec = paths.Jail.ExecFile
+	}
 	if err := saveRuntimeState(instanceDir(spec.ID), rt); err != nil {
 		log.Printf("vm: failed to persist runtime state for %s: %v", spec.ID, err)
 	}
 
 	b.mu.Lock()
 	b.running[spec.ID] = proc
+	b.paths[spec.ID] = paths
 	b.mu.Unlock()
 	b.watchGuest(spec, proc.Exited())
 	go b.watchExit(spec.ID, proc)
@@ -323,10 +390,14 @@ func (b *FCBackend) Start(ctx context.Context, spec *instance.Spec) error {
 func (b *FCBackend) Stop(ctx context.Context, spec *instance.Spec, force bool, timeout time.Duration) error {
 	b.mu.Lock()
 	proc, ok := b.running[spec.ID]
+	_, starting := b.starting[spec.ID]
 	if ok {
 		b.stopping[spec.ID] = struct{}{}
 	}
 	b.mu.Unlock()
+	if !ok && starting {
+		return fmt.Errorf("vm: %s is being started, try again once it's up", spec.Name)
+	}
 	if !ok {
 		removeRuntimeState(instanceDir(spec.ID))
 		return nil
@@ -382,7 +453,9 @@ func (b *FCBackend) watchExit(instanceID string, proc *firecracker.Process) {
 	}
 
 	state, reason := instance.StateStopped, "exited on its own (guest powered off or rebooted)"
-	if !proc.ExitedCleanly() {
+	if proc.ExitStatus() == "unknown" {
+		reason = "exited on its own; started by an earlier anvild, so its exit status is unknown"
+	} else if !proc.ExitedCleanly() {
 		state, reason = instance.StateError, "firecracker exited on its own ("+proc.ExitStatus()+")"
 	}
 	log.Printf("vm: %s exited on its own, now %s", instanceID, state)
@@ -398,16 +471,22 @@ func (b *FCBackend) releaseStopped(instanceID string, proc *firecracker.Process)
 	_ = proc.Close()
 	b.closeProxies(instanceID)
 	b.unexportMounts(instanceID)
+	dropGuestFilter(instanceID)
 	if err := b.Networker.Detach(instanceID); err != nil {
 		log.Printf("vm: failed to detach network device for %s: %v", instanceID, err)
 	}
 	removeRuntimeState(instanceDir(instanceID))
 
 	b.mu.Lock()
+	paths, ok := b.paths[instanceID]
 	if b.running[instanceID] == proc {
 		delete(b.running, instanceID)
+		delete(b.paths, instanceID)
 	}
 	b.mu.Unlock()
+	if ok {
+		removeJail(paths)
+	}
 }
 
 // Reconcile re-attaches to a firecracker process an earlier anvild started.
@@ -423,14 +502,25 @@ func (b *FCBackend) Reconcile(ctx context.Context, spec *instance.Spec) (instanc
 	if !found {
 		return instance.StateStopped, nil
 	}
-	proc, err := firecracker.Attach(fcPaths(spec.ID).Paths, rt.Pid)
+	var jail *firecracker.Jail
+	if rt.Jailed {
+		jail = &firecracker.Jail{ID: spec.ID, ChrootBase: b.ChrootBase, UID: os.Getuid(), GID: os.Getgid(), ExecFile: rt.JailExec}
+	}
+	paths := fcPathsFor(spec.ID, jail)
+	proc, err := firecracker.Attach(paths.Paths, rt.Pid)
 	if err != nil {
-		removeRuntimeState(dir)
+		b.removeLeftovers(spec.ID)
 		return instance.StateStopped, nil
 	}
 	if err := proc.WaitAPI(ctx); err != nil {
-		return instance.StateError, fmt.Errorf("vm: reconciled pid %d is alive but its API is unreachable: %w", rt.Pid, err)
+		// Left running untracked, a later Start would open the same disk in a second firecracker.
+		_ = proc.Stop(ctx, 0)
+		b.removeLeftovers(spec.ID)
+		return instance.StateError, fmt.Errorf("vm: reconciled pid %d was alive but its API was unreachable, killed it: %w", rt.Pid, err)
 	}
+	b.mu.Lock()
+	b.paths[spec.ID] = paths
+	b.mu.Unlock()
 
 	// The proxies died with the previous anvild; the SSH port stays the same when it's still free.
 	if standalone(spec.VM) {
@@ -452,8 +542,23 @@ func (b *FCBackend) Reconcile(ctx context.Context, spec *instance.Spec) (instanc
 	return instance.StateRunning, nil
 }
 
+// removeLeftovers clears what a firecracker that's gone untracked can leave: its tap, jail
+// (whose disk hard link keeps the disk's space in use) and runtime state.
+func (b *FCBackend) removeLeftovers(instanceID string) {
+	dropGuestFilter(instanceID)
+	if err := b.Networker.Detach(instanceID); err != nil {
+		log.Printf("vm: removing %s's tap: %v", instanceID, err)
+	}
+	jails, _ := filepath.Glob(filepath.Join(b.ChrootBase, "*", instanceID))
+	for _, dir := range jails {
+		_ = os.RemoveAll(dir)
+	}
+	removeRuntimeState(instanceDir(instanceID))
+}
+
 func (b *FCBackend) Delete(ctx context.Context, spec *instance.Spec) error {
 	_ = b.Stop(ctx, spec, true, 0)
+	b.removeLeftovers(spec.ID)
 	b.ipam.release(spec.ID)
 	if err := os.RemoveAll(instanceDir(spec.ID)); err != nil {
 		return fmt.Errorf("vm: removing instance dir: %w", err)
@@ -564,18 +669,16 @@ func (b *FCBackend) AddPort(ctx context.Context, spec *instance.Spec, port insta
 			return fmt.Errorf("vm: %s already forwards host port %d/%s", spec.Name, port.HostPort, proto)
 		}
 	}
+	// Under mu, so a stop can't drop the VM's proxy set between the check and the insert.
 	b.mu.Lock()
-	set, running := b.proxies[spec.ID]
-	b.mu.Unlock()
-	if running {
+	defer b.mu.Unlock()
+	if set, running := b.proxies[spec.ID]; running {
 		target := net.JoinHostPort(stripCIDR(spec.VM.StaticIP), strconv.Itoa(port.GuestPort))
 		pp, err := startPortProxy(proto, port.HostPort, target)
 		if err != nil {
 			return fmt.Errorf("vm: adding live port forward: %w", err)
 		}
-		b.mu.Lock()
 		set[proxyKey(port.HostPort, proto)] = pp
-		b.mu.Unlock()
 	}
 	spec.VM.Ports = append(spec.VM.Ports, instance.PortMapping{HostPort: port.HostPort, GuestPort: port.GuestPort, Protocol: proto})
 	return nil

@@ -39,28 +39,46 @@ func newStatsCommand(flags *globalFlags) *cobra.Command {
 				return nil
 			}
 
-			stream, err := c.StreamStats(cmd.Context(), &anvilv1.StreamStatsRequest{Name: args[0], IntervalMs: int32(interval.Milliseconds())})
-			if err != nil {
-				return err
-			}
 			clearScreen := isTerminalWriter(out)
-			for {
-				reply, err := stream.Recv()
-				if err == io.EOF {
-					fmt.Fprintf(out, "%s is not running\n", args[0])
-					return nil
-				}
-				if status.Code(err) == codes.Canceled {
-					return nil
-				}
-				if err != nil {
-					return err
-				}
+			show := func(st *anvilv1.InstanceStats) {
 				if clearScreen {
 					fmt.Fprint(out, "\033[H\033[2J")
 				}
-				printStats(out, args[0], reply.GetStats())
+				printStats(out, args[0], st)
 			}
+			stream, err := c.StreamStats(cmd.Context(), &anvilv1.StreamStatsRequest{Name: args[0], IntervalMs: int32(interval.Milliseconds())})
+			for err == nil {
+				var reply *anvilv1.StatsReply
+				if reply, err = stream.Recv(); err == nil {
+					show(reply.GetStats())
+				}
+			}
+			switch status.Code(err) {
+			case codes.Canceled:
+				return nil
+			case codes.Unimplemented:
+				// An anvild older than StreamStats: poll the one-shot RPC instead.
+				for {
+					reply, err := c.Stats(cmd.Context(), &anvilv1.StatsRequest{Name: args[0]})
+					if status.Code(err) == codes.Canceled {
+						return nil
+					}
+					if err != nil {
+						return err
+					}
+					show(reply.GetStats())
+					select {
+					case <-cmd.Context().Done():
+						return nil
+					case <-time.After(interval):
+					}
+				}
+			}
+			if err == io.EOF {
+				fmt.Fprintf(out, "%s is not running\n", args[0])
+				return nil
+			}
+			return err
 		},
 	}
 	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "keep refreshing until interrupted, like `docker stats`")

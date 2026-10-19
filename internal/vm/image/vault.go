@@ -19,6 +19,9 @@ const bytesPerGiB = 1 << 30
 type Vault struct {
 	PreparedDir string
 	Downloader  *Downloader
+
+	// RawDir, when set, holds raw copies of the base images (Firecracker's), deleted with them.
+	RawDir string
 }
 
 func NewVault(preparedDir string) *Vault {
@@ -194,7 +197,15 @@ type CachedImage struct {
 	Arch      string
 	Path      string
 	SizeBytes int64
+	Kind      string // one of the ImageKind constants
 }
+
+// Kinds of cached images.
+const (
+	ImageKindBase              = "base"               // a downloaded qcow2 base image
+	ImageKindFirecrackerRaw    = "firecracker-raw"    // a base image's raw copy
+	ImageKindFirecrackerKernel = "firecracker-kernel" // anvil's Firecracker guest kernel
+)
 
 // List returns every base image currently cached in PreparedDir.
 func (v *Vault) List() ([]CachedImage, error) {
@@ -221,6 +232,7 @@ func (v *Vault) List() ([]CachedImage, error) {
 			Arch:      arch,
 			Path:      filepath.Join(v.PreparedDir, e.Name()),
 			SizeBytes: info.Size(),
+			Kind:      ImageKindBase,
 		})
 	}
 	return out, nil
@@ -244,6 +256,10 @@ func (v *Vault) Delete(path string) error {
 		return fmt.Errorf("image: deleting %s: %w", path, err)
 	}
 	_ = os.Remove(path + checksumSuffix)
+	if v.RawDir != "" {
+		// The raw copy is derived from this base: it goes too, and comes back on next use.
+		_ = os.Remove(filepath.Join(v.RawDir, strings.TrimSuffix(filepath.Base(path), ".qcow2")+".raw"))
+	}
 	return nil
 }
 

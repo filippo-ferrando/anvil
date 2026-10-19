@@ -75,6 +75,10 @@ func vmSpecFromPB(v *anvilv1.VMSpec) *instance.VMSpec {
 		MACAddress:           v.GetMacAddress(),
 		Hypervisor:           vmHypervisorFromPB(v.GetHypervisor()),
 	}
+	// Only a migrated Firecracker VM brings its address; anywhere else the daemon assigns it.
+	if spec.Hypervisor == instance.VMHypervisorFirecracker {
+		spec.StaticIP = v.GetStaticIp()
+	}
 	for _, m := range v.GetMounts() {
 		spec.Mounts = append(spec.Mounts, instance.Mount{
 			HostPath:       m.GetHostPath(),
@@ -161,8 +165,11 @@ func vmHypervisorFromPB(h anvilv1.VmHypervisor) instance.VMHypervisor {
 		return instance.VMHypervisorQEMU
 	case anvilv1.VmHypervisor_VM_HYPERVISOR_FIRECRACKER:
 		return instance.VMHypervisorFirecracker
-	default:
+	case anvilv1.VmHypervisor_VM_HYPERVISOR_UNSPECIFIED:
 		return ""
+	default:
+		// Kept unknown, from a newer client, so Launch rejects it instead of running QEMU.
+		return instance.VMHypervisor(h.String())
 	}
 }
 

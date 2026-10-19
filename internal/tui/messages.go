@@ -8,6 +8,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
@@ -20,14 +22,17 @@ type instancesLoadedMsg struct {
 	err       error
 }
 
-// statsStreamMsg carries one snapshot from a StreamStats stream. gen names the stream, so
-// replies from a stream closed after a selection change are ignored. io.EOF: the instance stopped.
+// statsStreamMsg carries one stats snapshot and next, the Cmd that fetches the following one. gen
+// names the stream, so replies from one closed after a selection change are ignored. io.EOF: the instance stopped.
 type statsStreamMsg struct {
-	gen    int
-	stream anvilv1.InstanceService_StreamStatsClient
-	stats  *anvilv1.InstanceStats
-	err    error
+	gen   int
+	next  tea.Cmd
+	stats *anvilv1.InstanceStats
+	err   error
 }
+
+// selectionSettledMsg fires once the Instances cursor has rested on name for selectSettleDelay.
+type selectionSettledMsg struct{ name string }
 
 // eventsLoadedMsg feeds the Events screen; instanceEventsLoadedMsg the Instances detail panel.
 type eventsLoadedMsg struct {
@@ -111,6 +116,7 @@ type hostTestedMsg struct {
 // the stream itself to chain the next receive. done marks the terminal event.
 type launchStreamMsg struct {
 	stream   anvilv1.InstanceService_LaunchClient
+	want     anvilv1.VmHypervisor // the hypervisor asked for, checked on the final event
 	status   string
 	instance *anvilv1.Instance
 	err      error
@@ -193,6 +199,7 @@ type cloudInitImportStreamMsg struct {
 
 const (
 	watchReloadDelay   = 200 * time.Millisecond
+	selectSettleDelay  = 150 * time.Millisecond
 	watchRetryInterval = 5 * time.Second
 )
 
@@ -235,20 +242,41 @@ func loadInstances(c *client.Client) tea.Cmd {
 }
 
 // openStatsStream starts streaming name's live stats until ctx is cancelled or the instance stops.
+// An anvild older than StreamStats gets the one-shot Stats RPC polled instead.
 func openStatsStream(ctx context.Context, c *client.Client, gen int, name string) tea.Cmd {
 	return func() tea.Msg {
 		stream, err := c.StreamStats(ctx, &anvilv1.StreamStatsRequest{Name: name})
-		if err != nil {
+		if err == nil {
+			msg := recvStats(gen, stream)().(statsStreamMsg)
+			if status.Code(msg.err) != codes.Unimplemented {
+				return msg
+			}
+		} else if status.Code(err) != codes.Unimplemented {
 			return statsStreamMsg{gen: gen, err: err}
 		}
-		return recvStats(gen, stream)()
+		return pollStats(ctx, c, gen, name, 0)()
 	}
 }
 
 func recvStats(gen int, stream anvilv1.InstanceService_StreamStatsClient) tea.Cmd {
 	return func() tea.Msg {
 		reply, err := stream.Recv()
-		return statsStreamMsg{gen: gen, stream: stream, stats: reply.GetStats(), err: err}
+		return statsStreamMsg{gen: gen, next: recvStats(gen, stream), stats: reply.GetStats(), err: err}
+	}
+}
+
+// statsPollInterval matches StreamStats' default interval.
+const statsPollInterval = 2 * time.Second
+
+func pollStats(ctx context.Context, c *client.Client, gen int, name string, delay time.Duration) tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case <-ctx.Done():
+			return statsStreamMsg{gen: gen, err: status.FromContextError(ctx.Err()).Err()}
+		case <-time.After(delay):
+		}
+		reply, err := c.Stats(ctx, &anvilv1.StatsRequest{Name: name})
+		return statsStreamMsg{gen: gen, next: pollStats(ctx, c, gen, name, statsPollInterval), stats: reply.GetStats(), err: err}
 	}
 }
 
@@ -311,9 +339,9 @@ func loadCatalog(c *client.Client) tea.Cmd {
 	}
 }
 
-func deleteCachedImage(c *client.Client, id string) tea.Cmd {
+func deleteCachedImage(c *client.Client, id, arch, kind string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := c.Image.Delete(context.Background(), &anvilv1.ImageDeleteRequest{Id: id})
+		_, err := c.Image.Delete(context.Background(), &anvilv1.ImageDeleteRequest{Id: id, Arch: arch, Kind: kind})
 		return actionDoneMsg{screen: screenImages, verb: "deleted", err: err}
 	}
 }

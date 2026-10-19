@@ -65,6 +65,9 @@ type VM struct {
 	// MACAddress is kept, since the guest's network config inside the disk matches
 	// on it. Empty in older bundles.
 	MACAddress string
+
+	// Hypervisor is "qemu" or "firecracker"; empty in older bundles, which means qemu.
+	Hypervisor string `json:",omitempty"`
 }
 
 // Mount is one folder shared into a VM's guest, with its contents.

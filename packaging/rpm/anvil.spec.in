@@ -31,6 +31,9 @@ Requires:       virtiofsd
 Requires:       openssh-clients
 Requires:       systemd
 Recommends:     docker-ce
+Suggests:       firecracker
+Suggests:       nftables
+Suggests:       libcap
 
 %description -n anvild
 anvild is the daemon anvil (the CLI/TUI) talks to over a unix socket. It
@@ -85,8 +88,7 @@ install -Dm755 packaging/common/post-install.sh %{buildroot}/usr/lib/anvil/post-
 install -Dm644 packaging/common/anvild.service %{buildroot}/usr/lib/systemd/system/anvild.service
 install -Dm644 packaging/common/anvil.sysusers %{buildroot}/usr/lib/sysusers.d/anvil.conf
 install -Dm644 packaging/common/anvil.tmpfiles %{buildroot}/usr/lib/tmpfiles.d/anvil.conf
-/usr/lib/sysctl.d/60-anvil.conf
-install -Dm644 packaging/common/anvil.sysctl %{buildroot}/usr/lib/sysctl.d/60-anvil.conf
+install -Dm755 packaging/common/prepare-jailer.sh %{buildroot}/usr/lib/anvil/prepare-jailer.sh
 
 # Hand-written, not generated: anvild takes no flags/subcommands, so
 # there's no command tree for `anvil man`'s equivalent to walk.
@@ -115,6 +117,7 @@ fi
 /usr/lib/systemd/system/anvild.service
 /usr/lib/sysusers.d/anvil.conf
 /usr/lib/tmpfiles.d/anvil.conf
+/usr/lib/anvil/prepare-jailer.sh
 %{_mandir}/man8/anvild.8*
 
 # Deliberately no %preun that enables or starts the service, same

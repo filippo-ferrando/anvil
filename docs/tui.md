@@ -109,13 +109,15 @@ instance and intent delete prompts have an extra `p` choice, described below.
 The main screen: the instance list on the left, a detail panel for the selected instance
 on the right.
 
-Each list row shows a state marker, the name, the kind, the state, the image and an
+Each list row shows a state marker, the name, the kind (`vm`, `vm/firecracker` or
+`container`), the state, the image and an
 address (a bridged VM's static IP, otherwise the first IP the guest agent reported).
 
 The detail panel shows kind, state, image, creation time, size (vCPUs, memory, disk) for
 a VM, the autostart flag and restart policy, the snapshot schedule, the intent and role,
 port forwards and mounts. For a running instance it adds live data, streamed every 2 s
-for the selected row only (`StreamStats`): address, uptime, the guest agent state, cloud-init state and
+for the selected row only (`StreamStats`, or a 2 s poll of `Stats` on an older anvild),
+while the Instances screen is open: address, uptime, the guest agent state, cloud-init state and
 guest IPs (VM), and gauges for CPU, memory, disk usage (VM) or disk read/write rate
 (container), and network rate (shown as "not available" for a SLIRP VM).
 Under that, as many of the instance's recent events as fit, newest first, with the user
@@ -127,6 +129,7 @@ who caused each one and any error (see `anvil events`).
 | `s` | Stop the selected instance if it is running, otherwise start it. Stop uses the daemon's default 30 s graceful timeout. |
 | `x` | Open a shell in a VM: asks for a user (blank means the image's default user), then suspends the TUI and runs `ssh` into the VM until the session ends. On a container it opens `/bin/sh` through `docker exec`, like `anvil shell`. |
 | `e` | Run one command: asks for the command (and a user, for a VM), then runs it over `ssh` for a VM or `docker exec -it` for a container. |
+| `g` | Run a graphical app: command, X11 toggle, and whether to add it to this desktop's app launcher (`anvil gui`, see [gui.md](gui.md)). |
 | `l` | Open the Logs takeover. |
 | `d` | Delete, after a confirmation: `y`/`enter` deletes, `p` also removes the base image if no other VM uses it, any other key cancels. |
 | `f` | Fork the selected VM: new name, and whether to start it at once. Shows the progress until dismissed. |
@@ -153,7 +156,9 @@ fields depend on it:
 
 - Both: Name (defaults to the image), Image (suggestions from the VM catalog and cached
   images, or from local container images), CPUs, Memory MiB.
-- VM: Disk GiB (default 8), Cloud-init name (suggestions from the library), Guest agent
+- VM: Hypervisor (`qemu`, the default, or `firecracker`; with `firecracker` the Image
+  suggestions only list images it can boot, see [firecracker.md](firecracker.md)),
+  Disk GiB (default 8), Cloud-init name (suggestions from the library), Guest agent
   toggle (on by default), Wait toggle.
 - Container: Env (`K=V,K2=V2`), Volumes (`host:guest[:ro],...`).
 - Both, at the end: Autostart toggle, Restart policy (suggestions `no`, `on-failure`,
@@ -211,7 +216,8 @@ disk or the disk plus the VM state. `tab` moves focus between the panels.
 Two modes, shown as tabs at the top.
 
 - **VM images**: cached (downloaded) images on the left, with arch, size, how many
-  instances use them and, once computed, the sha256; the catalog on the right, with
+  instances use them and, once computed, the sha256. Firecracker's raw copies of a base
+  image and its guest kernel are listed too, marked by kind; the catalog on the right, with
   distro, version, arch, minimum disk and default user.
 - **Container images**: the engine's local images, with engine, size and how many
   containers use them.
@@ -220,8 +226,8 @@ Two modes, shown as tabs at the top.
 |-----|--------|
 | `v` / `c` | Switch to VM images / container images. |
 | `tab` | VM mode: switch focus between cached images and the catalog. |
-| `h` | VM mode, cached panel: compute the image's sha256. |
-| `x` | Delete the selected cached VM image (only the download, not the catalog entry) or container image, after a confirmation. |
+| `h` | VM mode, cached panel: compute a base image's sha256 (not offered for raw copies or the kernel). |
+| `x` | Delete the selected cached VM image (only the download, not the catalog entry; deleting a base also deletes its Firecracker raw copy) or container image, after a confirmation. |
 | `r` | Reload. |
 | `esc` `q` | Back to the sidebar. |
 
@@ -297,7 +303,8 @@ During a migration keys are ignored. When it ends, `tab` returns to the host lis
 
 The event log (`anvil events`), newest first: time, instance, action, the user who caused
 it (or `anvild`) and the message or error. A failed operation is marked `✕`. The newest
-500 events are loaded when the screen opens and again after instance changes.
+500 events are loaded when the screen opens and again after instance changes. With the
+cursor on the newest event it follows new ones; elsewhere it stays on the same event.
 
 | Key | Action |
 |-----|--------|

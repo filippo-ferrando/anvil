@@ -93,7 +93,7 @@ gzip -9n -c "$repo/docs/man/anvild.8" > "$pkg_anvild/usr/share/man/man8/anvild.8
 install -m644 "$common/anvild.service" "$pkg_anvild/usr/lib/systemd/system/anvild.service"
 install -m644 "$common/anvil.sysusers" "$pkg_anvild/usr/lib/sysusers.d/anvil.conf"
 install -m644 "$common/anvil.tmpfiles" "$pkg_anvild/usr/lib/tmpfiles.d/anvil.conf"
-install -Dm644 "$common/anvil.sysctl" "$pkg_anvild/usr/lib/sysctl.d/60-anvil.conf"
+install -m755 "$common/prepare-jailer.sh" "$pkg_anvild/usr/lib/anvil/prepare-jailer.sh"
 install -m644 "$repo/LICENSE.md" "$pkg_anvild/usr/share/doc/anvild/copyright"
 install -m755 "$root/postinst-anvild" "$pkg_anvild/DEBIAN/postinst"
 

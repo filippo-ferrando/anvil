@@ -44,6 +44,8 @@ type remoteCaps struct {
 	arch   string // target's CPU arch, in VM Arch naming ("x86_64", "aarch64")
 	kvm    bool   // /dev/kvm exists
 	qemu   bool   // qemu-system-<the migrating VM's arch> is installed
+	fc     bool   // firecracker is installed
+	fcCLI  bool   // the target's anvil knows about hypervisors (launch --hypervisor)
 	docker bool
 	podman bool
 	tar    bool
@@ -102,6 +104,10 @@ func probeRemote(ctx context.Context, t target, spec *instance.Spec, destName st
 			arch = "x86_64"
 		}
 		b.WriteString("command -v " + qemuBinary(arch) + " >/dev/null 2>&1 && echo qemu; ")
+		if spec.VM.HypervisorOf() == instance.VMHypervisorFirecracker {
+			b.WriteString("command -v firecracker >/dev/null 2>&1 && echo fc; " +
+				"anvil launch --help 2>/dev/null | grep -q -- --hypervisor && echo fccli; ")
+		}
 		if spec.VM.ImageRef != "" {
 			b.WriteString("echo base=$(" + imageChecksumCmd(spec.VM.ImageRef, arch) + "); ")
 		}
@@ -130,6 +136,10 @@ func parseRemoteCaps(out string) remoteCaps {
 			caps.kvm = true
 		case "qemu":
 			caps.qemu = true
+		case "fc":
+			caps.fc = true
+		case "fccli":
+			caps.fcCLI = true
 		case "docker":
 			caps.docker = true
 		case "podman":

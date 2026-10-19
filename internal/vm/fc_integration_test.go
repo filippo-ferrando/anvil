@@ -37,6 +37,10 @@ func TestFirecrackerRealBoot(t *testing.T) {
 		}
 	}
 
+	// The jailer needs real root (mknod is refused in a user namespace): opt in as root.
+	if os.Getenv("ANVIL_FC_TEST_JAILER") == "" {
+		t.Setenv(fcJailerEnv, "off")
+	}
 	if err := ensureFCNetwork(); err != nil {
 		t.Skipf("can't set up the standalone bridge (needs CAP_NET_ADMIN, try unshare -rn): %v", err)
 	}
@@ -75,6 +79,8 @@ func TestFirecrackerRealBoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := NewFCBackend(NewBackend(catalog, vault, noMirrors{}), filepath.Join(root, "fc"), nil)
+	b.ChrootBase = filepath.Join(root, "jailer")
+	t.Logf("jailer: %q", b.Jailer)
 	exits := make(chan instance.State, 1)
 	b.SetExitHook(func(_ string, state instance.State, _ string) { exits <- state })
 
@@ -105,13 +111,13 @@ func TestFirecrackerRealBoot(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	defer func() {
-		_ = b.Delete(context.Background(), spec)
 		if t.Failed() {
 			for _, f := range []string{"console.log", "firecracker.log"} {
 				data, _ := os.ReadFile(filepath.Join(instanceDir(id), f))
 				t.Logf("%s tail:\n%s", f, tail(string(data), 3000))
 			}
 		}
+		_ = b.Delete(context.Background(), spec)
 	}()
 
 	if err := b.Create(ctx, spec, func(s string) { t.Log(s) }); err != nil {
@@ -189,6 +195,7 @@ func TestFirecrackerRealBoot(t *testing.T) {
 		l.Close()
 	}
 	b2 := NewFCBackend(b.QEMU, b.Cache.Dir, nil)
+	b2.ChrootBase = b.ChrootBase
 	if st, err := b2.Reconcile(ctx, spec); err != nil || st != instance.StateRunning {
 		t.Fatalf("Reconcile = %v, %v; want running", st, err)
 	}
@@ -215,6 +222,40 @@ func TestFirecrackerRealBoot(t *testing.T) {
 		t.Errorf("Stop was reported as an outside exit (%s)", st)
 	default:
 	}
+
+	// Phase 8: the disk travels as a qcow2 delta and boots again as a migrated VM, which keeps
+	// its address (the source is deleted first, as after a migration).
+	sum, err := b.BaseImageChecksum(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta := filepath.Join(root, "migrated.qcow2")
+	if err := b.ExportDiskDelta(ctx, spec, delta); err != nil {
+		t.Fatalf("ExportDiskDelta: %v", err)
+	}
+	addr := spec.VM.StaticIP
+	if err := b.Delete(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	migrated := &instance.Spec{ID: "FCMIG", Name: "fc-mig", Kind: instance.KindVM, VM: &instance.VMSpec{
+		ImageRef: "e2e", CPUs: 1, MemoryMiB: 1024, Hypervisor: instance.VMHypervisorFirecracker,
+		SourceDiskPath: delta, SourceDiskBaseSHA256: sum, StaticIP: addr, MACAddress: spec.VM.MACAddress,
+	}}
+	defer b.Delete(context.Background(), migrated)
+	if err := b.Create(ctx, migrated, nil); err != nil {
+		t.Fatalf("Create from the migrated disk: %v", err)
+	}
+	if err := b.Start(ctx, migrated); err != nil {
+		t.Fatalf("Start of the migrated VM: %v", err)
+	}
+	if migrated.VM.StaticIP != addr {
+		t.Fatalf("migrated VM got %s, want its old %s", migrated.VM.StaticIP, addr)
+	}
+	sshBanner(t, migrated.VM.SSHPort)
+	if err := b.Stop(ctx, migrated, false, 60*time.Second); err != nil {
+		t.Fatalf("Stop of the migrated VM: %v", err)
+	}
+	t.Log("migrated disk booted with its old address")
 }
 
 // sshBanner checks the guest's sshd answers through host port, retrying while it starts.

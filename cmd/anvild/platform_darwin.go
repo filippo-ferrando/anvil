@@ -14,5 +14,8 @@ func newVMBackend(catalog *image.Catalog, vault *image.Vault, db *store.Store) V
 	return vz.NewBackend(catalog, vault, db)
 }
 
+// platformDNSHook has nothing to hook on macOS. See platform_linux.go.
+func platformDNSHook(refresh func()) {}
+
 // platformDNSZones has nothing to add on macOS. See platform_linux.go.
 func platformDNSZones() []dns.Zone { return nil }

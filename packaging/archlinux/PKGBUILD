@@ -44,6 +44,8 @@ package_anvild() {
   optdepends=(
     'docker: run containers via Docker'
     'podman: run containers via Podman (backend not implemented yet)'
+    'firecracker: run VMs with --hypervisor firecracker (jailer included)'
+    'nftables: outbound NAT for standalone Firecracker VMs'
   )
 
   install=anvild.install
@@ -63,7 +65,7 @@ package_anvild() {
   install -Dm644 "$startdir/../common/anvild.service" "$pkgdir/usr/lib/systemd/system/anvild.service"
   install -Dm644 "$startdir/../common/anvil.sysusers" "$pkgdir/usr/lib/sysusers.d/anvil.conf"
   install -Dm644 "$startdir/../common/anvil.tmpfiles" "$pkgdir/usr/lib/tmpfiles.d/anvil.conf"
-  install -Dm644 "$startdir/../common/anvil.sysctl" "$pkgdir/usr/lib/sysctl.d/60-anvil.conf"
+  install -Dm755 "$startdir/../common/prepare-jailer.sh" "$pkgdir/usr/lib/anvil/prepare-jailer.sh"
   install -Dm755 "$startdir/../common/post-install.sh" "$pkgdir/usr/lib/anvil/post-install.sh"
   # Referenced from anvild.install's pre_remove, not post_remove: pacman
   # deletes a package's own files before running post_remove, so this

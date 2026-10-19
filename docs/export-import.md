@@ -203,6 +203,15 @@ The prepared disk is then passed to the normal launch as `SourceDiskPath`. The V
 backend's `Create` sees it and moves the file into the new instance directory instead of
 creating an overlay (`adoptMigratedDisk`, the same path that `anvil migrate` uses).
 
+A **Firecracker** member (`Hypervisor` in the manifest; empty means QEMU) travels as a
+qcow2 too: at export its raw disk is converted next to the bundle, as a delta on the raw
+copy of its base when that base is cached, flattened otherwise. On import step 4 rebases
+onto this host's raw copy of the same base instead (`-F raw`), and `Create` converts the
+result back to a raw disk. A standalone Firecracker member keeps its address, since the
+guest's network config inside the disk names it. When it can't (`anvil import --name` of a
+copy next to its original, another subnet, or a member exported out of an intent), it gets
+a new address and a new seed, as a fork does, so cloud-init runs again in the guest.
+
 ### Shared folders and volumes
 
 Archived folder contents are moved out of the staging dir to fixed locations in the

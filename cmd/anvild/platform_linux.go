@@ -19,6 +19,10 @@ func newVMBackend(catalog *image.Catalog, vault *image.Vault, db *store.Store) V
 	return h
 }
 
+// platformDNSHook makes the DNS server pick up the standalone Firecracker zone as soon as
+// its bridge is created, not on the next periodic refresh.
+func platformDNSHook(refresh func()) { vm.FCNetworkUp = refresh }
+
 // platformDNSZones adds the forward-only zone of standalone Firecracker VMs, once their bridge exists.
 func platformDNSZones() []dns.Zone {
 	if z, ok := vm.FCDNSZone(); ok {

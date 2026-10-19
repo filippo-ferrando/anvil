@@ -130,7 +130,7 @@ container mirrors, man pages, shell completions and the TUI.
 
 ## VM hypervisors
 
-### Firecracker backend (in progress)
+### Firecracker backend (implemented, pending real-host checks)
 
 QEMU is the only VM hypervisor on Linux right now. Firecracker microVMs are being added as
 a second one, with the same lifecycle, commands, TUI screens and intent membership as QEMU
@@ -150,7 +150,7 @@ need a guest kernel: `ANVIL_FC_KERNEL=<path>` overrides the catalog kernel.
   `internal/vm/firecracker` only holds process control and the REST client, like `qemu/`.
 - **Kernel.** One anvil-built kernel per arch, everything built in, no modules: Firecracker's
   6.18 guest config plus btrfs, xfs, iso9660, overlayfs, netfilter, NFS client, vsock,
-  virtio-mem, SELinux/AppArmor. Built by `scripts/build-fc-kernel.sh` (docker, like
+  virtio-mem, SELinux (netfilter, bridge, veth and SELinux come from the base config; no AppArmor). Built by `scripts/build-fc-kernel.sh` (docker, like
   `build-gui-tools.sh`), published as a compressed bzImage release asset, not packaged:
   anvild downloads it on the first Firecracker launch into the Firecracker cache, like a
   distro image (catalog URL + sha256, mirrors apply, `ANVIL_FC_KERNEL` overrides it).
@@ -219,8 +219,8 @@ Each phase ends buildable, with its tests, and is ticked here when done.
 6. [x] **Disk and resources.** Snapshots, scheduled snapshots, fork, disk resize, live
    memory, CPUs at next start.
 7. [x] **Mounts and GUI.** NFS server and live mount/umount, GUI tools drive, PrepareGUI.
-8. [ ] **Export, import, migration.** Hypervisor-aware disk conversion on both ends.
-9. [ ] **Jailer and packaging.** Jailer chroot, unit capabilities, firecracker optdepend in
+8. [x] **Export, import, migration.** Hypervisor-aware disk conversion on both ends.
+9. [x] **Jailer and packaging.** Jailer chroot, unit capabilities, firecracker optdepend in
    all three package formats, docs (`docs/firecracker.md`), man pages.
 
 #### Status notes
@@ -320,8 +320,8 @@ Each phase ends buildable, with its tests, and is ticked here when done.
   spawn, closed on release, restarted on Reconcile on the same SSH port when free.
   `FCBackend` implements `PortForwarder` (live). DNS: `vm.FCDNSZone()`, a forward-only zone
   on the gateway, added to the intent DNS server through `platformDNSZones()` in
-  `cmd/anvild`. Packaging: `packaging/common/anvil.sysctl` ->
-  `/usr/lib/sysctl.d/60-anvil.conf` in all three formats, applied in post-install.
+  `cmd/anvild`. Packaging first shipped a sysctl.d file for `ip_forward`; replaced by
+  anvild turning it on at the first standalone start, so hosts without Firecracker don't route.
   `docs/networking.md` has a "Standalone Firecracker VMs" section.
   Tests: proxy TCP/UDP, IPAM, nft rules (`nft -c` when allowed), Create's network fields;
   `TestFirecrackerRealBoot` now checks SSH through the proxy, a live AddPort/RemovePort and
@@ -375,6 +375,70 @@ Each phase ends buildable, with its tests, and is ticked here when done.
   rebuild), the fstab script tests; `TestFirecrackerRealBoot` boots with a mount and the
   tools drive and the guest copies a tool through the share.
   Not verified yet (needs the agent, so a real anvild): live mount/umount and `anvil gui`.
+- **Phase 8 (done, verified in a network namespace).** `internal/vm/fc_transfer.go`: a
+  Firecracker disk travels as qcow2, flattened (`ExportDisk`) or as a delta on the raw copy
+  of its base (`ExportDiskDelta`, `-B base.raw -F raw`); the base qcow2's checksum still
+  identifies the base (`BaseImageChecksum`/`BaseImagePath` read the vault). Target `Create`
+  with `SourceDiskPath` adopts it (`adoptDisk`): checks/adopts the base like QEMU
+  (`matchingLocalBase`, `adoptSentBase`), rebases onto the local raw copy (`rawCopyOf`,
+  temporary when the base travelled and differs from the cached one), converts to
+  `disk.raw`, no seed. Bundles: `export.VMImporter` gained `ExportDiskFile` (QEMU: the
+  overlay itself; Firecracker: a qcow2 written next to the bundle, since archive/tar isn't
+  sparse-aware) and `PrepareImportedDisk` takes the hypervisor (Firecracker rebases onto
+  its raw copy). The dispatcher routes all of these through a `diskMover` capability.
+  The hypervisor travels in the payload (`payload.VM.Hypervisor`) and the manifest
+  (`VM.Hypervisor`, empty = qemu). A standalone Firecracker guest keeps its address
+  (`payload.VM.StaticIP`, the manifest's `StaticIP`): its network config is inside the disk
+  and a migrated disk boots without a seed. `keepAddress` reserves it through
+  `fcIPAM.reserve` and fails when another Firecracker VM holds it or it's outside this
+  host's subnet. `vmSpecFromPB` accepts `static_ip` only for a Firecracker VM.
+  Docs: `docs/migration.md` (step 5), `docs/export-import.md` (base image resolution).
+  Tests: `fc_transfer_test.go` (delta, full and bundle round trips, base mismatch refused,
+  address kept and clash refused), `migrate_import_test.go`, `convert_vm_test.go`;
+  `TestFirecrackerRealBoot` now exports a delta of the booted disk, deletes the source and
+  boots the adopted copy with its old address (SSH answers).
+  Not verified yet: a real two-host `anvil migrate` and export/import through anvild.
+- **Phase 9 (done; the jailed path is only unit-tested).** Jailer: `firecracker.Paths.Jail`
+  (`Jail{ID, ChrootBase, UID, GID}`, `Root()` = `<base>/firecracker/<id>/root`, `InVMM`
+  for in-jail paths); `Spawn` runs `jailer --id --exec-file --uid --gid --chroot-base-dir
+  --cgroup-version 2 -- <firecracker args>` (cgroup v2 with no `--cgroup` creates no
+  cgroup; no `--daemonize`, so the pid stays); `Attach` matches a jailed process by its
+  `--id`. `internal/vm/fc_jail.go`: used when `jailer` is on PATH and `ANVIL_FC_JAILER` isn't
+  `off`; `config.JailerDir()` = `/var/lib/anvil/jailer` (same filesystem as the disks, which
+  are hard-linked in; kernel, seed and tools ISO may fall back to a copy), firecracker.log
+  hard-linked back to the instance dir, the jail removed on release, `runtime.json` records
+  `jailed` so Reconcile finds the right paths, per-VM paths kept in `FCBackend.paths` (agent
+  dialer, live disk resize). Tap devices are now owned by anvild's uid/gid, so a capability-
+  less jailed firecracker can open them. Unit: `CAP_SYS_ADMIN CAP_SYS_CHROOT CAP_MKNOD
+  CAP_CHOWN CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE` added to the ambient and bounding sets
+  (trade-off written down in `docs/security.md` 3.2). Packaging: `firecracker` and `nftables`
+  as Arch optdepends, deb/rpm Suggests.
+  Images: `CachedImage.kind` (`base`, `firecracker-raw`, `firecracker-kernel`) and
+  `ImageDeleteRequest.kind`; `FCCache.List`; `Vault.RawDir` makes deleting a base delete its
+  raw copy; `anvil image list` has a KIND column, `image delete --kind`, the TUI labels them
+  and deletes by kind; `delete --purge` of a Firecracker VM prunes its base by name.
+  `CatalogEntry.firecracker` (from `Catalog.List`): a FIRECRACKER column in `anvil find`, a
+  tag in the TUI catalog. Docs: `docs/firecracker.md` (new), README, CLAUDE.md,
+  `docs/man/anvild.8` (`ANVIL_FC_KERNEL`, `ANVIL_FC_SUBNET`, `ANVIL_FC_JAILER`).
+  Tests: `jail_test.go` (jailer command line, id matching), `fc_jail_test.go` (layout, links,
+  cleanup), `image_server_test.go` (merged list, delete by kind, base takes its raw copy),
+  `TestCatalogListMarksFirecracker`. The real-boot test runs unjailed under `unshare`
+  (mknod is refused in a user namespace); `ANVIL_FC_TEST_JAILER=1` as root runs it jailed.
+
+#### To check on a real host (anvild from the packages)
+
+1. Standalone launch: `anvil launch ubuntu-24.04 --kind vm --hypervisor firecracker --wait`,
+   then `anvil shell`, outbound traffic from the guest (Docker's DOCKER-USER rules: does
+   `iptables` run as the anvil user with CAP_NET_ADMIN?), `anvil port add`.
+2. Guest agent over vsock: `--wait` returning through the agent, guest IPs in `anvil list`,
+   `anvil stop` through the agent's reboot.
+3. Live `anvil mount`/`umount` and `anvil gui` (both go through the agent).
+4. Jailer under the packaged unit: are the listed capabilities enough (setgroups,
+   chown of the device nodes)? Run `ANVIL_FC_TEST_JAILER=1` real-boot test as root, too.
+5. Intent with a Firecracker member, and `anvil apply` with `hypervisor: firecracker`.
+6. Two-host `anvil migrate` and `anvil export`/`import` of a Firecracker VM.
+7. Distros other than Ubuntu 26.04 and Debian 13 (Fedora's btrfs args, Arch, RHEL family,
+   openSUSE, Alpine), aarch64.
 
 ## Container engines
 

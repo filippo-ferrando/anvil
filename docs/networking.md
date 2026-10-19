@@ -111,10 +111,14 @@ Firecracker has no SLIRP, so a standalone `--hypervisor firecracker` VM gets a t
 
 - **Address.** A free static address from the subnet, picked at create time and written
   into the seed's network-config, so the guest keeps it across restarts.
-- **Outbound.** Masquerade in anvil's own nftables table (`table ip anvil`), plus two
-  rules in Docker's `DOCKER-USER` chain when Docker is installed, since Docker's FORWARD
-  policy drops everything it doesn't know. Needs `net.ipv4.ip_forward=1`; the packages ship
-  `/usr/lib/sysctl.d/60-anvil.conf` for it.
+- **Outbound.** Masquerade in anvil's own nftables table (`table ip anvil`), plus rules in
+  Docker's `DOCKER-USER` chain when Docker is installed, since Docker's FORWARD policy drops
+  everything it doesn't know. Traffic towards Docker's own bridges (`docker+`, `br-+`) goes
+  back to Docker's chains, which keep container and intent networks isolated. anvild turns
+  on `net.ipv4.ip_forward` on the first standalone start. The table and rules are
+  reapplied on every start, so a firewall reload that flushed them heals.
+- **Inbound.** Nothing is routed into the subnet from outside except replies: published
+  ports go through anvild's proxy below.
 - **DNS.** anvild answers on the bridge gateway and forwards to the host's resolvers, the
   same server intent networks use.
 - **SSH and `anvil port`.** A TCP/UDP proxy inside anvild listens on the host port (all

@@ -46,13 +46,17 @@ func (b *Backend) ExportDisk(ctx context.Context, spec *instance.Spec, destPath 
 	return errNotImplemented("ExportDisk")
 }
 
-// BaseImageChecksum and PrepareImportedDisk satisfy internal/export.VMImporter,
+// BaseImageChecksum, ExportDiskFile and PrepareImportedDisk satisfy internal/export.VMImporter,
 // same as internal/vm.Backend.
 func (b *Backend) BaseImageChecksum(spec *instance.Spec) (string, error) {
 	return "", errNotImplemented("BaseImageChecksum")
 }
 
-func (b *Backend) PrepareImportedDisk(ctx context.Context, imageRef, arch, diskPath, baseSHA256 string) error {
+func (b *Backend) ExportDiskFile(ctx context.Context, spec *instance.Spec, dir string) (string, error) {
+	return "", errNotImplemented("ExportDiskFile")
+}
+
+func (b *Backend) PrepareImportedDisk(ctx context.Context, hypervisor instance.VMHypervisor, imageRef, arch, diskPath, baseSHA256 string) error {
 	return errNotImplemented("PrepareImportedDisk")
 }
 

@@ -111,6 +111,8 @@ The longer write-up is in [docs/comparison.md](docs/comparison.md).
   Stream, openSUSE, Alpine (or bring your own via a mirror)
 - cross-arch guests: an `aarch64` image runs under emulation on an x86_64 host, see
   [docs/aarch64-on-x86.md](docs/aarch64-on-x86.md)
+- Firecracker microVMs with `--hypervisor firecracker`, the same commands and features,
+  see [docs/firecracker.md](docs/firecracker.md)
 - real cloud-init under the hood, plus a saved cloud-init config library you can write,
   edit, and reuse (`anvil cloud-init`)
 - `anvil shell` / `anvil exec` / `anvil transfer` over real SSH, using a keypair Anvil
@@ -385,6 +387,7 @@ scripts/         catalog checksum check, release notes and changelog from commit
 | aarch64 guests on x86_64 | [docs/aarch64-on-x86.md](docs/aarch64-on-x86.md) |
 | The TUI, screen by screen | [docs/tui.md](docs/tui.md) |
 | GUI apps from instances (`anvil gui`) | [docs/gui.md](docs/gui.md) |
+| Firecracker microVMs (`--hypervisor firecracker`) | [docs/firecracker.md](docs/firecracker.md) |
 | Security model | [docs/security.md](docs/security.md) |
 | Comparison with similar tools | [docs/comparison.md](docs/comparison.md) |
 

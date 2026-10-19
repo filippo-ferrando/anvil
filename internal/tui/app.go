@@ -144,7 +144,24 @@ func (m model) Init() tea.Cmd {
 	return tea.Batch(loadInstances(m.client), tickCmd(), startWatch(m.client))
 }
 
+// Update closes the stats stream while the Instances screen is hidden and reopens it on return.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	nm, ok := next.(model)
+	if !ok {
+		return next, cmd
+	}
+	switch {
+	case nm.screen != screenInstances && nm.instances.statsStreaming != "":
+		nm.instances.closeStatsStream()
+	case nm.screen == screenInstances && m.screen != screenInstances:
+		reload := nm.reloadSelected()
+		cmd = tea.Batch(cmd, reload)
+	}
+	return nm, cmd
+}
+
+func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tickMsg:
 		visible := statusVisible
@@ -215,7 +232,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Replies to long-running requests go to the screen that made them, even after the user moved on.
 	switch msg.(type) {
-	case waitStreamMsg, statsStreamMsg, instanceEventsLoadedMsg:
+	case waitStreamMsg, statsStreamMsg, instanceEventsLoadedMsg, selectionSettledMsg:
 		return m.updateInstances(msg)
 	case eventsLoadedMsg:
 		return m.updateEvents(msg)

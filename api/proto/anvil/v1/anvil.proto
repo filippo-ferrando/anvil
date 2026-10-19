@@ -239,7 +239,8 @@ message VMSpec {
   // Host directories shared into the guest via virtiofs, managed by InstanceService.Mount/Umount.
   repeated Mount mounts = 12;
 
-  // Daemon-populated when this VM joins an intent's bridge network.
+  // Daemon-populated when this VM joins an intent's bridge network, or for a standalone
+  // Firecracker VM. On Launch, static_ip is read only for a migrated Firecracker disk.
   string bridge_interface = 13; // Linux interface name of the intent's shared bridge
   string static_ip = 14;        // CIDR, e.g. "10.55.201.4/24"
   string gateway = 15;
@@ -634,6 +635,8 @@ message CachedImage {
   string path = 3;
   int64 size_bytes = 4;
   int32 ref_count = 5; // number of instances whose disk is backed by this image
+  // "base" (a downloaded qcow2), "firecracker-raw" (its raw copy) or "firecracker-kernel".
+  string kind = 6;
 }
 
 message ImageListRequest {}
@@ -651,6 +654,7 @@ message CatalogEntry {
   string arch = 5;
   int64 min_disk_gib = 6;
   string default_user = 7;
+  bool firecracker = 8; // also launches with --hypervisor firecracker
 }
 
 message CatalogRequest {}
@@ -663,6 +667,7 @@ message ImageDeleteRequest {
   string id = 1;
   string arch = 2; // optional; only needed if id is ambiguous across architectures
   bool force = 3;  // delete even if ref_count > 0, which will break those instances' disks
+  string kind = 4; // optional CachedImage.kind; empty picks the base image first
 }
 
 // ContainerImage is one image cached by a container engine, a separate

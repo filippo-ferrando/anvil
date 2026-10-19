@@ -160,3 +160,32 @@ func TestPreflightReportsSSHFailure(t *testing.T) {
 		t.Fatalf("expected the ssh error, got %v", err)
 	}
 }
+
+func TestPreflightVMFirecracker(t *testing.T) {
+	spec := vmSpec()
+	spec.VM.Hypervisor = instance.VMHypervisorFirecracker
+	spec.VM.StaticIP = "10.254.254.7/24"
+	caps := goodVMCaps()
+	caps.qemu, caps.fc, caps.fcCLI = false, true, true
+
+	// No qemu is fine for a Firecracker VM.
+	if fatal, _ := preflightVM(spec, caps); len(fatal) != 0 {
+		t.Fatalf("expected a clean check, got %v", fatal)
+	}
+
+	bad := caps
+	bad.fc, bad.fcCLI, bad.kvm, bad.arch = false, false, false, "aarch64"
+	fatal, _ := preflightVM(spec, bad)
+	for _, want := range []string{"upgrade", "firecracker is not installed", "/dev/kvm", "cannot emulate"} {
+		if !strings.Contains(strings.Join(fatal, "; "), want) {
+			t.Errorf("fatal %v is missing %q", fatal, want)
+		}
+	}
+}
+
+func TestParseRemoteCapsFirecracker(t *testing.T) {
+	caps := parseRemoteCaps("fc\nfccli\n")
+	if !caps.fc || !caps.fcCLI {
+		t.Errorf("parsed %+v", caps)
+	}
+}

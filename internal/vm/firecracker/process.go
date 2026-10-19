@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -18,12 +19,82 @@ import (
 // Binary is the firecracker executable, looked up on PATH.
 const Binary = "firecracker"
 
-// Paths are the files one Firecracker process uses.
+// Paths are the files one Firecracker process uses, as host paths.
 type Paths struct {
 	APISocket  string // REST API
 	ConfigFile string // --config-file, written by the caller
 	ConsoleLog string // the guest's serial console (Firecracker's stdout)
 	LogFile    string // Firecracker's own log and stderr
+
+	// Jail, when set, runs firecracker under the jailer. Every path but ConsoleLog must
+	// then be inside Jail.Root(), and firecracker sees them relative to it (InVMM).
+	Jail *Jail
+}
+
+// JailerBinary is the jailer executable, looked up on PATH.
+const JailerBinary = "jailer"
+
+// Jail is how the jailer confines one firecracker: a chroot under ChrootBase, a new mount
+// namespace, and UID/GID instead of the caller's privileges.
+type Jail struct {
+	ID         string // also names the chroot
+	ChrootBase string
+	UID, GID   int
+	Jailer     string // jailer binary, JailerBinary on PATH when empty
+	ExecFile   string // firecracker binary, symlinks resolved; its name is part of the chroot path
+}
+
+// ResolveBinary finds firecracker on PATH with symlinks resolved, the path a Jail's ExecFile wants.
+func ResolveBinary() (string, error) {
+	path, err := exec.LookPath(Binary)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(path)
+}
+
+func (j *Jail) execName() string {
+	if j.ExecFile == "" {
+		return Binary
+	}
+	return filepath.Base(j.ExecFile)
+}
+
+// Root is the chroot the jailer creates for j: <base>/<firecracker file name>/<id>/root.
+func (j *Jail) Root() string { return filepath.Join(j.ChrootBase, j.execName(), j.ID, "root") }
+
+// InVMM returns host path as firecracker sees it: unchanged, or relative to the jail root.
+func (p Paths) InVMM(path string) string {
+	if p.Jail == nil {
+		return path
+	}
+	return "/" + strings.TrimPrefix(strings.TrimPrefix(path, p.Jail.Root()), "/")
+}
+
+// command builds the firecracker invocation, wrapped in the jailer when p.Jail is set.
+// With cgroup v2 and no --cgroup the jailer creates no cgroup, so it needs no cgroup rights.
+func (p Paths) command() (string, []string, error) {
+	args := []string{"--api-sock", p.InVMM(p.APISocket), "--config-file", p.InVMM(p.ConfigFile), "--log-path", p.InVMM(p.LogFile)}
+	if p.Jail == nil {
+		return Binary, args, nil
+	}
+	fc := p.Jail.ExecFile
+	if fc == "" {
+		var err error
+		if fc, err = ResolveBinary(); err != nil {
+			return "", nil, err
+		}
+	}
+	jail := []string{
+		"--id", p.Jail.ID, "--exec-file", fc,
+		"--uid", strconv.Itoa(p.Jail.UID), "--gid", strconv.Itoa(p.Jail.GID),
+		"--chroot-base-dir", p.Jail.ChrootBase, "--cgroup-version", "2", "--",
+	}
+	jailer := p.Jail.Jailer
+	if jailer == "" {
+		jailer = JailerBinary
+	}
+	return jailer, append(jail, args...), nil
 }
 
 // Process controls one running or reattached firecracker process.
@@ -59,11 +130,14 @@ func Spawn(ctx context.Context, paths Paths) (*Process, error) {
 		return nil, fmt.Errorf("firecracker: opening log file: %w", err)
 	}
 
-	cmd := exec.Command(Binary,
-		"--api-sock", paths.APISocket,
-		"--config-file", paths.ConfigFile,
-		"--log-path", paths.LogFile,
-	)
+	bin, args, err := paths.command()
+	if err != nil {
+		console.Close()
+		logF.Close()
+		return nil, fmt.Errorf("firecracker: %w", err)
+	}
+	// Without --daemonize the jailer execs firecracker in its own process, so the pid stays.
+	cmd := exec.Command(bin, args...)
 	cmd.Stdout = console
 	cmd.Stderr = logF
 	// New process group so a kill reaches anything firecracker started too.
@@ -71,7 +145,7 @@ func Spawn(ctx context.Context, paths Paths) (*Process, error) {
 	if err := cmd.Start(); err != nil {
 		console.Close()
 		logF.Close()
-		return nil, fmt.Errorf("firecracker: starting %s: %w", Binary, err)
+		return nil, fmt.Errorf("firecracker: starting %s: %w", bin, err)
 	}
 
 	p := &Process{
@@ -88,7 +162,7 @@ func Spawn(ctx context.Context, paths Paths) (*Process, error) {
 // Attach takes control of a firecracker process an earlier anvild spawned, after
 // checking pid still is firecracker serving apiSocket.
 func Attach(paths Paths, pid int) (*Process, error) {
-	if !looksLikeOurs(pid, paths.APISocket) {
+	if !looksLikeOurs(pid, paths) {
 		return nil, fmt.Errorf("firecracker: pid %d is not firecracker for %s (stale or reused pid)", pid, paths.APISocket)
 	}
 	p := &Process{paths: paths, pid: pid, API: NewClient(paths.APISocket), exited: make(chan struct{})}
@@ -96,13 +170,31 @@ func Attach(paths Paths, pid int) (*Process, error) {
 	return p, nil
 }
 
-func looksLikeOurs(pid int, apiSocket string) bool {
+// looksLikeOurs checks pid is firecracker serving paths. Jailed ones all use the same
+// in-jail socket path, so their --id tells them apart.
+func looksLikeOurs(pid int, paths Paths) bool {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
 	if err != nil {
 		return false
 	}
 	args := strings.Split(string(bytes.TrimRight(data, "\x00")), "\x00")
-	return len(args) > 0 && filepath.Base(args[0]) == Binary && containsArg(args, apiSocket)
+	if len(args) == 0 || !containsArg(args, paths.InVMM(paths.APISocket)) {
+		return false
+	}
+	if name := filepath.Base(args[0]); name != Binary && (paths.Jail == nil || name != paths.Jail.execName()) {
+		return false
+	}
+	return paths.Jail == nil || hasID(args, paths.Jail.ID)
+}
+
+// hasID reports whether args name the jail id, as "--id=<id>" or "--id <id>".
+func hasID(args []string, id string) bool {
+	for i, a := range args {
+		if a == "--id="+id || (a == "--id" && i+1 < len(args) && args[i+1] == id) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsArg(args []string, want string) bool {
@@ -191,9 +283,19 @@ func (p *Process) kill() error {
 	if p.pid == 0 {
 		return nil
 	}
-	// Negative pid targets the whole process group.
-	_ = syscall.Kill(-p.pid, syscall.SIGKILL)
-	<-p.exited
+	select {
+	case <-p.exited:
+		// Already gone: its pid may belong to another process by now.
+	default:
+		// Negative pid targets the whole process group.
+		_ = syscall.Kill(-p.pid, syscall.SIGKILL)
+		select {
+		case <-p.exited:
+		case <-time.After(10 * time.Second):
+			// An Attach'd process that nothing reaps stays a zombie and never looks gone.
+			return fmt.Errorf("firecracker: pid %d still there 10s after SIGKILL", p.pid)
+		}
+	}
 	if p.cmd == nil {
 		return nil
 	}

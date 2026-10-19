@@ -49,6 +49,13 @@ type VM struct {
 
 	// MACAddress is kept, since the guest's network config inside the disk matches on it.
 	MACAddress string
+
+	// Hypervisor is "qemu" or "firecracker"; empty from older sources, which means qemu.
+	Hypervisor string
+
+	// StaticIP (CIDR) is a standalone Firecracker guest's address, configured inside its
+	// disk, so the target keeps it. An intent member's goes in Payload.StaticIP.
+	StaticIP string
 }
 
 // Mount is one folder shared into a VM's guest, with its contents.

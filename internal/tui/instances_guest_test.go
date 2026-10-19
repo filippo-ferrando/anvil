@@ -127,3 +127,11 @@ func TestImageChecksumShownOnItem(t *testing.T) {
 		t.Errorf("expected the full checksum in the status line, got %q", m.status)
 	}
 }
+
+func TestInstanceItemShowsHypervisor(t *testing.T) {
+	fc := instanceItem{inst: &anvilv1.Instance{Kind: anvilv1.Kind_KIND_VM,
+		Vm: &anvilv1.VMSpec{Hypervisor: anvilv1.VmHypervisor_VM_HYPERVISOR_FIRECRACKER}}}
+	if !strings.HasPrefix(fc.Description(), "vm/firecracker") {
+		t.Errorf("expected the hypervisor in %q", fc.Description())
+	}
+}

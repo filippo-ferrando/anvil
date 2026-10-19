@@ -54,7 +54,10 @@ func (fakeStore) GetCloudInit(string) (store.CloudInitConfig, error) {
 type fakeVMImporter struct{}
 
 func (fakeVMImporter) BaseImageChecksum(*instance.Spec) (string, error) { return "", nil }
-func (fakeVMImporter) PrepareImportedDisk(context.Context, string, string, string, string) error {
+func (fakeVMImporter) ExportDiskFile(_ context.Context, spec *instance.Spec, _ string) (string, error) {
+	return spec.VM.DiskPath, nil
+}
+func (fakeVMImporter) PrepareImportedDisk(context.Context, instance.VMHypervisor, string, string, string, string) error {
 	return nil
 }
 

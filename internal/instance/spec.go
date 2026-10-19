@@ -204,6 +204,15 @@ const (
 	VMHypervisorFirecracker VMHypervisor = "firecracker"
 )
 
+// CheckHypervisor rejects a hypervisor other than qemu, firecracker or empty (qemu).
+func CheckHypervisor(h VMHypervisor) error {
+	switch h {
+	case "", VMHypervisorQEMU, VMHypervisorFirecracker:
+		return nil
+	}
+	return fmt.Errorf("instance: unknown hypervisor %q (want qemu or firecracker)", h)
+}
+
 // HypervisorOf returns v's hypervisor, defaulting an unset one to QEMU.
 func (v *VMSpec) HypervisorOf() VMHypervisor {
 	if v.Hypervisor == "" {

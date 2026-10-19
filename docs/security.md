@@ -73,15 +73,31 @@ their cloud-init templates and triggering migrations.
 The packaged unit (`packaging/common/anvild.service`) runs `anvild` as the system user
 `anvil`, not root, with:
 
-- `SupplementaryGroups=kvm` and `DeviceAllow=/dev/kvm rw`, `DeviceAllow=/dev/net/tun rw`.
-- `AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE`, with the bounding set limited
-  to the same two. `CAP_NET_ADMIN` is needed for bridges and tap devices,
-  `CAP_NET_BIND_SERVICE` for the intent DNS server on port 53. Ambient capabilities are
-  passed on to the programs the daemon executes, such as QEMU and `virtiofsd`.
+- `SupplementaryGroups=kvm` and `DeviceAllow=` `rwm` for `/dev/kvm`, `/dev/net/tun` and
+  `/dev/userfaultfd` (`m` lets the jailer create them inside its chroots).
+- `AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE`: bridges and tap devices, and
+  the intent DNS server on port 53. Ambient capabilities are passed on to every program the
+  daemon executes (QEMU, `virtiofsd`, `qemu-img`, `nft`, ...).
+- A root `ExecStartPre=+` (`packaging/common/prepare-jailer.sh`) that copies Firecracker's
+  `jailer` to `/var/lib/anvil-jailer/jailer`, runnable only by the `anvil` user, with
+  `CAP_SYS_ADMIN CAP_SYS_CHROOT CAP_MKNOD CAP_CHOWN CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE`
+  as file capabilities (the bounding set keeps them allowed). Running a program with file
+  capabilities clears the ambient set, so the jailer has only its own and firecracker,
+  which the jailer runs next, has none. Those capabilities are close to root, so anyone who
+  controls the daemon user can use the jailer to get root; this is no worse than the
+  `docker` group below. Without `jailer` or `setcap` there is no copy, and firecracker runs
+  unjailed like QEMU.
 - Membership of the `docker` group, added by the post-install script
   (`packaging/common/post-install.sh`) when that group exists.
 
 QEMU and `virtiofsd` run as the same `anvil` user, with no extra sandboxing from Anvil.
+Firecracker runs under its jailer when it's installed (`internal/vm/fc_jail.go`): chrooted
+in `/var/lib/anvil/jailer/<firecracker binary>/<id>/root` with only that VM's disk
+(hard-linked), its own copies of the kernel, seed and GUI tools ISO, and its sockets, in
+its own mount namespace, as the `anvil` user with no capabilities, under firecracker's own
+seccomp filters. Being the same user, it can still signal anvild and the other VMs'
+processes. Without the jailer (`ANVIL_FC_JAILER=off`, or no prepared copy) it runs like
+QEMU, as the daemon user with its capabilities.
 `virtiofsd` is started with `--sandbox=namespace` first and falls back to
 `--sandbox=none` if that fails (`internal/vm/qemu/virtiofs.go`). A guest that escapes
 QEMU therefore gets the daemon's user, its capabilities, its file access (all instance
@@ -214,9 +230,11 @@ inside the shared directory (go-billy's BoundOS). A read-only share refuses ever
 host-side, whatever the guest mounts it as. Files keep the anvil user's ownership (chown
 is ignored, like root squash).
 
-The check is by source address. Guests on the same bridge are not isolated from each
-other at layer 2, so a guest that takes over another's address on its bridge could reach
-that VM's shares.
+The check is by source address. On `anvil-fc0` each standalone VM's tap has an nftables
+`netdev` ingress filter (`table netdev anvil-<id>`) that drops any frame not from the
+guest's own MAC and IPv4 address, so a guest can't take over a neighbour's address. Intent
+members sit on their intent's bridge without that filter, so a guest that takes over
+another member's address there could reach that VM's shares.
 
 ### 3.9 Intent DNS
 

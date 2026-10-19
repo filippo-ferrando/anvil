@@ -32,7 +32,7 @@ build='
     install -m 0755 "target/$target/release/waypipe" "$OUT"/waypipe
 
     # Alpine ships no static libXau or libxcb-util, and its xcb-cursor.pc leaves out xcb-util.
-    apk add --no-cache xorgproto util-macros make xcb-util-dev
+    apk add --no-cache xorgproto util-macros make xcb-util-dev xz
     wget -qO- https://xorg.freedesktop.org/releases/individual/lib/libXau-1.0.12.tar.xz | tar -xJ -C /src
     wget -qO- https://xorg.freedesktop.org/releases/individual/lib/xcb-util-0.4.1.tar.xz | tar -xJ -C /src
     for lib in libXau-1.0.12 xcb-util-0.4.1; do

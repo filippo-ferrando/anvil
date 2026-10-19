@@ -41,6 +41,9 @@ func (i instanceItem) Title() string {
 }
 func (i instanceItem) Description() string {
 	kind, image := "vm", i.inst.GetVm().GetImageRef()
+	if i.inst.GetVm().GetHypervisor() == anvilv1.VmHypervisor_VM_HYPERVISOR_FIRECRACKER {
+		kind = "vm/firecracker"
+	}
 	if i.inst.GetKind() == anvilv1.Kind_KIND_CONTAINER {
 		kind, image = "container", i.inst.GetContainer().GetImageRef()
 	}
@@ -229,7 +232,15 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items[i] = instanceItem{inst: inst}
 		}
 		m.instances.list.SetItems(items)
-		return m, m.reloadSelected()
+		cmd := m.reloadSelected()
+		return m, cmd
+
+	case selectionSettledMsg:
+		if inst := m.instances.selected(); m.screen != screenInstances || inst == nil || inst.GetName() != msg.name {
+			return m, nil // the cursor moved on, or the screen did
+		}
+		cmd := m.reloadSelected()
+		return m, cmd
 
 	case statsStreamMsg:
 		ins := &m.instances
@@ -246,7 +257,7 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		ins.stats, ins.statsFor, ins.statsErr = msg.stats, name, ""
-		return m, recvStats(msg.gen, msg.stream)
+		return m, msg.next
 
 	case instanceEventsLoadedMsg:
 		if inst := m.instances.selected(); inst == nil || inst.GetName() != msg.name || msg.err != nil {
@@ -564,7 +575,10 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.instances.list, cmd = m.instances.list.Update(msg)
 	if inst := m.instances.selected(); inst != nil && inst.GetName() != prevName {
 		m.instances.events, m.instances.eventsFor = nil, ""
-		return m, tea.Batch(cmd, m.reloadSelected())
+		// Held arrow keys would otherwise fire an Events call and a stats stream per row.
+		name := inst.GetName()
+		settle := tea.Tick(selectSettleDelay, func(time.Time) tea.Msg { return selectionSettledMsg{name: name} })
+		return m, tea.Batch(cmd, settle)
 	}
 	return m, cmd
 }

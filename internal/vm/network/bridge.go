@@ -6,6 +6,7 @@ package network
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/vishvananda/netlink"
 )
@@ -23,9 +24,13 @@ func (LinuxBridge) Attach(instanceID, bridgeName string) (string, error) {
 		return "", fmt.Errorf("network: finding bridge %q: %w", bridgeName, err)
 	}
 
+	// Owned by anvild's user, so a hypervisor running as that user without capabilities
+	// (a jailed firecracker) can still open it.
 	tap := &netlink.Tuntap{
 		LinkAttrs: netlink.LinkAttrs{Name: tapName},
 		Mode:      netlink.TUNTAP_MODE_TAP,
+		Owner:     uint32(os.Getuid()),
+		Group:     uint32(os.Getgid()),
 	}
 	if err := netlink.LinkAdd(tap); err != nil {
 		return "", fmt.Errorf("network: creating tap device %q: %w", tapName, err)

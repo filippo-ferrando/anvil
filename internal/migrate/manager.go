@@ -569,6 +569,10 @@ func (m *Manager) buildVMPayload(ctx context.Context, spec *instance.Spec, t tar
 		RemoteBaseImagePath: remoteBase,
 		Mounts:              mounts,
 		MACAddress:          spec.VM.MAC(spec.ID),
+		Hypervisor:          string(spec.VM.HypervisorOf()),
+	}
+	if spec.VM.HypervisorOf() == instance.VMHypervisorFirecracker && spec.VM.NetworkMode != "bridge" {
+		pl.VM.StaticIP = spec.VM.StaticIP
 	}
 	return nil
 }

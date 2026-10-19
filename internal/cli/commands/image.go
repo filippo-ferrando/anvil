@@ -25,7 +25,7 @@ func newImageCommand(flags *globalFlags) *cobra.Command {
 func newImageListCommand(flags *globalFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "List cached VM base images (see `image containers list` for container images)",
+		Short: "List cached VM base images, plus Firecracker's raw copies and kernels (see `image containers list` for container images)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := dial(flags)
@@ -39,14 +39,18 @@ func newImageListCommand(flags *globalFlags) *cobra.Command {
 				return err
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "ID\tARCH\tSIZE\tIN USE\tPATH")
+			fmt.Fprintln(tw, "ID\tARCH\tKIND\tSIZE\tIN USE\tPATH")
 			for _, img := range reply.GetImages() {
 				inUse := fmt.Sprintf("%d", img.GetRefCount())
 				if img.GetRefCount() == 0 {
 					inUse = "no"
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-					img.GetId(), img.GetArch(), humanBytes(img.GetSizeBytes()), inUse, img.GetPath())
+				kind := img.GetKind()
+				if kind == "" {
+					kind = "base" // from an older anvild
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+					img.GetId(), img.GetArch(), kind, humanBytes(img.GetSizeBytes()), inUse, img.GetPath())
 			}
 			return tw.Flush()
 		},
@@ -56,13 +60,15 @@ func newImageListCommand(flags *globalFlags) *cobra.Command {
 func newImageDeleteCommand(flags *globalFlags) *cobra.Command {
 	var (
 		arch  string
+		kind  string
 		force bool
 	)
 	cmd := &cobra.Command{
 		Use:   "delete <id>",
 		Short: "Delete a cached VM base image",
-		Long: "Delete a cached VM base image. Refuses to delete one still referenced by a " +
-			"current instance's disk (that would corrupt it) unless --force is given.",
+		Long: "Delete a cached VM base image, along with its Firecracker raw copy. Refuses to delete one still " +
+			"referenced by a current instance's disk (that would corrupt it) unless --force is given. " +
+			"A Firecracker raw copy or kernel can be deleted on its own; it comes back the next time it's needed.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := dial(flags)
@@ -74,11 +80,13 @@ func newImageDeleteCommand(flags *globalFlags) *cobra.Command {
 				Id:    args[0],
 				Arch:  arch,
 				Force: force,
+				Kind:  kind,
 			})
 			return err
 		},
 	}
 	cmd.Flags().StringVar(&arch, "arch", "", "architecture, if the id is ambiguous across more than one")
+	cmd.Flags().StringVar(&kind, "kind", "", `only delete this kind: "base", "firecracker-raw" or "firecracker-kernel" (default: the base image first)`)
 	cmd.Flags().BoolVar(&force, "force", false, "delete even if an instance's disk still depends on it (this will break that instance)")
 	return cmd
 }

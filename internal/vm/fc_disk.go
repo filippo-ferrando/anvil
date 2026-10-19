@@ -72,11 +72,23 @@ func (b *FCBackend) copyDisk(ctx context.Context, spec *instance.Spec, dest stri
 		return fmt.Errorf("vm: pausing %s: %w", spec.Name, err)
 	}
 	say("copying disk while paused")
-	copyErr := image.CloneDisk(ctx, spec.VM.DiskPath, dest, 0)
+	copyErr := image.ReflinkDisk(ctx, spec.VM.DiskPath, dest)
+	if copyErr == nil || !frozen {
+		if copyErr != nil {
+			say("no copy-on-write on this filesystem, full copy while paused (can take a while)")
+			copyErr = image.CloneDisk(ctx, spec.VM.DiskPath, dest, 0)
+		}
+		if err := proc.API.Resume(cleanup); err != nil {
+			return fmt.Errorf("vm: resuming %s: %w", spec.Name, err)
+		}
+		return copyErr
+	}
+	// No copy-on-write: frozen filesystems keep a slow full copy consistent while the guest runs.
 	if err := proc.API.Resume(cleanup); err != nil {
 		return fmt.Errorf("vm: resuming %s: %w", spec.Name, err)
 	}
-	return copyErr
+	say("no copy-on-write on this filesystem, full copy with the guest's filesystems frozen")
+	return image.CloneDisk(ctx, spec.VM.DiskPath, dest, 0)
 }
 
 func (b *FCBackend) CreateSnapshot(ctx context.Context, spec *instance.Spec, name string) error {
@@ -195,6 +207,11 @@ func (b *FCBackend) Fork(ctx context.Context, source, dest *instance.Spec, progr
 		_ = os.Remove(diskPath)
 		return fmt.Errorf("vm: forking disk: %w", err)
 	}
+	defer func() {
+		if err != nil {
+			_ = os.Remove(diskPath)
+		}
+	}()
 	dest.VM.DiskPath = diskPath
 	if standalone(dest.VM) {
 		if err := b.assignAddress(dest); err != nil {
@@ -252,7 +269,12 @@ func (b *FCBackend) ResizeDisk(ctx context.Context, spec *instance.Spec, newGiB 
 	if !running {
 		return fmt.Sprintf("disk grown to %d GiB; the guest filesystem grows at the next boot", newGiB), nil
 	}
-	if err := proc.API.UpdateDrive(ctx, fcRootDrive, spec.VM.DiskPath); err != nil {
+	// A jailed firecracker has the disk hard-linked in: the same file, under its in-jail path.
+	vmDisk := spec.VM.DiskPath
+	if paths := b.pathsOf(spec.ID); paths.Jail != nil {
+		vmDisk = paths.InVMM(filepath.Join(paths.Jail.Root(), "disk.raw"))
+	}
+	if err := proc.API.UpdateDrive(ctx, fcRootDrive, vmDisk); err != nil {
 		return "", fmt.Errorf("vm: telling the guest about the new disk size: %w", err)
 	}
 	note := fmt.Sprintf("disk grown live to %d GiB", newGiB)

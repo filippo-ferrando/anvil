@@ -66,6 +66,7 @@ func fcTestBackend(t *testing.T) *FCBackend {
 	fcLookPath = func(string) (string, error) { return "/usr/bin/firecracker", nil }
 	t.Cleanup(func() { fcLookPath = origLook })
 	t.Setenv(image.KernelEnv, "/test/vmlinux")
+	t.Setenv(fcJailerEnv, "off")
 
 	base, err := image.LoadEmbedded()
 	if err != nil {
@@ -187,6 +188,7 @@ func TestFCNetworkRules(t *testing.T) {
 		"ip saddr 10.254.254.0/24 ip daddr != 10.254.254.0/24 masquerade",
 		`iifname "anvil-fc0" accept`,
 		`oifname "anvil-fc0" ct state established,related accept`,
+		`oifname "anvil-fc0" drop`,
 	} {
 		if !strings.Contains(rules, want) {
 			t.Errorf("nft rules lack %q:\n%s", want, rules)
@@ -200,7 +202,23 @@ func TestFCNetworkRules(t *testing.T) {
 			t.Errorf("nft -c rejects the rules: %v: %s", err, out)
 		}
 	}
-	if r := dockerUserRules(FCBridge); len(r) != 2 || r[0][1] != FCBridge {
+	// Docker's own bridges go back to Docker's isolation before the bridge's catch-all accept.
+	r := dockerUserRules(FCBridge)
+	if len(r) != 4 || strings.Join(r[0], " ") != "-i anvil-fc0 -o docker+ -j RETURN" ||
+		strings.Join(r[2], " ") != "-i anvil-fc0 -j ACCEPT" {
 		t.Errorf("DOCKER-USER rules = %v", r)
+	}
+}
+
+func TestFCGuestFilter(t *testing.T) {
+	rules := fcGuestFilter("01JX", "tap-01jx", "52:54:00:12:34:56", "10.254.254.7")
+	for _, want := range []string{
+		`table netdev anvil-01jx`, `hook ingress device "tap-01jx"`, `policy drop`,
+		`ether saddr 52:54:00:12:34:56 ip saddr 10.254.254.7 accept`,
+		`arp saddr ip 10.254.254.7 accept`,
+	} {
+		if !strings.Contains(rules, want) {
+			t.Errorf("guest filter lacks %q:\n%s", want, rules)
+		}
 	}
 }

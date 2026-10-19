@@ -19,6 +19,23 @@ type launchProgressStream interface {
 	Recv() (*anvilv1.LaunchProgress, error)
 }
 
+// hypervisorCheck fails a launch asking for want when the launched instance reports another
+// hypervisor: an older anvild drops the field and runs QEMU.
+type hypervisorCheck struct {
+	launchProgressStream
+	want anvilv1.VmHypervisor
+}
+
+func (s hypervisorCheck) Recv() (*anvilv1.LaunchProgress, error) {
+	ev, err := s.launchProgressStream.Recv()
+	if inst := ev.GetInstance(); inst != nil && s.want == anvilv1.VmHypervisor_VM_HYPERVISOR_FIRECRACKER &&
+		inst.GetVm().GetHypervisor() != s.want {
+		return nil, fmt.Errorf("anvild launched %s with QEMU: it predates firecracker support; upgrade it, then `anvil delete %s` and launch again",
+			inst.GetName(), inst.GetName())
+	}
+	return ev, err
+}
+
 // streamLaunchProgress prints each LaunchProgress event as it arrives, see streamProgress.
 func streamLaunchProgress(out io.Writer, stream launchProgressStream) error {
 	return streamProgress(out, stream, "Launched")

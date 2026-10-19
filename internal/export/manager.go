@@ -40,7 +40,10 @@ type Intents interface {
 // at export time, and rebasing it onto this host's own copy at import time.
 type VMImporter interface {
 	BaseImageChecksum(spec *instance.Spec) (string, error)
-	PrepareImportedDisk(ctx context.Context, imageRef, arch, diskPath, baseSHA256 string) error
+	// ExportDiskFile returns the disk file a bundle carries for spec, written into dir when
+	// it isn't the disk itself (a Firecracker raw disk travels as qcow2).
+	ExportDiskFile(ctx context.Context, spec *instance.Spec, dir string) (string, error)
+	PrepareImportedDisk(ctx context.Context, hypervisor instance.VMHypervisor, imageRef, arch, diskPath, baseSHA256 string) error
 }
 
 type Manager struct {
@@ -114,6 +117,14 @@ func (m *Manager) Export(ctx context.Context, p ExportParams, progress func(stat
 	type source struct{ archivePath, localPath string }
 	var disks, dirs []source
 
+	// Disk files converted for the bundle, next to it since there's room for the bundle
+	// there, and gone once it's written.
+	diskDir, err := os.MkdirTemp(filepath.Dir(p.OutputPath), ".anvil-export-")
+	if err != nil {
+		return fmt.Errorf("export: creating staging dir: %w", err)
+	}
+	defer os.RemoveAll(diskDir)
+
 	for _, spec := range members {
 		progress(fmt.Sprintf("archiving %q", spec.Name))
 		mem := Member{Name: spec.Name, Kind: string(spec.Kind)}
@@ -127,7 +138,9 @@ func (m *Manager) Export(ctx context.Context, p ExportParams, progress func(stat
 		switch spec.Kind {
 		case instance.KindVM:
 			v := spec.VM
-			if manifest.Network != nil && v.StaticIP != "" {
+			// A standalone Firecracker guest has its address configured inside the disk too.
+			standaloneFC := v.HypervisorOf() == instance.VMHypervisorFirecracker && v.NetworkMode != "bridge"
+			if (manifest.Network != nil || standaloneFC) && v.StaticIP != "" {
 				mem.StaticIP = v.StaticIP
 			}
 			mem.VM = &VM{
@@ -140,6 +153,7 @@ func (m *Manager) Export(ctx context.Context, p ExportParams, progress func(stat
 				SSHPublicKeys:    v.SSHPublicKeys,
 				DiskFile:         "disks/" + spec.ID + ".qcow2",
 				MACAddress:       v.MAC(spec.ID),
+				Hypervisor:       string(v.HypervisorOf()),
 			}
 			// A disk with no base image (one adopted from a flattened migration) has
 			// no checksum to record, which only means the import can't cross-check it.
@@ -149,7 +163,12 @@ func (m *Manager) Export(ctx context.Context, p ExportParams, progress func(stat
 			for _, port := range v.Ports {
 				mem.VM.Ports = append(mem.VM.Ports, PortMapping{HostPort: port.HostPort, GuestPort: port.GuestPort, Protocol: port.Protocol})
 			}
-			disks = append(disks, source{archivePath: mem.VM.DiskFile, localPath: v.DiskPath})
+			progress(fmt.Sprintf("preparing %q's disk", spec.Name))
+			diskFile, err := m.VMImporter.ExportDiskFile(ctx, spec, diskDir)
+			if err != nil {
+				return fmt.Errorf("export: preparing %q's disk: %w", spec.Name, err)
+			}
+			disks = append(disks, source{archivePath: mem.VM.DiskFile, localPath: diskFile})
 			for i, mnt := range v.Mounts {
 				out := Mount{GuestPath: mnt.GuestPath, Tag: mnt.Tag, ReadOnly: mnt.ReadOnly}
 				if info, err := os.Stat(mnt.HostPath); err == nil && info.IsDir() {
@@ -325,6 +344,13 @@ func (m *Manager) Import(ctx context.Context, p ImportParams, progress func(stat
 		return Result{}, fmt.Errorf("import: invalid manifest.json: %w", err)
 	}
 
+	for _, mem := range manifest.Members {
+		if mem.VM != nil {
+			if err := instance.CheckHypervisor(instance.VMHypervisor(mem.VM.Hypervisor)); err != nil {
+				return Result{}, fmt.Errorf("import: member %q: %w", mem.Name, err)
+			}
+		}
+	}
 	intentName := manifest.IntentName
 	if manifest.IntentName != "" && p.Name != "" {
 		intentName = p.Name
@@ -415,7 +441,8 @@ func (m *Manager) fillLaunchParams(ctx context.Context, params *instance.LaunchP
 		if err != nil {
 			return err
 		}
-		if err := m.VMImporter.PrepareImportedDisk(ctx, mem.VM.ImageRef, mem.VM.Arch, diskPath, mem.VM.BaseSHA256); err != nil {
+		hypervisor := instance.VMHypervisor(mem.VM.Hypervisor)
+		if err := m.VMImporter.PrepareImportedDisk(ctx, hypervisor, mem.VM.ImageRef, mem.VM.Arch, diskPath, mem.VM.BaseSHA256); err != nil {
 			return fmt.Errorf("preparing disk: %w", err)
 		}
 		v := &instance.VMSpec{
@@ -428,6 +455,12 @@ func (m *Manager) fillLaunchParams(ctx context.Context, params *instance.LaunchP
 			SSHPublicKeys:     mem.VM.SSHPublicKeys,
 			SourceDiskPath:    diskPath,
 			MACAddress:        mem.VM.MACAddress,
+			Hypervisor:        hypervisor,
+		}
+		// A standalone Firecracker guest keeps the address configured inside its disk;
+		// an intent member's goes through PinnedStaticIP instead.
+		if hypervisor == instance.VMHypervisorFirecracker && params.IntentName == "" {
+			v.StaticIP = mem.StaticIP
 		}
 		for _, p := range mem.VM.Ports {
 			v.Ports = append(v.Ports, instance.PortMapping{HostPort: p.HostPort, GuestPort: p.GuestPort, Protocol: p.Protocol})

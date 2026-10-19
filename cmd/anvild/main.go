@@ -69,6 +69,7 @@ func run() error {
 		return fmt.Errorf("loading image catalog: %w", err)
 	}
 	vault := image.NewVault(config.PreparedImageDir())
+	vault.RawDir = config.FirecrackerImageDir()
 	vmBackend := newVMBackend(catalog, vault, db)
 
 	// db satisfies container.Source, used to resolve container mirrors at pull time.
@@ -103,6 +104,11 @@ func run() error {
 		return append(zones, platformDNSZones()...), err
 	})
 	intentMgr.DNS = dnsServer
+	platformDNSHook(func() {
+		if err := dnsServer.Refresh(ctx); err != nil {
+			log.Printf("dns: %v", err)
+		}
+	})
 	go dnsServer.Run(ctx, 30*time.Second)
 	// Announces this host to `anvil host discover` on the same network. It
 	// grants no access by itself, and ANVIL_MDNS=off turns it off.
@@ -141,7 +147,8 @@ func run() error {
 	anvilv1.RegisterInstanceServiceServer(grpcServer, daemon.NewServer(mgr, intentMgr, vault))
 	anvilv1.RegisterCloudInitServiceServer(grpcServer, daemon.NewCloudInitServer(db))
 	anvilv1.RegisterMirrorServiceServer(grpcServer, daemon.NewMirrorServer(db))
-	anvilv1.RegisterImageServiceServer(grpcServer, daemon.NewImageServer(db, vault, vmBackend, containerBackend))
+	anvilv1.RegisterImageServiceServer(grpcServer, daemon.NewImageServer(db, vault, vmBackend, containerBackend,
+		&image.FCCache{Dir: config.FirecrackerImageDir(), Vault: vault}))
 	anvilv1.RegisterIntentServiceServer(grpcServer, daemon.NewIntentServer(intentMgr, mgr))
 	anvilv1.RegisterHostServiceServer(grpcServer, daemon.NewHostServer(db, migrateMgr))
 	anvilv1.RegisterMigrateServiceServer(grpcServer, daemon.NewMigrateServer(migrateMgr))

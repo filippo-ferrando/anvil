@@ -302,43 +302,62 @@ func (h *Hypervisors) ListCatalog() ([]image.DistroEntry, error) {
 	return h.QEMU.ListCatalog()
 }
 
-// The disk export and import calls below are QEMU-only until phase 8 of the Firecracker plan.
+// diskMover is what migration and export bundles need from a hypervisor's disks.
+type diskMover interface {
+	ExportDisk(ctx context.Context, spec *instance.Spec, destPath string) error
+	BaseImageChecksum(spec *instance.Spec) (string, error)
+	BaseImagePath(spec *instance.Spec) (string, error)
+	ExportDiskDelta(ctx context.Context, spec *instance.Spec, destPath string) error
+	ExportDiskFile(ctx context.Context, spec *instance.Spec, dir string) (string, error)
+	PrepareImportedDisk(ctx context.Context, imageRef, arch, diskPath, baseSHA256 string) error
+}
 
 func (h *Hypervisors) ExportDisk(ctx context.Context, spec *instance.Spec, destPath string) error {
-	if err := h.qemuOnly(spec, "export"); err != nil {
+	d, err := capability[diskMover](h, spec, "export")
+	if err != nil {
 		return err
 	}
-	return h.QEMU.ExportDisk(ctx, spec, destPath)
+	return d.ExportDisk(ctx, spec, destPath)
 }
 
 func (h *Hypervisors) BaseImageChecksum(spec *instance.Spec) (string, error) {
-	if err := h.qemuOnly(spec, "export"); err != nil {
+	d, err := capability[diskMover](h, spec, "export")
+	if err != nil {
 		return "", err
 	}
-	return h.QEMU.BaseImageChecksum(spec)
+	return d.BaseImageChecksum(spec)
 }
 
 func (h *Hypervisors) BaseImagePath(spec *instance.Spec) (string, error) {
-	if err := h.qemuOnly(spec, "export"); err != nil {
+	d, err := capability[diskMover](h, spec, "export")
+	if err != nil {
 		return "", err
 	}
-	return h.QEMU.BaseImagePath(spec)
+	return d.BaseImagePath(spec)
 }
 
 func (h *Hypervisors) ExportDiskDelta(ctx context.Context, spec *instance.Spec, destPath string) error {
-	if err := h.qemuOnly(spec, "export"); err != nil {
+	d, err := capability[diskMover](h, spec, "export")
+	if err != nil {
 		return err
 	}
-	return h.QEMU.ExportDiskDelta(ctx, spec, destPath)
+	return d.ExportDiskDelta(ctx, spec, destPath)
 }
 
-func (h *Hypervisors) PrepareImportedDisk(ctx context.Context, imageRef, arch, diskPath, baseSHA256 string) error {
-	return h.QEMU.PrepareImportedDisk(ctx, imageRef, arch, diskPath, baseSHA256)
-}
-
-func (h *Hypervisors) qemuOnly(spec *instance.Spec, op string) error {
-	if spec.VM != nil && spec.VM.HypervisorOf() != instance.VMHypervisorQEMU {
-		return fmt.Errorf("vm: %s isn't supported on %s yet", op, spec.VM.HypervisorOf())
+func (h *Hypervisors) ExportDiskFile(ctx context.Context, spec *instance.Spec, dir string) (string, error) {
+	d, err := capability[diskMover](h, spec, "export")
+	if err != nil {
+		return "", err
 	}
-	return nil
+	return d.ExportDiskFile(ctx, spec, dir)
+}
+
+// PrepareImportedDisk readies an imported disk for the hypervisor it will run on.
+func (h *Hypervisors) PrepareImportedDisk(ctx context.Context, hypervisor instance.VMHypervisor, imageRef, arch, diskPath, baseSHA256 string) error {
+	spec := &instance.Spec{VM: &instance.VMSpec{Hypervisor: hypervisor}}
+	d, err := capability[diskMover](h, spec, "import")
+	if err != nil {
+		return err
+	}
+	return d.PrepareImportedDisk(ctx, imageRef, arch, diskPath, baseSHA256)
 }

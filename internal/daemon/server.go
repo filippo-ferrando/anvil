@@ -171,8 +171,8 @@ func (s *Server) Delete(ctx context.Context, req *anvilv1.DeleteRequest) (*anvil
 	for _, spec := range specs {
 		// Read before the disk is gone: the overlay names the base image it sits on.
 		var base string
-		if req.GetPurge() && spec.VM != nil && spec.VM.DiskPath != "" {
-			base, _ = image.BackingFile(spec.VM.DiskPath)
+		if req.GetPurge() {
+			base = baseImageOf(spec, s.Vault)
 		}
 		if err := s.Manager.Delete(ctx, []string{spec.Name}); err != nil {
 			errs = append(errs, err)
@@ -217,7 +217,7 @@ func (s *Server) pruneBaseImage(path string) error {
 		if err != nil {
 			return err
 		}
-		if users := usersOf(img.Path, specs); len(users) > 0 {
+		if users := usersOf(img.Path, specs, s.Vault); len(users) > 0 {
 			log.Printf("daemon: keeping base image %s, still used by %s", img.ID, strings.Join(users, ", "))
 			return nil
 		}

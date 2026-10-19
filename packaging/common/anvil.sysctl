@@ -1,3 +1,0 @@
-# Standalone Firecracker VMs reach outside the host through anvil's NAT on the anvil-fc0
-# bridge, which needs IPv4 forwarding. Docker turns it on as well.
-net.ipv4.ip_forward = 1

@@ -193,7 +193,7 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return streamLaunchProgress(cmd.OutOrStdout(), stream)
+			return streamLaunchProgress(cmd.OutOrStdout(), hypervisorCheck{stream, req.GetVm().GetHypervisor()})
 		},
 	}
 
