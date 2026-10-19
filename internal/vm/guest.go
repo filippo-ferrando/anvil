@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
@@ -29,6 +30,23 @@ const (
 	guestPollSlow = 30 * time.Second // afterwards, only to follow IP changes
 )
 
+// guestTracker polls each running VM's guest agent and keeps its last report. Both
+// hypervisor backends embed it; only how the agent is reached differs.
+type guestTracker struct {
+	guestMu   sync.Mutex
+	guests    map[string]*guestState // instance ID -> guest agent poller and last report
+	guestHook func(instanceID string)
+
+	// newAgent returns the agent handle for an instance: a unix socket for QEMU, vsock for Firecracker.
+	newAgent func(instanceID string) *qemu.GuestAgent
+	// shutdownMode is the guest-shutdown mode that ends the VM ("powerdown", or "reboot" on Firecracker).
+	shutdownMode string
+}
+
+func newGuestTracker(newAgent func(instanceID string) *qemu.GuestAgent, shutdownMode string) guestTracker {
+	return guestTracker{guests: make(map[string]*guestState), newAgent: newAgent, shutdownMode: shutdownMode}
+}
+
 // guestState is the backend's view of one running VM's guest.
 type guestState struct {
 	agent  *qemu.GuestAgent
@@ -41,7 +59,7 @@ func guestAgentSocket(instanceID string) string {
 }
 
 // GuestInfo returns the last guest report for spec, without talking to the guest.
-func (b *Backend) GuestInfo(spec *instance.Spec) (instance.GuestInfo, bool) {
+func (b *guestTracker) GuestInfo(spec *instance.Spec) (instance.GuestInfo, bool) {
 	b.guestMu.Lock()
 	defer b.guestMu.Unlock()
 	gs, ok := b.guests[spec.ID]
@@ -53,30 +71,30 @@ func (b *Backend) GuestInfo(spec *instance.Spec) (instance.GuestInfo, bool) {
 	return info, true
 }
 
-func (b *Backend) SetGuestChangeHook(hook func(instanceID string)) {
+func (b *guestTracker) SetGuestChangeHook(hook func(instanceID string)) {
 	b.guestMu.Lock()
 	b.guestHook = hook
 	b.guestMu.Unlock()
 }
 
 // agentFor returns spec's guest agent handle, shared by the poller, Stop and WaitReady.
-func (b *Backend) agentFor(instanceID string) *qemu.GuestAgent {
+func (b *guestTracker) agentFor(instanceID string) *qemu.GuestAgent {
 	b.guestMu.Lock()
 	defer b.guestMu.Unlock()
 	if gs, ok := b.guests[instanceID]; ok {
 		return gs.agent
 	}
-	return qemu.NewGuestAgent(guestAgentSocket(instanceID))
+	return b.newAgent(instanceID)
 }
 
-// watchGuest starts polling spec's guest agent until the VM stops.
-func (b *Backend) watchGuest(spec *instance.Spec, proc *qemu.Process) {
+// watchGuest starts polling spec's guest agent until the VM stops or exited closes.
+func (b *guestTracker) watchGuest(spec *instance.Spec, exited <-chan struct{}) {
 	ctx, cancel := context.WithCancel(context.Background())
 	b.guestMu.Lock()
 	if old, ok := b.guests[spec.ID]; ok {
 		old.cancel()
 	}
-	gs := &guestState{agent: qemu.NewGuestAgent(guestAgentSocket(spec.ID)), cancel: cancel}
+	gs := &guestState{agent: b.newAgent(spec.ID), cancel: cancel}
 	b.guests[spec.ID] = gs
 	b.guestMu.Unlock()
 
@@ -92,7 +110,7 @@ func (b *Backend) watchGuest(spec *instance.Spec, proc *qemu.Process) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-proc.Exited():
+			case <-exited:
 				// The VM went away without Stop (guest poweroff, crash): drop the stale report.
 				b.forgetGuest(specCopy.ID, gs)
 				return
@@ -103,7 +121,7 @@ func (b *Backend) watchGuest(spec *instance.Spec, proc *qemu.Process) {
 }
 
 // unwatchGuest stops spec's poller and forgets its guest report.
-func (b *Backend) unwatchGuest(instanceID string) {
+func (b *guestTracker) unwatchGuest(instanceID string) {
 	b.guestMu.Lock()
 	gs := b.guests[instanceID]
 	b.guestMu.Unlock()
@@ -113,7 +131,7 @@ func (b *Backend) unwatchGuest(instanceID string) {
 }
 
 // forgetGuest drops gs, unless a newer Start already replaced it.
-func (b *Backend) forgetGuest(instanceID string, gs *guestState) {
+func (b *guestTracker) forgetGuest(instanceID string, gs *guestState) {
 	b.guestMu.Lock()
 	if b.guests[instanceID] != gs {
 		b.guestMu.Unlock()
@@ -130,7 +148,7 @@ func (b *Backend) forgetGuest(instanceID string, gs *guestState) {
 
 // refreshGuest asks the guest for a new report, stores it, and runs the change
 // hook if anything differs from the previous one.
-func (b *Backend) refreshGuest(ctx context.Context, spec *instance.Spec) instance.GuestInfo {
+func (b *guestTracker) refreshGuest(ctx context.Context, spec *instance.Spec) instance.GuestInfo {
 	b.guestMu.Lock()
 	gs, ok := b.guests[spec.ID]
 	var prev instance.GuestInfo
@@ -160,7 +178,7 @@ func (b *Backend) refreshGuest(ctx context.Context, spec *instance.Spec) instanc
 
 // probeGuest collects one guest report. known is the last cloud-init status seen:
 // once final it is kept instead of asking again.
-func (b *Backend) probeGuest(ctx context.Context, spec *instance.Spec, agent *qemu.GuestAgent, known instance.CloudInitStatus) instance.GuestInfo {
+func (b *guestTracker) probeGuest(ctx context.Context, spec *instance.Spec, agent *qemu.GuestAgent, known instance.CloudInitStatus) instance.GuestInfo {
 	info := instance.GuestInfo{CloudInit: known}
 	_ = agent.Do(ctx, func(c *qemu.QGAConn) error {
 		info.AgentConnected = true
@@ -297,7 +315,11 @@ func (b *Backend) WaitReady(ctx context.Context, spec *instance.Spec, progress f
 	if !ok {
 		return fmt.Errorf("vm: %s is not running", spec.Name)
 	}
+	return b.waitReady(ctx, spec, proc.Exited(), progress)
+}
 
+// waitReady polls the guest until cloud-init is final or exited closes.
+func (b *guestTracker) waitReady(ctx context.Context, spec *instance.Spec, exited <-chan struct{}, progress func(status string)) error {
 	last := ""
 	for {
 		info := b.refreshGuest(ctx, spec)
@@ -323,24 +345,24 @@ func (b *Backend) WaitReady(ctx context.Context, spec *instance.Spec, progress f
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("vm: waiting for %s's cloud-init: %w", spec.Name, ctx.Err())
-		case <-proc.Exited():
+		case <-exited:
 			return fmt.Errorf("vm: %s stopped while waiting for cloud-init", spec.Name)
 		case <-time.After(2 * time.Second):
 		}
 	}
 }
 
-// agentShutdown asks the guest agent to power the guest off and waits up to
-// timeout for QEMU to exit. Returns false if the agent isn't there or the guest didn't stop.
-func (b *Backend) agentShutdown(ctx context.Context, instanceID string, proc *qemu.Process, timeout time.Duration) bool {
-	err := b.agentFor(instanceID).Do(ctx, func(c *qemu.QGAConn) error { return c.Shutdown() })
+// agentShutdown asks the guest agent to shut the guest down and waits up to timeout
+// for exited to close. Returns false if the agent isn't there or the guest didn't stop.
+func (b *guestTracker) agentShutdown(ctx context.Context, instanceID string, exited <-chan struct{}, timeout time.Duration) bool {
+	err := b.agentFor(instanceID).Do(ctx, func(c *qemu.QGAConn) error { return c.Shutdown(b.shutdownMode) })
 	if err != nil {
 		return false
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	select {
-	case <-proc.Exited():
+	case <-exited:
 		return true
 	case <-waitCtx.Done():
 		return false

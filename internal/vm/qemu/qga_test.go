@@ -166,7 +166,7 @@ func TestGuestAgentExecDisabled(t *testing.T) {
 func TestGuestAgentShutdownHasNoReply(t *testing.T) {
 	fa := startFakeAgent(t)
 	start := time.Now()
-	err := NewGuestAgent(fa.socket).Do(context.Background(), func(c *QGAConn) error { return c.Shutdown() })
+	err := NewGuestAgent(fa.socket).Do(context.Background(), func(c *QGAConn) error { return c.Shutdown("powerdown") })
 	if err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}

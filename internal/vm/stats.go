@@ -40,9 +40,13 @@ func (b *Backend) Stats(ctx context.Context, spec *instance.Spec) (instance.Stat
 	if !ok {
 		return instance.Stats{}, fmt.Errorf("vm: %s isn't running", spec.Name)
 	}
-	pid := proc.Pid()
+	return sampleStats(ctx, spec, proc.Pid(), b.Networker, v.NetworkMode == "bridge")
+}
 
-	bridged := v.NetworkMode == "bridge"
+// sampleStats measures the hypervisor process pid running spec. Network rates come from
+// the tap device, so only when the VM has one (bridged).
+func sampleStats(ctx context.Context, spec *instance.Spec, pid int, networker Networker, bridged bool) (instance.Stats, error) {
+	v := spec.VM
 
 	cpu0, err := readProcCPUTicks(pid)
 	if err != nil {
@@ -50,7 +54,7 @@ func (b *Backend) Stats(ctx context.Context, spec *instance.Spec) (instance.Stat
 	}
 	var rx0, tx0 uint64
 	if bridged {
-		rx0, tx0, _ = b.Networker.Stats(spec.ID)
+		rx0, tx0, _ = networker.Stats(spec.ID)
 	}
 	t0 := time.Now()
 
@@ -94,7 +98,7 @@ func (b *Backend) Stats(ctx context.Context, spec *instance.Spec) (instance.Stat
 	}
 
 	if bridged {
-		if rx1, tx1, err := b.Networker.Stats(spec.ID); err == nil {
+		if rx1, tx1, err := networker.Stats(spec.ID); err == nil {
 			stats.NetAvailable = true
 			if elapsed > 0 {
 				stats.NetRxBytesPerSec = float64(rx1-rx0) / elapsed

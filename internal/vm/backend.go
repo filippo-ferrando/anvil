@@ -27,6 +27,7 @@ import (
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/cloudinit"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/firecracker"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/network"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/qemu"
@@ -51,9 +52,7 @@ type Backend struct {
 	running  map[string]*qemu.Process // instance ID -> live process
 	starting map[string]struct{}      // instance ID -> in-progress Start call
 
-	guestMu   sync.Mutex
-	guests    map[string]*guestState // instance ID -> guest agent poller and last report
-	guestHook func(instanceID string)
+	guestTracker
 
 	// Guarded by mu, like running.
 	virtiofs map[string]map[string]*qemu.Virtiofsd // instance ID -> mount tag -> its virtiofsd
@@ -78,9 +77,11 @@ func NewBackend(catalog *image.Catalog, vault *image.Vault, source Source) *Back
 		Networker: network.LinuxBridge{},
 		running:   make(map[string]*qemu.Process),
 		starting:  make(map[string]struct{}),
-		guests:    make(map[string]*guestState),
-		virtiofs:  make(map[string]map[string]*qemu.Virtiofsd),
-		stopping:  make(map[string]struct{}),
+		guestTracker: newGuestTracker(func(id string) *qemu.GuestAgent {
+			return qemu.NewGuestAgent(guestAgentSocket(id))
+		}, "powerdown"),
+		virtiofs: make(map[string]map[string]*qemu.Virtiofsd),
+		stopping: make(map[string]struct{}),
 	}
 }
 
@@ -616,7 +617,7 @@ func (b *Backend) verifySnapshotPresence(spec *instance.Spec, name string, wantP
 // user-data, SSH keys, and mounts, overwriting v.SeedISOPath.
 func (b *Backend) buildSeed(spec *instance.Spec) error {
 	v := spec.VM
-	dir := config.InstanceDir(spec.ID)
+	dir := instanceDir(spec.ID)
 
 	userData := v.CloudInitUserData
 	if userData == "" && v.CloudInitName != "" {
@@ -640,6 +641,12 @@ func (b *Backend) buildSeed(spec *instance.Spec) error {
 	}
 	if !v.NoGuestAgent {
 		userData, err = mergeGuestAgent(userData)
+		if err != nil {
+			return fmt.Errorf("vm: preparing cloud-init user-data: %w", err)
+		}
+	}
+	if v.HypervisorOf() == instance.VMHypervisorFirecracker {
+		userData, err = mergeFirecrackerGuest(userData, !v.NoGuestAgent)
 		if err != nil {
 			return fmt.Errorf("vm: preparing cloud-init user-data: %w", err)
 		}
@@ -774,7 +781,7 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 	b.mu.Lock()
 	b.running[spec.ID] = proc
 	b.mu.Unlock()
-	b.watchGuest(spec, proc)
+	b.watchGuest(spec, proc.Exited())
 	go b.watchExit(spec.ID, v.NetworkMode, proc)
 	return nil
 }
@@ -810,7 +817,7 @@ func (b *Backend) Stop(ctx context.Context, spec *instance.Spec, force bool, tim
 	var stopErr error
 	start := time.Now()
 	graceful := !force && timeout > 0
-	if !graceful || !guest.AgentConnected || !b.agentShutdown(ctx, spec.ID, proc, timeout) {
+	if !graceful || !guest.AgentConnected || !b.agentShutdown(ctx, spec.ID, proc.Exited(), timeout) {
 		stopTimeout := timeout - time.Since(start)
 		if stopTimeout < minACPITimeout && timeout >= minACPITimeout {
 			stopTimeout = minACPITimeout
@@ -869,7 +876,7 @@ func (b *Backend) Reconcile(ctx context.Context, spec *instance.Spec) (instance.
 		_ = proc.Close()
 		return instance.StateError, fmt.Errorf("vm: reconciled pid %d is alive but QMP is unreachable at %s: %w", rt.Pid, rt.QMPSocket, err)
 	}
-	b.watchGuest(spec, proc)
+	b.watchGuest(spec, proc.Exited())
 	go b.watchExit(spec.ID, spec.VM.NetworkMode, proc)
 	return instance.StateRunning, nil
 }
@@ -1230,6 +1237,55 @@ func mergeGuestAgent(existing string) (string, error) {
 		return "", fmt.Errorf("re-encoding cloud-init user-data: %w", err)
 	}
 	return "#cloud-config\n" + string(out), nil
+}
+
+// fcAgentPort is the guest vsock port qemu-guest-agent listens on in a Firecracker VM.
+const fcAgentPort = 1024
+
+// fcAgentUnit runs qemu-guest-agent on vsock: the distro's own unit only starts with the
+// virtio-serial port QEMU provides.
+var fcAgentUnit = fmt.Sprintf(`[Unit]
+Description=QEMU guest agent on vsock (anvil)
+
+[Service]
+ExecStart=/bin/sh -c 'exec qemu-ga --method=vsock-listen --path=%d:%d'
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+`, firecracker.GuestCID, fcAgentPort)
+
+// fcAgentStartCmd enables the vsock unit, or on OpenRC (Alpine) points the stock service at vsock.
+const fcAgentStartCmd = "(systemctl daemon-reload && systemctl enable --now anvil-guest-agent) || " +
+	"(rc-update add qemu-guest-agent default && rc-service qemu-guest-agent restart) || true"
+
+// fcPoweroffCmd makes a systemd guest's poweroff a reboot: on x86_64 Firecracker only
+// exits on a guest reboot, while a poweroff leaves its process running.
+const fcPoweroffCmd = "[ -d /run/systemd/system ] && ln -sf /usr/lib/systemd/system/reboot.target /etc/systemd/system/poweroff.target || true"
+
+// mergeFirecrackerGuest adds what a Firecracker guest needs on top of the common user-data:
+// poweroff as reboot, and with agent the guest agent moved to vsock.
+func mergeFirecrackerGuest(existing string, agent bool) (string, error) {
+	doc, err := parseCloudConfig(existing)
+	if err != nil {
+		return "", err
+	}
+	bootcmd, _ := doc["bootcmd"].([]any)
+	doc["bootcmd"] = append(bootcmd, fcPoweroffCmd)
+	if agent {
+		files, _ := doc["write_files"].([]any)
+		doc["write_files"] = append(files,
+			map[string]any{"path": "/etc/systemd/system/anvil-guest-agent.service", "content": fcAgentUnit},
+			map[string]any{"path": "/etc/conf.d/qemu-guest-agent",
+				"content": fmt.Sprintf("GA_METHOD=\"vsock-listen\"\nGA_PATH=\"%d:%d\"\n", firecracker.GuestCID, fcAgentPort)},
+		)
+		runcmd, _ := doc["runcmd"].([]any)
+		// The stock start command is for virtio-serial; this one replaces it.
+		runcmd = slices.DeleteFunc(runcmd, func(c any) bool { return c == guestAgentStartCmd })
+		doc["runcmd"] = append(runcmd, fcAgentStartCmd)
+	}
+	return encodeCloudConfig(doc)
 }
 
 // bridgeNetworkConfig returns a cloud-init network-config statically

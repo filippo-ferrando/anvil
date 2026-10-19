@@ -211,7 +211,7 @@ Each phase ends buildable, with its tests, and is ticked here when done.
    `firecracker.json` catalog, raw conversion cache with GPT root lookup, reflink disk copy.
    CI caches the built kernel keyed on kernel version + config fragment + build script hash
    (same pattern as the build-gui cache from a03c738), so it only rebuilds when one changes.
-4. [ ] **Lifecycle.** `FCBackend` Create/Start/Stop/Delete/Status/Logs/Reconcile, exit
+4. [x] **Lifecycle.** `FCBackend` Create/Start/Stop/Delete/Status/Logs/Reconcile, exit
    watch, seed drive, console log, guest agent over vsock, WaitReady, GuestInfo, intent
    bridge networking, Stats.
 5. [ ] **Standalone networking.** `anvil-fc0` bridge, nftables masquerade, IPAM, DNS zone,
@@ -276,6 +276,30 @@ Each phase ends buildable, with its tests, and is ticked here when done.
   and `firecracker_aarch64.json` (the `-arm` ids), documented in its README and
   `docs/mirrors.md`.
   Open: `anvil image list/delete` don't show the raw copies and kernels yet.
+- **Phase 4 (done, real boot pending the anvil kernel).** `vm.FCBackend`
+  (`internal/vm/fc_backend.go`), registered as `Hypervisors.Firecracker` in
+  `cmd/anvild/platform_linux.go`. Create: checks the distro is in the Firecracker catalog,
+  downloads the kernel (first launch only), converts the base to raw, reflink-clones
+  `disk.raw`, builds the same seed. Start: resolves kernel + kernel args from the catalog on
+  every start, reads the root PARTUUID from the disk, writes `firecracker.json` (rootfs with
+  partuuid + discard, seed drive read-only, vsock at `vsock.sock`, entropy, tap on the
+  intent bridge), spawns, saves `runtime.json`. Stop: agent `guest-shutdown` mode reboot,
+  then Ctrl+Alt+Del, then kill. Exit watch, Reconcile, Delete, Status, Logs (shared
+  console.log), WaitReady, Stats, guest info all work the same as QEMU.
+  Shared code: guest polling moved into `guestTracker` (`guest.go`), embedded by both
+  backends with its own agent dialer and shutdown mode; `qemu.QGAConn.Shutdown(mode)`;
+  stats sampling is `sampleStats(pid)`; `buildSeed` uses the swappable `instanceDir`.
+  cloud-init on Firecracker (`mergeFirecrackerGuest`): an `anvil-guest-agent.service` unit
+  running `qemu-ga --method=vsock-listen --path=3:1024` (replaces the stock start command),
+  `/etc/conf.d/qemu-guest-agent` for OpenRC, and a bootcmd linking `poweroff.target` to
+  `reboot.target` because a guest poweroff leaves firecracker running on x86_64 (Firecracker
+  FAQ). Not covered: OpenRC guests (Alpine) still hang on `poweroff`; the conf.d variable
+  names for Alpine's agent are unverified.
+  Standalone Firecracker VMs have no NIC until phase 5: no SSH, and the agent package can't
+  install, so use `--no-guest-agent` or an intent until then.
+  Tests: `TestMergeFirecrackerGuest`, `TestFCBackendCreate` (local catalog, no firecracker
+  needed), `TestFirecrackerRealBoot` (needs `ANVIL_E2E_IMAGE` + `ANVIL_FC_KERNEL`, the anvil
+  kernel: Firecracker's CI kernel has no partition table support).
 
 ## Container engines
 

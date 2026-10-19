@@ -257,10 +257,10 @@ func (c *QGAConn) OnlineAllMemory() error {
 	return c.call("guest-set-memory-blocks", map[string]any{"mem-blks": offline}, nil)
 }
 
-// Shutdown asks the guest OS to power off. The agent sends no reply when this
-// works, only an error reply when it doesn't.
-func (c *QGAConn) Shutdown() error {
-	if err := c.send("guest-shutdown", map[string]string{"mode": "powerdown"}); err != nil {
+// Shutdown asks the guest OS to shut down in mode ("powerdown", "reboot" or "halt"). The
+// agent sends no reply when this works, only an error reply when it doesn't.
+func (c *QGAConn) Shutdown(mode string) error {
+	if err := c.send("guest-shutdown", map[string]string{"mode": mode}); err != nil {
 		return err
 	}
 	_ = c.conn.SetReadDeadline(time.Now().Add(time.Second))
