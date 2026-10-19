@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -142,5 +143,27 @@ func TestKillAfterExitSendsNothing(t *testing.T) {
 	}
 	if err := syscall.Kill(bystander.Process.Pid, 0); err != nil {
 		t.Fatalf("kill signalled the reused pid: %v", err)
+	}
+}
+
+func TestIsDynamic(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh on PATH")
+	}
+	sh, _ = filepath.EvalSymlinks(sh)
+	if !IsDynamic(sh) {
+		t.Skipf("%s is static here", sh)
+	}
+	if IsDynamic(filepath.Join(t.TempDir(), "missing")) {
+		t.Fatal("a missing file counts as dynamic")
+	}
+}
+
+func TestLogTail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fc.log")
+	os.WriteFile(path, []byte("a\nb\nc\nFailed to exec\nError: Exec\n"), 0o640)
+	if got := logTail(path); got != "c; Failed to exec; Error: Exec" {
+		t.Fatalf("logTail = %q", got)
 	}
 }

@@ -24,6 +24,11 @@ func jailerExe() string {
 	if os.Getenv(fcJailerEnv) == "off" {
 		return ""
 	}
+	// The jailer copies only the binary into an empty chroot, where a dynamic one finds no loader.
+	if fc, err := firecracker.ResolveBinary(); err == nil && firecracker.IsDynamic(fc) {
+		log.Printf("vm: %s is dynamically linked and can't run in the jailer's chroot, running firecracker unjailed (install a static build to jail it)", fc)
+		return ""
+	}
 	if _, err := os.Stat(config.JailerExe()); err == nil {
 		return config.JailerExe()
 	}

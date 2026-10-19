@@ -5,6 +5,7 @@ package firecracker
 import (
 	"bytes"
 	"context"
+	"debug/elf"
 	"errors"
 	"fmt"
 	"os"
@@ -235,11 +236,37 @@ func (p *Process) WaitAPI(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-p.exited:
-			return fmt.Errorf("firecracker: exited during startup (%s), see %s", p.ExitStatus(), p.paths.LogFile)
+			// The log may be gone by the time anyone reads it, so its tail goes in the error.
+			return fmt.Errorf("firecracker: exited during startup (%s): %s", p.ExitStatus(), logTail(p.paths.LogFile))
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
 	return fmt.Errorf("firecracker: API never became reachable at %s: %w", p.paths.APISocket, lastErr)
+}
+
+// logTail returns the last few lines of firecracker's log, joined on one line.
+func logTail(path string) string {
+	data, _ := os.ReadFile(path)
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) > 3 {
+		lines = lines[len(lines)-3:]
+	}
+	return strings.Join(lines, "; ")
+}
+
+// IsDynamic reports whether the ELF binary at path needs a dynamic loader.
+func IsDynamic(path string) bool {
+	f, err := elf.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	for _, prog := range f.Progs {
+		if prog.Type == elf.PT_INTERP {
+			return true
+		}
+	}
+	return false
 }
 
 // ExitedCleanly reports whether the process ended with status 0, as firecracker does

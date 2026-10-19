@@ -219,6 +219,8 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          # The automatic Actions token can't push to the protected main branch.
+          token: ${{ secrets.LOCAL_TOKEN || github.token }}
 
       # Rebuilt from every tag each time, so a failed run is fixed by the next one.
       - name: Update CHANGELOG.md on main
