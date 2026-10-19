@@ -2,6 +2,17 @@
 
 Built from commit subjects by `scripts/changelog.sh`.
 
+## v1.2.4 (2026-10-19)
+
+### Features
+
+- full firecracker integration (test version) (0c1ee19)
+- firecracker implementation (phase 7) (64129df)
+
+### Fixes
+
+- jailer problems (dd5a6e2)
+
 ## v1.2.3 (2026-10-17)
 
 ### Features
