@@ -2,6 +2,12 @@
 
 Built from commit subjects by `scripts/changelog.sh`.
 
+## v1.2.5 (2026-10-19)
+
+### Fixes
+
+- improve image list handling (d6be391)
+
 ## v1.2.4 (2026-10-19)
 
 ### Features
