@@ -52,8 +52,14 @@ jobs:
         with:
           path: dist
 
+      # One "<sha256>  <file name>" line per kernel and config, without the artifact dir.
       - name: Write checksums
-        run: cd dist && sha256sum */anvil-fc-kernel-* | sed 's#  .*/#  #' > SHA256SUMS && cat SHA256SUMS
+        run: |
+          cd dist
+          for f in */anvil-fc-kernel-*; do
+            (cd "$(dirname "$f")" && sha256sum "$(basename "$f")")
+          done > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Publish release
         uses: softprops/action-gh-release@v3
