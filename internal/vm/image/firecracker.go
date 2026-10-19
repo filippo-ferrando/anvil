@@ -132,7 +132,7 @@ func (c *FCCache) List() ([]CachedImage, error) {
 	var out []CachedImage
 	for _, e := range entries {
 		info, err := e.Info()
-		if err != nil || !info.Mode().IsRegular() {
+		if err != nil || !info.Mode().IsRegular() || strings.HasSuffix(e.Name(), checksumSuffix) {
 			continue
 		}
 		img := CachedImage{Path: filepath.Join(c.Dir, e.Name()), SizeBytes: info.Size()}

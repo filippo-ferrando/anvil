@@ -139,6 +139,7 @@ func (s *ImageServer) Delete(ctx context.Context, req *anvilv1.ImageDeleteReques
 		if err := os.Remove(target.Path); err != nil {
 			return nil, fmt.Errorf("image: deleting %s: %w", target.Path, err)
 		}
+		_ = os.Remove(target.Path + ".sha256")
 		return &anvilv1.ImageDeleteReply{}, nil
 	}
 	if err := s.Vault.Delete(target.Path); err != nil {
@@ -173,10 +174,22 @@ func (s *ImageServer) DeleteContainerImage(ctx context.Context, req *anvilv1.Con
 	return &anvilv1.ContainerImageDeleteReply{}, nil
 }
 
-// usersOf returns the names of specs whose disk sits on the base image at imagePath.
+// usersOf returns the names of specs whose disk sits on the base image at imagePath. A
+// Firecracker VM also uses that base's raw copy ("<id>-<arch>.raw") and its arch's kernel.
 func usersOf(imagePath string, specs []*instance.Spec, vault *image.Vault) (names []string) {
+	name := filepath.Base(imagePath)
 	for _, spec := range specs {
-		if base := baseImageOf(spec, vault); base != "" && samePath(base, imagePath) {
+		fc := spec.VM != nil && spec.VM.HypervisorOf() == instance.VMHypervisorFirecracker
+		if fc && strings.HasPrefix(name, "anvil-fc-kernel-") && strings.HasSuffix(name, "-"+spec.VM.Arch) {
+			names = append(names, spec.Name)
+			continue
+		}
+		base := baseImageOf(spec, vault)
+		if base == "" {
+			continue
+		}
+		raw := fc && name == strings.TrimSuffix(filepath.Base(base), ".qcow2")+".raw"
+		if raw || samePath(base, imagePath) {
 			names = append(names, spec.Name)
 		}
 	}

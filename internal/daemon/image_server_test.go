@@ -97,4 +97,12 @@ func TestUsersOfFirecracker(t *testing.T) {
 	if got := usersOf(base, specs, vault); len(got) != 1 || got[0] != "a" {
 		t.Fatalf("usersOf = %v, want [a]", got)
 	}
+	// The raw copy a Firecracker disk was made from counts too.
+	if got := usersOf(filepath.Join(dir, "firecracker", "debian-13-x86_64.raw"), specs, vault); len(got) != 1 || got[0] != "a" {
+		t.Fatalf("usersOf raw = %v, want [a]", got)
+	}
+	// Every Firecracker VM of the kernel's arch boots from it.
+	if got := usersOf(filepath.Join(dir, "firecracker", "anvil-fc-kernel-6.18.57-x86_64"), specs, vault); len(got) != 2 {
+		t.Fatalf("usersOf kernel = %v, want [a b]", got)
+	}
 }

@@ -232,3 +232,16 @@ func TestCatalogListMarksFirecracker(t *testing.T) {
 		}
 	}
 }
+
+func TestFCCacheListSkipsChecksums(t *testing.T) {
+	cache := &FCCache{Dir: t.TempDir()}
+	kernel := filepath.Join(cache.Dir, "anvil-fc-kernel-6.18.57-x86_64")
+	os.WriteFile(kernel, []byte("k"), 0o640)
+	if _, err := FileChecksum(kernel); err != nil {
+		t.Fatal(err)
+	}
+	got, err := cache.List()
+	if err != nil || len(got) != 1 || got[0].ID != filepath.Base(kernel) || got[0].Arch != "x86_64" {
+		t.Fatalf("List = %+v, %v; want only the kernel", got, err)
+	}
+}
