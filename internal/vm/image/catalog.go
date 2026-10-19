@@ -41,6 +41,8 @@ type DistroEntry struct {
 type Manifest struct {
 	SchemaVersion int           `json:"schema_version"`
 	Distros       []DistroEntry `json:"distros"`
+	// Firecracker is optional: older anvil versions ignore it.
+	Firecracker *FirecrackerSection `json:"firecracker,omitempty"`
 }
 
 type catalogEntry struct {
@@ -48,15 +50,28 @@ type catalogEntry struct {
 	Priority int
 }
 
+// prioritized is a Firecracker catalog entry with its manifest's priority.
+type prioritized[T any] struct {
+	v        T
+	priority int
+}
+
 // Catalog resolves a distro/version/arch selector to a fetchable
 // DistroEntry, merging the built-in manifest with any runtime-added mirrors.
 type Catalog struct {
-	entries []catalogEntry
+	entries   []catalogEntry
+	fcKernels []prioritized[FCKernel]
+	fcDistros []prioritized[FCDistro]
 }
 
-// LoadEmbedded parses the build's embedded default distro manifest.
+// LoadEmbedded parses the build's embedded default distro manifest and its
+// Firecracker catalog.
 func LoadEmbedded() (*Catalog, error) {
-	return loadManifest(distros.Raw, 0)
+	c, err := loadManifest(distros.Raw, 0)
+	if err != nil {
+		return nil, err
+	}
+	return c.WithMirrors([]MirrorManifest{{ManifestJSON: string(distros.FirecrackerRaw)}})
 }
 
 func loadManifest(raw []byte, priority int) (*Catalog, error) {
@@ -67,11 +82,19 @@ func loadManifest(raw []byte, priority int) (*Catalog, error) {
 	if m.SchemaVersion != CurrentSchemaVersion {
 		return nil, fmt.Errorf("image: manifest schema_version %d unsupported (expected %d)", m.SchemaVersion, CurrentSchemaVersion)
 	}
-	entries := make([]catalogEntry, len(m.Distros))
+	c := &Catalog{entries: make([]catalogEntry, len(m.Distros))}
 	for i, e := range m.Distros {
-		entries[i] = catalogEntry{DistroEntry: e, Priority: priority}
+		c.entries[i] = catalogEntry{DistroEntry: e, Priority: priority}
 	}
-	return &Catalog{entries: entries}, nil
+	if fc := m.Firecracker; fc != nil {
+		for _, k := range fc.Kernels {
+			c.fcKernels = append(c.fcKernels, prioritized[FCKernel]{k, priority})
+		}
+		for _, d := range fc.Distros {
+			c.fcDistros = append(c.fcDistros, prioritized[FCDistro]{d, priority})
+		}
+	}
+	return c, nil
 }
 
 // FetchManifest downloads and validates a mirror manifest from url,
@@ -113,13 +136,19 @@ type MirrorManifest struct {
 // WithMirrors returns a new Catalog with mirrors' entries merged on top of
 // c's. c itself is left unmodified.
 func (c *Catalog) WithMirrors(mirrors []MirrorManifest) (*Catalog, error) {
-	merged := &Catalog{entries: append([]catalogEntry(nil), c.entries...)}
+	merged := &Catalog{
+		entries:   append([]catalogEntry(nil), c.entries...),
+		fcKernels: append([]prioritized[FCKernel](nil), c.fcKernels...),
+		fcDistros: append([]prioritized[FCDistro](nil), c.fcDistros...),
+	}
 	for _, m := range mirrors {
 		cat, err := loadManifest([]byte(m.ManifestJSON), m.Priority)
 		if err != nil {
 			return nil, fmt.Errorf("image: merging mirror manifest: %w", err)
 		}
 		merged.entries = append(merged.entries, cat.entries...)
+		merged.fcKernels = append(merged.fcKernels, cat.fcKernels...)
+		merged.fcDistros = append(merged.fcDistros, cat.fcDistros...)
 	}
 	return merged, nil
 }

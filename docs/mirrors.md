@@ -82,6 +82,17 @@ Field notes:
 - `schema_version` must be `1` (the only version that exists right now). A manifest
   with an unrecognized major version is rejected outright when you try to add it,
   rather than silently misread.
+- `firecracker` is optional. It lists the guest kernel per arch and the distro ids that
+  boot under `--hypervisor firecracker`, each with optional extra kernel arguments. A
+  distro id still needs an image in some `distros` list, so a manifest can carry only this
+  section. Kernels and distro entries collide and win by `priority` like images do:
+
+  ```json
+  "firecracker": {
+    "kernels": [{"arch": "x86_64", "version": "6.18.57", "url": "https://.../anvil-fc-kernel-6.18.57-x86_64", "sha256": ""}],
+    "distros": [{"id": "fedora-44", "kernel_args": "rootflags=subvol=root"}]
+  }
+  ```
 
 ### Adding one
 
@@ -364,7 +375,9 @@ and overwrites the matching saved configs by name.
 ## The official catalogue
 
 The `catalog/` git submodule holds the official catalogue repo: `distros_x86_64.json`
-and `distros_aarch64.json` are VM mirror manifests, and `cloudinits/` is a template repo.
+and `distros_aarch64.json` are VM mirror manifests, `firecracker_x86_64.json` and
+`firecracker_aarch64.json` are VM mirror manifests with only a `firecracker` section,
+and `cloudinits/` is a template repo.
 None of it is embedded in the binary; add it like any other source, with the URLs listed
 in `catalog/README.md`:
 

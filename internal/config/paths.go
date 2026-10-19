@@ -32,6 +32,9 @@ func InstanceDir(id string) string { return filepath.Join(StateDir, "instances",
 // PreparedImageDir holds downloaded and checksum-verified base images.
 func PreparedImageDir() string { return filepath.Join(CacheDir, "images", "prepared") }
 
+// FirecrackerImageDir holds Firecracker's guest kernels and raw copies of the prepared images.
+func FirecrackerImageDir() string { return filepath.Join(CacheDir, "images", "firecracker") }
+
 // CloudInitDir holds the saved cloud-init user-data library.
 func CloudInitDir() string { return filepath.Join(StateDir, "cloud-init") }
 

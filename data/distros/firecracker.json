@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "distros": [],
+  "firecracker": {
+    "kernels": [
+      {
+        "arch": "x86_64",
+        "version": "6.18.57",
+        "url": "https://git.fferrando.cc/rdfilippo/anvil/releases/download/fc-kernel-6.18.57/anvil-fc-kernel-6.18.57-x86_64",
+        "sha256": ""
+      },
+      {
+        "arch": "aarch64",
+        "version": "6.18.57",
+        "url": "https://git.fferrando.cc/rdfilippo/anvil/releases/download/fc-kernel-6.18.57/anvil-fc-kernel-6.18.57-aarch64",
+        "sha256": ""
+      }
+    ],
+    "distros": [
+      {
+        "id": "ubuntu-26.04"
+      },
+      {
+        "id": "ubuntu-24.04"
+      },
+      {
+        "id": "ubuntu-22.04"
+      },
+      {
+        "id": "debian-13"
+      },
+      {
+        "id": "debian-12"
+      },
+      {
+        "id": "archlinux"
+      },
+      {
+        "id": "fedora-44",
+        "kernel_args": "rootflags=subvol=root"
+      },
+      {
+        "id": "rocky-9"
+      },
+      {
+        "id": "rocky-10"
+      },
+      {
+        "id": "almalinux-9"
+      },
+      {
+        "id": "almalinux-10"
+      },
+      {
+        "id": "centos-stream-9"
+      },
+      {
+        "id": "centos-stream-10"
+      },
+      {
+        "id": "opensuse-leap-15.6"
+      },
+      {
+        "id": "alpine-3.24.1"
+      }
+    ]
+  }
+}

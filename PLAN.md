@@ -155,10 +155,12 @@ need a guest kernel: `ANVIL_FC_KERNEL=<path>` overrides the catalog kernel.
   anvild downloads it on the first Firecracker launch into the Firecracker cache, like a
   distro image (catalog URL + sha256, mirrors apply, `ANVIL_FC_KERNEL` overrides it).
   Kernel updates inside the guest have no effect.
-- **Catalog.** `data/distros/firecracker.json`: the kernel per arch (url, sha256, version)
-  plus one entry per supported distro id (same ids as the QEMU catalog, so the same image
-  URL, checksum and mirrors apply) with Firecracker-only fields such as extra kernel args
-  (`rootflags=subvol=root` for Fedora's btrfs).
+- **Catalog.** A `firecracker` section in the manifest format: the kernel per arch (url,
+  sha256, version) plus one entry per supported distro id (same ids as the QEMU catalog, so
+  the same image URL, checksum and mirrors apply) with Firecracker-only fields such as extra
+  kernel args (`rootflags=subvol=root` for Fedora's btrfs). Built in as
+  `data/distros/firecracker.json`, and in the `catalog/` submodule as
+  `firecracker_<arch>.json` for `anvil mirror add`.
 - **Disks.** Raw only. The qcow2 base is converted once into a Firecracker cache
   (`/var/cache/anvil/images/firecracker/<id>-<arch>.raw`, plus the kernel). An instance
   disk is a reflink copy (btrfs/xfs, falls back to a sparse copy), grown with truncate.
@@ -205,7 +207,7 @@ Each phase ends buildable, with its tests, and is ticked here when done.
    network-interfaces, vsock, actions, vm state, PATCH drives, memory hotplug), process
    spawn/attach/stop, vsock dialer. Unit tests against an httptest unix socket; spawn
    integration test that skips without `firecracker`, `/dev/kvm` or `ANVIL_FC_KERNEL`.
-3. [ ] **Kernel and images.** `scripts/build-fc-kernel.sh` + config fragment, `make fc-kernel`,
+3. [x] **Kernel and images.** `scripts/build-fc-kernel.sh` + config fragment, `make fc-kernel`,
    `firecracker.json` catalog, raw conversion cache with GPT root lookup, reflink disk copy.
    CI caches the built kernel keyed on kernel version + config fragment + build script hash
    (same pattern as the build-gui cache from a03c738), so it only rebuilds when one changes.
@@ -247,6 +249,33 @@ Each phase ends buildable, with its tests, and is ticked here when done.
   handshake; `qemu.GuestAgent.Dial` lets the QGA client run over it.
   To check in phase 4 with a real guest: whether a guest `poweroff` (agent `guest-shutdown`
   mode powerdown) makes firecracker exit, or the agent has to use mode `reboot`.
+- **Phase 3 (done, kernel not built yet).** `scripts/build-fc-kernel.sh [out] [x86_64|aarch64]`
+  (`make fc-kernel`, `ARCH=aarch64` to cross-build) builds Linux 6.18.57 from Firecracker
+  v1.17.0's `microvm-kernel-ci-<arch>-6.18.config` merged with `scripts/fc-kernel.config`
+  (partition tables, btrfs/xfs/vfat/iso9660, NFSv3, vsock, virtio-mem, i8042 for
+  Ctrl+Alt+Del, overlayfs, wireguard). It fails if `olddefconfig` drops a fragment option,
+  and fixes the build timestamp/user/host so rebuilds are byte-identical. Output:
+  `anvil-fc-kernel-<version>-<arch>` (bzImage on x86_64, Image on aarch64) plus its `.config`.
+  CI: `.github/workflows/fc-kernel.yml`, separate from package releases, runs on tags
+  `fc-kernel-*` (and by hand), caches `build/fc-kernel` keyed on the script + fragment hash,
+  and publishes the kernels plus `SHA256SUMS` as that tag's release.
+  `data/distros/firecracker.json` (embedded as `distros.FirecrackerRaw`): kernel per arch
+  (URL assumes the Forgejo release `fc-kernel-6.18.57`, **sha256 still empty until the first
+  build is published**) and every main-catalog distro id, Fedora with
+  `rootflags=subvol=root`. Distros other than the ones tested in phase 4 are unverified.
+  `internal/vm/image/firecracker.go`: `FCCatalog`, `FCCache` (`config.FirecrackerImageDir()`,
+  `/var/cache/anvil/images/firecracker`) with `Kernel` (downloaded on first use through the
+  Vault's downloader; `ANVIL_FC_KERNEL` overrides) and `RawBase` (qcow2 base converted once,
+  again when the base is newer), `CloneDisk` (`cp --reflink=auto --sparse=always`, then
+  grow). `partition.go`: `RootPartUUID` reads GPT (arch root type, else largest Linux data,
+  else largest) or MBR (`<signature>-<NN>`) from the instance disk itself.
+  Mirrors: a VM mirror manifest takes an optional `firecracker` section (kernels + distro
+  entries, merged by priority like images, ignored by older anvil). The embedded
+  `firecracker.json` uses the same shape, so `Catalog.FirecrackerKernel`/`FirecrackerDistro`
+  cover built-in and mirrors alike. The `catalog/` submodule has `firecracker_x86_64.json`
+  and `firecracker_aarch64.json` (the `-arm` ids), documented in its README and
+  `docs/mirrors.md`.
+  Open: `anvil image list/delete` don't show the raw copies and kernels yet.
 
 ## Container engines
 

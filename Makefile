@@ -1,4 +1,4 @@
-.PHONY: proto tui-deps build gui-tools man test vet fmt clean
+.PHONY: proto tui-deps build gui-tools fc-kernel man test vet fmt clean
 
 GOBIN := $(shell go env GOPATH)/bin
 
@@ -28,6 +28,11 @@ build:
 # Builds static waypipe and xwayland-satellite for `anvil gui` into build/gui-tools (needs docker).
 gui-tools:
 	scripts/build-gui-tools.sh build/gui-tools
+
+# Builds anvil's Firecracker guest kernel into build/fc-kernel (needs docker).
+# ARCH=aarch64 cross-builds the arm64 one.
+fc-kernel:
+	scripts/build-fc-kernel.sh build/fc-kernel $(or $(ARCH),x86_64)
 
 # Regenerates man/man1 (one page per `anvil` subcommand, via the hidden
 # `anvil man` command in internal/cli/commands/man.go) and copies

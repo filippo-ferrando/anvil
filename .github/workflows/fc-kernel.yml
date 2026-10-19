@@ -1,0 +1,67 @@
+name: Firecracker kernel
+
+# The kernel is versioned apart from anvil: a tag fc-kernel-<version> publishes it as a
+# release asset, which the Firecracker catalog (data/distros/firecracker.json) points at.
+on:
+  push:
+    tags:
+      - "fc-kernel-*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        arch: [x86_64, aarch64]
+    runs-on: ubuntu-latest
+    container:
+      image: debian:trixie
+    steps:
+      - name: Install job tools
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends git nodejs tar zstd ca-certificates
+
+      - uses: actions/checkout@v7
+
+      # The script pins the kernel and base config versions, so it and the fragment name the
+      # kernel it builds: a cache hit skips the whole build.
+      - id: kernel-cache
+        uses: actions/cache@v4
+        with:
+          path: build/fc-kernel
+          key: fc-kernel-${{ matrix.arch }}-${{ hashFiles('scripts/build-fc-kernel.sh', 'scripts/fc-kernel.config') }}
+
+      - name: Build the kernel
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        run: scripts/build-fc-kernel.sh build/fc-kernel ${{ matrix.arch }}
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: fc-kernel-${{ matrix.arch }}
+          path: build/fc-kernel/
+          retention-days: 1
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/fc-kernel-')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v3
+        with:
+          path: dist
+
+      - name: Write checksums
+        run: cd dist && sha256sum */anvil-fc-kernel-* | sed 's#  .*/#  #' > SHA256SUMS && cat SHA256SUMS
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v3
+        with:
+          body: "anvil's Firecracker guest kernel. Put the checksums into data/distros/firecracker.json."
+          files: |
+            dist/*/anvil-fc-kernel-*
+            dist/SHA256SUMS
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
