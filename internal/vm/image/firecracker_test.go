@@ -2,6 +2,7 @@ package image
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -160,7 +161,15 @@ func TestCloneDisk(t *testing.T) {
 	if info.Size() != 2<<30 {
 		t.Fatalf("clone size = %d, want 2GiB", info.Size())
 	}
-	if data, _ := os.ReadFile(dst); !strings.HasPrefix(string(data[:10]), "bootsector") {
+	// Only the head: reading the whole 2GiB clone costs gigabytes under -race.
+	head := make([]byte, 10)
+	if f, err := os.Open(dst); err != nil {
+		t.Fatal(err)
+	} else {
+		_, _ = io.ReadFull(f, head)
+		f.Close()
+	}
+	if string(head) != "bootsector" {
 		t.Fatal("clone lost the source's content")
 	}
 
