@@ -33,7 +33,7 @@ What is and is not protected against concurrent use:
 | Store writes | Each `PutInstance` is one bbolt transaction, so a single write is never torn. |
 | Launch with the same name | Protected. Launch, Fork and import reserve the name up front; the second caller fails with "name already in use". |
 | Start/stop/delete/mount/port/snapshot/update of the same instance | Protected by a per-instance lock in `instance.Manager`. A second caller fails fast with "instance busy" rather than waiting behind a slow operation. Writes patch the stored record and never recreate a deleted one. |
-| Migrating an instance while another client acts on it | **Not protected.** A migration does not lock the source. A `start` from another client after the migration has stopped the source can make the exported disk inconsistent; a `delete` makes the migration fail. |
+| Migrating, exporting or applying while another client acts on the same instances | Protected. `migrate`, `export` and `apply` hold their instances for the whole run; other clients get "instance busy" until it ends. |
 
 The event log records which user did what (`ActorInterceptors` in
 `internal/daemon/events.go`), so concurrent actions can be told apart afterwards, but it

@@ -150,3 +150,61 @@ func TestDownloaderChecksumMismatchDropsPartFile(t *testing.T) {
 		t.Error("expected a corrupt .part file to be removed")
 	}
 }
+
+func TestDedupSurvivesFirstCallerLeaving(t *testing.T) {
+	d := newDownloadDedup()
+	release := make(chan struct{})
+	var runs int
+	fn := func(ctx context.Context, progress func(string)) error {
+		runs++
+		<-release
+		progress("done")
+		return ctx.Err()
+	}
+
+	first, cancelFirst := context.WithCancel(context.Background())
+	firstErr := make(chan error)
+	go func() { firstErr <- d.do(first, "k", nil, fn) }()
+	for {
+		d.mu.Lock()
+		_, started := d.inFlight["k"]
+		d.mu.Unlock()
+		if started {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	var got []string
+	secondErr := make(chan error)
+	go func() { secondErr <- d.do(context.Background(), "k", func(s string) { got = append(got, s) }, fn) }()
+	for {
+		d.mu.Lock()
+		f := d.inFlight["k"]
+		d.mu.Unlock()
+		f.mu.Lock()
+		n := len(f.waiters)
+		f.mu.Unlock()
+		if n == 2 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	cancelFirst()
+	if err := <-firstErr; err != context.Canceled {
+		t.Errorf("expected the first caller to see its own cancellation, got %v", err)
+	}
+	close(release)
+	if err := <-secondErr; err != nil {
+		t.Errorf("expected the shared download to finish for the second caller, got %v", err)
+	}
+	if runs != 1 || len(got) != 1 {
+		t.Errorf("expected one run and one progress line to the second caller, got %d runs, %v", runs, got)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.inFlight) != 0 {
+		t.Errorf("expected nothing left in flight, got %d", len(d.inFlight))
+	}
+}

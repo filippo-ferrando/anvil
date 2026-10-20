@@ -120,7 +120,7 @@ func (m *Manager) restartNow(id string) {
 		return
 	}
 	// Waits for a running stop or delete, then re-checks the record it left behind.
-	_ = m.lockAndRun(spec, true, func(spec *Spec) error {
+	_ = m.lockAndRun(context.Background(), spec, true, func(spec *Spec) error {
 		if !wantsRestart(spec) {
 			return nil
 		}

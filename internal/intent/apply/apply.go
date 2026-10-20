@@ -22,6 +22,8 @@ type Instances interface {
 	Delete(ctx context.Context, names []string) error
 	Update(ctx context.Context, name string, p instance.UpdateParams) (instance.UpdateResult, error)
 	WaitReady(ctx context.Context, name string, progress func(status string)) error
+	Hold(ctx context.Context, names []string) (context.Context, func(), error)
+	ReserveNames(ctx context.Context, names []string) (context.Context, func(), error)
 }
 
 // Intents is the subset of *intent.Manager's methods Applier needs.
@@ -84,6 +86,14 @@ func (a *Applier) Apply(ctx context.Context, m *Manifest, opts Options, onPlan f
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	if !opts.DryRun {
+		var release func()
+		var err error
+		if ctx, release, err = a.lock(ctx, m); err != nil {
+			return fmt.Errorf("apply: %w", err)
+		}
+		defer release()
+	}
 	steps, err := a.plan(m, opts)
 	if steps != nil {
 		onPlan(steps)
@@ -97,6 +107,36 @@ func (a *Applier) Apply(ctx context.Context, m *Manifest, opts Options, onPlan f
 		}
 	}
 	return nil
+}
+
+// lock holds the intent's current members and reserves the names still to be created,
+// so manual commands can't change them between plan and run.
+func (a *Applier) lock(ctx context.Context, m *Manifest) (context.Context, func(), error) {
+	var held, free []string
+	it, err := a.Intents.Info(m.Intent)
+	if err != nil && !errors.Is(err, instance.ErrNotFound) {
+		return nil, nil, err
+	}
+	for _, mem := range it.Members {
+		if spec, err := a.Instances.GetByID(mem.InstanceID); err == nil {
+			held = append(held, spec.Name)
+		}
+	}
+	for _, mem := range m.Members {
+		if !slices.Contains(held, mem.Name) {
+			free = append(free, mem.Name)
+		}
+	}
+	ctx, releaseHeld, err := a.Instances.Hold(ctx, held)
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, releaseFree, err := a.Instances.ReserveNames(ctx, free)
+	if err != nil {
+		releaseHeld()
+		return nil, nil, err
+	}
+	return ctx, func() { releaseFree(); releaseHeld() }, nil
 }
 
 func (a *Applier) plan(m *Manifest, opts Options) ([]Step, error) {

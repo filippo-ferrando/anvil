@@ -20,42 +20,86 @@ import (
 // path into one in-flight download.
 type downloadDedup struct {
 	mu       sync.Mutex
-	inFlight map[string]*sync.WaitGroup
-	results  map[string]error
+	inFlight map[string]*flight
+}
+
+// flight is one shared download. It runs until it ends or every waiter gave up.
+type flight struct {
+	done     chan struct{}
+	err      error
+	cancel   context.CancelFunc
+	canceled bool // every waiter left; set under downloadDedup.mu
+
+	mu      sync.Mutex
+	waiters map[*int]func(status string) // each waiter's progress, keyed by a unique pointer
 }
 
 func newDownloadDedup() *downloadDedup {
-	return &downloadDedup{
-		inFlight: make(map[string]*sync.WaitGroup),
-		results:  make(map[string]error),
+	return &downloadDedup{inFlight: make(map[string]*flight)}
+}
+
+// progress forwards status to every waiter still there.
+func (f *flight) progress(status string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, p := range f.waiters {
+		if p != nil {
+			p(status)
+		}
 	}
 }
 
-// do runs fn for key, or waits for and returns the result of an
-// already-in-flight call for the same key.
-func (d *downloadDedup) do(key string, fn func() error) error {
+// do runs fn for key, or joins an already-in-flight call for the same key. fn's
+// context ends only once every caller's ctx did, so one caller leaving doesn't fail the rest.
+func (d *downloadDedup) do(ctx context.Context, key string, progress func(string), fn func(ctx context.Context, progress func(string)) error) error {
 	d.mu.Lock()
-	if wg, ok := d.inFlight[key]; ok {
+	f, ok := d.inFlight[key]
+	for ok && f.canceled {
+		// Its last waiter left; let it wind down before starting again.
 		d.mu.Unlock()
-		wg.Wait()
+		<-f.done
 		d.mu.Lock()
-		err := d.results[key]
-		d.mu.Unlock()
-		return err
+		f, ok = d.inFlight[key]
 	}
-	wg := &sync.WaitGroup{}
-	wg.Add(1)
-	d.inFlight[key] = wg
+	var fctx context.Context
+	if !ok {
+		var cancel context.CancelFunc
+		fctx, cancel = context.WithCancel(context.WithoutCancel(ctx))
+		f = &flight{done: make(chan struct{}), cancel: cancel, waiters: map[*int]func(string){}}
+		d.inFlight[key] = f
+	}
+	me := new(int)
+	f.mu.Lock()
+	f.waiters[me] = progress
+	f.mu.Unlock()
 	d.mu.Unlock()
+	if fctx != nil {
+		go func() {
+			f.err = fn(fctx, f.progress)
+			f.cancel()
+			d.mu.Lock()
+			delete(d.inFlight, key)
+			d.mu.Unlock()
+			close(f.done)
+		}()
+	}
 
-	err := fn()
-
-	d.mu.Lock()
-	d.results[key] = err
-	delete(d.inFlight, key)
-	d.mu.Unlock()
-	wg.Done()
-	return err
+	select {
+	case <-f.done:
+		return f.err
+	case <-ctx.Done():
+		d.mu.Lock()
+		f.mu.Lock()
+		delete(f.waiters, me)
+		last := len(f.waiters) == 0
+		f.mu.Unlock()
+		if last {
+			f.canceled = true
+			f.cancel()
+		}
+		d.mu.Unlock()
+		return ctx.Err()
+	}
 }
 
 // Downloader fetches a DistroEntry's image to a local path, verifying its
@@ -72,7 +116,7 @@ func NewDownloader() *Downloader {
 // Fetch downloads entry's image to destPath if not already present with
 // a matching checksum, deduplicating concurrent calls for the same path.
 func (d *Downloader) Fetch(ctx context.Context, entry DistroEntry, destPath string, progress func(status string)) error {
-	return d.dedup.do(destPath, func() error {
+	return d.dedup.do(ctx, destPath, progress, func(ctx context.Context, progress func(string)) error {
 		if ok, _ := verifyExisting(destPath, entry.SHA256); ok {
 			return nil
 		}

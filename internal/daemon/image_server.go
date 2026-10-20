@@ -30,6 +30,8 @@ type ImageServer struct {
 	Containers *container.Backend
 	// FC lists Firecracker's raw copies and kernels next to the base images.
 	FC *image.FCCache
+	// Creating lists instances still being created, whose disks may not exist yet; nil for none.
+	Creating func() []string
 }
 
 func NewImageServer(s *store.Store, v *image.Vault, backend VMCatalog, containers *container.Backend, fc *image.FCCache) *ImageServer {
@@ -124,6 +126,13 @@ func (s *ImageServer) Delete(ctx context.Context, req *anvilv1.ImageDeleteReques
 		return nil, fmt.Errorf("image: no cached image matching id %q", req.GetId())
 	}
 
+	if !req.GetForce() && s.Creating != nil {
+		// ponytail: refuses for any in-flight create, match by image if this gets in the way.
+		if busy := s.Creating(); len(busy) > 0 {
+			return nil, fmt.Errorf("image: instance(s) %s are still being created and may use %q; retry once done, or pass --force",
+				strings.Join(busy, ", "), req.GetId())
+		}
+	}
 	if !req.GetForce() {
 		specs, err := s.Store.List(instance.KindVM)
 		if err != nil {

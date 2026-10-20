@@ -2,6 +2,7 @@ package apply
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -86,6 +87,22 @@ type fakes struct {
 	intent  *store.Intent
 	specs   map[string]*instance.Spec // by ID
 	updated instance.UpdateParams
+
+	held, reserved []string
+	holdErr        error
+}
+
+func (f *fakes) Hold(ctx context.Context, names []string) (context.Context, func(), error) {
+	if f.holdErr != nil {
+		return nil, nil, f.holdErr
+	}
+	f.held = append(f.held, names...)
+	return ctx, func() {}, nil
+}
+
+func (f *fakes) ReserveNames(ctx context.Context, names []string) (context.Context, func(), error) {
+	f.reserved = append(f.reserved, names...)
+	return ctx, func() {}, nil
 }
 
 func (f *fakes) Info(name string) (store.Intent, error) {
@@ -303,5 +320,27 @@ func TestApplyHypervisorChange(t *testing.T) {
 	steps, _ = runApply(t, f, m, Options{DryRun: true})
 	if steps["app"].Action != ActionRecreate {
 		t.Fatalf("app action = %s, want recreate after a hypervisor change", steps["app"].Action)
+	}
+}
+
+func TestApplyLocksMembersAndNames(t *testing.T) {
+	m := mustParse(t, sample)
+	f := &fakes{}
+	f.member(m, "cache", instance.StateRunning)
+	if _, err := runApply(t, f, m, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(f.reserved)
+	if !slices.Equal(f.held, []string{"shop-cache"}) || !slices.Equal(f.reserved, []string{"shop-app", "shop-db"}) {
+		t.Errorf("held %v, reserved %v; want [shop-cache], [shop-app shop-db]", f.held, f.reserved)
+	}
+
+	busy := &fakes{holdErr: instance.ErrBusy}
+	busy.member(m, "cache", instance.StateRunning)
+	if _, err := runApply(t, busy, m, Options{}); !errors.Is(err, instance.ErrBusy) {
+		t.Errorf("expected a busy member to stop the apply, got %v", err)
+	}
+	if len(busy.log) != 0 {
+		t.Errorf("expected nothing run, got %v", busy.log)
 	}
 }

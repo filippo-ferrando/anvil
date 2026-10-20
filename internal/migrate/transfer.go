@@ -345,8 +345,9 @@ func remoteSize(ctx context.Context, t target, remotePath string) (int64, error)
 
 // reportUpload sends a progress line every 5 seconds until the returned stop func runs.
 func reportUpload(c *countingReader, size int64, progress func(status string)) (stop func()) {
-	done := make(chan struct{})
+	done, exited := make(chan struct{}), make(chan struct{})
 	go func() {
+		defer close(exited)
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -363,7 +364,8 @@ func reportUpload(c *countingReader, size int64, progress func(status string)) (
 			}
 		}
 	}()
-	return func() { close(done) }
+	// Waits for the ticker, so nothing is reported after the upload returned.
+	return func() { close(done); <-exited }
 }
 
 type countingReader struct {

@@ -151,3 +151,50 @@ func TestRestartWaitsForStopAndRespectsIt(t *testing.T) {
 		t.Errorf("expected stopped by the user, got %+v", got)
 	}
 }
+
+func TestHoldLetsHolderThroughOnly(t *testing.T) {
+	reg := &memRegistry{}
+	_ = reg.PutInstance(&Spec{ID: "01", Name: "box", Kind: KindVM, State: StateRunning, VM: &VMSpec{}})
+	m := NewManager(reg, map[Kind]Backend{KindVM: plainBackend{}})
+
+	ctx, release, err := m.Hold(context.Background(), []string{"box"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(context.Background(), []string{"box"}); !errors.Is(err, ErrBusy) {
+		t.Errorf("expected another caller to get ErrBusy, got %v", err)
+	}
+	if err := m.Stop(ctx, []string{"box"}, false, time.Second); err != nil {
+		t.Errorf("expected the holder's stop to pass, got %v", err)
+	}
+	release()
+	if err := m.Start(context.Background(), []string{"box"}); err != nil {
+		t.Errorf("expected start to work after release, got %v", err)
+	}
+}
+
+func TestReserveNamesBlocksOtherLaunches(t *testing.T) {
+	reg := &memRegistry{}
+	m := NewManager(reg, map[Kind]Backend{KindVM: plainBackend{}})
+	launch := func(ctx context.Context) error {
+		return m.Launch(ctx, LaunchParams{Name: "web", Kind: KindVM, VM: &VMSpec{}, NoStart: true}, func(LaunchEvent) {})
+	}
+
+	ctx, release, err := m.ReserveNames(context.Background(), []string{"web"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Creating(); len(got) != 1 || got[0] != "web" {
+		t.Errorf("Creating() = %v, want [web]", got)
+	}
+	if err := launch(context.Background()); err == nil {
+		t.Error("expected a launch outside the reservation to fail")
+	}
+	if err := launch(ctx); err != nil {
+		t.Errorf("expected the reserving caller's launch to pass, got %v", err)
+	}
+	release()
+	if _, _, err := m.ReserveNames(context.Background(), []string{"web"}); err == nil {
+		t.Error("expected reserving an existing name to fail")
+	}
+}

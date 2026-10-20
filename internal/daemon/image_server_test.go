@@ -106,3 +106,22 @@ func TestUsersOfFirecracker(t *testing.T) {
 		t.Fatalf("usersOf kernel = %v, want [a b]", got)
 	}
 }
+
+func TestImageDeleteWaitsForCreates(t *testing.T) {
+	dir := t.TempDir()
+	vault := image.NewVault(filepath.Join(dir, "prepared"))
+	base := filepath.Join(vault.PreparedDir, "debian-13-x86_64.qcow2")
+	touch(t, base)
+	srv := NewImageServer(testStore(t), vault, nil, nil, nil)
+	srv.Creating = func() []string { return []string{"web"} }
+
+	if _, err := srv.Delete(t.Context(), &anvilv1.ImageDeleteRequest{Id: "debian-13"}); err == nil {
+		t.Fatal("expected delete to be refused while an instance is being created")
+	}
+	if _, err := srv.Delete(t.Context(), &anvilv1.ImageDeleteRequest{Id: "debian-13", Force: true}); err != nil {
+		t.Fatalf("expected --force to delete anyway, got %v", err)
+	}
+	if _, err := os.Stat(base); !os.IsNotExist(err) {
+		t.Error("the base is still there after a forced delete")
+	}
+}

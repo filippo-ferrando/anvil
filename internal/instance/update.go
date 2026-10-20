@@ -54,7 +54,7 @@ func (m *Manager) Update(ctx context.Context, name string, p UpdateParams) (Upda
 		return UpdateResult{}, err
 	}
 	var res UpdateResult
-	err = m.withLock(spec, func(spec *Spec) error {
+	err = m.withLock(ctx, spec, func(spec *Spec) error {
 		res, err = m.update(ctx, spec, p)
 		return err
 	})

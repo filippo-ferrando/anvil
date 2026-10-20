@@ -195,251 +195,6 @@ need a guest kernel: `ANVIL_FC_KERNEL=<path>` overrides the catalog kernel.
   (`CAP_SYS_ADMIN CAP_SYS_CHROOT CAP_MKNOD CAP_SETUID CAP_SETGID CAP_CHOWN
   CAP_DAC_OVERRIDE`); disks and kernel are hard-linked into the chroot.
 
-#### Phases
-
-Each phase ends buildable, with its tests, and is ticked here when done.
-
-1. [x] **Selection plumbing.** Proto enum + `VMSpec.hypervisor`, `instance.VMHypervisor`,
-   convert.go, `anvil launch --hypervisor`, `anvil.yaml` `hypervisor:`, TUI launch form
-   field, `vm.Hypervisors` dispatcher (Firecracker returns "not implemented yet"), list/info
-   show the hypervisor.
-2. [x] **`internal/vm/firecracker`.** REST client (machine-config, boot-source, drives,
-   network-interfaces, vsock, actions, vm state, PATCH drives, memory hotplug), process
-   spawn/attach/stop, vsock dialer. Unit tests against an httptest unix socket; spawn
-   integration test that skips without `firecracker`, `/dev/kvm` or `ANVIL_FC_KERNEL`.
-3. [x] **Kernel and images.** `scripts/build-fc-kernel.sh` + config fragment, `make fc-kernel`,
-   `firecracker.json` catalog, raw conversion cache with GPT root lookup, reflink disk copy.
-   CI caches the built kernel keyed on kernel version + config fragment + build script hash
-   (same pattern as the build-gui cache from a03c738), so it only rebuilds when one changes.
-4. [x] **Lifecycle.** `FCBackend` Create/Start/Stop/Delete/Status/Logs/Reconcile, exit
-   watch, seed drive, console log, guest agent over vsock, WaitReady, GuestInfo, intent
-   bridge networking, Stats.
-5. [x] **Standalone networking.** `anvil-fc0` bridge, nftables masquerade, IPAM, DNS zone,
-   port proxy, AddPort/RemovePort, packaging sysctl.
-6. [x] **Disk and resources.** Snapshots, scheduled snapshots, fork, disk resize, live
-   memory, CPUs at next start.
-7. [x] **Mounts and GUI.** NFS server and live mount/umount, GUI tools drive, PrepareGUI.
-8. [x] **Export, import, migration.** Hypervisor-aware disk conversion on both ends.
-9. [x] **Jailer and packaging.** Jailer chroot, unit capabilities, firecracker optdepend in
-   all three package formats, docs (`docs/firecracker.md`), man pages.
-
-#### Status notes
-
-(Updated at the end of each phase: what landed, what's left, anything surprising.)
-
-- **Phase 1 (done).** `VmHypervisor` enum + `VMSpec.hypervisor` (field 24), `instance.VMHypervisor`
-  with `VMSpec.HypervisorOf()` (empty = qemu, so stored VMs need no migration), converters,
-  `anvil launch --hypervisor`, `hypervisor:` in `anvil.yaml` (a change means recreate), TUI
-  launch form field and "VM (firecracker)" in the detail panel, list ENGINE column and
-  `anvil info` show the hypervisor. `vm.Hypervisors` (`internal/vm/hypervisors.go`) is now
-  the KindVM backend; its `Firecracker` field is nil, so firecracker launches fail with "isn't
-  implemented yet". A missing capability fails with "<op> isn't supported on firecracker".
-  Left for phase 8: export/migration calls are QEMU-only in the dispatcher,
-  `PrepareImportedDisk` has no spec so it can't pick a hypervisor, and the migration target's
-  `anvil launch --from-disk` call must pass `--hypervisor`. Fork keeps the source's
-  hypervisor through `cloneVMSpecForFork`, with `NetworkMode` "slirp" meaning standalone.
-- **Phase 2 (done, real-VM test pending a kernel).** `internal/vm/firecracker`: `Config`
-  (`--config-file` JSON: boot source, machine config, drives with `partuuid`, network
-  interfaces, vsock, memory-hotplug, entropy), so the VM boots on spawn with no pre-boot API
-  calls. `Client` covers the runtime calls only: `Info`, `SendCtrlAltDel`, `Pause`/`Resume`,
-  `UpdateDrive` (PATCH, picks up a grown file), `MemoryHotplug`/`SetMemoryHotplug`.
-  `Process` mirrors `qemu.Process` (Spawn, Attach by `/proc/<pid>/cmdline`, WaitAPI, Exited,
-  Stop = Ctrl+Alt+Del then SIGKILL). Serial console is firecracker's stdout (`console.log`),
-  its own log plus stderr go to `firecracker.log`. `DialVsock` does the `CONNECT <port>`
-  handshake; `qemu.GuestAgent.Dial` lets the QGA client run over it.
-  To check in phase 4 with a real guest: whether a guest `poweroff` (agent `guest-shutdown`
-  mode powerdown) makes firecracker exit, or the agent has to use mode `reboot`.
-- **Phase 3 (done, kernel not built yet).** `scripts/build-fc-kernel.sh [out] [x86_64|aarch64]`
-  (`make fc-kernel`, `ARCH=aarch64` to cross-build) builds Linux 6.18.57 from Firecracker
-  v1.17.0's `microvm-kernel-ci-<arch>-6.18.config` merged with `scripts/fc-kernel.config`
-  (partition tables, btrfs/xfs/vfat/iso9660, NFSv3, vsock, virtio-mem, i8042 for
-  Ctrl+Alt+Del, overlayfs, wireguard). It fails if `olddefconfig` drops a fragment option,
-  and fixes the build timestamp/user/host so rebuilds are byte-identical. Output:
-  `anvil-fc-kernel-<version>-<arch>` (bzImage on x86_64, Image on aarch64) plus its `.config`.
-  CI: `.github/workflows/fc-kernel.yml`, separate from package releases, runs on tags
-  `fc-kernel-*` (and by hand), caches `build/fc-kernel` keyed on the script + fragment hash,
-  and publishes the kernels plus `SHA256SUMS` as that tag's release.
-  `data/distros/firecracker.json` (embedded as `distros.FirecrackerRaw`): kernel per arch
-  (Forgejo release `fc-kernel-6.18.57`, sha256 from its `SHA256SUMS`, also in the
-  `catalog/` files) and every main-catalog distro id, Fedora with
-  `rootflags=subvol=root`. Distros other than the ones tested in phase 4 are unverified.
-  `internal/vm/image/firecracker.go`: `FCCatalog`, `FCCache` (`config.FirecrackerImageDir()`,
-  `/var/cache/anvil/images/firecracker`) with `Kernel` (downloaded on first use through the
-  Vault's downloader; `ANVIL_FC_KERNEL` overrides) and `RawBase` (qcow2 base converted once,
-  again when the base is newer), `CloneDisk` (`cp --reflink=auto --sparse=always`, then
-  grow). `partition.go`: `RootPartUUID` reads GPT (arch root type, else largest Linux data,
-  else largest) or MBR (`<signature>-<NN>`) from the instance disk itself.
-  Mirrors: a VM mirror manifest takes an optional `firecracker` section (kernels + distro
-  entries, merged by priority like images, ignored by older anvil). The embedded
-  `firecracker.json` uses the same shape, so `Catalog.FirecrackerKernel`/`FirecrackerDistro`
-  cover built-in and mirrors alike. The `catalog/` submodule has `firecracker_x86_64.json`
-  and `firecracker_aarch64.json` (the `-arm` ids), documented in its README and
-  `docs/mirrors.md`.
-  Open: `anvil image list/delete` don't show the raw copies and kernels yet.
-- **Phase 4 (done, verified).** `vm.FCBackend`
-  (`internal/vm/fc_backend.go`), registered as `Hypervisors.Firecracker` in
-  `cmd/anvild/platform_linux.go`. Create: checks the distro is in the Firecracker catalog,
-  downloads the kernel (first launch only), converts the base to raw, reflink-clones
-  `disk.raw`, builds the same seed. Start: resolves kernel + kernel args from the catalog on
-  every start, reads the root PARTUUID from the disk, writes `firecracker.json` (rootfs with
-  partuuid + discard, seed drive read-only, vsock at `vsock.sock`, entropy, tap on the
-  intent bridge), spawns, saves `runtime.json`. Stop: agent `guest-shutdown` mode reboot,
-  then Ctrl+Alt+Del, then kill. Exit watch, Reconcile, Delete, Status, Logs (shared
-  console.log), WaitReady, Stats, guest info all work the same as QEMU.
-  Shared code: guest polling moved into `guestTracker` (`guest.go`), embedded by both
-  backends with its own agent dialer and shutdown mode; `qemu.QGAConn.Shutdown(mode)`;
-  stats sampling is `sampleStats(pid)`; `buildSeed` uses the swappable `instanceDir`.
-  cloud-init on Firecracker (`mergeFirecrackerGuest`): an `anvil-guest-agent.service` unit
-  running `qemu-ga --method=vsock-listen --path=3:1024` (replaces the stock start command),
-  `/etc/conf.d/qemu-guest-agent` for OpenRC, and a bootcmd linking `poweroff.target` to
-  `reboot.target` because a guest poweroff leaves firecracker running on x86_64 (Firecracker
-  FAQ). Not covered: OpenRC guests (Alpine) still hang on `poweroff`; the conf.d variable
-  names for Alpine's agent are unverified.
-  Standalone Firecracker VMs have no NIC until phase 5: no SSH, and the agent package can't
-  install, so use `--no-guest-agent` or an intent until then.
-  Tests: `TestMergeFirecrackerGuest`, `TestFCBackendCreate` (local catalog, no firecracker
-  needed), `TestFirecrackerRealBoot` (needs `ANVIL_E2E_IMAGE` + `ANVIL_FC_KERNEL`, the anvil
-  kernel: Firecracker's CI kernel has no partition table support).
-  Verified with the published kernel: `TestSpawnRealProcessLifecycle` and
-  `TestFirecrackerRealBoot` on Ubuntu 26.04 and Debian 13 (boot by PARTUUID, cloud-init
-  done, reconcile, Ctrl+Alt+Del stop in under 4s). Found and fixed: a config without drives
-  was written as `"drives": null`, which firecracker rejects.
-  Still to check through a real anvild: the guest agent over vsock (needs the guest to
-  install qemu-guest-agent, so network) and the intent bridge path.
-- **Phase 5 (done, verified in a network namespace).** `internal/vm/fcnet.go`: bridge
-  `anvil-fc0` (`10.254.254.0/24`, `ANVIL_FC_SUBNET` overrides, /24 only) created through
-  netlink on the first standalone start, `table ip anvil` in nftables (masquerade +
-  forward accept, recreated whole via `nft -f -`), two `iptables` rules in `DOCKER-USER`
-  when that chain exists (Docker's FORWARD drop wins over any accept elsewhere), a log line
-  when `ip_forward` is off. `fcIPAM` picks addresses from the registry (`Instances`, the
-  store) plus Creates not saved yet, reusing `intent/ipam` (126 per host). Create stores
-  `StaticIP`/`Gateway`/`DNSServers` (= gateway); `bridgeNetworkConfig` now keys on
-  `StaticIP` alone. `NetworkMode` stays standalone and `SSHPort` is set, so `anvil shell`,
-  `--publish` and `anvil port` behave as with SLIRP. `proxy.go`: TCP (half-close aware)
-  and UDP (per-client flows, 2 min idle) proxies on all interfaces, started before the
-  spawn, closed on release, restarted on Reconcile on the same SSH port when free.
-  `FCBackend` implements `PortForwarder` (live). DNS: `vm.FCDNSZone()`, a forward-only zone
-  on the gateway, added to the intent DNS server through `platformDNSZones()` in
-  `cmd/anvild`. Packaging first shipped a sysctl.d file for `ip_forward`; replaced by
-  anvild turning it on at the first standalone start, so hosts without Firecracker don't route.
-  `docs/networking.md` has a "Standalone Firecracker VMs" section.
-  Tests: proxy TCP/UDP, IPAM, nft rules (`nft -c` when allowed), Create's network fields;
-  `TestFirecrackerRealBoot` now checks SSH through the proxy, a live AddPort/RemovePort and
-  the proxies after Reconcile. It skips without CAP_NET_ADMIN; run it as
-  `unshare --user --map-root-user --net <compiled test binary> -test.run TestFirecrackerRealBoot`
-  to keep the bridge and nft table off the host.
-  Unverified: whether `iptables` agrees to run as the anvil user with only
-  CAP_NET_ADMIN (the DOCKER-USER rules are best-effort and log on failure); `nftables`
-  isn't a package dependency yet (phase 9, with firecracker itself). A forked
-  Firecracker VM gets a new address in phase 6 (`Fork`).
-- **Phase 6 (done, verified in a network namespace).** `internal/vm/fc_disk.go`.
-  Snapshots are reflink copies of the disk at `snapshots/<name>.raw` (disk only, like the
-  QEMU ones: restore boots fresh, `HasVMState` false). `copyDisk` pauses a running VM over the
-  API around the copy, with fsfreeze/thaw through the agent when it's connected (resume and
-  thaw run even if the caller's ctx is gone). Restore copies next to the disk and renames over
-  it, stopping and restarting a running VM. Scheduled snapshots need nothing more: the
-  scheduler goes through `Snapshotter`. Fork uses the same copy, then `assignAddress` (shared
-  with Create) and a new seed. `ResizeDisk` truncates and, while running,
-  `PATCH /drives/rootfs` plus the same growpart/resizefs script through the agent.
-  `SetCPUsLive` always answers `ErrNeedsRestart` (no vCPU hotplug in firecracker).
-  `SetMemoryLive`: Start now books a virtio-mem region up to the host's memory
-  (`fcHotplugMiB`, whole 128 MiB slots, x86_64 only like QEMU) and boots with
-  `memhp_default_state=online_movable`; the live change sets `requested_size_mib` and waits
-  through `settleVirtioMem`, now shared with QEMU (as is `guestExec`, moved to `guestTracker`).
-  Raw disks have no backing file, so `image delete` and `delete --purge` ignore them; the raw
-  cache isn't pruned yet (phase 9 with `anvil image`).
-  Tests: `fc_disk_test.go` (snapshots, fork, resize and restart-needed answers on a stopped
-  VM); `TestFirecrackerRealBoot` now also does a live snapshot, a live fork, a live disk grow,
-  +512 MiB through virtio-mem (works over MMIO, no PCI needed) and a restore of a running VM.
-- **Phase 7 (done, verified in a network namespace).** Mounts: `internal/vm/nfs.go`, a
-  `nfsHub` with one real listener per gateway on `fcNFSPort` (20490, fixed because the
-  guest's fstab names it) handing each connection to the per-VM `go-nfs` server for its
-  source address (`connQueue`); closed otherwise. Each VM's server has its own caching
-  handler, so handles never cross VMs. Exports are `/<tag>` -> `hostFS` (go-billy BoundOS +
-  chmod/chtimes kept inside the root, chown ignored) or `readOnlyFS`. go-nfs quirks found:
-  it builds a root handle even for a refused mount (crashes on a nil fs, so `refusedFS`),
-  has no exclusive create (the Linux client falls back on its own) and logs that as an
-  error (its log level is set to fatal). `internal/vm/fc_mounts.go`: `nfsFstabLine`
-  (`<gw>:/<tag> <path> nfs vers=3,...,port=20490,mountport=20490,nolock,addr=,mountaddr=`,
-  works with only the kernel client, no nfs-common), exports at Start/Reconcile, dropped on
-  release, `Mount`/`Umount` live through the agent or via `reseedAndRestart`. Shared with
-  QEMU now: `mergeMounts(..., line)`, `mountLiveScript(m, line)`, `tagLinePattern`, and
-  `anvilFstabPattern` also matching NFS lines (`/` escaped: it sits in a sed address).
-  GUI: `fc_gui.go` packs `config.GUIToolsDir()` into `gui-tools.iso` in the Firecracker
-  cache (rebuilt when a tool is newer), attached read-only at start; `PrepareGUI`,
-  `ListGuestDir` and `ReadGuestFile` are shared through `guestTracker`, only the tools
-  mount command differs (`blkid -L anviltools || findfs`).
-  Docs: `docs/gui.md`, `docs/security.md` (3.8 and new 3.8.1).
-  Tests: `nfs_test.go` (a real NFS client through the hub: write, chmod, read-only refusal,
-  unknown tag, forgotten VM and foreign address closed), `fc_gui_test.go` (ISO label and
-  rebuild), the fstab script tests; `TestFirecrackerRealBoot` boots with a mount and the
-  tools drive and the guest copies a tool through the share.
-  Not verified yet (needs the agent, so a real anvild): live mount/umount and `anvil gui`.
-- **Phase 8 (done, verified in a network namespace).** `internal/vm/fc_transfer.go`: a
-  Firecracker disk travels as qcow2, flattened (`ExportDisk`) or as a delta on the raw copy
-  of its base (`ExportDiskDelta`, `-B base.raw -F raw`); the base qcow2's checksum still
-  identifies the base (`BaseImageChecksum`/`BaseImagePath` read the vault). Target `Create`
-  with `SourceDiskPath` adopts it (`adoptDisk`): checks/adopts the base like QEMU
-  (`matchingLocalBase`, `adoptSentBase`), rebases onto the local raw copy (`rawCopyOf`,
-  temporary when the base travelled and differs from the cached one), converts to
-  `disk.raw`, no seed. Bundles: `export.VMImporter` gained `ExportDiskFile` (QEMU: the
-  overlay itself; Firecracker: a qcow2 written next to the bundle, since archive/tar isn't
-  sparse-aware) and `PrepareImportedDisk` takes the hypervisor (Firecracker rebases onto
-  its raw copy). The dispatcher routes all of these through a `diskMover` capability.
-  The hypervisor travels in the payload (`payload.VM.Hypervisor`) and the manifest
-  (`VM.Hypervisor`, empty = qemu). A standalone Firecracker guest keeps its address
-  (`payload.VM.StaticIP`, the manifest's `StaticIP`): its network config is inside the disk
-  and a migrated disk boots without a seed. `keepAddress` reserves it through
-  `fcIPAM.reserve` and fails when another Firecracker VM holds it or it's outside this
-  host's subnet. `vmSpecFromPB` accepts `static_ip` only for a Firecracker VM.
-  Docs: `docs/migration.md` (step 5), `docs/export-import.md` (base image resolution).
-  Tests: `fc_transfer_test.go` (delta, full and bundle round trips, base mismatch refused,
-  address kept and clash refused), `migrate_import_test.go`, `convert_vm_test.go`;
-  `TestFirecrackerRealBoot` now exports a delta of the booted disk, deletes the source and
-  boots the adopted copy with its old address (SSH answers).
-  Not verified yet: a real two-host `anvil migrate` and export/import through anvild.
-- **Phase 9 (done; the jailed path is only unit-tested).** Jailer: `firecracker.Paths.Jail`
-  (`Jail{ID, ChrootBase, UID, GID}`, `Root()` = `<base>/firecracker/<id>/root`, `InVMM`
-  for in-jail paths); `Spawn` runs `jailer --id --exec-file --uid --gid --chroot-base-dir
-  --cgroup-version 2 -- <firecracker args>` (cgroup v2 with no `--cgroup` creates no
-  cgroup; no `--daemonize`, so the pid stays); `Attach` matches a jailed process by its
-  `--id`. `internal/vm/fc_jail.go`: used when `jailer` is on PATH and `ANVIL_FC_JAILER` isn't
-  `off`; `config.JailerDir()` = `/var/lib/anvil/jailer` (same filesystem as the disks, which
-  are hard-linked in; kernel, seed and tools ISO may fall back to a copy), firecracker.log
-  hard-linked back to the instance dir, the jail removed on release, `runtime.json` records
-  `jailed` so Reconcile finds the right paths, per-VM paths kept in `FCBackend.paths` (agent
-  dialer, live disk resize). Tap devices are now owned by anvild's uid/gid, so a capability-
-  less jailed firecracker can open them. Unit: `CAP_SYS_ADMIN CAP_SYS_CHROOT CAP_MKNOD
-  CAP_CHOWN CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE` added to the ambient and bounding sets
-  (trade-off written down in `docs/security.md` 3.2). Packaging: `firecracker` and `nftables`
-  as Arch optdepends, deb/rpm Suggests.
-  Images: `CachedImage.kind` (`base`, `firecracker-raw`, `firecracker-kernel`) and
-  `ImageDeleteRequest.kind`; `FCCache.List`; `Vault.RawDir` makes deleting a base delete its
-  raw copy; `anvil image list` has a KIND column, `image delete --kind`, the TUI labels them
-  and deletes by kind; `delete --purge` of a Firecracker VM prunes its base by name.
-  `CatalogEntry.firecracker` (from `Catalog.List`): a FIRECRACKER column in `anvil find`, a
-  tag in the TUI catalog. Docs: `docs/firecracker.md` (new), README, CLAUDE.md,
-  `docs/man/anvild.8` (`ANVIL_FC_KERNEL`, `ANVIL_FC_SUBNET`, `ANVIL_FC_JAILER`).
-  Tests: `jail_test.go` (jailer command line, id matching), `fc_jail_test.go` (layout, links,
-  cleanup), `image_server_test.go` (merged list, delete by kind, base takes its raw copy),
-  `TestCatalogListMarksFirecracker`. The real-boot test runs unjailed under `unshare`
-  (mknod is refused in a user namespace); `ANVIL_FC_TEST_JAILER=1` as root runs it jailed.
-
-#### To check on a real host (anvild from the packages)
-
-1. Standalone launch: `anvil launch ubuntu-24.04 --kind vm --hypervisor firecracker --wait`,
-   then `anvil shell`, outbound traffic from the guest (Docker's DOCKER-USER rules: does
-   `iptables` run as the anvil user with CAP_NET_ADMIN?), `anvil port add`.
-2. Guest agent over vsock: `--wait` returning through the agent, guest IPs in `anvil list`,
-   `anvil stop` through the agent's reboot.
-3. Live `anvil mount`/`umount` and `anvil gui` (both go through the agent).
-4. Jailer under the packaged unit: are the listed capabilities enough (setgroups,
-   chown of the device nodes)? Run `ANVIL_FC_TEST_JAILER=1` real-boot test as root, too.
-5. Intent with a Firecracker member, and `anvil apply` with `hypervisor: firecracker`.
-6. Two-host `anvil migrate` and `anvil export`/`import` of a Firecracker VM.
-7. Distros other than Ubuntu 26.04 and Debian 13 (Fedora's btrfs args, Arch, RHEL family,
-   openSUSE, Alpine), aarch64.
-
 ## Container engines
 
 ### Podman backend
@@ -487,122 +242,35 @@ and keeps the host strictly in line with every `anvil.yaml` found in it, recursi
 
 ## Daemon concurrency
 
-Several clients (local CLI, TUI, `--remote` sessions) can call one anvild at once, each
-RPC on its own goroutine. Instance operations are not serialized, so concurrent writes to
-the same instance race. Context and failure scenarios: `docs/remote.md`.
+Done. Several clients (local CLI, TUI, `--remote` sessions) can call one anvild at once;
+writes to the same instance are now serialized. Context: `docs/remote.md`.
 
-### Root causes
+What is in place:
 
-- **No per-instance lock.** `instance.Manager` (`internal/instance/manager.go`) has no
-  lock around start/stop/delete/mount/port/snapshot/update, and neither do the restart
-  supervisor (`restart.go`), exit handling (`exit.go`) and autostart.
-- **Whole-record upsert.** Every writer does `GetByName`, a slow backend call, then
-  `PutInstance` (`internal/store/bolt.go`), which writes the full record and recreates it
-  if it was deleted meanwhile. Fields from other writers get reverted: State,
-  UserStopped, SSHPort, ContainerID, Mounts/NextMountIndex, Ports, SeedISOPath.
-- **Name check then write.** Launch (`manager.go:148` vs `:203`), Fork (`:259` vs `:309`)
-  and import (`internal/export/manager.go:377`) check the name long before
-  `PutInstance`, which overwrites the name index without checking it.
+- **Per-instance lock** (`internal/instance/lock.go`), taken by every mutating
+  `instance.Manager` operation, fork (on the source) and the snapshot scheduler. A second
+  caller fails fast with "instance busy"; the restart supervisor and exit handling wait.
+- **Hold** for multi-step work: export, migration and `anvil apply` lock their instances
+  for the whole run, and their own Stop/Start/Delete calls pass through via the ctx.
+- **Name reservation** in Launch/Fork, and `ReserveNames` for import and apply, so data
+  dirs and roles can't be claimed twice. `store.PutInstance` refuses a taken name.
+- **Patch, not upsert.** `store.UpdateInstance` re-reads and writes in one transaction and
+  never recreates a deleted record; the Manager saves only the fields it owns.
+- **Smaller fixes:** stale exit reports are checked against the backend's live state,
+  image delete refuses while an instance is being created, shared image downloads outlive
+  the caller that started them, migration progress is sent from one goroutine at a time,
+  the migration base is staged per instance, the migration key uses the `sshkey.Ensure`
+  link pattern, `SetMirrorEnabled` is one transaction, and the guest poller has its own
+  `VMSpec` copy.
 
-### Fix
+Known limits, left on purpose:
 
-- **Per-instance lock** in `instance.Manager`, keyed by instance ID, taken by every
-  mutating operation, the restart supervisor, exit handling, autostart, snapshot
-  scheduler, export, fork and migration (on the source). A second caller fails fast with
-  "instance busy" rather than queueing behind a minutes-long mount or snapshot.
-- **Name reservation.** Reserve the name in an in-memory set (or a placeholder store
-  record) at the start of Launch/Fork/import, release on failure. `PutInstance` for a new
-  ID refuses a name already mapped to another ID.
-- **Patch, not upsert.** `store.UpdateInstance(id, func(*Spec) error)` re-reads and writes
-  inside one bbolt transaction and fails if the record is gone, so a delete can't be undone.
-- **Tests.** Unit tests with a fake backend that blocks in Start/Mount, running two
-  operations on one instance in parallel, under `go test -race`.
-
-### Status
-
-Done: per-instance lock (`internal/instance/lock.go`) in every mutating `instance.Manager`
-operation, restart supervisor, exit handling, autostart, snapshot scheduler and fork
-source; name reservation in Launch/Fork (so import too); `PutInstance` refuses a taken
-name; `store.UpdateInstance` patches, and the Manager saves only the fields it owns.
-Tests in `internal/instance/lock_test.go`, `internal/store/bolt_test.go`.
-
-Left: export and migration don't take the lock yet (they call Stop/Start, which take it,
-so they need a hold that those calls can share). Every Medium/Low item below not covered
-by the above is still open.
-
-### Known races (verified in code)
-
-High:
-
-- **Container ID lost on port add/remove.** Docker AddPort/RemovePort recreate the
-  container (`internal/container/docker_backend.go:131-195`). A concurrent stop/update
-  writes back the old ContainerID: the record points at a deleted container and the new
-  one is orphaned.
-- **Restart supervisor overrides a user stop.** `restartNow` drops its timer, then runs a
-  slow `b.Start`. A `stop` in that window finds no timer to cancel, and QEMU's Stop
-  returns nil for a VM not yet running (`internal/vm/backend.go:812`).
-  `startForPolicy` then writes Running. Autostart (`cmd/anvild/main.go:163`) races the
-  same way. Firecracker refuses with "being started" instead.
-- **Delete during a slow operation resurrects the record.** Delete during Start, Mount
-  (stop/start, up to 30s), resize or snapshot removes the instance dir, then the slow
-  operation's `PutInstance` recreates the record, possibly with an untracked live
-  qemu/firecracker process.
-- **Same-name Launch/Fork/import.** Both pass the check, the second hides the first.
-
-Medium:
-
-- **Mount/Umount on a running VM** do a full stop/start (`vm/backend.go:1077`,
-  `fc_mounts.go:182`) and overwrite a user stop/start made in between.
-- **SSHPort reverted.** QEMU picks a new SSH port on every start
-  (`vm/backend.go:739-750`). Any writer holding an older spec writes the old port back,
-  so `anvil ssh` hits a dead port or another VM's.
-- **Two mounts get the same tag** from `NextMountIndex` (`vm/mounts.go:142`,
-  `fc_mounts.go:108`). On Firecracker the NFS export map is overwritten
-  (`nfs.go:80`), so one guest path serves the other host directory with the other's
-  read-only flag (a requested `ro` can become rw).
-- **Concurrent AddPort/RemovePort** both apply live but only one is recorded; after a
-  restart the forward is gone, `port remove` can't find a live one.
-- **Image delete vs in-flight launch.** The "in use" check (`daemon/image_server.go:126`)
-  only sees stored instances, so a base can be deleted under a launch still in Create.
-- **Fork of a stopped source** copies the disk unlocked (`qemu-img convert -U`,
-  `vm/backend.go:454`); a concurrent start makes a torn copy. Two live forks share job ID
-  `fork-<srcID>` (`fork_resize.go:49`) and one thaw can end the other's freeze.
-- **Export** archives the live disk file with no lock (`export/manager.go:93-113`); a
-  concurrent start or second export tears the bundle, and the deferred restart can undo a
-  user stop.
-- **Migration staging names.** Local `<id>.qcow2` and remote `anvil-migrate-<id>.qcow2`
-  are fixed per instance, and the remote base `anvil-migrate-base-<sha>.qcow2` is shared
-  by every migration to that target (`migrate/manager.go:514-549`). Two migrations
-  append into the same file on resume (`transfer.go:276`), delete each other's file on
-  cleanup, or one import moves the base away from the other. Use a per-migration suffix.
-
-Low:
-
-- **Migration key generation** (`EnsurePublicKey`, `migrate/manager.go:163`) is
-  stat-then-`ssh-keygen`; two first migrations can fail or interleave. Reuse the temp file
-  plus `os.Link` pattern from `sshkey.EnsureDefault`.
-- **Concurrent `stream.Send`.** The upload ticker (`migrate/transfer.go:347`) sends from
-  its own goroutine while the handler also sends, and can send after the handler returns.
-  Guard `progress` with a mutex and wait for the ticker in `stop`.
-- **Shared download tied to the first caller** (`image/downloader.go:36-58`): its Ctrl-C
-  or dropped ssh fails every waiting launch. The `results` map also never shrinks.
-- **Same-name imports** can merge data dirs: `hostpath.MoveDir` (`movedir.go:14-28`)
-  falls back to copyDir when the rename fails.
-- **Stray exit report** (`exit.go:22`) can overwrite a `start` made right after the
-  process exited, and trigger the restart policy.
-- **Live CPU hotplug** (`hotplug.go:97-120`) computes free slots unlocked (uncertain).
-- **Snapshot restore vs start**: errors from qcow2 locking rather than corruption, and the
-  scheduler's prune can delete a snapshot being restored.
-- **`SetMirrorEnabled`** (`store/mirrors.go:102`) is get-then-put in two transactions and
-  can undo a concurrent `mirror remove`.
-- **apply vs manual commands.** `Applier.mu` only serializes applies; a manual launch or
-  delete between plan and run can duplicate a role or delete a just-recreated instance.
-- **Data race on `SeedISOPath`.** The guest poller's shallow copy (`vm/guest.go:99`)
-  shares `*VMSpec` with Mount's `buildSeed`.
-
-Already safe: Firecracker IPAM (`fcnet.go`), `allocateFreePort`, TAP/vsock names, intent
-membership and member IPs (`intent.Manager.mu`, a global lock: one slow intent launch
-blocks every other intent operation), backend maps, DNS server, event broadcaster.
+- Image delete refuses during any in-flight create, not only those using that image, and
+  a launch that starts between the check and the removal can still lose its base.
+- An `apply` recreate deletes then relaunches the same name; a manual launch of that
+  exact name in between wins.
+- `intent.Manager.mu` is a global lock: one slow intent launch blocks every other intent
+  operation.
 
 ## Migration
 

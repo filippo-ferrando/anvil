@@ -98,7 +98,12 @@ func (b *guestTracker) watchGuest(spec *instance.Spec, exited <-chan struct{}) {
 	b.guests[spec.ID] = gs
 	b.guestMu.Unlock()
 
+	// The poller gets its own VMSpec: Mount rewrites fields such as SeedISOPath on the original.
 	specCopy := *spec
+	if spec.VM != nil {
+		vm := *spec.VM
+		specCopy.VM = &vm
+	}
 	go func() {
 		defer cancel()
 		for {

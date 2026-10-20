@@ -99,11 +99,23 @@ func (s *Store) DeleteMirror(name string) error {
 	})
 }
 
+// SetMirrorEnabled flips one mirror in a single transaction, so it can't undo a concurrent remove.
 func (s *Store) SetMirrorEnabled(name string, enabled bool) error {
-	m, err := s.GetMirror(name)
-	if err != nil {
-		return err
-	}
-	m.Enabled = enabled
-	return s.PutMirror(m)
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketMirrors)
+		data := bucket.Get([]byte(name))
+		if data == nil {
+			return fmt.Errorf("store: no mirror named %q: %w", name, instance.ErrNotFound)
+		}
+		var m Mirror
+		if err := json.Unmarshal(data, &m); err != nil {
+			return err
+		}
+		m.Enabled = enabled
+		out, err := json.Marshal(m)
+		if err != nil {
+			return fmt.Errorf("store: encoding mirror %s: %w", name, err)
+		}
+		return bucket.Put([]byte(name), out)
+	})
 }

@@ -29,6 +29,10 @@ type Instances interface {
 	Start(ctx context.Context, names []string) error
 	Stop(ctx context.Context, names []string, force bool, timeout time.Duration) error
 	Launch(ctx context.Context, params instance.LaunchParams, progress func(instance.LaunchEvent)) error
+	// Hold locks names' instances until release; calls made with the returned ctx pass the lock.
+	Hold(ctx context.Context, names []string) (context.Context, func(), error)
+	// ReserveNames holds names for new instances until release; Launch with the returned ctx uses them.
+	ReserveNames(ctx context.Context, names []string) (context.Context, func(), error)
 }
 
 // Intents is the subset of *intent.Manager's methods Manager needs.
@@ -83,10 +87,21 @@ func (m *Manager) Export(ctx context.Context, p ExportParams, progress func(stat
 	}
 
 	names := make([]string, len(members))
-	wasRunning := make(map[string]bool, len(members))
 	for i, spec := range members {
 		names[i] = spec.Name
-		wasRunning[spec.Name] = spec.State == instance.StateRunning
+	}
+	// Held until the instances are resumed, so another client can't start one mid-archive.
+	ctx, release, err := m.Instances.Hold(ctx, names)
+	if err != nil {
+		return fmt.Errorf("export: %w", err)
+	}
+	defer release()
+	wasRunning := make(map[string]bool, len(members))
+	for i, spec := range members {
+		if members[i], err = m.Instances.GetByID(spec.ID); err != nil {
+			return fmt.Errorf("export: %w", err)
+		}
+		wasRunning[spec.Name] = members[i].State == instance.StateRunning
 	}
 
 	progress(fmt.Sprintf("stopping %d instance(s)", len(names)))
@@ -373,15 +388,17 @@ func (m *Manager) Import(ctx context.Context, p ImportParams, progress func(stat
 		}
 		return mem.Name
 	}
-	// Checked up front, before any member's data is moved into place.
-	for _, mem := range manifest.Members {
-		name := destName(mem)
-		if _, err := m.Instances.Info([]string{name}); err == nil {
-			return Result{}, fmt.Errorf("import: an instance named %q already exists (purge it, or import with --name)", name)
-		} else if !errors.Is(err, instance.ErrNotFound) {
-			return Result{}, fmt.Errorf("import: checking whether %q exists: %w", name, err)
-		}
+	// Reserved up front, before any member's data is moved into place, so a second
+	// import of the same name can't merge into the same data dirs.
+	names := make([]string, len(manifest.Members))
+	for i, mem := range manifest.Members {
+		names[i] = destName(mem)
 	}
+	ctx, release, err := m.Instances.ReserveNames(ctx, names)
+	if err != nil {
+		return Result{}, fmt.Errorf("import: %w (purge it, or import with --name)", err)
+	}
+	defer release()
 
 	result := Result{IntentName: intentName}
 	for _, mem := range manifest.Members {

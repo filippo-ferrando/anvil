@@ -147,7 +147,7 @@ func (m *Manager) Launch(ctx context.Context, params LaunchParams, progress func
 		return err
 	}
 
-	release, err := m.reserveName(params.Name)
+	release, err := m.reserveName(ctx, params.Name)
 	if err != nil {
 		progress(LaunchEvent{Err: err})
 		return err
@@ -256,16 +256,15 @@ func (m *Manager) Fork(ctx context.Context, params ForkParams, progress func(Lau
 		return err
 	}
 
-	release, err := m.reserveName(params.NewName)
+	release, err := m.reserveName(ctx, params.NewName)
 	if err != nil {
 		progress(LaunchEvent{Err: err})
 		return err
 	}
 	defer release()
 	// The source stays locked while its disk is copied.
-	releaseSource, err := m.locks.acquire(source.ID, false)
+	_, releaseSource, err := m.Hold(ctx, []string{source.Name})
 	if err != nil {
-		err = fmt.Errorf("instance: %s: %w", source.Name, err)
 		progress(LaunchEvent{Err: err})
 		return err
 	}
@@ -461,7 +460,7 @@ func (m *Manager) Mount(ctx context.Context, name, hostPath, guestPath string, r
 	if readOnly {
 		msg += " (ro)"
 	}
-	err = m.withLock(spec, func(spec *Spec) error {
+	err = m.withLock(ctx, spec, func(spec *Spec) error {
 		if err := mounter.Mount(ctx, spec, hostPath, guestPath, readOnly); err != nil {
 			return err
 		}
@@ -485,7 +484,7 @@ func (m *Manager) Umount(ctx context.Context, name, guestPath string) error {
 	if !ok {
 		return fmt.Errorf("instance: %s instances don't support mounts", spec.Kind)
 	}
-	err = m.withLock(spec, func(spec *Spec) error {
+	err = m.withLock(ctx, spec, func(spec *Spec) error {
 		if err := mounter.Umount(ctx, spec, guestPath); err != nil {
 			return err
 		}
@@ -509,7 +508,7 @@ func (m *Manager) AddPort(ctx context.Context, name string, port PortMapping) er
 	if !ok {
 		return fmt.Errorf("instance: %s instances don't support port forwarding changes", spec.Kind)
 	}
-	err = m.withLock(spec, func(spec *Spec) error {
+	err = m.withLock(ctx, spec, func(spec *Spec) error {
 		if err := pf.AddPort(ctx, spec, port); err != nil {
 			return err
 		}
@@ -534,7 +533,7 @@ func (m *Manager) RemovePort(ctx context.Context, name string, hostPort int, pro
 	if !ok {
 		return fmt.Errorf("instance: %s instances don't support port forwarding changes", spec.Kind)
 	}
-	err = m.withLock(spec, func(spec *Spec) error {
+	err = m.withLock(ctx, spec, func(spec *Spec) error {
 		if err := pf.RemovePort(ctx, spec, hostPort, protocol); err != nil {
 			return err
 		}
@@ -568,7 +567,7 @@ func (m *Manager) CreateSnapshot(ctx context.Context, name, snapshotName string)
 	if err != nil {
 		return err
 	}
-	err = m.withLock(spec, func(spec *Spec) error {
+	err = m.withLock(ctx, spec, func(spec *Spec) error {
 		if err := sn.CreateSnapshot(ctx, spec, snapshotName); err != nil {
 			return err
 		}
@@ -584,7 +583,7 @@ func (m *Manager) RestoreSnapshot(ctx context.Context, name, snapshotName string
 	if err != nil {
 		return err
 	}
-	err = m.withLock(spec, func(spec *Spec) error {
+	err = m.withLock(ctx, spec, func(spec *Spec) error {
 		if err := sn.RestoreSnapshot(ctx, spec, snapshotName); err != nil {
 			return err
 		}
@@ -600,7 +599,7 @@ func (m *Manager) DeleteSnapshot(ctx context.Context, name, snapshotName string)
 	if err != nil {
 		return err
 	}
-	err = m.withLock(spec, func(spec *Spec) error {
+	err = m.withLock(ctx, spec, func(spec *Spec) error {
 		if err := sn.DeleteSnapshot(ctx, spec, snapshotName); err != nil {
 			return err
 		}
@@ -654,7 +653,7 @@ func (m *Manager) start(ctx context.Context, names []string, action string) erro
 		return err
 	}
 	return forEachParallel(specs, func(spec *Spec) error {
-		err := m.withLock(spec, func(spec *Spec) error { return m.startOne(ctx, spec) })
+		err := m.withLock(ctx, spec, func(spec *Spec) error { return m.startOne(ctx, spec) })
 		m.record(ctx, spec, action, "", err)
 		return err
 	})
@@ -685,7 +684,7 @@ func (m *Manager) Stop(ctx context.Context, names []string, force bool, timeout 
 		msg = "forced"
 	}
 	return forEachParallel(specs, func(spec *Spec) error {
-		err := m.withLock(spec, func(spec *Spec) error { return m.stopOne(ctx, spec, force, timeout) })
+		err := m.withLock(ctx, spec, func(spec *Spec) error { return m.stopOne(ctx, spec, force, timeout) })
 		m.record(ctx, spec, "stop", msg, err)
 		return err
 	})
@@ -712,7 +711,7 @@ func (m *Manager) Delete(ctx context.Context, names []string) error {
 	}
 	var errs []error
 	for _, spec := range specs {
-		err := m.withLock(spec, func(spec *Spec) error { return m.deleteOne(ctx, spec) })
+		err := m.withLock(ctx, spec, func(spec *Spec) error { return m.deleteOne(ctx, spec) })
 		m.record(ctx, spec, "delete", "", err)
 		errs = append(errs, err)
 	}

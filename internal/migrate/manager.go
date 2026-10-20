@@ -10,14 +10,15 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/config"
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/migrate/payload"
+	"git.fferrando.cc/rdfilippo/anvil/internal/sshkey"
 	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 )
 
@@ -34,6 +35,8 @@ type Instances interface {
 	Info(names []string) ([]*instance.Spec, error)
 	Stop(ctx context.Context, names []string, force bool, timeout time.Duration) error
 	Delete(ctx context.Context, names []string) error
+	// Hold locks names' instances until release; calls made with the returned ctx pass the lock.
+	Hold(ctx context.Context, names []string) (context.Context, func(), error)
 
 	// GetByID resolves an intent member's InstanceID to its full spec.
 	GetByID(id string) (*instance.Spec, error)
@@ -162,21 +165,8 @@ func (m *Manager) GuestKey(ctx context.Context, aliasOrTarget string) (string, e
 // fresh ed25519 keypair if one doesn't exist yet.
 func (m *Manager) EnsurePublicKey() (string, error) {
 	path := config.MigrateIdentityPath()
-	if _, err := os.Stat(path); err != nil {
-		if !os.IsNotExist(err) {
-			return "", fmt.Errorf("migrate: checking for the migration SSH key: %w", err)
-		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			return "", fmt.Errorf("migrate: creating the SSH key directory: %w", err)
-		}
-		keygenBin, err := exec.LookPath("ssh-keygen")
-		if err != nil {
-			return "", fmt.Errorf("migrate: ssh-keygen not found on PATH (needed to generate the migration SSH key)")
-		}
-		cmd := exec.Command(keygenBin, "-t", "ed25519", "-N", "", "-C", "anvil-migrate", "-f", path)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return "", fmt.Errorf("migrate: generating the migration SSH key: %w: %s", err, out)
-		}
+	if err := sshkey.Ensure(path, "anvil-migrate"); err != nil {
+		return "", fmt.Errorf("migrate: %w", err)
 	}
 
 	pub, err := os.ReadFile(path + ".pub")
@@ -198,6 +188,14 @@ func (m *Manager) Migrate(ctx context.Context, p Params, progress func(status st
 
 	if _, err := m.EnsurePublicKey(); err != nil {
 		return Result{}, err
+	}
+	// The upload ticker reports from its own goroutine; a gRPC stream allows one sender at a time.
+	var progressMu sync.Mutex
+	send := progress
+	progress = func(status string) {
+		progressMu.Lock()
+		defer progressMu.Unlock()
+		send(status)
 	}
 
 	t, err := m.resolveTarget(p.To)
@@ -259,6 +257,16 @@ func (m *Manager) migrateInstance(ctx context.Context, t target, spec *instance.
 	progress(fmt.Sprintf("target check: %s is %s, anvil at %s", t.Host, caps.arch, caps.anvil))
 	if p.DryRun {
 		return "", nil
+	}
+
+	// Held until the end, so no other client starts, changes or deletes it meanwhile.
+	ctx, release, err := m.Instances.Hold(ctx, []string{spec.Name})
+	if err != nil {
+		return "", fmt.Errorf("migrate: %w", err)
+	}
+	defer release()
+	if spec, err = m.Instances.GetByID(spec.ID); err != nil {
+		return "", fmt.Errorf("migrate: %w", err)
 	}
 
 	// The instance must be stopped before its disk can be safely flattened.
@@ -356,6 +364,17 @@ func (m *Manager) migrateIntent(ctx context.Context, t target, it store.Intent, 
 	if len(members) == 0 {
 		return Result{IntentName: it.Name, Members: preflightFailed},
 			fmt.Errorf("migrate: no member of intent %q can run on the target", it.Name)
+	}
+
+	ctx, release, err := m.Instances.Hold(ctx, names)
+	if err != nil {
+		return Result{}, fmt.Errorf("migrate: %w", err)
+	}
+	defer release()
+	for i := range members {
+		if members[i].spec, err = m.Instances.GetByID(members[i].spec.ID); err != nil {
+			return Result{}, fmt.Errorf("migrate: %w", err)
+		}
 	}
 
 	progress(fmt.Sprintf("stopping %d source instance(s)", len(names)))
@@ -538,7 +557,8 @@ func (m *Manager) buildVMPayload(ctx context.Context, spec *instance.Spec, t tar
 
 	remoteBase := ""
 	if basePath != "" {
-		remoteBase = remoteStagingDir + "/anvil-migrate-base-" + baseSHA + ".qcow2"
+		// Named per instance: two migrations to one target must not share the file.
+		remoteBase = remoteStagingDir + "/anvil-migrate-base-" + baseSHA + "-" + spec.ID + ".qcow2"
 		progress("sending the base image too, the target has no copy of it")
 		if err := uploadDisk(ctx, t, basePath, remoteBase, caps, progress); err != nil {
 			return err

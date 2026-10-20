@@ -32,7 +32,13 @@ func (f *fakeInstances) Info(names []string) ([]*instance.Spec, error) {
 	return nil, instance.ErrNotFound
 }
 func (f *fakeInstances) GetByID(string) (*instance.Spec, error) { return f.spec, nil }
-func (f *fakeInstances) Start(context.Context, []string) error  { f.started = true; return nil }
+func (f *fakeInstances) ReserveNames(ctx context.Context, _ []string) (context.Context, func(), error) {
+	return ctx, func() {}, nil
+}
+func (f *fakeInstances) Hold(ctx context.Context, _ []string) (context.Context, func(), error) {
+	return ctx, func() {}, nil
+}
+func (f *fakeInstances) Start(context.Context, []string) error { f.started = true; return nil }
 func (f *fakeInstances) Stop(context.Context, []string, bool, time.Duration) error {
 	f.stopped = true
 	return nil

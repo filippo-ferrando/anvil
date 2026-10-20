@@ -1,12 +1,18 @@
 package instance
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // exitBackend is a Backend that only records the exit hook it was given.
 type exitBackend struct {
 	plainBackend
-	hook func(string, State, string)
+	hook   func(string, State, string)
+	status State // what Status reports
 }
+
+func (b *exitBackend) Status(context.Context, *Spec) (State, error) { return b.status, nil }
 
 func (b *exitBackend) SetExitHook(hook func(string, State, string)) { b.hook = hook }
 
@@ -52,5 +58,18 @@ func TestRecordExitStartOutsideAnvil(t *testing.T) {
 	eb.hook("02", StateRunning, "test")
 	if spec, _ := reg.GetByID("02"); spec.State != StateDeleted {
 		t.Errorf("expected a deleted record to stay deleted, got %s", spec.State)
+	}
+}
+
+func TestRecordExitIgnoresStaleReport(t *testing.T) {
+	eb := &exitBackend{status: StateRunning}
+	reg := &memRegistry{}
+	_ = reg.PutInstance(&Spec{ID: "01", Name: "web", Kind: KindVM, State: StateRunning})
+	NewManager(reg, map[Kind]Backend{KindVM: eb})
+
+	// The old process exited, but a start already brought up a new one.
+	eb.hook("01", StateStopped, "test")
+	if spec, _ := reg.GetByID("01"); spec.State != StateRunning {
+		t.Errorf("expected a stale exit report to be ignored, got %s", spec.State)
 	}
 }

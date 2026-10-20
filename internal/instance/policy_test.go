@@ -19,7 +19,10 @@ type recordingBackend struct {
 	resized  map[string]int64
 	snaps    map[string][]Snapshot
 	hook     func(string, State, string)
+	status   State // what Status reports; "" means unknown
 }
+
+func (b *recordingBackend) Status(context.Context, *Spec) (State, error) { return b.status, nil }
 
 func (b *recordingBackend) Start(_ context.Context, s *Spec) error {
 	b.mu.Lock()

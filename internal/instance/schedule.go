@@ -46,7 +46,7 @@ func (m *Manager) SetSnapshotSchedule(name string, every time.Duration, keep int
 		spec.VM.SnapshotSchedule = &SnapshotSchedule{Every: every, Keep: keep, LastRun: last}
 	}
 	sched := spec.VM.SnapshotSchedule
-	return m.withLock(spec, func(spec *Spec) error {
+	return m.withLock(context.Background(), spec, func(spec *Spec) error {
 		return m.registry.UpdateInstance(spec.ID, func(s *Spec) error {
 			if s.VM == nil {
 				return fmt.Errorf("instance: snapshot schedules only apply to VMs")
@@ -85,7 +85,7 @@ func (m *Manager) runDueSnapshots(ctx context.Context, now time.Time) {
 			continue
 		}
 		// A busy instance is skipped and tried again on the next tick.
-		_ = m.withLock(spec, func(spec *Spec) error {
+		_ = m.withLock(ctx, spec, func(spec *Spec) error {
 			if err := m.takeScheduledSnapshot(ctx, spec, now); err != nil {
 				log.Printf("instance: scheduled snapshot of %s: %v", spec.Name, err)
 			}

@@ -25,10 +25,23 @@ func (m *Manager) recordExit(instanceID string, state State, reason string) {
 		return
 	}
 	// Waits for a running operation, so its outcome is the one the checks below see.
-	_ = m.lockAndRun(spec, true, func(spec *Spec) error {
+	_ = m.lockAndRun(context.Background(), spec, true, func(spec *Spec) error {
 		m.applyExit(spec, state, reason)
 		return nil
 	})
+}
+
+// liveState asks spec's backend for its current state, "" when it can't tell.
+func (m *Manager) liveState(spec *Spec) State {
+	b, err := m.backendFor(spec.Kind)
+	if err != nil {
+		return ""
+	}
+	st, err := b.Status(context.Background(), spec)
+	if err != nil {
+		return ""
+	}
+	return st
 }
 
 func (m *Manager) applyExit(spec *Spec, state State, reason string) {
@@ -37,6 +50,9 @@ func (m *Manager) applyExit(spec *Spec, state State, reason string) {
 	case state != StateRunning && (spec.State == StateRunning || spec.State == StateStarting):
 	default:
 		return
+	}
+	if state != StateRunning && m.liveState(spec) == StateRunning {
+		return // a start finished after the exit was reported, so the report is stale
 	}
 	spec.State = state
 	if err := m.save(spec, func(s *Spec) { s.State = state }); err != nil {
