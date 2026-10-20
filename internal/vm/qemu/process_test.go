@@ -126,3 +126,23 @@ func TestProcessAliveTreatsAZombieAsGone(t *testing.T) {
 		t.Error("expected an unreaped zombie to count as gone")
 	}
 }
+
+// TestKillReachesProcessOutsideItsOwnGroup covers a reattached QEMU that isn't a
+// process group leader: signalling only the group would never reach it.
+func TestKillReachesProcessOutsideItsOwnGroup(t *testing.T) {
+	cmd := exec.Command("sleep", "60") // stays in the test's process group
+	if err := cmd.Start(); err != nil {
+		t.Skipf("sleep unavailable: %v", err)
+	}
+	go func() { _ = cmd.Wait() }()
+	p := &Process{pid: cmd.Process.Pid, exited: make(chan struct{})}
+	go p.pollLiveness()
+	done := make(chan error, 1)
+	go func() { done <- p.kill() }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("kill never reached a process outside its own group")
+	}
+}

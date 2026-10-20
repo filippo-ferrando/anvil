@@ -3,7 +3,9 @@
 package vm
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -152,22 +154,43 @@ func TestQEMUDeleteRemovesLeftoverTap(t *testing.T) {
 	}
 }
 
+// fakeQEMUEnv makes the test binary act as a long-running fake QEMU.
+const fakeQEMUEnv = "ANVIL_TEST_FAKE_QEMU"
+
 // TestQEMUReconcileKillsAnUncontrollableQEMU covers a live QEMU whose QMP is gone:
 // left running untracked, a later Start would open its disk in a second QEMU.
 func TestQEMUReconcileKillsAnUncontrollableQEMU(t *testing.T) {
+	if os.Getenv(fakeQEMUEnv) != "" {
+		time.Sleep(time.Minute) // the fake QEMU itself, started below
+		os.Exit(0)
+	}
 	b, net, spec := qemuLeftoverBackend(t, "Q3")
 	if err := os.MkdirAll(instanceDir("Q3"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	// Looks like qemu-system for the disk; the trailing ":" keeps sh from exec'ing sleep.
-	fake := exec.Command("sh", "-c", "sleep 60; :", "qemu-system-x86_64", spec.VM.DiskPath)
-	fake.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// The test binary again, with an argv that looks like qemu-system for the disk; no
+	// shell in between, so its cmdline doesn't depend on how the host's sh runs it.
+	fake := exec.Command(os.Args[0], "-test.run=^TestQEMUReconcileKillsAnUncontrollableQEMU$", "--", "qemu-system-x86_64", spec.VM.DiskPath)
+	fake.Env = append(os.Environ(), fakeQEMUEnv+"=1")
+	fake.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // its own group, as anvil starts QEMU
 	if err := fake.Start(); err != nil {
 		t.Fatal(err)
 	}
 	exited := make(chan struct{})
 	go func() { _ = fake.Wait(); close(exited) }()
-	t.Cleanup(func() { _ = syscall.Kill(-fake.Process.Pid, syscall.SIGKILL) })
+	t.Cleanup(func() { _ = fake.Process.Kill() })
+	// Start can return before the kernel shows the new argv, and Attach checks it.
+	var cmdline []byte
+	var err error
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		cmdline, err = os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", fake.Process.Pid))
+		if err == nil && bytes.Contains(cmdline, []byte("qemu-system")) && bytes.Contains(cmdline, []byte(spec.VM.DiskPath)) {
+			break
+		}
+	}
+	if err != nil || !bytes.Contains(cmdline, []byte(spec.VM.DiskPath)) {
+		t.Skipf("this host's /proc doesn't show the fake process's cmdline (%q, %v)", cmdline, err)
+	}
 
 	rt := runtimeState{Pid: fake.Process.Pid, QMPSocket: filepath.Join(instanceDir("Q3"), "qmp.sock")}
 	if err := saveRuntimeState(instanceDir("Q3"), rt); err != nil {

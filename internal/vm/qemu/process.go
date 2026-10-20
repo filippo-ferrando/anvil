@@ -194,8 +194,11 @@ func (p *Process) kill() error {
 	if p.pid == 0 {
 		return nil
 	}
-	// Negative pid targets the whole process group.
-	_ = syscall.Kill(-p.pid, syscall.SIGKILL)
+	// Negative pid targets the whole process group; a process that isn't a group leader
+	// would otherwise never get the signal and this would wait forever.
+	if err := syscall.Kill(-p.pid, syscall.SIGKILL); err != nil {
+		_ = syscall.Kill(p.pid, syscall.SIGKILL)
+	}
 	<-p.exited
 	if p.cmd == nil {
 		return nil
