@@ -2,6 +2,16 @@
 
 Built from commit subjects by `scripts/changelog.sh`.
 
+## v1.2.6 (2026-10-20)
+
+### Fixes
+
+- test peaked at 6Gb of ram, OOM CI (497fe72)
+- timing problem on `process.go` (4e7421a)
+- closed gaps (c14af22)
+- fix for migrate/export/ecc (12ffc10)
+- fix on high impact (1ca787c)
+
 ## v1.2.5 (2026-10-19)
 
 ### Fixes
