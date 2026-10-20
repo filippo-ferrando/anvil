@@ -24,6 +24,14 @@ func (m *Manager) recordExit(instanceID string, state State, reason string) {
 	if err != nil {
 		return
 	}
+	// Waits for a running operation, so its outcome is the one the checks below see.
+	_ = m.lockAndRun(spec, true, func(spec *Spec) error {
+		m.applyExit(spec, state, reason)
+		return nil
+	})
+}
+
+func (m *Manager) applyExit(spec *Spec, state State, reason string) {
 	switch {
 	case state == StateRunning && (spec.State == StateStopped || spec.State == StateError):
 	case state != StateRunning && (spec.State == StateRunning || spec.State == StateStarting):
@@ -31,7 +39,7 @@ func (m *Manager) recordExit(instanceID string, state State, reason string) {
 		return
 	}
 	spec.State = state
-	if err := m.registry.PutInstance(spec); err != nil {
+	if err := m.save(spec, func(s *Spec) { s.State = state }); err != nil {
 		log.Printf("instance: recording %s's new state %s: %v", spec.Name, state, err)
 		return
 	}

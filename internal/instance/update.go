@@ -53,7 +53,11 @@ func (m *Manager) Update(ctx context.Context, name string, p UpdateParams) (Upda
 	if err != nil {
 		return UpdateResult{}, err
 	}
-	res, err := m.update(ctx, spec, p)
+	var res UpdateResult
+	err = m.withLock(spec, func(spec *Spec) error {
+		res, err = m.update(ctx, spec, p)
+		return err
+	})
 	m.record(ctx, spec, "update", strings.Join(res.Notes, "; "), err)
 	return res, err
 }
@@ -137,7 +141,8 @@ func (m *Manager) update(ctx context.Context, spec *Spec, p UpdateParams) (Updat
 		res.Notes = append(res.Notes, "restart policy set to "+p.RestartPolicy.String())
 	}
 
-	if err := m.registry.PutInstance(spec); err != nil {
+	err := m.save(spec, func(s *Spec) { s.Autostart, s.RestartPolicy = spec.Autostart, spec.RestartPolicy })
+	if err != nil {
 		return UpdateResult{}, err
 	}
 	res.Spec = m.withGuest(spec)

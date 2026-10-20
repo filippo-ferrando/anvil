@@ -81,17 +81,49 @@ func Open(path string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 
 // PutInstance inserts or replaces spec's record and points the name->id
-// index at spec.ID.
+// index at spec.ID. It refuses a name already mapped to another instance.
 func (s *Store) PutInstance(spec *instance.Spec) error {
 	data, err := json.Marshal(toRecord(spec))
 	if err != nil {
 		return fmt.Errorf("store: encoding instance %s: %w", spec.ID, err)
 	}
 	return s.db.Update(func(tx *bbolt.Tx) error {
+		names := tx.Bucket(bucketInstanceNames)
+		if id := names.Get([]byte(spec.Name)); id != nil && string(id) != spec.ID {
+			return fmt.Errorf("store: name %q is already in use", spec.Name)
+		}
 		if err := tx.Bucket(bucketInstances).Put([]byte(spec.ID), data); err != nil {
 			return err
 		}
-		return tx.Bucket(bucketInstanceNames).Put([]byte(spec.Name), []byte(spec.ID))
+		return names.Put([]byte(spec.Name), []byte(spec.ID))
+	})
+}
+
+// UpdateInstance applies fn to a fresh copy of id's record and writes it back in one
+// transaction. A record that is gone fails with ErrNotFound, so a delete is never undone.
+func (s *Store) UpdateInstance(id string, fn func(*instance.Spec) error) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketInstances)
+		data := bucket.Get([]byte(id))
+		if data == nil {
+			return fmt.Errorf("store: no instance with id %q: %w", id, instance.ErrNotFound)
+		}
+		var rec record
+		if err := json.Unmarshal(data, &rec); err != nil {
+			return err
+		}
+		spec := rec.toSpec()
+		if err := fn(spec); err != nil {
+			return err
+		}
+		if spec.ID != rec.ID || spec.Name != rec.Name {
+			return fmt.Errorf("store: an update can't change instance %s's ID or name", id)
+		}
+		out, err := json.Marshal(toRecord(spec))
+		if err != nil {
+			return fmt.Errorf("store: encoding instance %s: %w", id, err)
+		}
+		return bucket.Put([]byte(id), out)
 	})
 }
 

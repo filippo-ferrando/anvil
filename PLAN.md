@@ -485,6 +485,125 @@ and keeps the host strictly in line with every `anvil.yaml` found in it, recursi
 - **Tests.** Unit tests for the reconcile diff, including pruning and drift revert,
   against a local bare repo created in the test.
 
+## Daemon concurrency
+
+Several clients (local CLI, TUI, `--remote` sessions) can call one anvild at once, each
+RPC on its own goroutine. Instance operations are not serialized, so concurrent writes to
+the same instance race. Context and failure scenarios: `docs/remote.md`.
+
+### Root causes
+
+- **No per-instance lock.** `instance.Manager` (`internal/instance/manager.go`) has no
+  lock around start/stop/delete/mount/port/snapshot/update, and neither do the restart
+  supervisor (`restart.go`), exit handling (`exit.go`) and autostart.
+- **Whole-record upsert.** Every writer does `GetByName`, a slow backend call, then
+  `PutInstance` (`internal/store/bolt.go`), which writes the full record and recreates it
+  if it was deleted meanwhile. Fields from other writers get reverted: State,
+  UserStopped, SSHPort, ContainerID, Mounts/NextMountIndex, Ports, SeedISOPath.
+- **Name check then write.** Launch (`manager.go:148` vs `:203`), Fork (`:259` vs `:309`)
+  and import (`internal/export/manager.go:377`) check the name long before
+  `PutInstance`, which overwrites the name index without checking it.
+
+### Fix
+
+- **Per-instance lock** in `instance.Manager`, keyed by instance ID, taken by every
+  mutating operation, the restart supervisor, exit handling, autostart, snapshot
+  scheduler, export, fork and migration (on the source). A second caller fails fast with
+  "instance busy" rather than queueing behind a minutes-long mount or snapshot.
+- **Name reservation.** Reserve the name in an in-memory set (or a placeholder store
+  record) at the start of Launch/Fork/import, release on failure. `PutInstance` for a new
+  ID refuses a name already mapped to another ID.
+- **Patch, not upsert.** `store.UpdateInstance(id, func(*Spec) error)` re-reads and writes
+  inside one bbolt transaction and fails if the record is gone, so a delete can't be undone.
+- **Tests.** Unit tests with a fake backend that blocks in Start/Mount, running two
+  operations on one instance in parallel, under `go test -race`.
+
+### Status
+
+Done: per-instance lock (`internal/instance/lock.go`) in every mutating `instance.Manager`
+operation, restart supervisor, exit handling, autostart, snapshot scheduler and fork
+source; name reservation in Launch/Fork (so import too); `PutInstance` refuses a taken
+name; `store.UpdateInstance` patches, and the Manager saves only the fields it owns.
+Tests in `internal/instance/lock_test.go`, `internal/store/bolt_test.go`.
+
+Left: export and migration don't take the lock yet (they call Stop/Start, which take it,
+so they need a hold that those calls can share). Every Medium/Low item below not covered
+by the above is still open.
+
+### Known races (verified in code)
+
+High:
+
+- **Container ID lost on port add/remove.** Docker AddPort/RemovePort recreate the
+  container (`internal/container/docker_backend.go:131-195`). A concurrent stop/update
+  writes back the old ContainerID: the record points at a deleted container and the new
+  one is orphaned.
+- **Restart supervisor overrides a user stop.** `restartNow` drops its timer, then runs a
+  slow `b.Start`. A `stop` in that window finds no timer to cancel, and QEMU's Stop
+  returns nil for a VM not yet running (`internal/vm/backend.go:812`).
+  `startForPolicy` then writes Running. Autostart (`cmd/anvild/main.go:163`) races the
+  same way. Firecracker refuses with "being started" instead.
+- **Delete during a slow operation resurrects the record.** Delete during Start, Mount
+  (stop/start, up to 30s), resize or snapshot removes the instance dir, then the slow
+  operation's `PutInstance` recreates the record, possibly with an untracked live
+  qemu/firecracker process.
+- **Same-name Launch/Fork/import.** Both pass the check, the second hides the first.
+
+Medium:
+
+- **Mount/Umount on a running VM** do a full stop/start (`vm/backend.go:1077`,
+  `fc_mounts.go:182`) and overwrite a user stop/start made in between.
+- **SSHPort reverted.** QEMU picks a new SSH port on every start
+  (`vm/backend.go:739-750`). Any writer holding an older spec writes the old port back,
+  so `anvil ssh` hits a dead port or another VM's.
+- **Two mounts get the same tag** from `NextMountIndex` (`vm/mounts.go:142`,
+  `fc_mounts.go:108`). On Firecracker the NFS export map is overwritten
+  (`nfs.go:80`), so one guest path serves the other host directory with the other's
+  read-only flag (a requested `ro` can become rw).
+- **Concurrent AddPort/RemovePort** both apply live but only one is recorded; after a
+  restart the forward is gone, `port remove` can't find a live one.
+- **Image delete vs in-flight launch.** The "in use" check (`daemon/image_server.go:126`)
+  only sees stored instances, so a base can be deleted under a launch still in Create.
+- **Fork of a stopped source** copies the disk unlocked (`qemu-img convert -U`,
+  `vm/backend.go:454`); a concurrent start makes a torn copy. Two live forks share job ID
+  `fork-<srcID>` (`fork_resize.go:49`) and one thaw can end the other's freeze.
+- **Export** archives the live disk file with no lock (`export/manager.go:93-113`); a
+  concurrent start or second export tears the bundle, and the deferred restart can undo a
+  user stop.
+- **Migration staging names.** Local `<id>.qcow2` and remote `anvil-migrate-<id>.qcow2`
+  are fixed per instance, and the remote base `anvil-migrate-base-<sha>.qcow2` is shared
+  by every migration to that target (`migrate/manager.go:514-549`). Two migrations
+  append into the same file on resume (`transfer.go:276`), delete each other's file on
+  cleanup, or one import moves the base away from the other. Use a per-migration suffix.
+
+Low:
+
+- **Migration key generation** (`EnsurePublicKey`, `migrate/manager.go:163`) is
+  stat-then-`ssh-keygen`; two first migrations can fail or interleave. Reuse the temp file
+  plus `os.Link` pattern from `sshkey.EnsureDefault`.
+- **Concurrent `stream.Send`.** The upload ticker (`migrate/transfer.go:347`) sends from
+  its own goroutine while the handler also sends, and can send after the handler returns.
+  Guard `progress` with a mutex and wait for the ticker in `stop`.
+- **Shared download tied to the first caller** (`image/downloader.go:36-58`): its Ctrl-C
+  or dropped ssh fails every waiting launch. The `results` map also never shrinks.
+- **Same-name imports** can merge data dirs: `hostpath.MoveDir` (`movedir.go:14-28`)
+  falls back to copyDir when the rename fails.
+- **Stray exit report** (`exit.go:22`) can overwrite a `start` made right after the
+  process exited, and trigger the restart policy.
+- **Live CPU hotplug** (`hotplug.go:97-120`) computes free slots unlocked (uncertain).
+- **Snapshot restore vs start**: errors from qcow2 locking rather than corruption, and the
+  scheduler's prune can delete a snapshot being restored.
+- **`SetMirrorEnabled`** (`store/mirrors.go:102`) is get-then-put in two transactions and
+  can undo a concurrent `mirror remove`.
+- **apply vs manual commands.** `Applier.mu` only serializes applies; a manual launch or
+  delete between plan and run can duplicate a role or delete a just-recreated instance.
+- **Data race on `SeedISOPath`.** The guest poller's shallow copy (`vm/guest.go:99`)
+  shares `*VMSpec` with Mount's `buildSeed`.
+
+Already safe: Firecracker IPAM (`fcnet.go`), `allocateFreePort`, TAP/vsock names, intent
+membership and member IPs (`intent.Manager.mu`, a global lock: one slow intent launch
+blocks every other intent operation), backend maps, DNS server, event broadcaster.
+
 ## Migration
 
 - **Live migration.** QMP `migrate` through an SSH tunnel, to move a running VM with a short

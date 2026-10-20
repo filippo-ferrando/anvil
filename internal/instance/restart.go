@@ -116,16 +116,23 @@ func (m *Manager) restartNow(id string) {
 	m.restarts.mu.Unlock()
 
 	spec, err := m.registry.GetByID(id)
-	if err != nil || !wantsRestart(spec) {
+	if err != nil {
 		return
 	}
-	err = m.startForPolicy(spec)
-	m.record(context.Background(), spec, "restart", "policy "+spec.RestartPolicy.String(), err)
-	if err != nil {
-		log.Printf("instance: restarting %s: %v", spec.Name, err)
-		spec.State = StateError
-		m.maybeRestart(spec) // try again, later
-	}
+	// Waits for a running stop or delete, then re-checks the record it left behind.
+	_ = m.lockAndRun(spec, true, func(spec *Spec) error {
+		if !wantsRestart(spec) {
+			return nil
+		}
+		err := m.startForPolicy(spec)
+		m.record(context.Background(), spec, "restart", "policy "+spec.RestartPolicy.String(), err)
+		if err != nil {
+			log.Printf("instance: restarting %s: %v", spec.Name, err)
+			spec.State = StateError
+			m.maybeRestart(spec) // try again, later
+		}
+		return nil
+	})
 }
 
 // startForPolicy starts spec without touching the counters an explicit Start resets.
@@ -142,7 +149,7 @@ func (m *Manager) startForPolicy(spec *Spec) error {
 	m.restarts.lastStart[spec.ID] = time.Now()
 	m.restarts.mu.Unlock()
 	spec.State = StateRunning
-	return m.registry.PutInstance(spec)
+	return m.save(spec, func(s *Spec) { s.State = StateRunning })
 }
 
 // Autostart starts every instance marked autostart that isn't running and wasn't stopped

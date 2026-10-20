@@ -75,14 +75,26 @@ func (r notifyingRegistry) PutInstance(spec *Spec) error {
 	if err := r.Registry.PutInstance(spec); err != nil {
 		return err
 	}
-	// Read the record back so subscribers never share memory with the caller's spec.
-	if fresh, err := r.Registry.GetByID(spec.ID); err == nil {
+	r.publishUpdated(spec.ID)
+	return nil
+}
+
+func (r notifyingRegistry) UpdateInstance(id string, fn func(*Spec) error) error {
+	if err := r.Registry.UpdateInstance(id, fn); err != nil {
+		return err
+	}
+	r.publishUpdated(id)
+	return nil
+}
+
+// publishUpdated reads the record back, so subscribers never share memory with a caller's spec.
+func (r notifyingRegistry) publishUpdated(id string) {
+	if fresh, err := r.Registry.GetByID(id); err == nil {
 		if r.decorate != nil {
 			fresh = r.decorate(fresh)
 		}
 		r.events.publish(Event{Type: EventUpdated, Spec: fresh})
 	}
-	return nil
 }
 
 func (r notifyingRegistry) DeleteByID(id string) error {

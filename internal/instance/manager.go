@@ -17,6 +17,8 @@ type Manager struct {
 	backends map[Kind]Backend
 	events   *broadcaster[Event]
 	restarts restartTracker
+	locks    keyLocks // per instance ID, see withLock
+	names    keyLocks // names being launched or forked, see reserveName
 
 	// History persists the event log behind `anvil events`, taken from the registry when it
 	// implements HistoryStore; nil keeps events live only.
@@ -77,7 +79,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 		stateChanged := newState != spec.State
 		spec.State = newState
-		if err := m.registry.PutInstance(spec); err != nil {
+		if err := m.save(spec, func(s *Spec) { s.State = newState }); err != nil {
 			return fmt.Errorf("instance: persisting reconciled state for %s: %w", spec.Name, err)
 		}
 		if stateChanged && newState != StateRunning {
@@ -145,14 +147,12 @@ func (m *Manager) Launch(ctx context.Context, params LaunchParams, progress func
 		return err
 	}
 
-	if _, err := m.registry.GetByName(params.Name); err == nil {
-		err := fmt.Errorf("instance: name %q is already in use", params.Name)
-		progress(LaunchEvent{Err: err})
-		return err
-	} else if !errors.Is(err, ErrNotFound) {
+	release, err := m.reserveName(params.Name)
+	if err != nil {
 		progress(LaunchEvent{Err: err})
 		return err
 	}
+	defer release()
 
 	labels := make(map[string]string, len(params.Labels))
 	for k, v := range params.Labels {
@@ -256,11 +256,21 @@ func (m *Manager) Fork(ctx context.Context, params ForkParams, progress func(Lau
 		return err
 	}
 
-	if _, err := m.registry.GetByName(params.NewName); err == nil {
-		err := fmt.Errorf("instance: name %q is already in use", params.NewName)
+	release, err := m.reserveName(params.NewName)
+	if err != nil {
 		progress(LaunchEvent{Err: err})
 		return err
-	} else if !errors.Is(err, ErrNotFound) {
+	}
+	defer release()
+	// The source stays locked while its disk is copied.
+	releaseSource, err := m.locks.acquire(source.ID, false)
+	if err != nil {
+		err = fmt.Errorf("instance: %s: %w", source.Name, err)
+		progress(LaunchEvent{Err: err})
+		return err
+	}
+	defer releaseSource()
+	if source, err = m.registry.GetByID(source.ID); err != nil {
 		progress(LaunchEvent{Err: err})
 		return err
 	}
@@ -451,10 +461,12 @@ func (m *Manager) Mount(ctx context.Context, name, hostPath, guestPath string, r
 	if readOnly {
 		msg += " (ro)"
 	}
-	err = mounter.Mount(ctx, spec, hostPath, guestPath, readOnly)
-	if err == nil {
-		err = m.registry.PutInstance(spec)
-	}
+	err = m.withLock(spec, func(spec *Spec) error {
+		if err := mounter.Mount(ctx, spec, hostPath, guestPath, readOnly); err != nil {
+			return err
+		}
+		return m.save(spec, nil)
+	})
 	m.record(ctx, spec, "mount", msg, err)
 	return err
 }
@@ -473,10 +485,12 @@ func (m *Manager) Umount(ctx context.Context, name, guestPath string) error {
 	if !ok {
 		return fmt.Errorf("instance: %s instances don't support mounts", spec.Kind)
 	}
-	err = mounter.Umount(ctx, spec, guestPath)
-	if err == nil {
-		err = m.registry.PutInstance(spec)
-	}
+	err = m.withLock(spec, func(spec *Spec) error {
+		if err := mounter.Umount(ctx, spec, guestPath); err != nil {
+			return err
+		}
+		return m.save(spec, nil)
+	})
 	m.record(ctx, spec, "umount", guestPath, err)
 	return err
 }
@@ -495,10 +509,12 @@ func (m *Manager) AddPort(ctx context.Context, name string, port PortMapping) er
 	if !ok {
 		return fmt.Errorf("instance: %s instances don't support port forwarding changes", spec.Kind)
 	}
-	err = pf.AddPort(ctx, spec, port)
-	if err == nil {
-		err = m.registry.PutInstance(spec)
-	}
+	err = m.withLock(spec, func(spec *Spec) error {
+		if err := pf.AddPort(ctx, spec, port); err != nil {
+			return err
+		}
+		return m.save(spec, nil)
+	})
 	m.record(ctx, spec, "port-add", fmt.Sprintf("%d -> %d/%s", port.HostPort, port.GuestPort, Protocol(port.Protocol)), err)
 	return err
 }
@@ -518,10 +534,12 @@ func (m *Manager) RemovePort(ctx context.Context, name string, hostPort int, pro
 	if !ok {
 		return fmt.Errorf("instance: %s instances don't support port forwarding changes", spec.Kind)
 	}
-	err = pf.RemovePort(ctx, spec, hostPort, protocol)
-	if err == nil {
-		err = m.registry.PutInstance(spec)
-	}
+	err = m.withLock(spec, func(spec *Spec) error {
+		if err := pf.RemovePort(ctx, spec, hostPort, protocol); err != nil {
+			return err
+		}
+		return m.save(spec, nil)
+	})
 	m.record(ctx, spec, "port-remove", fmt.Sprintf("%d/%s", hostPort, Protocol(protocol)), err)
 	return err
 }
@@ -550,10 +568,12 @@ func (m *Manager) CreateSnapshot(ctx context.Context, name, snapshotName string)
 	if err != nil {
 		return err
 	}
-	err = sn.CreateSnapshot(ctx, spec, snapshotName)
-	if err == nil {
-		err = m.registry.PutInstance(spec)
-	}
+	err = m.withLock(spec, func(spec *Spec) error {
+		if err := sn.CreateSnapshot(ctx, spec, snapshotName); err != nil {
+			return err
+		}
+		return m.save(spec, nil)
+	})
 	m.record(ctx, spec, "snapshot-create", snapshotName, err)
 	return err
 }
@@ -564,10 +584,12 @@ func (m *Manager) RestoreSnapshot(ctx context.Context, name, snapshotName string
 	if err != nil {
 		return err
 	}
-	err = sn.RestoreSnapshot(ctx, spec, snapshotName)
-	if err == nil {
-		err = m.registry.PutInstance(spec)
-	}
+	err = m.withLock(spec, func(spec *Spec) error {
+		if err := sn.RestoreSnapshot(ctx, spec, snapshotName); err != nil {
+			return err
+		}
+		return m.save(spec, nil)
+	})
 	m.record(ctx, spec, "snapshot-restore", snapshotName, err)
 	return err
 }
@@ -578,10 +600,12 @@ func (m *Manager) DeleteSnapshot(ctx context.Context, name, snapshotName string)
 	if err != nil {
 		return err
 	}
-	err = sn.DeleteSnapshot(ctx, spec, snapshotName)
-	if err == nil {
-		err = m.registry.PutInstance(spec)
-	}
+	err = m.withLock(spec, func(spec *Spec) error {
+		if err := sn.DeleteSnapshot(ctx, spec, snapshotName); err != nil {
+			return err
+		}
+		return m.save(spec, nil)
+	})
 	m.record(ctx, spec, "snapshot-delete", snapshotName, err)
 	return err
 }
@@ -630,7 +654,7 @@ func (m *Manager) start(ctx context.Context, names []string, action string) erro
 		return err
 	}
 	return forEachParallel(specs, func(spec *Spec) error {
-		err := m.startOne(ctx, spec)
+		err := m.withLock(spec, func(spec *Spec) error { return m.startOne(ctx, spec) })
 		m.record(ctx, spec, action, "", err)
 		return err
 	})
@@ -644,10 +668,8 @@ func (m *Manager) startOne(ctx context.Context, spec *Spec) error {
 	if err := b.Start(ctx, spec); err != nil {
 		return fmt.Errorf("instance: starting %s: %w", spec.Name, err)
 	}
-	spec.State = StateRunning
-	spec.UserStopped = false
 	m.restarts.started(spec.ID)
-	return m.registry.PutInstance(spec)
+	return m.save(spec, func(s *Spec) { s.State, s.UserStopped = StateRunning, false })
 }
 
 // Stop stops each named instance, at most maxParallelOps at a time, and tries
@@ -663,7 +685,7 @@ func (m *Manager) Stop(ctx context.Context, names []string, force bool, timeout 
 		msg = "forced"
 	}
 	return forEachParallel(specs, func(spec *Spec) error {
-		err := m.stopOne(ctx, spec, force, timeout)
+		err := m.withLock(spec, func(spec *Spec) error { return m.stopOne(ctx, spec, force, timeout) })
 		m.record(ctx, spec, "stop", msg, err)
 		return err
 	})
@@ -678,9 +700,7 @@ func (m *Manager) stopOne(ctx context.Context, spec *Spec, force bool, timeout t
 	if err := b.Stop(ctx, spec, force, timeout); err != nil {
 		return fmt.Errorf("instance: stopping %s: %w", spec.Name, err)
 	}
-	spec.State = StateStopped
-	spec.UserStopped = true
-	return m.registry.PutInstance(spec)
+	return m.save(spec, func(s *Spec) { s.State, s.UserStopped = StateStopped, true })
 }
 
 // Delete tears down each named instance's backend resources (disk, container) and
@@ -692,7 +712,7 @@ func (m *Manager) Delete(ctx context.Context, names []string) error {
 	}
 	var errs []error
 	for _, spec := range specs {
-		err := m.deleteOne(ctx, spec)
+		err := m.withLock(spec, func(spec *Spec) error { return m.deleteOne(ctx, spec) })
 		m.record(ctx, spec, "delete", "", err)
 		errs = append(errs, err)
 	}

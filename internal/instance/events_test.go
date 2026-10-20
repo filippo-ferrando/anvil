@@ -22,6 +22,20 @@ func (r *memRegistry) PutInstance(spec *Spec) error {
 	return nil
 }
 
+func (r *memRegistry) UpdateInstance(id string, fn func(*Spec) error) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.specs[id]
+	if !ok {
+		return ErrNotFound
+	}
+	if err := fn(&s); err != nil {
+		return err
+	}
+	r.specs[id] = s
+	return nil
+}
+
 func (r *memRegistry) GetByID(id string) (*Spec, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

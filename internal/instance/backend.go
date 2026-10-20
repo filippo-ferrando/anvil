@@ -161,6 +161,9 @@ type GuestFileReader interface {
 // Registry is the persistence contract Manager needs.
 type Registry interface {
 	PutInstance(spec *Spec) error
+	// UpdateInstance applies fn to a fresh copy of id's record and saves it atomically,
+	// failing with ErrNotFound when the record is gone.
+	UpdateInstance(id string, fn func(*Spec) error) error
 	GetByID(id string) (*Spec, error)
 	GetByName(name string) (*Spec, error)
 	List(kindFilter Kind) ([]*Spec, error)

@@ -45,7 +45,16 @@ func (m *Manager) SetSnapshotSchedule(name string, every time.Duration, keep int
 		}
 		spec.VM.SnapshotSchedule = &SnapshotSchedule{Every: every, Keep: keep, LastRun: last}
 	}
-	return m.registry.PutInstance(spec)
+	sched := spec.VM.SnapshotSchedule
+	return m.withLock(spec, func(spec *Spec) error {
+		return m.registry.UpdateInstance(spec.ID, func(s *Spec) error {
+			if s.VM == nil {
+				return fmt.Errorf("instance: snapshot schedules only apply to VMs")
+			}
+			s.VM.SnapshotSchedule = sched
+			return nil
+		})
+	})
 }
 
 // RunSnapshotScheduler takes due scheduled snapshots until ctx ends.
@@ -75,11 +84,15 @@ func (m *Manager) runDueSnapshots(ctx context.Context, now time.Time) {
 		if sched == nil || spec.State != StateRunning || now.Sub(sched.LastRun) < sched.Every {
 			continue
 		}
-		if err := m.takeScheduledSnapshot(ctx, spec, now); err != nil {
-			log.Printf("instance: scheduled snapshot of %s: %v", spec.Name, err)
-		}
-		// Recorded even after a failure, so a broken VM is retried next interval, not every tick.
-		m.markSnapshotRun(spec.ID, now)
+		// A busy instance is skipped and tried again on the next tick.
+		_ = m.withLock(spec, func(spec *Spec) error {
+			if err := m.takeScheduledSnapshot(ctx, spec, now); err != nil {
+				log.Printf("instance: scheduled snapshot of %s: %v", spec.Name, err)
+			}
+			// Recorded even after a failure, so a broken VM is retried next interval, not every tick.
+			m.markSnapshotRun(spec.ID, now)
+			return nil
+		})
 	}
 }
 
@@ -131,8 +144,13 @@ func (m *Manager) markSnapshotRun(id string, at time.Time) {
 	if err != nil || spec.VM == nil || spec.VM.SnapshotSchedule == nil {
 		return
 	}
-	spec.VM.SnapshotSchedule.LastRun = at
-	if err := m.registry.PutInstance(spec); err != nil {
+	err = m.registry.UpdateInstance(id, func(s *Spec) error {
+		if s.VM != nil && s.VM.SnapshotSchedule != nil {
+			s.VM.SnapshotSchedule.LastRun = at
+		}
+		return nil
+	})
+	if err != nil {
 		log.Printf("instance: recording snapshot run for %s: %v", spec.Name, err)
 	}
 }
