@@ -68,7 +68,8 @@ type model struct {
 	socketPath string // the daemon socket as given, for anvil commands run from the TUI
 	who        string // local OS username@hostname, shown in the header
 
-	daemonState string // "" before the first reply, then "ok" or "down", from the last instance list
+	daemonState   string // "" before the first reply, then "ok" or "down", from the last instance list
+	daemonVersion string // from the Version RPC, empty until it answers
 
 	screen         screen
 	sidebarFocused bool // true: up/down/enter on the sidebar; false: keys go to the active screen
@@ -141,7 +142,7 @@ func Run(socketPath, remote string) error {
 
 // Init loads the Instances screen, starts the status-clearing tick and subscribes to instance changes.
 func (m model) Init() tea.Cmd {
-	return tea.Batch(loadInstances(m.client), tickCmd(), startWatch(m.client))
+	return tea.Batch(loadInstances(m.client), tickCmd(), startWatch(m.client), loadVersion(m.client))
 }
 
 // Update closes the stats stream while the Instances screen is hidden and reopens it on return.
@@ -209,6 +210,9 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// launch/logs are full-width takeovers, not squeezed by the sidebar.
 		m.launch.setSize(msg.Width, contentHeight(msg.Height))
 		m.logs.viewport.Width, m.logs.viewport.Height = msg.Width, logsViewportHeight(msg.Height)
+		return m, nil
+	case versionMsg:
+		m.daemonVersion = msg.version
 		return m, nil
 	case instancesLoadedMsg:
 		m.daemonState = "ok"
@@ -392,7 +396,11 @@ func (m model) headerView() string {
 	var right []string
 	switch m.daemonState {
 	case "ok":
-		right = append(right, styleGood.Render("● daemon connected"))
+		label := "● daemon connected"
+		if m.daemonVersion != "" {
+			label += " " + m.daemonVersion
+		}
+		right = append(right, styleGood.Render(label))
 	case "down":
 		right = append(right, styleError.Render("● daemon unreachable"))
 	default:

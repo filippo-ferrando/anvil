@@ -37,8 +37,8 @@ func NewManager(registry Registry, backends map[Kind]Backend) *Manager {
 	return m
 }
 
-// Reconcile re-derives the live state of every running/starting instance from its backend,
-// and removes records left deleted by older versions. Call once at startup, before serving requests.
+// Reconcile re-derives every instance's live state from its backend, and removes records
+// left deleted by older versions. Call once at startup, before serving requests.
 func (m *Manager) Reconcile(ctx context.Context) error {
 	specs, err := m.registry.List("")
 	if err != nil {
@@ -53,7 +53,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			}
 			continue
 		}
-		if spec.State != StateRunning && spec.State != StateStarting {
+		// Stopped and errored records are checked too: a crash between a backend Start
+		// and the save that follows leaves a live instance recorded as stopped.
+		wasDown := spec.State == StateStopped || spec.State == StateError
+		if spec.State != StateRunning && spec.State != StateStarting && !wasDown {
 			continue
 		}
 		b, err := m.backendFor(spec.Kind)
@@ -72,6 +75,9 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		newState, rErr := reconciler.Reconcile(ctx, spec)
 		if rErr != nil {
 			log.Printf("instance: reconciling %s (%s): %v", spec.Name, spec.ID, rErr)
+		}
+		if wasDown && newState != StateRunning {
+			continue
 		}
 		// A reattached VM can come back on another SSH port when its old one was taken.
 		if newState == spec.State && (spec.VM == nil || spec.VM.SSHPort == sshPort) {
@@ -136,8 +142,22 @@ type LaunchEvent struct {
 	Err      error
 }
 
+// Sizes a VM gets when a launch leaves them at 0.
+const (
+	DefaultCPUs      = 1
+	DefaultMemoryMiB = 1024
+)
+
 // Launch provisions (and, unless params.NoStart, starts) a new instance, reporting progress.
 func (m *Manager) Launch(ctx context.Context, params LaunchParams, progress func(LaunchEvent)) error {
+	if params.VM != nil {
+		if params.VM.CPUs <= 0 {
+			params.VM.CPUs = DefaultCPUs
+		}
+		if params.VM.MemoryMiB <= 0 {
+			params.VM.MemoryMiB = DefaultMemoryMiB
+		}
+	}
 	b, err := m.backendFor(params.Kind)
 	if err == nil && params.VM != nil {
 		err = CheckHypervisor(params.VM.Hypervisor)
@@ -153,6 +173,8 @@ func (m *Manager) Launch(ctx context.Context, params LaunchParams, progress func
 		return err
 	}
 	defer release()
+	ctx, releaseLeases := withLeases(ctx)
+	defer releaseLeases()
 
 	labels := make(map[string]string, len(params.Labels))
 	for k, v := range params.Labels {
@@ -183,6 +205,7 @@ func (m *Manager) Launch(ctx context.Context, params LaunchParams, progress func
 
 	progress(LaunchEvent{Status: "provisioning"})
 	if err := b.Create(ctx, spec, func(status string) { progress(LaunchEvent{Status: status}) }); err != nil {
+		m.rollback(ctx, b, spec, "failed create")
 		return fail(err)
 	}
 
@@ -192,9 +215,7 @@ func (m *Manager) Launch(ctx context.Context, params LaunchParams, progress func
 		progress(LaunchEvent{Status: "starting"})
 		if err := b.Start(ctx, spec); err != nil {
 			// Roll back what Create already provisioned so nothing is leaked untracked.
-			if delErr := b.Delete(ctx, spec); delErr != nil {
-				log.Printf("instance: rolling back failed start of %s (%s): %v", spec.Name, spec.ID, delErr)
-			}
+			m.rollback(ctx, b, spec, "failed start")
 			return fail(err)
 		}
 		spec.State = StateRunning
@@ -202,10 +223,11 @@ func (m *Manager) Launch(ctx context.Context, params LaunchParams, progress func
 
 	if err := m.registry.PutInstance(spec); err != nil {
 		// Tear down the just-provisioned resource rather than leave it live and untracked.
-		if delErr := b.Delete(ctx, spec); delErr != nil {
-			log.Printf("instance: rolling back %s (%s) after registry write failure: %v", spec.Name, spec.ID, delErr)
-		}
+		m.rollback(ctx, b, spec, "registry write failure")
 		return fail(err)
+	}
+	if !params.NoStart {
+		m.catchEarlyExit(spec)
 	}
 
 	msg := imageOf(spec)
@@ -215,6 +237,39 @@ func (m *Manager) Launch(ctx context.Context, params LaunchParams, progress func
 	m.record(ctx, spec, "launch", msg, nil)
 	progress(LaunchEvent{Instance: spec})
 	return nil
+}
+
+// rollbackTimeout bounds a rollback that runs after the request that started it is gone.
+const rollbackTimeout = 2 * time.Minute
+
+// rollback deletes what a failed create provisioned. It runs on a ctx that outlives a
+// cancelled request, so a client that went away doesn't leave resources behind.
+func (m *Manager) rollback(ctx context.Context, b Backend, spec *Spec, why string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+	defer cancel()
+	if err := b.Delete(ctx, spec); err != nil {
+		log.Printf("instance: rolling back %s (%s) after %s: %v", spec.Name, spec.ID, why, err)
+	}
+}
+
+// catchEarlyExit applies an exit that happened before spec's record existed, when the
+// backend's exit report found nothing to update.
+func (m *Manager) catchEarlyExit(spec *Spec) {
+	if live := m.liveState(spec); live == StateStopped || live == StateError {
+		m.recordExit(spec.ID, live, "exited during launch")
+	}
+}
+
+// syncState saves spec's live backend state after a failed operation that may have changed it.
+func (m *Manager) syncState(spec *Spec) {
+	live := m.liveState(spec)
+	if live == "" || live == spec.State {
+		return
+	}
+	spec.State = live
+	if err := m.save(spec, func(s *Spec) { s.State = live }); err != nil {
+		log.Printf("instance: recording %s's state %s: %v", spec.Name, live, err)
+	}
 }
 
 // imageOf returns the image an instance was created from, for event messages.
@@ -262,6 +317,8 @@ func (m *Manager) Fork(ctx context.Context, params ForkParams, progress func(Lau
 		return err
 	}
 	defer release()
+	ctx, releaseLeases := withLeases(ctx)
+	defer releaseLeases()
 	// The source stays locked while its disk is copied.
 	_, releaseSource, err := m.Hold(ctx, []string{source.Name})
 	if err != nil {
@@ -299,15 +356,14 @@ func (m *Manager) Fork(ctx context.Context, params ForkParams, progress func(Lau
 
 	progress(LaunchEvent{Status: "forking disk"})
 	if err := forker.Fork(ctx, source, dest, func(status string) { progress(LaunchEvent{Status: status}) }); err != nil {
+		m.rollback(ctx, b, dest, "failed fork")
 		return fail(err)
 	}
 
 	if params.Start {
 		progress(LaunchEvent{Status: "starting"})
 		if err := b.Start(ctx, dest); err != nil {
-			if delErr := b.Delete(ctx, dest); delErr != nil {
-				log.Printf("instance: rolling back failed start of fork %s (%s): %v", dest.Name, dest.ID, delErr)
-			}
+			m.rollback(ctx, b, dest, "failed start of fork")
 			return fail(err)
 		}
 		dest.State = StateRunning
@@ -316,10 +372,11 @@ func (m *Manager) Fork(ctx context.Context, params ForkParams, progress func(Lau
 	}
 
 	if err := m.registry.PutInstance(dest); err != nil {
-		if delErr := b.Delete(ctx, dest); delErr != nil {
-			log.Printf("instance: rolling back fork %s (%s) after registry write failure: %v", dest.Name, dest.ID, delErr)
-		}
+		m.rollback(ctx, b, dest, "fork registry write failure")
 		return fail(err)
+	}
+	if params.Start {
+		m.catchEarlyExit(dest)
 	}
 
 	m.record(ctx, dest, "fork", msg, nil)
@@ -510,6 +567,10 @@ func (m *Manager) AddPort(ctx context.Context, name string, port PortMapping) er
 	}
 	err = m.withLock(ctx, spec, func(spec *Spec) error {
 		if err := pf.AddPort(ctx, spec, port); err != nil {
+			// A failed change can still replace the backend's resource (a recreated container).
+			if saveErr := m.save(spec, nil); saveErr != nil {
+				log.Printf("instance: saving %s after a failed port change: %v", spec.Name, saveErr)
+			}
 			return err
 		}
 		return m.save(spec, nil)
@@ -535,6 +596,10 @@ func (m *Manager) RemovePort(ctx context.Context, name string, hostPort int, pro
 	}
 	err = m.withLock(ctx, spec, func(spec *Spec) error {
 		if err := pf.RemovePort(ctx, spec, hostPort, protocol); err != nil {
+			// A failed change can still replace the backend's resource (a recreated container).
+			if saveErr := m.save(spec, nil); saveErr != nil {
+				log.Printf("instance: saving %s after a failed port change: %v", spec.Name, saveErr)
+			}
 			return err
 		}
 		return m.save(spec, nil)
@@ -585,6 +650,7 @@ func (m *Manager) RestoreSnapshot(ctx context.Context, name, snapshotName string
 	}
 	err = m.withLock(ctx, spec, func(spec *Spec) error {
 		if err := sn.RestoreSnapshot(ctx, spec, snapshotName); err != nil {
+			m.syncState(spec) // the restore may have stopped it before failing
 			return err
 		}
 		return m.save(spec, nil)
@@ -697,6 +763,7 @@ func (m *Manager) stopOne(ctx context.Context, spec *Spec, force bool, timeout t
 	}
 	m.restarts.cancel(spec.ID)
 	if err := b.Stop(ctx, spec, force, timeout); err != nil {
+		m.syncState(spec) // a stop can fail after the instance is already down
 		return fmt.Errorf("instance: stopping %s: %w", spec.Name, err)
 	}
 	return m.save(spec, func(s *Spec) { s.State, s.UserStopped = StateStopped, true })

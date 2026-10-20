@@ -46,7 +46,7 @@ func TestHypervisorsDispatch(t *testing.T) {
 		}
 	}
 
-	if err := h.Start(ctx, vmSpec("b", instance.VMHypervisorFirecracker)); err == nil || !strings.Contains(err.Error(), "isn't implemented yet") {
+	if err := h.Start(ctx, vmSpec("b", instance.VMHypervisorFirecracker)); err == nil || !strings.Contains(err.Error(), "isn't supported on this build") {
 		t.Fatalf("firecracker without a backend: err = %v", err)
 	}
 	if err := h.Start(ctx, vmSpec("c", "xen")); err == nil || !strings.Contains(err.Error(), "unknown hypervisor") {

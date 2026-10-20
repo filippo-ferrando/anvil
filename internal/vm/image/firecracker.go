@@ -78,6 +78,7 @@ func (c *FCCache) Kernel(ctx context.Context, k FCKernel, progress func(status s
 		return path, nil
 	}
 	dest := filepath.Join(c.Dir, "anvil-fc-kernel-"+k.Version+"-"+k.Arch)
+	c.Vault.Use(ctx, dest)
 	entry := DistroEntry{ID: "firecracker kernel " + k.Version, Arch: k.Arch, URL: k.URL, SHA256: k.SHA256}
 	if err := c.Vault.Downloader.Fetch(ctx, entry, dest, progress); err != nil {
 		return "", err
@@ -93,6 +94,7 @@ func (c *FCCache) RawBase(ctx context.Context, entry DistroEntry, progress func(
 		return "", err
 	}
 	dest := filepath.Join(c.Dir, entry.ID+"-"+entry.Arch+".raw")
+	c.Vault.Use(ctx, dest)
 	if fresh(dest, base) {
 		return dest, nil
 	}

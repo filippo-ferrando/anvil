@@ -161,8 +161,8 @@ func newIntentAddCommand(flags *globalFlags) *cobra.Command {
 
 // launchMember runs one member through the streaming Launch RPC, tagged with intentName/role.
 func launchMember(cmd *cobra.Command, c *client.Client, intentName string, m memberFlag, hv anvilv1.VmHypervisor) error {
+	// The daemon names the member "<intent>-<role>" and fills in default sizes.
 	req := &anvilv1.LaunchRequest{
-		Name:       intentName + "-" + m.role,
 		Kind:       m.kind,
 		IntentName: intentName,
 		Role:       m.role,
@@ -173,7 +173,7 @@ func launchMember(cmd *cobra.Command, c *client.Client, intentName string, m mem
 		if err != nil {
 			return err
 		}
-		req.Vm = &anvilv1.VMSpec{ImageRef: m.image, Cpus: 1, MemoryMib: 1024, SshPublicKeys: resolvedKeys, Hypervisor: hv}
+		req.Vm = &anvilv1.VMSpec{ImageRef: m.image, SshPublicKeys: resolvedKeys, Hypervisor: hv}
 	case anvilv1.Kind_KIND_CONTAINER:
 		req.Container = &anvilv1.ContainerSpec{ImageRef: m.image}
 	}
@@ -186,11 +186,15 @@ func launchMember(cmd *cobra.Command, c *client.Client, intentName string, m mem
 }
 
 func newIntentListCommand(flags *globalFlags) *cobra.Command {
-	return &cobra.Command{
+	var output string
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List intents",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkOutput(output); err != nil {
+				return err
+			}
 			c, err := dial(flags)
 			if err != nil {
 				return err
@@ -201,6 +205,9 @@ func newIntentListCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if output == "json" {
+				return printJSON(cmd.OutOrStdout(), reply)
+			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(tw, "NAME\tMEMBERS")
 			for _, it := range reply.GetIntents() {
@@ -209,6 +216,8 @@ func newIntentListCommand(flags *globalFlags) *cobra.Command {
 			return tw.Flush()
 		},
 	}
+	addOutputFlag(cmd, &output)
+	return cmd
 }
 
 func newIntentInfoCommand(flags *globalFlags) *cobra.Command {

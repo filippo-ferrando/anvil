@@ -25,11 +25,14 @@ func (i intentItem) Description() string {
 }
 
 // intentsModel is the Intents page: lists intents, with `i`/`enter` to
-// view members and `x` to remove a group.
+// view members, `U` to ungroup one member and `x` to remove a group.
 type intentsModel struct {
 	list          list.Model
 	showingInfo   *anvilv1.Intent // non-nil while showing a member-list modal
 	confirmDelete *anvilv1.Intent
+
+	removeMemberOf *anvilv1.Intent // non-nil while the remove-member form is up
+	removeForm     simpleForm
 
 	exportTarget *anvilv1.Intent // non-nil while the export output-path form is up
 	exportForm   simpleForm
@@ -251,6 +254,23 @@ func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, startExportStream(m.client, target.GetName(), outputPath, true)
 	}
 
+	if in.removeMemberOf != nil {
+		var submitted, cancelled bool
+		in.removeForm, submitted, cancelled = in.removeForm.update(msg)
+		if cancelled || !submitted {
+			if cancelled {
+				in.removeMemberOf = nil
+			}
+			return m, nil
+		}
+		name, member := in.removeMemberOf.GetName(), strings.TrimSpace(in.removeForm.Value("Member"))
+		in.removeMemberOf = nil
+		if member == "" {
+			return m, nil
+		}
+		return m, removeIntentMember(m.client, name, member)
+	}
+
 	if in.confirmDelete != nil {
 		switch msg.String() {
 		case "y", "enter":
@@ -286,6 +306,16 @@ func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "x":
 		if item, ok := in.list.SelectedItem().(intentItem); ok {
 			in.confirmDelete = item.intent
+		}
+		return m, nil
+	case "U":
+		if item, ok := in.list.SelectedItem().(intentItem); ok {
+			member := textField("Member", "role or instance ID, kept as a standalone instance", "")
+			for _, mem := range item.intent.GetMembers() {
+				member.Suggestions = append(member.Suggestions, mem.GetRole())
+			}
+			in.removeMemberOf = item.intent
+			in.removeForm = newSimpleForm("Remove a member from "+item.intent.GetName(), []formField{member})
 		}
 		return m, nil
 	case "E":
@@ -358,6 +388,9 @@ func (m intentsModel) View() string {
 	if m.applyPrompting {
 		return m.applyForm.View()
 	}
+	if m.removeMemberOf != nil {
+		return m.removeForm.View()
+	}
 	if m.confirmDelete != nil {
 		return styleWarn.Render(fmt.Sprintf("Remove intent %q?", m.confirmDelete.GetName())) + "\n\n" +
 			helpBar("y", "ungroup only", "p", "ungroup and purge members", "any other key", "cancel")
@@ -377,7 +410,7 @@ func (m intentsModel) View() string {
 		return styleTitle.Render(" "+m.showingInfo.GetName()+" ") + "\n\n" + body + "\n\n" +
 			helpBar("any key", "back")
 	}
-	return m.list.View() + "\n" + helpBar("i", "members", "x", "remove", "E", "export", "I", "import", "A", "apply", "r", "refresh", "esc", "back")
+	return m.list.View() + "\n" + helpBar("i", "members", "x", "remove", "U", "remove member", "E", "export", "I", "import", "A", "apply", "r", "refresh", "esc", "back")
 }
 
 // memberLine renders one member as "role (kind)", plus its address and

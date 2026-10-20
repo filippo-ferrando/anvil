@@ -86,6 +86,10 @@ func (m *Manager) runDueSnapshots(ctx context.Context, now time.Time) {
 		}
 		// A busy instance is skipped and tried again on the next tick.
 		_ = m.withLock(ctx, spec, func(spec *Spec) error {
+			// The fresh record may have lost its schedule, or stopped, since the list.
+			if spec.VM == nil || spec.VM.SnapshotSchedule == nil || spec.State != StateRunning {
+				return nil
+			}
 			if err := m.takeScheduledSnapshot(ctx, spec, now); err != nil {
 				log.Printf("instance: scheduled snapshot of %s: %v", spec.Name, err)
 			}

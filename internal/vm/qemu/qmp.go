@@ -331,7 +331,9 @@ func (c *QMPClient) AddVirtiofs(ctx context.Context, tag, socketPath string) err
 			break
 		}
 	}
-	_, _ = c.Execute(ctx, "chardev-remove", map[string]string{"id": chardev})
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	_, _ = c.Execute(cleanup, "chardev-remove", map[string]string{"id": chardev})
+	cancel()
 	return fmt.Errorf("qmp: hot-plugging virtiofs device %s: %w", tag, lastErr)
 }
 
@@ -414,7 +416,9 @@ func (c *QMPClient) StartTopBackup(ctx context.Context, drive, targetPath, jobID
 		"sync":         "top",
 		"auto-dismiss": false,
 	}); err != nil {
-		_, _ = c.Execute(ctx, "blockdev-del", map[string]string{"node-name": node})
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+		_, _ = c.Execute(cleanup, "blockdev-del", map[string]string{"node-name": node})
+		cancel()
 		return fmt.Errorf("qmp: starting backup: %w", err)
 	}
 	return nil
@@ -431,53 +435,89 @@ func backupTargetNode(jobID string) string {
 // progress, if set, gets the job's completion percentage now and then.
 func (c *QMPClient) FinishTopBackup(ctx context.Context, jobID string, progress func(pct int)) error {
 	defer func() {
-		cleanup := context.WithoutCancel(ctx)
+		if ctx.Err() != nil {
+			c.cancelJob(ctx, jobID)
+		}
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+		defer cancel()
 		_, _ = c.Execute(cleanup, "job-dismiss", map[string]string{"id": jobID})
 		_, _ = c.Execute(cleanup, "blockdev-del", map[string]string{"node-name": backupTargetNode(jobID)})
 	}()
 	lastPct := -1
 	for {
-		raw, err := c.Execute(ctx, "query-jobs", nil)
+		j, err := c.queryJob(ctx, jobID)
 		if err != nil {
-			return fmt.Errorf("qmp: querying jobs: %w", err)
+			return err
 		}
-		var jobs []struct {
-			ID       string `json:"id"`
-			Status   string `json:"status"`
-			Current  int64  `json:"current-progress"`
-			Total    int64  `json:"total-progress"`
-			ErrorMsg string `json:"error"`
-		}
-		if err := json.Unmarshal(raw, &jobs); err != nil {
-			return fmt.Errorf("qmp: decoding query-jobs: %w", err)
-		}
-		found := false
-		for _, j := range jobs {
-			if j.ID != jobID {
-				continue
-			}
-			found = true
-			if j.Status == "concluded" {
-				if j.ErrorMsg != "" {
-					return fmt.Errorf("qmp: backup failed: %s", j.ErrorMsg)
-				}
-				return nil
-			}
-			if progress != nil && j.Total > 0 {
-				if pct := int(j.Current * 100 / j.Total); pct != lastPct {
-					progress(pct)
-					lastPct = pct
-				}
-			}
-		}
-		if !found {
+		if j == nil {
 			return fmt.Errorf("qmp: backup job %s disappeared", jobID)
+		}
+		if j.Status == "concluded" {
+			if j.ErrorMsg != "" {
+				return fmt.Errorf("qmp: backup failed: %s", j.ErrorMsg)
+			}
+			return nil
+		}
+		if progress != nil && j.Total > 0 {
+			if pct := int(j.Current * 100 / j.Total); pct != lastPct {
+				progress(pct)
+				lastPct = pct
+			}
 		}
 		select {
 		case <-ctx.Done():
-			_, _ = c.Execute(context.WithoutCancel(ctx), "job-cancel", map[string]string{"id": jobID})
 			return ctx.Err()
 		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
+
+// cleanupTimeout bounds rollback and cleanup commands, which run even after ctx is done.
+const cleanupTimeout = 30 * time.Second
+
+type qmpJob struct {
+	ID       string `json:"id"`
+	Status   string `json:"status"`
+	Current  int64  `json:"current-progress"`
+	Total    int64  `json:"total-progress"`
+	ErrorMsg string `json:"error"`
+}
+
+// queryJob returns jobID's entry in query-jobs, or nil when there is none.
+func (c *QMPClient) queryJob(ctx context.Context, jobID string) (*qmpJob, error) {
+	raw, err := c.Execute(ctx, "query-jobs", nil)
+	if err != nil {
+		return nil, fmt.Errorf("qmp: querying jobs: %w", err)
+	}
+	var jobs []qmpJob
+	if err := json.Unmarshal(raw, &jobs); err != nil {
+		return nil, fmt.Errorf("qmp: decoding query-jobs: %w", err)
+	}
+	for i := range jobs {
+		if jobs[i].ID == jobID {
+			return &jobs[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// cancelJob cancels jobID and waits for it to conclude, since job-dismiss and
+// blockdev-del fail while it is still aborting. It runs even when ctx is done.
+func (c *QMPClient) cancelJob(ctx context.Context, jobID string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	if _, err := c.Execute(ctx, "job-cancel", map[string]string{"id": jobID}); err != nil {
+		return
+	}
+	for {
+		j, err := c.queryJob(ctx, jobID)
+		if err != nil || j == nil || j.Status == "concluded" {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(100 * time.Millisecond):
 		}
 	}
 }

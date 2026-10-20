@@ -383,10 +383,10 @@ func (m *Manager) migrateIntent(ctx context.Context, t target, it store.Intent, 
 	}
 
 	// succeeded tracks each successfully migrated member's source instance
-	// name and its index in results.
+	// name, ID and its index in results.
 	type succeededMember struct {
-		name string
-		idx  int
+		name, id string
+		idx      int
 	}
 	results := preflightFailed
 	var succeeded []succeededMember
@@ -405,7 +405,7 @@ func (m *Manager) migrateIntent(ctx context.Context, t target, it store.Intent, 
 			continue
 		}
 		results = append(results, MemberResult{Role: mem.role, NewID: newID})
-		succeeded = append(succeeded, succeededMember{name: mem.spec.Name, idx: len(results) - 1})
+		succeeded = append(succeeded, succeededMember{name: mem.spec.Name, id: mem.spec.ID, idx: len(results) - 1})
 	}
 
 	rolledBack := false
@@ -433,7 +433,7 @@ func (m *Manager) migrateIntent(ctx context.Context, t target, it store.Intent, 
 				continue
 			}
 			if m.IntentCleanup != nil {
-				if _, err := m.IntentCleanup.Remove(ctx, it.Name, s.name); err != nil {
+				if _, err := m.IntentCleanup.Remove(ctx, it.Name, s.id); err != nil {
 					log.Printf("migrate: removing migrated member %q from source intent %q: %v", s.name, it.Name, err)
 				}
 			}
@@ -518,6 +518,9 @@ func rollbackRemote(ctx context.Context, t target, names []string) error {
 	if err != nil {
 		return fmt.Errorf("migrate: encoding rollback names: %w", err)
 	}
+	// Detached: a cancelled migration must still take its half-made copies back out.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+	defer cancel()
 	_, err = sshRun(ctx, t, "anvil migrate-rollback", bytes.NewReader(data))
 	return err
 }
@@ -714,7 +717,8 @@ func parseMigrateResult(out string) (id string, err error) {
 }
 
 // IsStagedDataPath reports whether p names a shared folder this package
-// uploaded. Adopting a path deletes it, so anvild accepts only these.
+// uploaded into the staging dir. Adopting a path deletes it, so anvild accepts only these.
 func IsStagedDataPath(p string) bool {
-	return strings.HasPrefix(filepath.Base(filepath.Clean(p)), "anvil-migrate-data-")
+	clean := filepath.Clean(p)
+	return filepath.Dir(clean) == remoteStagingDir && strings.HasPrefix(filepath.Base(clean), "anvil-migrate-data-")
 }

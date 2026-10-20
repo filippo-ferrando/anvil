@@ -61,3 +61,40 @@ func TestCheckCallerOwns(t *testing.T) {
 		t.Errorf("no paths means nothing to check: %v", err)
 	}
 }
+
+func TestCheckCallerFile(t *testing.T) {
+	dir := t.TempDir()
+	me := peer.NewContext(context.Background(), &peer.Peer{Addr: callerAddr{uid: uint32(os.Getuid())}})
+	file := filepath.Join(dir, "bundle.tar.zst")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(file, link); err != nil {
+		t.Fatal(err)
+	}
+
+	p := filepath.Join(dir, "new.tar.zst")
+	if err := checkCallerFile(me, &p, false); err != nil {
+		t.Errorf("a new file in an owned dir should pass: %v", err)
+	}
+	if err := checkCallerFile(me, &p, true); err == nil {
+		t.Error("expected a missing file to fail when it must exist")
+	}
+	p = file
+	if err := checkCallerFile(me, &p, true); err != nil {
+		t.Errorf("an owned regular file should pass: %v", err)
+	}
+	p = link
+	if err := checkCallerFile(me, &p, false); err == nil {
+		t.Error("expected a symlink to be refused")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("running as root, every caller is the daemon's own user")
+	}
+	other := peer.NewContext(context.Background(), &peer.Peer{Addr: callerAddr{uid: 54321}})
+	p = file
+	if err := checkCallerFile(other, &p, true); err == nil {
+		t.Error("expected uid 54321 to be refused a file it doesn't own")
+	}
+}

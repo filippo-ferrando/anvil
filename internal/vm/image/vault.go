@@ -3,12 +3,14 @@ package image
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,6 +24,54 @@ type Vault struct {
 
 	// RawDir, when set, holds raw copies of the base images (Firecracker's), deleted with them.
 	RawDir string
+
+	// Keep, when set, holds a lease until the create in ctx saves its instance
+	// (instance.KeepUntilCreated), and reports false when ctx runs no create.
+	Keep func(ctx context.Context, release func()) bool
+
+	mu    sync.Mutex
+	inUse map[string]int // leased paths, see Use
+}
+
+// ErrInUse means an image is still used by an instance, or one being created.
+var ErrInUse = errors.New("image in use")
+
+// Use marks path as in use by the create running in ctx, so DeleteUnused refuses it
+// until that instance is saved. Outside a create it's a no-op.
+func (v *Vault) Use(ctx context.Context, path string) {
+	v.mu.Lock()
+	if v.inUse == nil {
+		v.inUse = make(map[string]int)
+	}
+	v.inUse[path]++
+	v.mu.Unlock()
+	release := sync.OnceFunc(func() {
+		v.mu.Lock()
+		defer v.mu.Unlock()
+		if v.inUse[path]--; v.inUse[path] <= 0 {
+			delete(v.inUse, path)
+		}
+	})
+	if v.Keep == nil || !v.Keep(ctx, release) {
+		release()
+	}
+}
+
+// DeleteUnused deletes path like Delete, unless a create is using it (see Use) or
+// check fails. Both checks and the removal run under one lock, so no create can start
+// using path in between.
+func (v *Vault) DeleteUnused(path string, check func() error) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.inUse[path] > 0 || v.inUse[v.rawPath(path)] > 0 {
+		return fmt.Errorf("%w: %s is used by an instance being created, retry once done", ErrInUse, filepath.Base(path))
+	}
+	if check != nil {
+		if err := check(); err != nil {
+			return err
+		}
+	}
+	return v.Delete(path)
 }
 
 func NewVault(preparedDir string) *Vault {
@@ -44,6 +94,19 @@ func (v *Vault) CachedPath(entry DistroEntry) (string, bool) {
 // present, and returns its local path. progress is forwarded to Downloader.Fetch.
 func (v *Vault) Ensure(ctx context.Context, entry DistroEntry, progress func(status string)) (string, error) {
 	dest := v.preparedPath(entry)
+	v.Use(ctx, dest)
+	// Overlays point at dest by path, so a cached base is never swapped for different bytes.
+	if _, err := os.Stat(dest); err == nil && entry.SHA256 != "" {
+		sum, err := FileChecksum(dest)
+		if err != nil {
+			return "", fmt.Errorf("image: hashing %s: %w", dest, err)
+		}
+		if sum != entry.SHA256 {
+			return "", fmt.Errorf("image: the cached %s (%s) differs from the catalog's checksum and existing disks may sit on it; "+
+				"delete it with `anvil image delete %s` once no instance uses it, then launch again", entry.ID, entry.Arch, entry.ID)
+		}
+		return dest, nil
+	}
 	if err := v.Downloader.Fetch(ctx, entry, dest, progress); err != nil {
 		return "", err
 	}
@@ -256,11 +319,20 @@ func (v *Vault) Delete(path string) error {
 		return fmt.Errorf("image: deleting %s: %w", path, err)
 	}
 	_ = os.Remove(path + checksumSuffix)
-	if v.RawDir != "" {
+	if raw := v.rawPath(path); raw != "" {
 		// The raw copy is derived from this base: it goes too, and comes back on next use.
-		_ = os.Remove(filepath.Join(v.RawDir, strings.TrimSuffix(filepath.Base(path), ".qcow2")+".raw"))
+		_ = os.Remove(raw)
 	}
 	return nil
+}
+
+// rawPath returns where the raw copy of the base at path lives, "" for no raw copies
+// or a path that isn't a base.
+func (v *Vault) rawPath(path string) string {
+	if v.RawDir == "" || !strings.HasSuffix(path, ".qcow2") {
+		return ""
+	}
+	return filepath.Join(v.RawDir, strings.TrimSuffix(filepath.Base(path), ".qcow2")+".raw")
 }
 
 // checksumSuffix names the sidecar file that caches a base image's SHA256.

@@ -295,3 +295,27 @@ func TestFileChecksumUsesSidecar(t *testing.T) {
 		t.Errorf("expected a rehash after the sidecar went stale, got %s", got)
 	}
 }
+
+// TestEnsureNeverReplacesCachedBase makes sure a catalog checksum change doesn't swap a
+// base that existing overlays sit on.
+func TestEnsureNeverReplacesCachedBase(t *testing.T) {
+	v := NewVault(t.TempDir())
+	entry := DistroEntry{ID: "d", Arch: "x86_64", URL: "https://example.invalid/d.qcow2"}
+	path := v.preparedPath(entry)
+	if err := os.WriteFile(path, []byte("old base"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte("old base"))
+
+	entry.SHA256 = hex.EncodeToString(sum[:])
+	if got, err := v.Ensure(context.Background(), entry, nil); err != nil || got != path {
+		t.Fatalf("matching base: got %q, %v", got, err)
+	}
+	entry.SHA256 = strings.Repeat("0", 64)
+	if _, err := v.Ensure(context.Background(), entry, nil); err == nil {
+		t.Fatal("expected a mismatching cached base to be refused, not replaced")
+	}
+	if data, _ := os.ReadFile(path); string(data) != "old base" {
+		t.Error("the cached base was changed")
+	}
+}

@@ -7,7 +7,8 @@ Two related operations work on a VM's disk image:
 - `anvil fork` creates a *new* instance whose disk starts as a copy of an existing VM's
   disk.
 
-Both are VM-only. Containers are covered at the end of this page.
+Both are VM-only. Most of this page describes QEMU VMs; Firecracker VMs and containers
+are covered near the end.
 
 ## Background: the disk layout
 
@@ -317,6 +318,29 @@ partition and filesystem state is whatever was on the source disk at the copy po
 the source had not grown its filesystem yet, the comment in `ResizeDisk` notes that
 cloud-init's `growpart` and `resizefs` run on every boot and grow it then. The disk can
 only grow, never shrink.
+
+## Firecracker VMs
+
+Firecracker VMs (`--hypervisor firecracker`) support the same commands, including
+schedules, but their disk is a plain raw file (`disk.raw`), not a QCOW2 overlay, so the
+mechanics differ (`internal/vm/fc_disk.go`):
+
+- **Snapshot.** A full copy of the disk at `<instance dir>/snapshots/<name>.raw`, made as
+  a reflink on filesystems with copy-on-write (btrfs, xfs) and as a full copy otherwise.
+  `list` reads that directory; the creation time is the file's modification time.
+- **Disk only.** No RAM state is ever saved, so every snapshot is disk-only and a restore
+  always cold-boots, as with QEMU.
+- **Live copy.** For a running VM the guest's filesystems are frozen through the guest
+  agent (if connected), the VM is paused over the Firecracker API, the disk is copied, and
+  the VM is resumed and thawed. Without copy-on-write and with frozen filesystems, the
+  VM is resumed first and the slow full copy runs while the filesystems stay frozen.
+- **Restore.** A running VM is stopped, the snapshot is copied next to the disk and
+  renamed over it (a failed copy leaves the disk whole), then the VM is started again.
+- **Fork.** The source disk is copied the same way to the new instance's `disk.raw`. The
+  fork gets its own address on `anvil-fc0` and a new seed, and starts standalone.
+
+Since each snapshot is a full raw file, it costs no extra space on a copy-on-write
+filesystem until the disk diverges, and the full disk size otherwise.
 
 ## Containers
 

@@ -66,7 +66,7 @@ exist for that case.
 
 On every start, `Backend.Start` (`internal/vm/backend.go`) picks a free host port with
 `allocateFreePort` and forwards it to guest port 22. The port is stored as `VMSpec.SSHPort`
-and is what `anvil ssh`/`shell`/`exec` connect to, as `localhost:<port>`
+and is what `anvil shell`/`exec`/`transfer` connect to, as `localhost:<port>`
 (`resolveSSHTarget` in `internal/cli/commands/ssh.go`). The port changes across restarts.
 
 `allocateFreePort` binds `127.0.0.1:0`, reads the port the kernel assigned, and closes the

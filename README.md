@@ -20,8 +20,8 @@
 ---
 
 Anvil spins up cloud-init VMs and Docker containers from the same CLI, the same daemon,
-and the same mental model. It's what I wish `multipass` was: not tied to Ubuntu, not VM-only,
-and actually able to group stuff together and move it between machines.
+and the same mental model. Think `multipass`, but not tied to Ubuntu, not VM-only,
+and able to group instances together and move them between machines.
 
 No GUI of its own, no login system, no heavy abstraction layer to drag around. Just a
 daemon, a CLI, a TUI, and the real primitives underneath (QEMU/QMP directly, no libvirt;
@@ -47,9 +47,9 @@ the real Docker API, no SDK; Apple's Virtualization.framework on macOS, in progr
 [Multipass](https://multipass.run) is genuinely solid, and Anvil steals its whole vibe.
 But a few things about it kept getting in the way:
 
-- **VMs only.** No containers, so you end up running Multipass *and* Docker side by side
+- **VMs only.** No containers, so Multipass *and* Docker end up running side by side
   for no good reason.
-- **Ubuntu-first.** Everything about the image story assumes you want Ubuntu.
+- **Ubuntu-first.** Everything about the image story assumes Ubuntu.
 - **No grouping.** There's no way to say "these three things are actually one app" and
   manage them as a unit.
 - **No mobility.** Moving a VM to another machine isn't really a supported idea.
@@ -108,15 +108,15 @@ The longer write-up is in [docs/comparison.md](docs/comparison.md).
 **VMs**, driven straight against `qemu-system-*` over QMP (no libvirt in between):
 
 - 15 base images out of the box: Ubuntu, Debian, Arch, Fedora, Rocky, AlmaLinux, CentOS
-  Stream, openSUSE, Alpine (or bring your own via a mirror)
+  Stream, openSUSE, Alpine (more through a mirror)
 - cross-arch guests: an `aarch64` image runs under emulation on an x86_64 host, see
   [docs/aarch64-on-x86.md](docs/aarch64-on-x86.md)
 - Firecracker microVMs with `--hypervisor firecracker`, the same commands and features,
   see [docs/firecracker.md](docs/firecracker.md)
-- real cloud-init under the hood, plus a saved cloud-init config library you can write,
+- real cloud-init under the hood, plus a saved cloud-init config library to write,
   edit, and reuse (`anvil cloud-init`)
 - `anvil shell` / `anvil exec` / `anvil transfer` over real SSH, using a keypair Anvil
-  manages for you, *zero* flags, *zero* setup
+  manages itself, *zero* flags, *zero* setup
 - `anvil mount` shares a host directory into the guest over virtiofs, live when the
   guest agent is connected
 - live progress on downloads instead of a silent terminal
@@ -161,7 +161,7 @@ An intent can also be described in an `anvil.yaml` file and kept in line with it
 anvil migrate myapp --to user@otherhost
 ```
 
-No daemon-to-daemon trust to set up. If you can already SSH there, you can migrate there.
+No daemon-to-daemon trust to set up. Any host reachable over SSH is a valid target.
 Copies the disk, brings the network config with it, and only deletes the source once the
 target actually confirms it worked.
 
@@ -219,8 +219,9 @@ A container talks to the host compositor through a relay (GPU included when the 
 `--x11`. A stopped instance is started first. Only instances created by a version with
 GUI support can do this. See [docs/gui.md](docs/gui.md).
 
-`anvil list` and `anvil find` take `-o json` for scripts: the reply is printed as JSON
-with the field names from `anvil.proto`, instead of the table.
+Every list-style command (`list`, `find`, `events`, `host list`, `snapshot list`,
+`image list`, `cloud-init list`, `port list`, ...) takes `-o json` for scripts: the reply
+is printed as JSON with the field names from `anvil.proto`, instead of the table.
 
 **A TUI**, because staring at JSON all day gets old:
 
@@ -231,7 +232,7 @@ anvil tui
 Built on [Bubble Tea](https://github.com/charmbracelet/bubbletea). Same daemon, same API,
 just easier on the eyes.
 
-**A growing image/template catalogue** you can pull from without waiting for a new
+**A growing image/template catalogue** to pull from without waiting for a new
 release:
 
 ```
@@ -273,8 +274,8 @@ package.
 
 ### From source
 
-You'll need Go 1.27+, `protoc`, and `qemu-system-x86_64`,
-`qemu-img`, and `xorriso` on your `PATH`, plus `virtiofsd` (for `anvil mount`; it's
+Building needs Go 1.27+, `protoc`, and `qemu-system-x86_64`,
+`qemu-img`, and `xorriso` on `PATH`, plus `virtiofsd` (for `anvil mount`; it's
 usually installed outside `PATH`, e.g. `/usr/lib/virtiofsd`).
 
 ```
@@ -302,13 +303,32 @@ sudo ./anvild &
 (Running as root here is just the fast path for trying it out locally, the packaged
 version runs the daemon as an unprivileged system user instead, see [Install](#install).)
 
+### More commands
+
+Less visible commands and flags, all listed in `anvil <command> --help` and the man pages:
+
+| Command | What it does |
+| --- | --- |
+| `anvil launch --intent <name> [--role <role>]` | join the new instance to an intent (created if missing), with a role (defaults to its name) |
+| `anvil launch -e KEY=VALUE -v <host>:<path>[:ro] --entrypoint <cmd>` | container env vars, bind mounts and entrypoint (repeatable `-e`/`--env`, `-v`/`--volume`) |
+| `anvil create-dir <path>` | create a host directory and grant the `anvil` user access (ACLs), ready for `anvil mount` |
+| `anvil mount --read-only <path> <name>:<guest-path>` | share a host directory read-only |
+| `anvil logs --tail N <name>` | only the last N lines (0 = from the start), `-f` to keep following |
+| `anvil stats --watch [--interval 2s] <name>` | keep refreshing the stats, like `docker stats` |
+| `anvil watch --existing` | print one line per current instance before the live changes |
+| `anvil events -n/--limit N` | only the newest N stored events (default 100, 0 = all) |
+| `anvil intent list` / `anvil intent remove <intent> <member>` | list intents / ungroup a member without deleting it |
+| `anvil intent delete --purge-members <intent>` | delete the intent and every member instance |
+| `anvil cloud-init show\|edit\|rename\|delete` | print, edit in `$EDITOR`, rename or delete a saved cloud-init config |
+| `anvil image containers delete [--force] <id>` | delete a container engine image, refused while a container uses it unless `--force` |
+
 ## The TUI
 
-`anvil tui` gives you a sidebar-driven view over Instances, Snapshots, Images, Intents,
+`anvil tui` is a sidebar-driven view over Instances, Snapshots, Images, Intents,
 Cloud-Init, Mirrors, Migration, and Events, over the exact same gRPC API the CLI uses
 (`anvil stats <name>` is the CLI's own window into the same data). Shell/exec sessions
 hand the real terminal off to `ssh`/`docker exec` and back, logs stream live, and launch progress redraws in place
-instead of scrolling your terminal into oblivion.
+instead of scrolling the terminal into oblivion.
 
 Select an instance on the Instances screen and its detail panel shows a live CPU/memory
 gauge, disk usage (or I/O rate for a container), network throughput, uptime, and address,
@@ -327,9 +347,9 @@ suggests instance and intent names for Name and known host aliases for To.
 ```
 anvil (CLI + TUI, one binary)  ──gRPC over a unix socket──▶  anvild (daemon)
                                                                   │
-                                                                  ├─ QEMU processes, driven over QMP
+                                                                  ├─ QEMU processes over QMP, Firecracker over its REST API
                                                                   ├─ Docker's real HTTP API
-                                                                  ├─ bbolt (instances / intents / mirrors / hosts)
+                                                                  ├─ bbolt (instances / intents / mirrors / hosts / events)
                                                                   └─ SSH, for migration to another anvild
 ```
 
@@ -339,7 +359,7 @@ Unix group and being able to reach the socket, *no* accounts, *no* portal, *no* 
 
 Everything the daemon does across hosts (migration) goes over plain SSH to the target's
 own local `anvil` CLI, never daemon-to-daemon gRPC. That means Anvil never has to solve
-cross-host trust on its own, whatever SSH access you already have is enough. The same
+cross-host trust on its own, whatever SSH access already exists is enough. The same
 goes for `anvil --remote`: the CLI runs `anvil dial-stdio` on the other host over SSH and
 speaks gRPC through that pipe to the local socket there.
 
@@ -350,7 +370,8 @@ pkg/client/      thin gRPC client (unix socket or SSH), shared by the CLI and TU
 internal/
   daemon/        gRPC service implementation
   instance/      domain model + the Manager
-  vm/            QEMU backend: process management, QMP, cloud-init, image catalog
+  vm/            VM backends (QEMU and Firecracker), cloud-init, image catalog
+  vm/firecracker/  Firecracker process, REST API client, vsock, jailer
   vm/vz/         Apple Virtualization.framework backend (stub, not implemented)
   container/     Docker backend (Podman lands here too, eventually)
   intent/        grouping, shared bridge networking per intent
@@ -404,8 +425,8 @@ aren't there yet:
 - **Podman** isn't wired up. `--engine podman` fails cleanly instead of pretending to
   work; Docker is the only engine right now.
 - The built-in image catalog's checksums are a work in progress: run
-  `scripts/verify-catalog.sh` if you want to double-check before you trust it blindly, or
-  point `anvil mirror add` at your own verified manifest instead.
+  `scripts/verify-catalog.sh` to double-check them before trusting them, or point
+  `anvil mirror add` at a separately verified manifest instead.
 
 The CLI, the gRPC API and the on-disk formats can still change between releases until
 the planned feature set is settled. What's planned is in [PLAN.md](PLAN.md), what changed
@@ -413,9 +434,9 @@ in each release is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Contributing
 
-Issues and PRs are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md). If you're touching
-daemon logic, keep it in `internal/` behind the gRPC boundary, the CLI and TUI are meant
-to stay dumb clients, that's what keeps them in sync with each other for free. Security
+Issues and PRs are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md). Daemon logic belongs
+in `internal/` behind the gRPC boundary: the CLI and TUI stay dumb clients, which keeps
+them in sync with each other for free. Security
 issues: [SECURITY.md](SECURITY.md). Everyone taking part follows the
 [Code of Conduct](CODE_OF_CONDUCT.md).
 

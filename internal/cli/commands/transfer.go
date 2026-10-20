@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newTransferCommand(flags *globalFlags) *cobra.Command {
@@ -52,7 +54,7 @@ func newTransferCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			target, err := resolveSSHTarget(c, inst, user)
+			target, err := c.SSHTarget(inst, user)
 			if err != nil {
 				return err
 			}
@@ -61,7 +63,7 @@ func newTransferCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("scp: not found on PATH (needed for `anvil transfer`)")
 			}
-			scpArgs, err := commonSSHArgs(target, "-P", key)
+			scpArgs, err := client.SSHArgs(target, "-P", key)
 			if err != nil {
 				return err
 			}

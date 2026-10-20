@@ -32,6 +32,7 @@ type Store interface {
 type Instances interface {
 	Launch(ctx context.Context, params instance.LaunchParams, progress func(instance.LaunchEvent)) error
 	GetByID(id string) (*instance.Spec, error)
+	List(kind instance.Kind) ([]*instance.Spec, error)
 	Delete(ctx context.Context, names []string) error
 }
 
@@ -68,14 +69,32 @@ type Manager struct {
 	Networker Networker
 	DNS       DNS
 
-	// mu serializes Launch/Remove/Delete's read-modify-write sequence
-	// against an intent's Store record.
-	mu sync.Mutex
+	// locks serializes Launch/Remove/Delete's read-modify-write of one intent's
+	// Store record, so a slow launch only blocks its own intent.
+	locksMu sync.Mutex
+	locks   map[string]*sync.Mutex
 
-	// pending is an intent whose first member is still launching, not yet
-	// in the Store, so its zone is served before that member boots.
+	// pending holds intents whose member is still launching, by name, so a new
+	// intent's zone is served before its first member boots.
 	pendingMu sync.Mutex
-	pending   *store.Intent
+	pending   map[string]store.Intent
+}
+
+// lock takes name's intent lock and returns its release.
+// ponytail: entries are never freed, one small mutex per intent name ever used.
+func (m *Manager) lock(name string) func() {
+	m.locksMu.Lock()
+	if m.locks == nil {
+		m.locks = make(map[string]*sync.Mutex)
+	}
+	mu, ok := m.locks[name]
+	if !ok {
+		mu = &sync.Mutex{}
+		m.locks[name] = mu
+	}
+	m.locksMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
 }
 
 func NewManager(s Store, instances Instances, networker Networker) *Manager {
@@ -94,16 +113,14 @@ func (m *Manager) ensureNetwork(ctx context.Context, it *store.Intent, pinned *i
 			return fmt.Errorf("intent: %q already has a network (%s) that doesn't match the pinned one (%s) this migrated member needs",
 				it.Name, it.Network.Subnet, pinned.Subnet)
 		}
-		return nil
+		return m.recreateIfGone(ctx, it.Network)
 	}
 	if m.Networker == nil {
 		return nil
 	}
 
 	engineName := networkNamePrefix + it.ID
-	// Uses the last 10 characters of the ULID to stay within Linux's
-	// interface name length limit while keeping the random portion.
-	bridgeIface := "anvil" + it.ID[len(it.ID)-10:]
+	bridgeIface := bridgeFor(it.ID)
 
 	if pinned != nil {
 		if err := m.Networker.CreateNetwork(ctx, engineName, bridgeIface, pinned.Subnet, pinned.Gateway, pinned.DockerIPRange); err != nil {
@@ -136,6 +153,52 @@ func (m *Manager) ensureNetwork(ctx context.Context, it *store.Intent, pinned *i
 		return nil
 	}
 	return fmt.Errorf("intent: creating a network for %q after %d attempts: %w", it.Name, maxSubnetAttempts, lastErr)
+}
+
+// bridgeFor names an intent's bridge from its ID: the last 10 characters of the ULID
+// stay within Linux's interface name length limit while keeping the random portion.
+func bridgeFor(intentID string) string {
+	if len(intentID) < 10 {
+		return "anvil" + intentID
+	}
+	return "anvil" + intentID[len(intentID)-10:]
+}
+
+// recreateIfGone brings back n with its recorded addresses when the engine lost it
+// (e.g. `docker network prune` on an intent with only VMs).
+func (m *Manager) recreateIfGone(ctx context.Context, n *store.IntentNetwork) error {
+	if m.Networker == nil {
+		return nil
+	}
+	names, err := m.Networker.ListNetworks(ctx)
+	if err != nil {
+		return fmt.Errorf("intent: listing networks: %w", err)
+	}
+	for _, name := range names {
+		if name == n.EngineNetworkName {
+			return nil
+		}
+	}
+	log.Printf("intent: network %q is gone, creating it again", n.EngineNetworkName)
+	return m.Networker.CreateNetwork(ctx, n.EngineNetworkName, n.BridgeInterface, n.Subnet, n.Gateway, n.DockerIPRange)
+}
+
+// networkUsers returns the instances still attached to n, whose traffic would stop if it
+// were removed. A listing error counts as in use, so nothing is cut off by mistake.
+func (m *Manager) networkUsers(n *store.IntentNetwork) []string {
+	specs, err := m.Instances.List("")
+	if err != nil {
+		log.Printf("intent: listing instances using %q: %v", n.EngineNetworkName, err)
+		return []string{"(unknown)"}
+	}
+	var users []string
+	for _, spec := range specs {
+		if (spec.VM != nil && spec.VM.BridgeInterface == n.BridgeInterface) ||
+			(spec.Container != nil && spec.Container.NetworkMode == n.EngineNetworkName) {
+			users = append(users, spec.Name)
+		}
+	}
+	return users
 }
 
 // nextVMAddress picks the lowest free static address in subnet's reserved
@@ -204,41 +267,48 @@ func (m *Manager) Launch(ctx context.Context, params instance.LaunchParams, prog
 		return fmt.Errorf("intent: Launch called without an intent name")
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	defer m.lock(params.IntentName)()
 
 	it, err := m.Store.GetIntentByName(params.IntentName)
-	isNew := err != nil
-	if isNew {
+	if err != nil {
 		it = store.Intent{ID: ulid.Make().String(), Name: params.IntentName}
 	}
 
+	role := params.Role
+	if role == "" {
+		role = params.Name
+	}
+	for _, mem := range it.Members {
+		if mem.Role == role {
+			err := fmt.Errorf("intent: %q already has a member with role %q", it.Name, role)
+			progress(instance.LaunchEvent{Err: err})
+			return err
+		}
+	}
+
+	hadNetwork := it.Network != nil
 	if err := m.ensureNetwork(ctx, &it, params.PinnedNetwork); err != nil {
 		progress(instance.LaunchEvent{Err: err})
 		return err
 	}
-	// A brand-new intent is only persisted once its first member launches, so
-	// until then its fresh network has nothing referencing it. Take it back out
-	// on any failure, or it survives until the next daemon restart reconciles.
+	// A network made by this call is only referenced once the member is saved below.
+	// Take it back out on any failure, or it survives until the next daemon restart reconciles.
 	persisted := false
-	if isNew && it.Network != nil && m.Networker != nil {
+	if !hadNetwork && it.Network != nil && m.Networker != nil {
 		defer func() {
 			if persisted {
 				return
 			}
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+			defer cancel()
 			if err := m.Networker.RemoveNetwork(ctx, it.Network.EngineNetworkName); err != nil {
 				log.Printf("intent: removing %q's unused network: %v", it.Name, err)
 			}
 		}()
 	}
 	m.setPending(&it)
-	defer m.setPending(nil)
+	defer m.clearPending(it.Name)
 	m.refreshDNS(ctx)
-
-	role := params.Role
-	if role == "" {
-		role = params.Name
-	}
 
 	labels := make(map[string]string, len(params.Labels)+2)
 	for k, v := range params.Labels {
@@ -323,7 +393,7 @@ func (m *Manager) Launch(ctx context.Context, params instance.LaunchParams, prog
 		return err
 	}
 	persisted = true
-	m.setPending(nil)
+	m.clearPending(it.Name)
 	m.refreshDNS(ctx)
 	return nil
 }
@@ -339,8 +409,7 @@ func (m *Manager) Info(name string) (store.Intent, error) {
 // Remove ungroups member (by ID or role) from name without deleting the instance. If that leaves
 // no members, the shared network is torn down too, best-effort, since members are often deleted individually.
 func (m *Manager) Remove(ctx context.Context, name, member string) (store.Intent, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	defer m.lock(name)()
 
 	it, err := m.Store.GetIntentByName(name)
 	if err != nil {
@@ -362,7 +431,10 @@ func (m *Manager) Remove(ctx context.Context, name, member string) (store.Intent
 	it.Members = kept
 
 	if len(it.Members) == 0 && m.Networker != nil && it.Network != nil {
-		if err := m.Networker.RemoveNetwork(ctx, it.Network.EngineNetworkName); err != nil {
+		if users := m.networkUsers(it.Network); len(users) > 0 {
+			// Kept on the record, so it's removed once they're gone and the intent is deleted.
+			log.Printf("intent: keeping now-empty %q's network, still used by %s", name, strings.Join(users, ", "))
+		} else if err := m.Networker.RemoveNetwork(ctx, it.Network.EngineNetworkName); err != nil {
 			// Left set (not cleared) so ReconcileNetworks can still catch
 			// and finish this later instead of losing track of it.
 			log.Printf("intent: removing now-empty %q's network: %v", name, err)
@@ -381,8 +453,7 @@ func (m *Manager) Remove(ctx context.Context, name, member string) (store.Intent
 // Delete removes the intent record and its shared network (best-effort).
 // If purgeMembers, every member instance is deleted too.
 func (m *Manager) Delete(ctx context.Context, name string, purgeMembers bool) (store.Intent, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	defer m.lock(name)()
 
 	it, err := m.Store.GetIntentByName(name)
 	if err != nil {
@@ -406,7 +477,10 @@ func (m *Manager) Delete(ctx context.Context, name string, purgeMembers bool) (s
 	}
 
 	if m.Networker != nil && it.Network != nil {
-		if err := m.Networker.RemoveNetwork(ctx, it.Network.EngineNetworkName); err != nil {
+		if users := m.networkUsers(it.Network); len(users) > 0 {
+			// ReconcileNetworks removes it at a later start, once nothing uses it.
+			log.Printf("intent: keeping %q's network, still used by %s", name, strings.Join(users, ", "))
+		} else if err := m.Networker.RemoveNetwork(ctx, it.Network.EngineNetworkName); err != nil {
 			log.Printf("intent: removing network for %q: %v", name, err)
 		}
 	}
@@ -443,6 +517,10 @@ func (m *Manager) ReconcileNetworks(ctx context.Context) error {
 		if !strings.HasPrefix(name, networkNamePrefix) || known[name] {
 			continue
 		}
+		// An instance left on a deleted intent's network keeps it until it's gone.
+		if users := m.networkUsers(&store.IntentNetwork{EngineNetworkName: name, BridgeInterface: bridgeFor(strings.TrimPrefix(name, networkNamePrefix))}); len(users) > 0 {
+			continue
+		}
 		log.Printf("intent: removing orphaned network %q (no intent references it)", name)
 		if err := m.Networker.RemoveNetwork(ctx, name); err != nil {
 			log.Printf("intent: removing orphaned network %q: %v", name, err)
@@ -456,6 +534,11 @@ func Domain(intentName string) string {
 	return dns.Domain(intentName)
 }
 
+// MemberName is the instance name a member gets when none is given, e.g. "shop-db".
+func MemberName(intentName, role string) string {
+	return intentName + "-" + role
+}
+
 // MemberDNSName returns the fully qualified name a member resolves as,
 // e.g. "db.myapp.anvil".
 func MemberDNSName(intentName, role string) string {
@@ -465,12 +548,16 @@ func MemberDNSName(intentName, role string) string {
 func (m *Manager) setPending(it *store.Intent) {
 	m.pendingMu.Lock()
 	defer m.pendingMu.Unlock()
-	if it == nil {
-		m.pending = nil
-		return
+	if m.pending == nil {
+		m.pending = make(map[string]store.Intent)
 	}
-	cp := *it
-	m.pending = &cp
+	m.pending[it.Name] = *it
+}
+
+func (m *Manager) clearPending(name string) {
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	delete(m.pending, name)
 }
 
 // refreshDNS reloads the DNS server's zones; a failure only means a
@@ -494,17 +581,14 @@ func (m *Manager) DNSZones(ctx context.Context) ([]dns.Zone, error) {
 	if err != nil {
 		return nil, err
 	}
+	stored := make(map[string]bool, len(intents))
+	for _, it := range intents {
+		stored[it.ID] = true
+	}
 	m.pendingMu.Lock()
-	if m.pending != nil {
-		found := false
-		for _, it := range intents {
-			if it.ID == m.pending.ID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			intents = append(intents, *m.pending)
+	for _, p := range m.pending {
+		if !stored[p.ID] {
+			intents = append(intents, p)
 		}
 	}
 	m.pendingMu.Unlock()

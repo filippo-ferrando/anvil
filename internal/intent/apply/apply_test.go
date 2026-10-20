@@ -344,3 +344,14 @@ func TestApplyLocksMembersAndNames(t *testing.T) {
 		t.Errorf("expected nothing run, got %v", busy.log)
 	}
 }
+
+func TestSamePortReadsEmptyProtocolAsTCP(t *testing.T) {
+	a := instance.PortMapping{HostPort: 8080, GuestPort: 80}
+	b := instance.PortMapping{HostPort: 8080, GuestPort: 80, Protocol: "tcp"}
+	if !samePort(a, b) {
+		t.Error(`expected "" and "tcp" to be the same port`)
+	}
+	if samePort(a, instance.PortMapping{HostPort: 8080, GuestPort: 80, Protocol: "udp"}) {
+		t.Error("expected tcp and udp to differ")
+	}
+}

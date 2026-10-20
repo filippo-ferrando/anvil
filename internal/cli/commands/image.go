@@ -23,11 +23,15 @@ func newImageCommand(flags *globalFlags) *cobra.Command {
 }
 
 func newImageListCommand(flags *globalFlags) *cobra.Command {
-	return &cobra.Command{
+	var output string
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List cached VM base images, plus Firecracker's raw copies and kernels (see `image containers list` for container images)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkOutput(output); err != nil {
+				return err
+			}
 			c, err := dial(flags)
 			if err != nil {
 				return err
@@ -37,6 +41,9 @@ func newImageListCommand(flags *globalFlags) *cobra.Command {
 			reply, err := c.Image.List(cmd.Context(), &anvilv1.ImageListRequest{})
 			if err != nil {
 				return err
+			}
+			if output == "json" {
+				return printJSON(cmd.OutOrStdout(), reply)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(tw, "ID\tARCH\tKIND\tSIZE\tIN USE\tPATH")
@@ -55,6 +62,8 @@ func newImageListCommand(flags *globalFlags) *cobra.Command {
 			return tw.Flush()
 		},
 	}
+	addOutputFlag(cmd, &output)
+	return cmd
 }
 
 func newImageDeleteCommand(flags *globalFlags) *cobra.Command {
@@ -130,11 +139,15 @@ func newImageContainersCommand(flags *globalFlags) *cobra.Command {
 }
 
 func newImageContainersListCommand(flags *globalFlags) *cobra.Command {
-	return &cobra.Command{
+	var output string
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List images cached by the container engine",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkOutput(output); err != nil {
+				return err
+			}
 			c, err := dial(flags)
 			if err != nil {
 				return err
@@ -144,6 +157,9 @@ func newImageContainersListCommand(flags *globalFlags) *cobra.Command {
 			reply, err := c.Image.ListContainerImages(cmd.Context(), &anvilv1.ContainerImageListRequest{})
 			if err != nil {
 				return err
+			}
+			if output == "json" {
+				return printJSON(cmd.OutOrStdout(), reply)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(tw, "ID\tENGINE\tREPO:TAG\tSIZE\tIN USE")
@@ -162,6 +178,8 @@ func newImageContainersListCommand(flags *globalFlags) *cobra.Command {
 			return tw.Flush()
 		},
 	}
+	addOutputFlag(cmd, &output)
+	return cmd
 }
 
 func newImageContainersDeleteCommand(flags *globalFlags) *cobra.Command {

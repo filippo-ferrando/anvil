@@ -425,6 +425,10 @@ func (b *FCBackend) Stop(ctx context.Context, spec *instance.Spec, force bool, t
 		}
 		stopErr = proc.Stop(ctx, stopTimeout)
 	}
+	if stopErr != nil && !hasExited(proc) {
+		// Its tap and jail stay while it may still run; watchExit releases them once it's gone.
+		return fmt.Errorf("vm: stopping instance %s: %w", spec.ID, stopErr)
+	}
 	b.releaseStopped(spec.ID, proc)
 
 	if stopErr != nil {
@@ -542,6 +546,23 @@ func (b *FCBackend) Reconcile(ctx context.Context, spec *instance.Spec) (instanc
 	return instance.StateRunning, nil
 }
 
+// tracked reports whether instanceID has a firecracker this daemon still tracks.
+func (b *FCBackend) tracked(instanceID string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, ok := b.running[instanceID]
+	return ok
+}
+
+func hasExited(proc *firecracker.Process) bool {
+	select {
+	case <-proc.Exited():
+		return true
+	default:
+		return false
+	}
+}
+
 // removeLeftovers clears what a firecracker that's gone untracked can leave: its tap, jail
 // (whose disk hard link keeps the disk's space in use) and runtime state.
 func (b *FCBackend) removeLeftovers(instanceID string) {
@@ -557,7 +578,9 @@ func (b *FCBackend) removeLeftovers(instanceID string) {
 }
 
 func (b *FCBackend) Delete(ctx context.Context, spec *instance.Spec) error {
-	_ = b.Stop(ctx, spec, true, 0)
+	if err := b.Stop(ctx, spec, true, 0); err != nil && b.tracked(spec.ID) {
+		return err
+	}
 	b.removeLeftovers(spec.ID)
 	b.ipam.release(spec.ID)
 	if err := os.RemoveAll(instanceDir(spec.ID)); err != nil {

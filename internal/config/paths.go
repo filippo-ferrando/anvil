@@ -3,7 +3,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -23,7 +25,7 @@ func GUIToolsDir() string {
 // SocketPath is the daemon's gRPC listen address.
 func SocketPath() string { return filepath.Join(RunDir, "anvild.sock") }
 
-// DBPath is the bbolt registry file (instances/intents/images/mirrors buckets).
+// DBPath is the bbolt registry file (instances, intents, mirrors, hosts, cloud-init, events).
 func DBPath() string { return filepath.Join(StateDir, "anvil.db") }
 
 // InstanceDir is where a single instance's mutable, non-registry state lives.
@@ -42,9 +44,6 @@ func PreparedImageDir() string { return filepath.Join(CacheDir, "images", "prepa
 
 // FirecrackerImageDir holds Firecracker's guest kernels and raw copies of the prepared images.
 func FirecrackerImageDir() string { return filepath.Join(CacheDir, "images", "firecracker") }
-
-// CloudInitDir holds the saved cloud-init user-data library.
-func CloudInitDir() string { return filepath.Join(StateDir, "cloud-init") }
 
 // MigrateKnownHostsPath is the shared SSH known_hosts file for migration targets.
 func MigrateKnownHostsPath() string { return filepath.Join(StateDir, "migrate-known-hosts") }
@@ -68,4 +67,16 @@ func ImportedVolumeDir(instanceName string, idx int) string {
 // MountedFolderDir is the same, for a VM's Nth shared folder.
 func MountedFolderDir(instanceName string, idx int) string {
 	return filepath.Join(StateDir, "vm-mounts", instanceName, fmt.Sprint(idx))
+}
+
+// FreeDir returns path, or path with the first "-N" suffix that doesn't exist yet, so data
+// restored under a reused instance name never lands on an older copy.
+func FreeDir(path string) string {
+	candidate := path
+	for n := 2; ; n++ {
+		if _, err := os.Lstat(candidate); errors.Is(err, fs.ErrNotExist) {
+			return candidate
+		}
+		candidate = fmt.Sprintf("%s-%d", path, n)
+	}
 }

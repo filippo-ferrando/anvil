@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -30,8 +29,6 @@ type ImageServer struct {
 	Containers *container.Backend
 	// FC lists Firecracker's raw copies and kernels next to the base images.
 	FC *image.FCCache
-	// Creating lists instances still being created, whose disks may not exist yet; nil for none.
-	Creating func() []string
 }
 
 func NewImageServer(s *store.Store, v *image.Vault, backend VMCatalog, containers *container.Backend, fc *image.FCCache) *ImageServer {
@@ -126,32 +123,24 @@ func (s *ImageServer) Delete(ctx context.Context, req *anvilv1.ImageDeleteReques
 		return nil, fmt.Errorf("image: no cached image matching id %q", req.GetId())
 	}
 
-	if !req.GetForce() && s.Creating != nil {
-		// ponytail: refuses for any in-flight create, match by image if this gets in the way.
-		if busy := s.Creating(); len(busy) > 0 {
-			return nil, fmt.Errorf("image: instance(s) %s are still being created and may use %q; retry once done, or pass --force",
-				strings.Join(busy, ", "), req.GetId())
-		}
-	}
-	if !req.GetForce() {
-		specs, err := s.Store.List(instance.KindVM)
-		if err != nil {
+	if req.GetForce() {
+		if err := s.Vault.Delete(target.Path); err != nil {
 			return nil, err
 		}
-		if users := usersOf(target.Path, specs, s.Vault); len(users) > 0 {
-			return nil, fmt.Errorf("image: %q is still used by instance(s) %s; pass --force to delete anyway (this will break their disks)",
-				req.GetId(), strings.Join(users, ", "))
-		}
-	}
-
-	if target.Kind != image.ImageKindBase {
-		if err := os.Remove(target.Path); err != nil {
-			return nil, fmt.Errorf("image: deleting %s: %w", target.Path, err)
-		}
-		_ = os.Remove(target.Path + ".sha256")
 		return &anvilv1.ImageDeleteReply{}, nil
 	}
-	if err := s.Vault.Delete(target.Path); err != nil {
+	err = s.Vault.DeleteUnused(target.Path, func() error {
+		specs, err := s.Store.List(instance.KindVM)
+		if err != nil {
+			return err
+		}
+		if users := usersOf(target.Path, specs, s.Vault); len(users) > 0 {
+			return fmt.Errorf("%w: %q is still used by instance(s) %s; pass --force to delete anyway (this will break their disks)",
+				image.ErrInUse, req.GetId(), strings.Join(users, ", "))
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	return &anvilv1.ImageDeleteReply{}, nil

@@ -76,3 +76,27 @@ func TestRunDueSnapshotsTakesAndPrunes(t *testing.T) {
 		t.Errorf("expected LastRun recorded, got %s", s.VM.SnapshotSchedule.LastRun)
 	}
 }
+
+// TestRunDueSnapshotsSkipsScheduleRemovedMeanwhile covers a schedule removed while an
+// earlier VM's snapshot runs: the stale list still has it, the fresh record doesn't.
+func TestRunDueSnapshotsSkipsScheduleRemovedMeanwhile(t *testing.T) {
+	m, rb, _ := newPolicyManager(t,
+		&Spec{ID: "01", Name: "a", Kind: KindVM, State: StateRunning, VM: &VMSpec{SnapshotSchedule: &SnapshotSchedule{Every: time.Hour, Keep: 2}}},
+		&Spec{ID: "02", Name: "b", Kind: KindVM, State: StateRunning, VM: &VMSpec{SnapshotSchedule: &SnapshotSchedule{Every: time.Hour, Keep: 2}}},
+	)
+	// List order isn't fixed: drop the schedule of whichever VM isn't being snapshotted.
+	rb.onSnap = func() {
+		rb.onSnap = nil
+		other := "b"
+		if _, ok := rb.snaps["b"]; ok {
+			other = "a"
+		}
+		if err := m.SetSnapshotSchedule(other, 0, 0); err != nil {
+			t.Error(err)
+		}
+	}
+	m.runDueSnapshots(context.Background(), time.Now()) // must not panic
+	if len(rb.snaps) != 1 {
+		t.Errorf("expected only the first VM snapshotted, got %v", rb.snaps)
+	}
+}

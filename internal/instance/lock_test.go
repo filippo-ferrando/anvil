@@ -184,9 +184,6 @@ func TestReserveNamesBlocksOtherLaunches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := m.Creating(); len(got) != 1 || got[0] != "web" {
-		t.Errorf("Creating() = %v, want [web]", got)
-	}
 	if err := launch(context.Background()); err == nil {
 		t.Error("expected a launch outside the reservation to fail")
 	}
@@ -196,5 +193,26 @@ func TestReserveNamesBlocksOtherLaunches(t *testing.T) {
 	release()
 	if _, _, err := m.ReserveNames(context.Background(), []string{"web"}); err == nil {
 		t.Error("expected reserving an existing name to fail")
+	}
+}
+
+func TestLeasesReleaseOnce(t *testing.T) {
+	if KeepUntilCreated(t.Context(), func() {}) {
+		t.Fatal("KeepUntilCreated outside a create should report false")
+	}
+	ctx, release := withLeases(t.Context())
+	inner, innerRelease := withLeases(ctx)
+	n := 0
+	if !KeepUntilCreated(inner, func() { n++ }) {
+		t.Fatal("KeepUntilCreated inside a create should report true")
+	}
+	innerRelease() // a nested create (Launch inside an import) leaves the outer bag alone
+	if n != 0 {
+		t.Fatalf("nested release ran the lease early")
+	}
+	release()
+	release()
+	if n != 1 {
+		t.Fatalf("lease released %d times, want 1", n)
 	}
 }

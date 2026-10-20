@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -47,6 +48,7 @@ type migrationModel struct {
 	adding        bool
 	addForm       simpleForm
 	confirmRemove *anvilv1.Host
+	migrateKey    string // anvild's own public key, shown until any key is pressed
 
 	focusForm     bool // false: hosts list has focus; true: the migrate form does
 	migrateForm   simpleForm
@@ -191,6 +193,14 @@ func (m model) updateMigration(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case migrateKeyMsg:
+		if msg.err != nil {
+			m.setStatus("migration key: "+msg.err.Error(), true)
+			return m, nil
+		}
+		m.migration.migrateKey = msg.key
+		return m, nil
+
 	case migrateStreamMsg:
 		if msg.line != "" {
 			m.migration.progressLines = appendProgressLine(m.migration.progressLines, msg.line)
@@ -229,6 +239,11 @@ func (m model) updateMigrationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.sidebarFocused = true
 			}
 		}
+		return m, nil
+	}
+
+	if mg.migrateKey != "" {
+		mg.migrateKey = ""
 		return m, nil
 	}
 
@@ -337,6 +352,8 @@ func (m model) updateMigrationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "r":
 		return m, loadHosts(m.client)
+	case "K":
+		return m, loadMigrateKey(m.client)
 	}
 
 	var cmd tea.Cmd
@@ -375,6 +392,11 @@ func (m migrationModel) View() string {
 	if m.adding {
 		return m.addForm.View()
 	}
+	if m.migrateKey != "" {
+		return styleTitle.Render(" Migration key ") + "\n\n" +
+			"Add this to the target user's ~/.ssh/authorized_keys on each host to migrate to:\n\n" +
+			m.migrateKey + "\n\n" + helpBar("any key", "back")
+	}
 	if m.migrating || len(m.progressLines) > 0 {
 		s := styleTitle.Render(" Migrating… ") + "\n\n"
 		for _, line := range m.progressLines {
@@ -400,7 +422,7 @@ func (m migrationModel) View() string {
 	left := hostsBox.Render(lipgloss.NewStyle().Height(m.panelHeight).Render(listView))
 	right := formBox.Render(m.migrateForm.View())
 
-	help := helpBar("tab", "switch focus", "a", "add host", "d", "discover", "x", "remove", "t", "test", "esc", "back")
+	help := helpBar("tab", "switch focus", "a", "add host", "d", "discover", "x", "remove", "t", "test", "K", "migration key", "esc", "back")
 	if m.browsing {
 		help = helpBar("enter", "add this host", "d", "rescan", "esc", "saved hosts")
 	}
@@ -410,14 +432,20 @@ func (m migrationModel) View() string {
 func startMigrateStream(c *client.Client, req *anvilv1.MigrateRequest) tea.Cmd {
 	return func() tea.Msg {
 		// Skip guest-key injection for a dry run.
+		var warning string
 		if !req.GetDryRun() {
-			if err := injectGuestKeys(context.Background(), c, req.GetName(), req.GetTo()); err != nil {
+			warnings, err := c.InjectGuestKeys(context.Background(), req.GetName(), req.GetTo())
+			if err != nil {
 				return migrateStreamMsg{err: fmt.Errorf("preparing guest SSH access on the target: %w", err), done: true}
 			}
+			warning = strings.Join(warnings, "; ")
 		}
 		stream, err := c.Migrate.Migrate(context.Background(), req)
 		if err != nil {
 			return migrateStreamMsg{err: err, done: true}
+		}
+		if warning != "" {
+			return migrateStreamMsg{stream: stream, line: styleWarn.Render("warning: " + warning)}
 		}
 		return receiveMigrateEvent(stream)()
 	}

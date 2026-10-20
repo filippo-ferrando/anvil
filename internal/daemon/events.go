@@ -16,13 +16,20 @@ import (
 // event log records as the actor of what the request does.
 func ActorInterceptors() []grpc.ServerOption {
 	return []grpc.ServerOption{
-		grpc.ChainUnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
-			return h(withCallerActor(ctx), req)
-		}),
-		grpc.ChainStreamInterceptor(func(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, h grpc.StreamHandler) error {
-			return h(srv, actorStream{ServerStream: ss, ctx: withCallerActor(ss.Context())})
-		}),
+		grpc.ChainUnaryInterceptor(interceptUnary),
+		grpc.ChainStreamInterceptor(interceptStream),
 	}
+}
+
+// interceptUnary and interceptStream tag each call with its caller and run wrapErr on the
+// result, so every service gives the same NotFound code, not only those that call it.
+func interceptUnary(ctx context.Context, req any, _ *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
+	reply, err := h(withCallerActor(ctx), req)
+	return reply, wrapErr(err)
+}
+
+func interceptStream(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, h grpc.StreamHandler) error {
+	return wrapErr(h(srv, actorStream{ServerStream: ss, ctx: withCallerActor(ss.Context())}))
 }
 
 type actorStream struct {

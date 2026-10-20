@@ -19,7 +19,8 @@ type recordingBackend struct {
 	resized  map[string]int64
 	snaps    map[string][]Snapshot
 	hook     func(string, State, string)
-	status   State // what Status reports; "" means unknown
+	status   State  // what Status reports; "" means unknown
+	onSnap   func() // called after each CreateSnapshot
 }
 
 func (b *recordingBackend) Status(context.Context, *Spec) (State, error) { return b.status, nil }
@@ -46,6 +47,9 @@ func (b *recordingBackend) CreateSnapshot(_ context.Context, s *Spec, name strin
 		b.snaps = map[string][]Snapshot{}
 	}
 	b.snaps[s.Name] = append(b.snaps[s.Name], Snapshot{Name: name, CreatedAt: time.Now()})
+	if b.onSnap != nil {
+		b.onSnap()
+	}
 	return nil
 }
 func (b *recordingBackend) RestoreSnapshot(context.Context, *Spec, string) error { return nil }

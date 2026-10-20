@@ -3,6 +3,7 @@ package hostpath
 import (
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -60,5 +61,35 @@ func TestResolveAndCheckResolved(t *testing.T) {
 	}
 	if err := CheckResolved(got); err == nil {
 		t.Error("expected a swapped path to be refused")
+	}
+}
+
+func TestCopyDirKeepsLinksAndSkipsSpecialFiles(t *testing.T) {
+	src, dst := t.TempDir(), filepath.Join(t.TempDir(), "out")
+	secret := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(secret, []byte("daemon only"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "f"), []byte("data"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(src, "k")); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(src, "fifo"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyDir(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dst, "f")); string(got) != "data" {
+		t.Errorf("regular file = %q, want data", got)
+	}
+	if link, err := os.Readlink(filepath.Join(dst, "k")); err != nil || link != secret {
+		t.Errorf("symlink should be copied as a link, got %q, %v", link, err)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "fifo")); err == nil {
+		t.Error("a FIFO should be skipped")
 	}
 }

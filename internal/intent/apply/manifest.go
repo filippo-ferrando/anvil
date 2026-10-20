@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/intent"
 )
 
 // Manifest is one parsed anvil.yaml: an intent and its members, keyed by role.
@@ -67,10 +68,10 @@ func (m *Manifest) VolumePaths() []*string {
 	return paths
 }
 
-// Defaults match `anvil launch`.
+// Defaults match `anvil launch`; set here too so a plan compares against the real sizes.
 const (
-	defaultCPUs      = 1
-	defaultMemoryMiB = 1024
+	defaultCPUs      = instance.DefaultCPUs
+	defaultMemoryMiB = instance.DefaultMemoryMiB
 )
 
 // Parse reads and validates a manifest. Unknown fields are errors, so typos don't pass silently.
@@ -117,7 +118,7 @@ func (mem *Member) parse(intentName, role string) error {
 		return errors.New("image is required")
 	}
 	if mem.Name == "" {
-		mem.Name = intentName + "-" + role
+		mem.Name = intent.MemberName(intentName, role)
 	}
 	policy, err := instance.ParseRestartPolicy(mem.Restart)
 	if err != nil {

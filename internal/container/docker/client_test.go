@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // newTestServer starts handler listening on a unix socket in t.TempDir()
@@ -692,9 +693,10 @@ func writeFrame(w http.ResponseWriter, streamType byte, payload string) {
 }
 
 func TestEventsStreamsUntilClosed(t *testing.T) {
-	var gotQuery string
+	var gotQuery, gotSince string
 	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotQuery = r.URL.Query().Get("filters")
+		gotSince = r.URL.Query().Get("since")
 		w.WriteHeader(http.StatusOK)
 		enc := json.NewEncoder(w)
 		_ = enc.Encode(map[string]any{"Type": "container", "Action": "die", "Actor": map[string]any{"ID": "abc", "Attributes": map[string]string{"exitCode": "137"}}})
@@ -702,7 +704,7 @@ func TestEventsStreamsUntilClosed(t *testing.T) {
 	}))
 
 	var got []Event
-	err := c.Events(t.Context(), map[string][]string{"type": {"container"}}, func(ev Event) { got = append(got, ev) })
+	err := c.Events(t.Context(), time.Unix(1700000000, 0), map[string][]string{"type": {"container"}}, func(ev Event) { got = append(got, ev) })
 	if err == nil {
 		t.Fatal("expected an error once the stream ends")
 	}
@@ -711,6 +713,9 @@ func TestEventsStreamsUntilClosed(t *testing.T) {
 	}
 	if gotQuery != `{"type":["container"]}` {
 		t.Errorf("unexpected filters query %q", gotQuery)
+	}
+	if gotSince != "1700000000" {
+		t.Errorf("unexpected since query %q", gotSince)
 	}
 }
 
@@ -771,5 +776,18 @@ func TestArchive(t *testing.T) {
 	}
 	if _, ok, err := c.Archive(t.Context(), "cid", "/missing", 5); ok || err != nil {
 		t.Fatalf("missing: %v %v", ok, err)
+	}
+}
+
+func TestCreateContainerRejectsColonInVolume(t *testing.T) {
+	c := &Client{} // refused before any request is sent
+	for _, v := range []VolumeMount{
+		{HostPath: "/home/u/a:/b", ContainerPath: "rw"},
+		{HostPath: "/host", ContainerPath: "/c:ro"},
+		{HostPath: "/host", ContainerPath: "relative"},
+	} {
+		if _, err := c.CreateContainer(t.Context(), CreateContainerParams{Name: "x", Image: "nginx", Volumes: []VolumeMount{v}}); err == nil {
+			t.Errorf("expected volume %+v to be refused", v)
+		}
 	}
 }

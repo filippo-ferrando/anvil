@@ -135,12 +135,12 @@ func (b *FCBackend) adoptDisk(ctx context.Context, spec *instance.Spec, dir stri
 		progress("adopting migrated disk")
 	}
 	if v.SourceDiskBaseSHA256 != "" {
-		basePath, err := b.QEMU.matchingLocalBase(v)
+		basePath, err := b.QEMU.matchingLocalBase(ctx, v)
 		if err != nil {
 			if v.SourceBaseImagePath == "" {
 				return err
 			}
-			if basePath, err = b.QEMU.adoptSentBase(v, dir); err != nil {
+			if basePath, err = b.QEMU.adoptSentBase(ctx, v, dir); err != nil {
 				return err
 			}
 		} else if v.SourceBaseImagePath != "" {

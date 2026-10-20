@@ -52,7 +52,7 @@ func run() error {
 	v, commit := version.Get()
 	log.Printf("anvild: starting %s (%s)", v, commit)
 
-	for _, dir := range []string{config.RunDir, config.StateDir, config.CacheDir, config.PreparedImageDir(), config.CloudInitDir(), config.MigrateStagingDir(), config.ExportStagingDir()} {
+	for _, dir := range []string{config.RunDir, config.StateDir, config.CacheDir, config.PreparedImageDir(), config.MigrateStagingDir(), config.ExportStagingDir()} {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return fmt.Errorf("creating %s: %w (run as root, or as the \"anvil\" system user once packaged)", dir, err)
 		}
@@ -70,6 +70,7 @@ func run() error {
 	}
 	vault := image.NewVault(config.PreparedImageDir())
 	vault.RawDir = config.FirecrackerImageDir()
+	vault.Keep = instance.KeepUntilCreated
 	vmBackend := newVMBackend(catalog, vault, db)
 
 	// db satisfies container.Source, used to resolve container mirrors at pull time.
@@ -149,7 +150,6 @@ func run() error {
 	anvilv1.RegisterMirrorServiceServer(grpcServer, daemon.NewMirrorServer(db))
 	imageServer := daemon.NewImageServer(db, vault, vmBackend, containerBackend,
 		&image.FCCache{Dir: config.FirecrackerImageDir(), Vault: vault})
-	imageServer.Creating = mgr.Creating
 	anvilv1.RegisterImageServiceServer(grpcServer, imageServer)
 	anvilv1.RegisterIntentServiceServer(grpcServer, daemon.NewIntentServer(intentMgr, mgr))
 	anvilv1.RegisterHostServiceServer(grpcServer, daemon.NewHostServer(db, migrateMgr))

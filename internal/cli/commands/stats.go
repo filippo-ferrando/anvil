@@ -81,7 +81,7 @@ func newStatsCommand(flags *globalFlags) *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "keep refreshing until interrupted, like `docker stats`")
+	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "keep refreshing until interrupted, like docker stats")
 	cmd.Flags().DurationVar(&interval, "interval", 2*time.Second, "refresh interval in --watch mode")
 	return cmd
 }

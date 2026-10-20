@@ -52,6 +52,9 @@ type Server struct {
 	// ResolvConf is where upstream resolvers are read from on Refresh.
 	ResolvConf string
 
+	// refreshMu runs one Refresh at a time, so an older zone list never replaces a newer one.
+	refreshMu sync.Mutex
+
 	mu        sync.Mutex
 	listeners map[netip.Addr]*zoneListener
 	upstreams []string
@@ -86,6 +89,8 @@ func (s *Server) Run(ctx context.Context, interval time.Duration) {
 // Refresh re-reads zones and upstreams, opens listeners for new zones and
 // closes the ones no longer present. A failed bind is retried on the next call.
 func (s *Server) Refresh(ctx context.Context) error {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
 	zones, err := s.Source(ctx)
 	if err != nil {
 		return fmt.Errorf("listing zones: %w", err)

@@ -8,6 +8,8 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
+	"syscall"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/peer"
@@ -82,6 +84,31 @@ func checkCallerOwns(ctx context.Context, paths ...*string) error {
 			return status.Errorf(codes.PermissionDenied, "daemon: %s is owned by uid %d, not by the caller (uid %d); only a directory the caller owns can be shared", *p, owner, uid)
 		}
 		*p = real
+	}
+	return nil
+}
+
+// checkCallerFile resolves a file path's directory in place and fails unless the caller owns
+// it and, when the file exists, the file too. A symlink or non-regular file is refused.
+func checkCallerFile(ctx context.Context, p *string, mustExist bool) error {
+	dir := filepath.Dir(*p)
+	if err := checkCallerOwns(ctx, &dir); err != nil {
+		return err
+	}
+	*p = filepath.Join(dir, filepath.Base(*p))
+	info, err := os.Lstat(*p)
+	if errors.Is(err, fs.ErrNotExist) && !mustExist {
+		return nil
+	} else if err != nil {
+		return status.Errorf(codes.InvalidArgument, "daemon: %v", err)
+	}
+	if !info.Mode().IsRegular() {
+		return status.Errorf(codes.PermissionDenied, "daemon: %s is not a regular file", *p)
+	}
+	uid, _ := callerUID(ctx)
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if uid != 0 && int(uid) != os.Getuid() && (!ok || st.Uid != uid) {
+		return status.Errorf(codes.PermissionDenied, "daemon: %s isn't owned by the caller (uid %d)", *p, uid)
 	}
 	return nil
 }

@@ -15,7 +15,7 @@ import (
 // call to QEMU or Firecracker based on spec.VM.Hypervisor.
 type Hypervisors struct {
 	QEMU        *Backend
-	Firecracker instance.Backend // nil until the Firecracker backend lands
+	Firecracker instance.Backend // nil on builds without Firecracker support
 }
 
 var (
@@ -58,7 +58,7 @@ func (h *Hypervisors) backendFor(spec *instance.Spec) (instance.Backend, error) 
 		return h.QEMU, nil
 	case instance.VMHypervisorFirecracker:
 		if h.Firecracker == nil {
-			return nil, fmt.Errorf("vm: firecracker support isn't implemented yet")
+			return nil, fmt.Errorf("vm: firecracker isn't supported on this build")
 		}
 		return h.Firecracker, nil
 	default:

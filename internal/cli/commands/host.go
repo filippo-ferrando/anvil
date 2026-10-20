@@ -60,11 +60,15 @@ func newHostAddCommand(flags *globalFlags) *cobra.Command {
 }
 
 func newHostListCommand(flags *globalFlags) *cobra.Command {
-	return &cobra.Command{
+	var output string
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List known hosts",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkOutput(output); err != nil {
+				return err
+			}
 			c, err := dial(flags)
 			if err != nil {
 				return err
@@ -74,6 +78,9 @@ func newHostListCommand(flags *globalFlags) *cobra.Command {
 			reply, err := c.Host.List(cmd.Context(), &anvilv1.HostListRequest{})
 			if err != nil {
 				return err
+			}
+			if output == "json" {
+				return printJSON(cmd.OutOrStdout(), reply)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(tw, "ALIAS\tTARGET\tIDENTITY\tHOST KEY")
@@ -91,6 +98,8 @@ func newHostListCommand(flags *globalFlags) *cobra.Command {
 			return tw.Flush()
 		},
 	}
+	addOutputFlag(cmd, &output)
+	return cmd
 }
 
 func newHostRemoveCommand(flags *globalFlags) *cobra.Command {
@@ -137,6 +146,7 @@ func newHostTestCommand(flags *globalFlags) *cobra.Command {
 
 func newHostDiscoverCommand(flags *globalFlags) *cobra.Command {
 	var timeout time.Duration
+	var output string
 	cmd := &cobra.Command{
 		Use:   "discover",
 		Short: "Find other anvil hosts on the local network over mDNS",
@@ -145,6 +155,9 @@ func newHostDiscoverCommand(flags *globalFlags) *cobra.Command {
 			"with the user to log in as.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkOutput(output); err != nil {
+				return err
+			}
 			c, err := dial(flags)
 			if err != nil {
 				return err
@@ -160,6 +173,9 @@ func newHostDiscoverCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if output == "json" {
+				return printJSON(cmd.OutOrStdout(), reply)
+			}
 			if len(reply.GetHosts()) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "no anvil hosts answered on this network")
 				return nil
@@ -173,5 +189,6 @@ func newHostDiscoverCommand(flags *globalFlags) *cobra.Command {
 		},
 	}
 	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Second, "how long to wait for answers")
+	addOutputFlag(cmd, &output)
 	return cmd
 }

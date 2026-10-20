@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
 // MoveDir relocates src to dst, falling back to a recursive copy across filesystems. An existing
@@ -28,6 +29,8 @@ func MoveDir(src, dst string) error {
 	return os.RemoveAll(src)
 }
 
+// copyDir copies src's tree into dst. Symlinks are copied as links, never followed,
+// and other special files (FIFOs, sockets, devices) are skipped.
 func copyDir(src, dst string) error {
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -38,15 +41,24 @@ func copyDir(src, dst string) error {
 			return err
 		}
 		target := filepath.Join(dst, rel)
-		if info.IsDir() {
+		switch mode := info.Mode(); {
+		case mode.IsDir():
 			return os.MkdirAll(target, 0o750)
+		case mode&fs.ModeSymlink != 0:
+			link, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(link, target)
+		case !mode.IsRegular():
+			return nil
 		}
-		in, err := os.Open(path)
+		in, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 		if err != nil {
 			return err
 		}
 		defer in.Close()
-		out, err := os.Create(target)
+		out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
 		if err != nil {
 			return err
 		}

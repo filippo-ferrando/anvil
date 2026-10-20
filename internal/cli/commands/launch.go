@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/internal/sshkey"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newLaunchCommand(flags *globalFlags) *cobra.Command {
@@ -132,7 +132,7 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				ports, err := parsePublish(publish)
+				ports, err := client.ParsePorts(publish)
 				if err != nil {
 					return err
 				}
@@ -156,15 +156,15 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				env, err := parseEnvVars(envVars)
+				env, err := client.ParseEnv(envVars)
 				if err != nil {
 					return err
 				}
-				vols, err := parseVolumes(volumes)
+				vols, err := client.ParseVolumes(volumes)
 				if err != nil {
 					return err
 				}
-				ports, err := parsePublish(publish)
+				ports, err := client.ParsePorts(publish)
 				if err != nil {
 					return err
 				}
@@ -204,7 +204,7 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 	cmd.Flags().Int64Var(&memoryMiB, "memory", 1024, "memory in MiB (VM only)")
 	cmd.Flags().Int64Var(&diskGiB, "disk", 0, "disk size in GiB (VM only; 0 = catalog minimum)")
 	cmd.Flags().StringVar(&cloudInitFile, "cloud-init", "", `path to a cloud-init user-data file, or "-" for stdin (VM only, ad hoc, not saved to the library)`)
-	cmd.Flags().StringVar(&cloudInitName, "cloud-init-name", "", "name of a saved cloud-init config from the library (VM only, see `anvil cloud-init`)")
+	cmd.Flags().StringVar(&cloudInitName, "cloud-init-name", "", "name of a saved cloud-init config from the library (VM only, see anvil cloud-init)")
 	cmd.Flags().StringArrayVar(&sshKeys, "ssh-key", nil, "additional SSH public key to authorize, on top of anvil's own managed key "+
 		"(always authorized by default): a literal key, or a path to a .pub file; repeatable (VM only)")
 	cmd.Flags().StringVar(&engineStr, "engine", "", `container engine: "docker" or "podman" (container only; defaults to docker, the only one implemented so far)`)
@@ -214,15 +214,15 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 	cmd.Flags().StringArrayVarP(&publish, "publish", "p", nil, "publish <host-port>:<guest-port>[/tcp|udp] (repeatable; a bridged --intent VM already has its own reachable address, so this only applies to a standalone VM or a container)")
 	cmd.Flags().StringVar(&entrypoint, "entrypoint", "", "override the image's entrypoint (container only)")
 	cmd.Flags().BoolVar(&noStart, "no-start", false, "create but don't start the instance")
-	cmd.Flags().StringVar(&intentName, "intent", "", "join this instance to an intent (created automatically if it doesn't exist yet), see `anvil intent`")
+	cmd.Flags().StringVar(&intentName, "intent", "", "join this instance to an intent (created automatically if it doesn't exist yet), see anvil intent")
 	cmd.Flags().StringVar(&role, "role", "", "label this instance's role within --intent (defaults to its own name)")
-	cmd.Flags().StringVar(&fromDisk, "from-disk", "", "use this already-prepared qcow2 file as the VM's own disk directly, skipping the image catalog and cloud-init entirely (internal, used by `anvil migrate`)")
+	cmd.Flags().StringVar(&fromDisk, "from-disk", "", "use this already-prepared qcow2 file as the VM's own disk directly, skipping the image catalog and cloud-init entirely (internal, used by anvil migrate)")
 	cmd.Flags().BoolVar(&wait, "wait", false, "block until the instance finished its first-boot setup (cloud-init for a VM); fails if cloud-init reports errors")
 	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 15*time.Minute, "give up on --wait after this long")
 	cmd.Flags().BoolVar(&autostart, "autostart", false, "start the instance whenever anvild starts, unless it was stopped on purpose")
 	cmd.Flags().StringVar(&restart, "restart", "", "restart policy when it stops on its own: no (default), on-failure[:N] or always")
 	cmd.Flags().BoolVar(&noGuestAgent, "no-guest-agent", false, "don't install qemu-guest-agent through cloud-init (VM only); disables guest IP reporting and agent shutdown")
-	cmd.Flags().StringVar(&defaultUser, "default-user", "", "override the SSH login user normally read from the image catalog (VM only, mainly for internal use by `anvil migrate`)")
+	cmd.Flags().StringVar(&defaultUser, "default-user", "", "override the SSH login user normally read from the image catalog (VM only, mainly for internal use by anvil migrate)")
 	return cmd
 }
 
@@ -250,74 +250,6 @@ func parseVMHypervisor(s string) (anvilv1.VmHypervisor, error) {
 	default:
 		return 0, fmt.Errorf(`--hypervisor must be "qemu" or "firecracker"`)
 	}
-}
-
-func parseEnvVars(vars []string) (map[string]string, error) {
-	if len(vars) == 0 {
-		return nil, nil
-	}
-	env := make(map[string]string, len(vars))
-	for _, v := range vars {
-		k, val, ok := strings.Cut(v, "=")
-		if !ok {
-			return nil, fmt.Errorf("--env %q must be in KEY=VALUE form", v)
-		}
-		env[k] = val
-	}
-	return env, nil
-}
-
-func parseVolumes(vols []string) ([]*anvilv1.VolumeMount, error) {
-	var out []*anvilv1.VolumeMount
-	for _, v := range vols {
-		parts := strings.Split(v, ":")
-		if len(parts) < 2 || len(parts) > 3 {
-			return nil, fmt.Errorf(`--volume %q must be "<host-path>:<container-path>[:ro]"`, v)
-		}
-		readOnly := false
-		if len(parts) == 3 {
-			if parts[2] != "ro" {
-				return nil, fmt.Errorf(`--volume %q: third part must be "ro"`, v)
-			}
-			readOnly = true
-		}
-		out = append(out, &anvilv1.VolumeMount{
-			HostPath:      parts[0],
-			ContainerPath: parts[1],
-			ReadOnly:      readOnly,
-		})
-	}
-	return out, nil
-}
-
-func parsePublish(pubs []string) ([]*anvilv1.PortMapping, error) {
-	var out []*anvilv1.PortMapping
-	for _, p := range pubs {
-		spec := p
-		protocol := "tcp"
-		if host, proto, ok := strings.Cut(p, "/"); ok {
-			spec = host
-			protocol = proto
-		}
-		hostStr, guestStr, ok := strings.Cut(spec, ":")
-		if !ok {
-			return nil, fmt.Errorf(`--publish %q must be "<host-port>:<guest-port>[/tcp|udp]"`, p)
-		}
-		hostPort, err := strconv.Atoi(hostStr)
-		if err != nil {
-			return nil, fmt.Errorf("--publish %q: invalid host port: %w", p, err)
-		}
-		guestPort, err := strconv.Atoi(guestStr)
-		if err != nil {
-			return nil, fmt.Errorf("--publish %q: invalid guest port: %w", p, err)
-		}
-		out = append(out, &anvilv1.PortMapping{
-			HostPort:  int32(hostPort),
-			GuestPort: int32(guestPort),
-			Protocol:  protocol,
-		})
-	}
-	return out, nil
 }
 
 func readCloudInitFile(path string) (string, error) {

@@ -35,7 +35,7 @@ func newShellCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			target, err := resolveSSHTarget(c, inst, user)
+			target, err := c.SSHTarget(inst, user)
 			if err != nil {
 				return err
 			}

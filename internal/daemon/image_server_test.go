@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -110,14 +112,42 @@ func TestUsersOfFirecracker(t *testing.T) {
 func TestImageDeleteWaitsForCreates(t *testing.T) {
 	dir := t.TempDir()
 	vault := image.NewVault(filepath.Join(dir, "prepared"))
+	var leases []func()
+	vault.Keep = func(ctx context.Context, release func()) bool {
+		leases = append(leases, release)
+		return true
+	}
+	base := filepath.Join(vault.PreparedDir, "debian-13-x86_64.qcow2")
+	other := filepath.Join(vault.PreparedDir, "ubuntu-24.04-x86_64.qcow2")
+	touch(t, base)
+	touch(t, other)
+	srv := NewImageServer(testStore(t), vault, nil, nil, nil)
+	vault.Use(t.Context(), base) // a create of debian-13 in flight
+
+	if _, err := srv.Delete(t.Context(), &anvilv1.ImageDeleteRequest{Id: "debian-13"}); !errors.Is(err, image.ErrInUse) {
+		t.Fatalf("expected delete to be refused while an instance is being created from it, got %v", err)
+	}
+	if _, err := srv.Delete(t.Context(), &anvilv1.ImageDeleteRequest{Id: "ubuntu-24.04"}); err != nil {
+		t.Fatalf("an image no create uses should delete, got %v", err)
+	}
+	leases[0]()
+	if _, err := srv.Delete(t.Context(), &anvilv1.ImageDeleteRequest{Id: "debian-13"}); err != nil {
+		t.Fatalf("expected delete once the create is saved, got %v", err)
+	}
+	if _, err := os.Stat(base); !os.IsNotExist(err) {
+		t.Error("the base is still there after delete")
+	}
+}
+
+func TestImageDeleteForceIgnoresCreates(t *testing.T) {
+	dir := t.TempDir()
+	vault := image.NewVault(filepath.Join(dir, "prepared"))
+	vault.Keep = func(context.Context, func()) bool { return true }
 	base := filepath.Join(vault.PreparedDir, "debian-13-x86_64.qcow2")
 	touch(t, base)
 	srv := NewImageServer(testStore(t), vault, nil, nil, nil)
-	srv.Creating = func() []string { return []string{"web"} }
+	vault.Use(t.Context(), base)
 
-	if _, err := srv.Delete(t.Context(), &anvilv1.ImageDeleteRequest{Id: "debian-13"}); err == nil {
-		t.Fatal("expected delete to be refused while an instance is being created")
-	}
 	if _, err := srv.Delete(t.Context(), &anvilv1.ImageDeleteRequest{Id: "debian-13", Force: true}); err != nil {
 		t.Fatalf("expected --force to delete anyway, got %v", err)
 	}

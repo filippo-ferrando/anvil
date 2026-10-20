@@ -9,6 +9,15 @@ container mirrors, man pages, shell completions and the TUI.
 
 ### Recently done
 
+- **Gap review fixes (2026-10).** Export and import paths, staged migration data and
+  container volume binds are checked against the caller; instance names are validated.
+  Failed creates, rollbacks after a cancelled request, exits during launch, failed port
+  changes, failed restores and stops, and VMs left running across a daemon crash leave
+  a consistent record. QEMU taps and unreachable QEMUs are cleaned up at start, a cached
+  base is never replaced under existing disks, intent networks stay while an instance
+  uses them and come back after a prune, and roles are unique per intent. The CLI and
+  TUI share SSH, guest-key and launch parsing code in `pkg/client`, every list command
+  takes `-o json`, and every service maps missing records to NotFound.
 - **Event log.** `anvil events [name] [-f] [-n N] [-o table|json]` shows what happened to
   instances: launch, fork, start, stop, delete, settings, mounts, ports and snapshots run
   through anvil (with the caller's user name and any error), exits and starts outside anvil
@@ -31,8 +40,9 @@ container mirrors, man pages, shell completions and the TUI.
   TUI alike, tunnels gRPC through `ssh <host> anvil dial-stdio`. Guest SSH hops through the
   host with `ssh -J`, container exec/cp go through `DOCKER_HOST=ssh://`, and paths sent to
   the daemon (`mount`, `export`, `import`) are remote paths and must be absolute.
-- **JSON output.** `anvil list` and `anvil find` take `-o json` (default `table`), printed
-  with `protojson` and the field names from `anvil.proto`.
+- **JSON output.** Every list-style command (`list`, `find`, `events`, `host list`,
+  `snapshot list`, `image list`, ...) takes `-o json` (default `table`), printed with
+  `protojson` and the field names from `anvil.proto`.
 - **Official catalogue as a submodule.** Extra distro manifests and cloud-init templates
   live in their own repo, checked out at `catalog/`, for `anvil mirror add` and
   `anvil cloud-init import-repo`.
@@ -130,11 +140,12 @@ container mirrors, man pages, shell completions and the TUI.
 
 ## VM hypervisors
 
-### Firecracker backend (implemented, pending real-host checks)
+### Firecracker backend (done)
 
-QEMU is the only VM hypervisor on Linux right now. Firecracker microVMs are being added as
-a second one, with the same lifecycle, commands, TUI screens and intent membership as QEMU
-VMs. The only visible difference is `--hypervisor firecracker` (default `qemu`).
+Firecracker microVMs are the second VM hypervisor on Linux, next to QEMU, shipped and
+tested on real hosts. They have the same lifecycle, commands, TUI screens and intent
+membership as QEMU VMs. The only visible difference is `--hypervisor firecracker`
+(default `qemu`). The notes below record the design decisions.
 
 Host requirements: `firecracker` and `jailer` (Arch: `extra/firecracker`, 1.17+ for
 bzImage and virtio-mem), `/dev/kvm`, `qemu-img` (qcow2 to raw), `nft`. Dev and tests also
@@ -177,7 +188,8 @@ need a guest kernel: `ANVIL_FC_KERNEL=<path>` overrides the catalog kernel.
   anvil-owned nftables table, a static IP through the seed's network-config, and DNS through
   the intent DNS forwarder on the gateway. SSH and `anvil port` forwards are a small TCP/UDP
   proxy in anvild listening on all interfaces (like SLIRP hostfwd), re-created on Reconcile.
-  Packaging adds a sysctl.d file for `net.ipv4.ip_forward`.
+  anvild turns on `net.ipv4.ip_forward` at runtime when it sets up `anvil-fc0`
+  (`internal/vm/fcnet.go`), so hosts without Firecracker VMs don't route.
 - **Mounts.** A userspace NFSv3 server in anvild (`github.com/willscott/go-nfs`) on a fixed
   port of each gateway, one server per VM picked by source address. Mount/umount go live
   through the guest agent; the fstab line needs no NFS client package in the guest.
@@ -201,7 +213,7 @@ need a guest kernel: `ANVIL_FC_KERNEL=<path>` overrides the catalog kernel.
 
 Docker is the only container engine right now. `--engine podman` returns a clear
 "not implemented yet" error instead of silently doing nothing, but there's no actual
-Podman code (`internal/container/podman/` is an empty package).
+Podman code (`internal/container/podman/` is an empty placeholder directory).
 
 A few things are blocked on this landing:
 
@@ -256,21 +268,22 @@ What is in place:
   dirs and roles can't be claimed twice. `store.PutInstance` refuses a taken name.
 - **Patch, not upsert.** `store.UpdateInstance` re-reads and writes in one transaction and
   never recreates a deleted record; the Manager saves only the fields it owns.
+- **Image leases.** A create marks the base image, raw copy and kernel it uses in the
+  `image.Vault` until its instance is saved. Image delete and the purge prune check those
+  leases, the instance list and remove the file under one lock, so only creates of that
+  same image block a delete, and none can slip in between.
+- **Per-intent lock.** `intent.Manager` locks one intent at a time, so a slow member
+  launch only blocks its own intent.
 - **Smaller fixes:** stale exit reports are checked against the backend's live state,
-  image delete refuses while an instance is being created, shared image downloads outlive
-  the caller that started them, migration progress is sent from one goroutine at a time,
+  shared image downloads outlive the caller that started them, migration progress is sent from one goroutine at a time,
   the migration base is staged per instance, the migration key uses the `sshkey.Ensure`
   link pattern, `SetMirrorEnabled` is one transaction, and the guest poller has its own
   `VMSpec` copy.
 
 Known limits, left on purpose:
 
-- Image delete refuses during any in-flight create, not only those using that image, and
-  a launch that starts between the check and the removal can still lose its base.
 - An `apply` recreate deletes then relaunches the same name; a manual launch of that
   exact name in between wins.
-- `intent.Manager.mu` is a global lock: one slow intent launch blocks every other intent
-  operation.
 
 ## Migration
 

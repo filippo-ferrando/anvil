@@ -3,12 +3,14 @@ package export
 import (
 	"archive/tar"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 )
 
 // zstdBin locates the zstd CLI, used to compress/decompress bundles. This is consistent with the
@@ -30,7 +32,8 @@ func writeTarZst(ctx context.Context, destPath string, build func(tw *tar.Writer
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
 		return fmt.Errorf("export: creating output dir: %w", err)
 	}
-	out, err := os.Create(destPath)
+	// O_NOFOLLOW: a symlink swapped in after the caller check must not redirect the write.
+	out, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o640)
 	if err != nil {
 		return fmt.Errorf("export: creating %s: %w", destPath, err)
 	}
@@ -57,11 +60,14 @@ func writeTarZst(ctx context.Context, destPath string, build func(tw *tar.Writer
 		tarErrCh <- buildErr
 	}()
 
-	if err := cmd.Run(); err != nil {
-		<-tarErrCh
-		return fmt.Errorf("export: compressing bundle: %w", err)
+	runErr := cmd.Run()
+	// Unblocks the tar writer when zstd exits before reading everything.
+	pr.CloseWithError(errors.New("export: compressor exited"))
+	tarErr := <-tarErrCh
+	if runErr != nil {
+		return fmt.Errorf("export: compressing bundle: %w", runErr)
 	}
-	return <-tarErrCh
+	return tarErr
 }
 
 // extractTarZst decompresses and unpacks bundlePath into destDir.

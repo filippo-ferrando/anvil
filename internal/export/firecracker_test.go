@@ -71,7 +71,7 @@ func TestFillLaunchParamsFirecracker(t *testing.T) {
 		VM: &VM{ImageRef: "test-distro", Arch: "x86_64", DiskFile: "disks/01JFC.qcow2", Hypervisor: "firecracker"}}
 
 	var standalone instance.LaunchParams
-	if err := m.fillLaunchParams(context.Background(), &standalone, mem, "web", staging, func(string) {}); err != nil {
+	if err := m.fillLaunchParams(context.Background(), &standalone, mem, "web", staging, new([]string), func(string) {}); err != nil {
 		t.Fatal(err)
 	}
 	if v := standalone.VM; v.Hypervisor != instance.VMHypervisorFirecracker || v.StaticIP != "10.254.254.9/24" {
@@ -80,7 +80,7 @@ func TestFillLaunchParamsFirecracker(t *testing.T) {
 
 	// An intent member's address goes through the intent instead.
 	member := instance.LaunchParams{IntentName: "app"}
-	if err := m.fillLaunchParams(context.Background(), &member, mem, "web", staging, func(string) {}); err != nil {
+	if err := m.fillLaunchParams(context.Background(), &member, mem, "web", staging, new([]string), func(string) {}); err != nil {
 		t.Fatal(err)
 	}
 	if v := member.VM; v.Hypervisor != instance.VMHypervisorFirecracker || v.StaticIP != "" {

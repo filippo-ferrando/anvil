@@ -106,3 +106,23 @@ func TestAttachSucceedsForARealMatchingProcess(t *testing.T) {
 	default:
 	}
 }
+
+// TestProcessAliveTreatsAZombieAsGone covers a killed process nothing has reaped yet.
+func TestProcessAliveTreatsAZombieAsGone(t *testing.T) {
+	cmd := exec.Command("sleep", "60")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("sleep unavailable: %v", err)
+	}
+	defer func() { _ = cmd.Wait() }()
+	_ = cmd.Process.Kill()
+	deadline := time.Now().Add(5 * time.Second)
+	for !isZombie(cmd.Process.Pid) {
+		if time.Now().After(deadline) {
+			t.Fatal("killed child never became a zombie")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if processAlive(cmd.Process.Pid) {
+		t.Error("expected an unreaped zombie to count as gone")
+	}
+}

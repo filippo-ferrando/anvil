@@ -73,7 +73,7 @@ func TestIsHostfwdRemoveSuccess(t *testing.T) {
 
 // fakeQMP serves a QMP socket. greet controls whether it sends the banner at
 // all, so a silent QEMU can be simulated.
-func fakeQMP(t *testing.T, greet bool, handle func(id string) string) string {
+func fakeQMP(t *testing.T, greet bool, handle func(id, execute string) string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "qmp.sock")
 	ln, err := net.Listen("unix", path)
@@ -94,11 +94,11 @@ func fakeQMP(t *testing.T, greet bool, handle func(id string) string) string {
 		fmt.Fprintln(conn, `{"QMP":{"version":{}}}`)
 		sc := bufio.NewScanner(conn)
 		for sc.Scan() {
-			var cmd struct{ ID string }
+			var cmd struct{ ID, Execute string }
 			if json.Unmarshal(sc.Bytes(), &cmd) != nil {
 				continue
 			}
-			fmt.Fprintln(conn, handle(cmd.ID))
+			fmt.Fprintln(conn, handle(cmd.ID, cmd.Execute))
 		}
 	}()
 	return path
@@ -125,7 +125,7 @@ func TestDialQMPGivesUpOnASilentQEMU(t *testing.T) {
 }
 
 func TestExecuteConcurrentCommandsEachGetTheirOwnReply(t *testing.T) {
-	path := fakeQMP(t, true, func(id string) string {
+	path := fakeQMP(t, true, func(id, _ string) string {
 		return fmt.Sprintf(`{"return":%q,"id":%q}`, "r"+id, id)
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -171,5 +171,50 @@ func TestBackupTargetNodeFitsQEMULimit(t *testing.T) {
 	}
 	if a == backupTargetNode("fork-01KXYZ0ABCDEFGHJKMNPQRSTVX") {
 		t.Error("different jobs should get different node names")
+	}
+}
+
+// TestFinishTopBackupCancelWaitsForTheJob covers a cancelled fork: QEMU only accepts
+// job-dismiss once the cancelled job has concluded, which takes a few polls here.
+func TestFinishTopBackupCancelWaitsForTheJob(t *testing.T) {
+	var mu sync.Mutex
+	status, aborting, dismissed := "running", 0, false
+	path := fakeQMP(t, true, func(id, execute string) string {
+		mu.Lock()
+		defer mu.Unlock()
+		ret := "{}"
+		switch execute {
+		case "query-jobs":
+			if status == "aborting" {
+				if aborting++; aborting == 3 {
+					status = "concluded"
+				}
+			}
+			ret = fmt.Sprintf(`[{"id":"job1","status":%q}]`, status)
+		case "job-cancel":
+			status = "aborting"
+		case "job-dismiss":
+			if status != "concluded" {
+				return fmt.Sprintf(`{"error":{"class":"GenericError","desc":"job not concluded"},"id":%q}`, id)
+			}
+			dismissed = true
+		}
+		return fmt.Sprintf(`{"return":%s,"id":%q}`, ret, id)
+	})
+	c, err := DialQMP(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := c.FinishTopBackup(ctx, "job1", nil); err == nil {
+		t.Fatal("expected the cancelled ctx's error")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !dismissed {
+		t.Errorf("job dismissed before it concluded (status %s)", status)
 	}
 }

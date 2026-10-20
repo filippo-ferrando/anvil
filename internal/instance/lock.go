@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"slices"
+	"regexp"
 	"sync"
 )
 
@@ -47,16 +47,6 @@ func (l *keyLocks) acquire(key string, wait bool) (release func(), err error) {
 		close(ch)
 	}, nil
 }
-
-// keys returns every key currently held.
-func (l *keyLocks) keys() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return slices.Collect(maps.Keys(l.held))
-}
-
-// Creating returns the names of instances a Launch, Fork or import is still creating.
-func (m *Manager) Creating() []string { return m.names.keys() }
 
 // withLock runs fn on a fresh copy of spec's record while holding its instance lock.
 // A second caller fails fast with ErrBusy instead of queueing behind a slow operation.
@@ -133,7 +123,8 @@ func (m *Manager) ReserveNames(ctx context.Context, names []string) (context.Con
 	if reserved == nil {
 		reserved = map[string]bool{}
 	}
-	var releases []func()
+	ctx, releaseLeases := withLeases(ctx)
+	releases := []func(){releaseLeases}
 	release := func() {
 		for _, r := range releases {
 			r()
@@ -159,6 +150,9 @@ func reservedNames(ctx context.Context) map[string]bool {
 // reserveName holds name for a Launch or Fork until release, and fails if it's taken.
 // A name reserved through ctx (see ReserveNames) is the caller's already.
 func (m *Manager) reserveName(ctx context.Context, name string) (release func(), err error) {
+	if err := ValidateName(name); err != nil {
+		return nil, err
+	}
 	release = func() {}
 	if !reservedNames(ctx)[name] {
 		if release, err = m.names.acquire(name, false); err != nil {
@@ -185,4 +179,53 @@ func (m *Manager) save(spec *Spec, set func(*Spec)) error {
 		}
 		return nil
 	})
+}
+
+type leasesKey struct{}
+
+type leaseBag struct {
+	mu       sync.Mutex
+	releases []func()
+}
+
+// withLeases gives ctx a lease bag for a create, unless it already has one.
+// The returned func releases what the bag holds, once the instance is saved.
+func withLeases(ctx context.Context) (context.Context, func()) {
+	if _, ok := ctx.Value(leasesKey{}).(*leaseBag); ok {
+		return ctx, func() {}
+	}
+	bag := &leaseBag{}
+	return context.WithValue(ctx, leasesKey{}, bag), func() {
+		bag.mu.Lock()
+		defer bag.mu.Unlock()
+		for _, r := range bag.releases {
+			r()
+		}
+		bag.releases = nil
+	}
+}
+
+// KeepUntilCreated holds release until the create running in ctx (Launch, Fork or a
+// ReserveNames batch) has saved its instance. It reports false when ctx runs no create.
+func KeepUntilCreated(ctx context.Context, release func()) bool {
+	bag, ok := ctx.Value(leasesKey{}).(*leaseBag)
+	if !ok {
+		return false
+	}
+	bag.mu.Lock()
+	defer bag.mu.Unlock()
+	bag.releases = append(bag.releases, release)
+	return true
+}
+
+// validName matches the instance names anvil accepts: they end up in paths, hostnames and DNS.
+var validName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
+
+// ValidateName fails for a name that isn't 1-63 letters, digits, '.', '_' or '-',
+// starting with a letter or digit.
+func ValidateName(name string) error {
+	if !validName.MatchString(name) {
+		return fmt.Errorf("instance: invalid name %q: use 1-63 letters, digits, '.', '_' or '-', starting with a letter or digit", name)
+	}
+	return nil
 }

@@ -33,11 +33,15 @@ func newCloudInitCommand(flags *globalFlags) *cobra.Command {
 }
 
 func newCloudInitListCommand(flags *globalFlags) *cobra.Command {
-	return &cobra.Command{
+	var output string
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List saved cloud-init configs",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkOutput(output); err != nil {
+				return err
+			}
 			c, err := dial(flags)
 			if err != nil {
 				return err
@@ -48,6 +52,9 @@ func newCloudInitListCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if output == "json" {
+				return printJSON(cmd.OutOrStdout(), reply)
+			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(tw, "NAME\tMODIFIED")
 			for _, cfg := range reply.GetConfigs() {
@@ -57,6 +64,8 @@ func newCloudInitListCommand(flags *globalFlags) *cobra.Command {
 			return tw.Flush()
 		},
 	}
+	addOutputFlag(cmd, &output)
+	return cmd
 }
 
 func newCloudInitNewCommand(flags *globalFlags) *cobra.Command {

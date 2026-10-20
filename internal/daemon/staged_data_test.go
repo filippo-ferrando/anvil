@@ -1,26 +1,36 @@
 package daemon
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"google.golang.org/grpc/peer"
+
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 )
 
+// asMe is a request ctx from the test's own uid, the daemon's user here.
+func asMe() context.Context {
+	return peer.NewContext(context.Background(), &peer.Peer{Addr: callerAddr{uid: uint32(os.Getuid())}})
+}
+
 func TestAdoptOneMovesStagedData(t *testing.T) {
 	dir := t.TempDir()
-	staged := filepath.Join(dir, "anvil-migrate-data-01J-0")
-	if err := os.MkdirAll(staged, 0o750); err != nil {
-		t.Fatal(err)
+	// Only the real staging dir is accepted, so this test stages there.
+	staged, err := os.MkdirTemp("/var/tmp", "anvil-migrate-data-test-")
+	if err != nil {
+		t.Skipf("no writable /var/tmp: %v", err)
 	}
+	t.Cleanup(func() { os.RemoveAll(staged) })
 	if err := os.WriteFile(filepath.Join(staged, "a.txt"), []byte("data"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 
 	mnt := instance.Mount{HostPath: "/srv/old", GuestPath: "/data", SourceDataPath: staged}
 	dest := filepath.Join(dir, "adopted")
-	if err := adoptOne(&mnt.SourceDataPath, &mnt.HostPath, dest); err != nil {
+	if err := adoptOne(asMe(), &mnt.SourceDataPath, &mnt.HostPath, dest); err != nil {
 		t.Fatalf("adoptOne: %v", err)
 	}
 	if mnt.HostPath != dest {
@@ -45,7 +55,7 @@ func TestAdoptStagedDataLeavesOrdinaryLaunchesAlone(t *testing.T) {
 		VM:        &instance.VMSpec{Mounts: []instance.Mount{{HostPath: "/srv/data", GuestPath: "/data"}}},
 		Container: &instance.ContainerSpec{Volumes: []instance.VolumeMount{{HostPath: "/srv/db", ContainerPath: "/db"}}},
 	}
-	if err := adoptStagedData(&params); err != nil {
+	if _, err := adoptStagedData(asMe(), &params); err != nil {
 		t.Fatalf("adoptStagedData: %v", err)
 	}
 	if params.VM.Mounts[0].HostPath != "/srv/data" || params.Container.Volumes[0].HostPath != "/srv/db" {
@@ -62,10 +72,25 @@ func TestAdoptOneRejectsArbitraryPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	mnt := instance.Mount{GuestPath: "/data", SourceDataPath: victim}
-	if err := adoptOne(&mnt.SourceDataPath, &mnt.HostPath, filepath.Join(dir, "dest")); err == nil {
+	if err := adoptOne(asMe(), &mnt.SourceDataPath, &mnt.HostPath, filepath.Join(dir, "dest")); err == nil {
 		t.Fatal("expected a path outside a staged upload to be rejected")
 	}
 	if _, err := os.Stat(victim); err != nil {
 		t.Errorf("the rejected path should be untouched: %v", err)
+	}
+}
+
+// TestAdoptOneRejectsSymlink makes sure a staged name pointing at the daemon's own
+// files isn't followed.
+func TestAdoptOneRejectsSymlink(t *testing.T) {
+	target := t.TempDir()
+	link := filepath.Join("/var/tmp", "anvil-migrate-data-test-link-"+filepath.Base(target))
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("no writable /var/tmp: %v", err)
+	}
+	t.Cleanup(func() { os.Remove(link) })
+	mnt := instance.Mount{GuestPath: "/data", SourceDataPath: link}
+	if err := adoptOne(asMe(), &mnt.SourceDataPath, &mnt.HostPath, filepath.Join(t.TempDir(), "dest")); err == nil {
+		t.Fatal("expected a symlinked staging path to be rejected")
 	}
 }

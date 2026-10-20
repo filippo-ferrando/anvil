@@ -55,11 +55,20 @@ func (s *Server) Launch(req *anvilv1.LaunchRequest, stream anvilv1.InstanceServi
 		return err
 	}
 	ctx := stream.Context()
+	if params.Name == "" && params.IntentName != "" && params.Role != "" {
+		params.Name = intent.MemberName(params.IntentName, params.Role)
+	}
+	// Checked before anything is named after it on disk.
+	if err := instance.ValidateName(params.Name); err != nil {
+		sendLaunchEvent(stream, instance.LaunchEvent{Err: err})
+		return err
+	}
 	if err := checkCallerOwns(ctx, sharedPaths(params)...); err != nil {
 		sendLaunchEvent(stream, instance.LaunchEvent{Err: err})
 		return err
 	}
-	if err := adoptStagedData(&params); err != nil {
+	undoAdopt, err := adoptStagedData(ctx, &params)
+	if err != nil {
 		sendLaunchEvent(stream, instance.LaunchEvent{Err: err})
 		return err
 	}
@@ -80,6 +89,9 @@ func (s *Server) Launch(req *anvilv1.LaunchRequest, stream anvilv1.InstanceServi
 		err = s.Intents.Launch(ctx, params, send)
 	} else {
 		err = s.Manager.Launch(ctx, params, send)
+	}
+	if err != nil {
+		undoAdopt()
 	}
 	if err != nil || !wait || launched == nil {
 		return err
@@ -202,8 +214,6 @@ func (s *Server) Delete(ctx context.Context, req *anvilv1.DeleteRequest) (*anvil
 
 // pruneBaseImage removes path from the base image cache when no VM's disk sits on it.
 // A base outside the cache (one that came with a migrated disk) left with the instance dir.
-// ponytail: no lock against a launch making an overlay on path right now; add one in
-// image.Vault if a purge racing a launch of the same image ever shows up.
 func (s *Server) pruneBaseImage(path string) error {
 	cached, err := s.Vault.List()
 	if err != nil {
@@ -213,15 +223,21 @@ func (s *Server) pruneBaseImage(path string) error {
 		if !samePath(img.Path, path) {
 			continue
 		}
-		specs, err := s.Manager.List(instance.KindVM)
-		if err != nil {
-			return err
-		}
-		if users := usersOf(img.Path, specs, s.Vault); len(users) > 0 {
-			log.Printf("daemon: keeping base image %s, still used by %s", img.ID, strings.Join(users, ", "))
+		err := s.Vault.DeleteUnused(img.Path, func() error {
+			specs, err := s.Manager.List(instance.KindVM)
+			if err != nil {
+				return err
+			}
+			if users := usersOf(img.Path, specs, s.Vault); len(users) > 0 {
+				return fmt.Errorf("%w: still used by %s", image.ErrInUse, strings.Join(users, ", "))
+			}
+			return nil
+		})
+		if errors.Is(err, image.ErrInUse) {
+			log.Printf("daemon: keeping base image %s: %v", img.ID, err)
 			return nil
 		}
-		return s.Vault.Delete(img.Path)
+		return err
 	}
 	return nil
 }

@@ -8,10 +8,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"syscall"
 	"testing"
+	"time"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/firecracker"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/qemu"
 )
 
 // recordingNetworker records Detach calls and attaches nothing.
@@ -93,6 +96,94 @@ func TestFCDeleteRemovesLeftoverJail(t *testing.T) {
 		}
 	}
 	if !slices.Contains(net.detached, "D1") {
+		t.Errorf("tap not detached: %v", net.detached)
+	}
+}
+
+// qemuLeftoverBackend is a QEMU Backend with no QEMU and a bridged spec for id.
+func qemuLeftoverBackend(t *testing.T, id string) (*Backend, *recordingNetworker, *instance.Spec) {
+	t.Helper()
+	root := t.TempDir()
+	orig := instanceDir
+	instanceDir = func(id string) string { return filepath.Join(root, id) }
+	t.Cleanup(func() { instanceDir = orig })
+	net := &recordingNetworker{}
+	b := &Backend{
+		Networker: net, running: map[string]*qemu.Process{}, starting: map[string]struct{}{},
+		stopping: map[string]struct{}{}, virtiofs: map[string]map[string]*qemu.Virtiofsd{},
+	}
+	spec := &instance.Spec{ID: id, Name: id, VM: &instance.VMSpec{NetworkMode: "bridge", DiskPath: filepath.Join(root, id, "disk.qcow2")}}
+	return b, net, spec
+}
+
+// TestQEMUReconcileRemovesLeftoverTap covers a QEMU that died while anvild was down:
+// its persistent tap would make the next Start fail.
+func TestQEMUReconcileRemovesLeftoverTap(t *testing.T) {
+	dead := exec.Command("true")
+	if err := dead.Run(); err != nil {
+		t.Fatal(err)
+	}
+	b, net, spec := qemuLeftoverBackend(t, "Q1")
+	if err := os.MkdirAll(instanceDir("Q1"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveRuntimeState(instanceDir("Q1"), runtimeState{Pid: dead.Process.Pid}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := b.Reconcile(context.Background(), spec)
+	if err != nil || state != instance.StateStopped {
+		t.Fatalf("Reconcile = %s, %v; want stopped", state, err)
+	}
+	if _, found, _ := loadRuntimeState(instanceDir("Q1")); found {
+		t.Error("runtime state kept")
+	}
+	if !slices.Contains(net.detached, "Q1") {
+		t.Errorf("tap not detached: %v", net.detached)
+	}
+}
+
+func TestQEMUDeleteRemovesLeftoverTap(t *testing.T) {
+	b, net, spec := qemuLeftoverBackend(t, "Q2")
+	if err := b.Delete(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(net.detached, "Q2") {
+		t.Errorf("tap not detached: %v", net.detached)
+	}
+}
+
+// TestQEMUReconcileKillsAnUncontrollableQEMU covers a live QEMU whose QMP is gone:
+// left running untracked, a later Start would open its disk in a second QEMU.
+func TestQEMUReconcileKillsAnUncontrollableQEMU(t *testing.T) {
+	b, net, spec := qemuLeftoverBackend(t, "Q3")
+	if err := os.MkdirAll(instanceDir("Q3"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// Looks like qemu-system for the disk; the trailing ":" keeps sh from exec'ing sleep.
+	fake := exec.Command("sh", "-c", "sleep 60; :", "qemu-system-x86_64", spec.VM.DiskPath)
+	fake.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := fake.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan struct{})
+	go func() { _ = fake.Wait(); close(exited) }()
+	t.Cleanup(func() { _ = syscall.Kill(-fake.Process.Pid, syscall.SIGKILL) })
+
+	rt := runtimeState{Pid: fake.Process.Pid, QMPSocket: filepath.Join(instanceDir("Q3"), "qmp.sock")}
+	if err := saveRuntimeState(instanceDir("Q3"), rt); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if state, err := b.Reconcile(ctx, spec); err == nil || state != instance.StateError {
+		t.Fatalf("Reconcile = %s, %v; want an error state", state, err)
+	}
+	select {
+	case <-exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the uncontrollable QEMU was left running")
+	}
+	if !slices.Contains(net.detached, "Q3") {
 		t.Errorf("tap not detached: %v", net.detached)
 	}
 }

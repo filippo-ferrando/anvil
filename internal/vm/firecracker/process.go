@@ -208,7 +208,18 @@ func containsArg(args []string, want string) bool {
 }
 
 func processAlive(pid int) bool {
-	return syscall.Kill(pid, 0) == nil
+	return syscall.Kill(pid, 0) == nil && !isZombie(pid)
+}
+
+// isZombie reports whether pid has exited and only waits for its parent to reap it.
+func isZombie(pid int) bool {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return false
+	}
+	// The state follows the command name, which is in parentheses and may hold spaces.
+	i := bytes.LastIndexByte(data, ')')
+	return i >= 0 && i+2 < len(data) && data[i+2] == 'Z'
 }
 
 func (p *Process) pollLiveness() {

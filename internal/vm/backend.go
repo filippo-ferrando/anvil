@@ -170,7 +170,7 @@ func (b *Backend) adoptMigratedDisk(ctx context.Context, spec *instance.Spec, di
 	// Check the base before touching the disk, so a mismatch leaves it where it was.
 	var basePath string
 	if v.SourceDiskBaseSHA256 != "" {
-		local, err := b.matchingLocalBase(v)
+		local, err := b.matchingLocalBase(ctx, v)
 		switch {
 		case err == nil:
 			// A base image that travelled for nothing, because this host cached
@@ -184,7 +184,7 @@ func (b *Backend) adoptMigratedDisk(ctx context.Context, spec *instance.Spec, di
 			if progress != nil {
 				progress("adopting the base image that came with the disk")
 			}
-			if local, err = b.adoptSentBase(v, dir); err != nil {
+			if local, err = b.adoptSentBase(ctx, v, dir); err != nil {
 				return err
 			}
 		}
@@ -215,7 +215,7 @@ func (b *Backend) adoptMigratedDisk(ctx context.Context, spec *instance.Spec, di
 
 // matchingLocalBase returns this host's cached copy of v's base image, after
 // checking it is byte-identical to the one the migrated delta was made against.
-func (b *Backend) matchingLocalBase(v *instance.VMSpec) (string, error) {
+func (b *Backend) matchingLocalBase(ctx context.Context, v *instance.VMSpec) (string, error) {
 	catalog, err := b.EffectiveCatalog()
 	if err != nil {
 		return "", err
@@ -228,6 +228,7 @@ func (b *Backend) matchingLocalBase(v *instance.VMSpec) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("vm: migrated disk needs base image %s (%s), which isn't cached here", entry.ID, entry.Arch)
 	}
+	b.Vault.Use(ctx, basePath)
 	sum, err := image.FileChecksum(basePath)
 	if err != nil {
 		return "", fmt.Errorf("vm: hashing base image %s: %w", basePath, err)
@@ -241,7 +242,7 @@ func (b *Backend) matchingLocalBase(v *instance.VMSpec) (string, error) {
 // adoptSentBase installs a base image that travelled with a migrated disk. It goes
 // into the image cache when nothing is cached under that name yet, so later
 // migrations only need the delta, and next to the disk otherwise.
-func (b *Backend) adoptSentBase(v *instance.VMSpec, dir string) (string, error) {
+func (b *Backend) adoptSentBase(ctx context.Context, v *instance.VMSpec, dir string) (string, error) {
 	sum, err := image.FileChecksum(v.SourceBaseImagePath)
 	if err != nil {
 		return "", fmt.Errorf("vm: hashing the base image that came with the disk: %w", err)
@@ -256,6 +257,7 @@ func (b *Backend) adoptSentBase(v *instance.VMSpec, dir string) (string, error) 
 			// Never overwrite a cached image: other instances' disks back onto it.
 			if path, cached := b.Vault.CachedPath(entry); !cached {
 				dest = path
+				b.Vault.Use(ctx, dest)
 			}
 		}
 	}
@@ -726,6 +728,8 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 	if v.NetworkMode == "bridge" {
 		// Attach to the intent's shared network via the backend's Networker
 		// (Linux tap+bridge by default; see Networker's doc for why it's swappable).
+		// A tap left by a QEMU that died while anvild was down would make Attach fail.
+		_ = b.Networker.Detach(spec.ID)
 		deviceName, err := b.Networker.Attach(spec.ID, v.BridgeInterface)
 		if err != nil {
 			return fmt.Errorf("vm: attaching to bridge %s: %w", v.BridgeInterface, err)
@@ -800,7 +804,7 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 const minACPITimeout = 5 * time.Second
 
 func (b *Backend) Stop(ctx context.Context, spec *instance.Spec, force bool, timeout time.Duration) error {
-	dir := config.InstanceDir(spec.ID)
+	dir := instanceDir(spec.ID)
 
 	b.mu.Lock()
 	proc, ok := b.running[spec.ID]
@@ -856,7 +860,7 @@ func (b *Backend) Reconcile(ctx context.Context, spec *instance.Spec) (instance.
 	if spec.VM == nil {
 		return instance.StateStopped, nil
 	}
-	dir := config.InstanceDir(spec.ID)
+	dir := instanceDir(spec.ID)
 
 	rt, found, err := loadRuntimeState(dir)
 	if err != nil {
@@ -869,7 +873,7 @@ func (b *Backend) Reconcile(ctx context.Context, spec *instance.Spec) (instance.
 
 	proc, err := qemu.Attach(qemu.Config{QMPSocket: rt.QMPSocket}, rt.Pid, spec.VM.DiskPath)
 	if err != nil {
-		removeRuntimeState(dir)
+		b.removeLeftovers(spec)
 		return instance.StateStopped, nil
 	}
 
@@ -878,24 +882,37 @@ func (b *Backend) Reconcile(ctx context.Context, spec *instance.Spec) (instance.
 	b.mu.Unlock()
 
 	if err := proc.AttachQMP(ctx); err != nil {
-		// The process is alive but uncontrollable over QMP. Drop it again, or
-		// Status would report it as starting forever and nothing would watch it.
+		// Left running untracked, a later Start would open the same disk in a second QEMU.
 		b.mu.Lock()
 		delete(b.running, spec.ID)
 		b.mu.Unlock()
+		_ = proc.Stop(ctx, 0)
 		_ = proc.Close()
-		return instance.StateError, fmt.Errorf("vm: reconciled pid %d is alive but QMP is unreachable at %s: %w", rt.Pid, rt.QMPSocket, err)
+		b.removeLeftovers(spec)
+		return instance.StateError, fmt.Errorf("vm: reconciled pid %d was alive but QMP was unreachable at %s, killed it: %w", rt.Pid, rt.QMPSocket, err)
 	}
 	b.watchGuest(spec, proc.Exited())
 	go b.watchExit(spec.ID, spec.VM.NetworkMode, proc)
 	return instance.StateRunning, nil
 }
 
+// removeLeftovers clears what a QEMU that's gone untracked can leave: its tap
+// (persistent, so it outlives QEMU) and runtime state.
+func (b *Backend) removeLeftovers(spec *instance.Spec) {
+	if spec.VM != nil && spec.VM.NetworkMode == "bridge" {
+		if err := b.Networker.Detach(spec.ID); err != nil {
+			log.Printf("vm: removing %s's tap: %v", spec.ID, err)
+		}
+	}
+	removeRuntimeState(instanceDir(spec.ID))
+}
+
 func (b *Backend) Delete(ctx context.Context, spec *instance.Spec) error {
 	// Best-effort stop first.
 	_ = b.Stop(ctx, spec, true, 0)
+	b.removeLeftovers(spec)
 
-	dir := config.InstanceDir(spec.ID)
+	dir := instanceDir(spec.ID)
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("vm: removing instance dir: %w", err)
 	}

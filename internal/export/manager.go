@@ -13,6 +13,7 @@ import (
 	"git.fferrando.cc/rdfilippo/anvil/internal/config"
 	"git.fferrando.cc/rdfilippo/anvil/internal/hostpath"
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/intent"
 	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 )
 
@@ -104,10 +105,7 @@ func (m *Manager) Export(ctx context.Context, p ExportParams, progress func(stat
 		wasRunning[spec.Name] = members[i].State == instance.StateRunning
 	}
 
-	progress(fmt.Sprintf("stopping %d instance(s)", len(names)))
-	if err := m.Instances.Stop(ctx, names, false, 30*time.Second); err != nil {
-		return fmt.Errorf("export: stopping source instance(s): %w", err)
-	}
+	// Registered before the stop, so members that did stop come back when another one fails.
 	defer func() {
 		var restart []string
 		for _, name := range names {
@@ -127,6 +125,10 @@ func (m *Manager) Export(ctx context.Context, p ExportParams, progress func(stat
 			progress(fmt.Sprintf("warning: some instances failed to resume after export: %v", err))
 		}
 	}()
+	progress(fmt.Sprintf("stopping %d instance(s)", len(names)))
+	if err := m.Instances.Stop(ctx, names, false, 30*time.Second); err != nil {
+		return fmt.Errorf("export: stopping source instance(s): %w", err)
+	}
 
 	// One entry per file or directory copied into the bundle.
 	type source struct{ archivePath, localPath string }
@@ -383,8 +385,8 @@ func (m *Manager) Import(ctx context.Context, p ImportParams, progress func(stat
 		switch {
 		case manifest.IntentName == "" && p.Name != "":
 			return p.Name
-		case intentName != manifest.IntentName && mem.Name == manifest.IntentName+"-"+mem.Role:
-			return intentName + "-" + mem.Role
+		case intentName != manifest.IntentName && mem.Name == intent.MemberName(manifest.IntentName, mem.Role):
+			return intent.MemberName(intentName, mem.Role)
 		}
 		return mem.Name
 	}
@@ -413,7 +415,15 @@ func (m *Manager) Import(ctx context.Context, p ImportParams, progress func(stat
 			params.PinnedStaticIP = mem.StaticIP
 		}
 
-		if err := m.fillLaunchParams(ctx, &params, mem, destName, stagingDir, progress); err != nil {
+		// A member that fails to launch takes its restored folders with it; the bundle still has them.
+		var adopted []string
+		removeAdopted := func() {
+			for _, dir := range adopted {
+				_ = os.RemoveAll(dir)
+			}
+		}
+		if err := m.fillLaunchParams(ctx, &params, mem, destName, stagingDir, &adopted, progress); err != nil {
+			removeAdopted()
 			return Result{}, fmt.Errorf("import: preparing %q: %w", destName, err)
 		}
 
@@ -434,9 +444,11 @@ func (m *Manager) Import(ctx context.Context, p ImportParams, progress func(stat
 				launchErr = ev.Err
 			}
 		}); err != nil {
+			removeAdopted()
 			return Result{}, fmt.Errorf("import: launching %q: %w", destName, err)
 		}
 		if launchErr != nil {
+			removeAdopted()
 			return Result{}, fmt.Errorf("import: launching %q: %w", destName, launchErr)
 		}
 		result.Members = append(result.Members, MemberResult{Role: mem.Role, NewID: launched.ID})
@@ -448,7 +460,7 @@ func (m *Manager) Import(ctx context.Context, p ImportParams, progress func(stat
 
 // fillLaunchParams resolves mem's disk/volumes out of stagingDir and fills
 // params.Kind/VM/Container accordingly.
-func (m *Manager) fillLaunchParams(ctx context.Context, params *instance.LaunchParams, mem Member, destName, stagingDir string, progress func(string)) error {
+func (m *Manager) fillLaunchParams(ctx context.Context, params *instance.LaunchParams, mem Member, destName, stagingDir string, adopted *[]string, progress func(string)) error {
 	switch mem.Kind {
 	case "vm":
 		if mem.VM == nil {
@@ -491,10 +503,11 @@ func (m *Manager) fillLaunchParams(ctx context.Context, params *instance.LaunchP
 			if err != nil {
 				return err
 			}
-			hostPath := config.MountedFolderDir(destName, i)
+			hostPath := config.FreeDir(config.MountedFolderDir(destName, i))
 			if err := hostpath.MoveDir(src, hostPath); err != nil {
 				return fmt.Errorf("restoring the folder shared at %s: %w", mnt.GuestPath, err)
 			}
+			*adopted = append(*adopted, hostPath)
 			v.Mounts = append(v.Mounts, instance.Mount{
 				HostPath: hostPath, GuestPath: mnt.GuestPath, Tag: mnt.Tag, ReadOnly: mnt.ReadOnly,
 			})
@@ -523,10 +536,11 @@ func (m *Manager) fillLaunchParams(ctx context.Context, params *instance.LaunchP
 			if err != nil {
 				return err
 			}
-			hostPath := config.ImportedVolumeDir(destName, i)
+			hostPath := config.FreeDir(config.ImportedVolumeDir(destName, i))
 			if err := hostpath.MoveDir(src, hostPath); err != nil {
 				return fmt.Errorf("restoring volume %d: %w", i, err)
 			}
+			*adopted = append(*adopted, hostPath)
 			c.Volumes = append(c.Volumes, instance.VolumeMount{HostPath: hostPath, ContainerPath: vol.ContainerPath, ReadOnly: vol.ReadOnly})
 		}
 		params.Kind = instance.KindContainer

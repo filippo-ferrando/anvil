@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -16,14 +15,6 @@ import (
 
 // shellDoneMsg reports the outcome of a suspended shell/exec session back into the update loop.
 type shellDoneMsg struct{ err error }
-
-// ttyCompatSSHArgs are extra ssh -o flags that keep local terminal quirks
-// (e.g. TERM) from leaking into the guest session.
-var ttyCompatSSHArgs = []string{
-	"-o", "SetEnv=TERM=xterm-256color",
-	"-o", "IgnoreUnknown=WarnWeakCrypto",
-	"-o", "WarnWeakCrypto=no-pq-kex",
-}
 
 // shellInto suspends the TUI and opens an interactive shell in inst: ssh for a VM,
 // where user overrides the image's default user, and docker/podman exec for a container.
@@ -67,37 +58,11 @@ func (m model) execInto(inst *anvilv1.Instance, user, command string) (tea.Model
 // buildShellCommand builds the ssh invocation for inst: an interactive
 // login when command is empty, a one-off remote command otherwise.
 func buildShellCommand(c *client.Client, inst *anvilv1.Instance, user string, command []string) (*exec.Cmd, error) {
-	vm := inst.GetVm()
-	if vm == nil {
-		return nil, fmt.Errorf("%q isn't a VM", inst.GetName())
-	}
-	if inst.GetState() != anvilv1.State_STATE_RUNNING {
-		return nil, fmt.Errorf("%q isn't running", inst.GetName())
-	}
-
-	if user == "" {
-		user = vm.GetDefaultUser()
-	}
-	if user == "" {
-		user = "root"
-	}
-
-	host, port := "localhost", int(vm.GetSshPort())
-	if vm.GetNetworkMode() == "bridge" {
-		ip, _, _ := strings.Cut(vm.GetStaticIp(), "/")
-		if ip == "" {
-			return nil, fmt.Errorf("%q has no known bridge address yet", inst.GetName())
-		}
-		host, port = ip, 22
-	} else if port == 0 {
-		return nil, fmt.Errorf("%q has no known SSH port yet", inst.GetName())
-	}
-
-	identity, err := sshkey.EnsureDefault()
+	target, err := c.SSHTarget(inst, user)
 	if err != nil {
 		return nil, err
 	}
-	knownHosts, err := knownHostsPath(inst.GetId())
+	identity, err := sshkey.EnsureDefault()
 	if err != nil {
 		return nil, err
 	}
@@ -105,17 +70,11 @@ func buildShellCommand(c *client.Client, inst *anvilv1.Instance, user string, co
 	if err != nil {
 		return nil, fmt.Errorf("ssh: not found on PATH")
 	}
-
-	args := []string{
-		"-p", fmt.Sprintf("%d", port),
-		"-i", identity,
-		"-o", "StrictHostKeyChecking=accept-new",
-		"-o", "LogLevel=ERROR", // hides the "Permanently added" notice of accept-new
-		"-o", "UserKnownHostsFile=" + knownHosts,
+	args, err := client.SSHArgs(target, "-p", identity)
+	if err != nil {
+		return nil, err
 	}
-	args = append(args, ttyCompatSSHArgs...)
-	args = append(args, c.JumpArgs()...)
-	args = append(args, fmt.Sprintf("%s@%s", user, host))
+	args = append(args, fmt.Sprintf("%s@%s", target.User, target.Host))
 	args = append(args, command...)
 
 	cmd := exec.Command(sshBin, args...)
@@ -147,17 +106,4 @@ func buildContainerExecCommand(c *client.Client, inst *anvilv1.Instance, command
 	cmd.Env = c.DockerEnv()
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd, nil
-}
-
-// knownHostsPath returns the known_hosts file path for instanceID.
-func knownHostsPath(instanceID string) (string, error) {
-	cacheDir, err := os.UserCacheDir()
-	if err != nil {
-		return "", fmt.Errorf("finding a cache directory: %w", err)
-	}
-	dir := filepath.Join(cacheDir, "anvil", "known_hosts")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Errorf("creating known_hosts dir: %w", err)
-	}
-	return filepath.Join(dir, instanceID), nil
 }

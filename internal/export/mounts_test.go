@@ -3,6 +3,7 @@ package export
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -23,6 +24,7 @@ type fakeInstances struct {
 	stopped  bool
 	started  bool
 	launched int
+	stopErr  error
 }
 
 func (f *fakeInstances) Info(names []string) ([]*instance.Spec, error) {
@@ -41,7 +43,7 @@ func (f *fakeInstances) Hold(ctx context.Context, _ []string) (context.Context, 
 func (f *fakeInstances) Start(context.Context, []string) error { f.started = true; return nil }
 func (f *fakeInstances) Stop(context.Context, []string, bool, time.Duration) error {
 	f.stopped = true
-	return nil
+	return f.stopErr
 }
 func (f *fakeInstances) Launch(context.Context, instance.LaunchParams, func(instance.LaunchEvent)) error {
 	f.launched++
@@ -179,5 +181,18 @@ func TestImportRefusesTakenName(t *testing.T) {
 	}
 	if instances.launched != 0 {
 		t.Error("nothing should be launched")
+	}
+}
+
+// TestExportResumesWhenStopFails makes sure members that did stop come back when another fails.
+func TestExportResumesWhenStopFails(t *testing.T) {
+	spec := &instance.Spec{ID: "01JTEST", Name: "web", Kind: instance.KindVM, State: instance.StateRunning, VM: &instance.VMSpec{}}
+	instances := &fakeInstances{spec: spec, stopErr: errors.New("stop timed out")}
+	m := NewManager(fakeStore{}, instances, nil, fakeVMImporter{})
+	if err := m.Export(context.Background(), ExportParams{Name: "web", OutputPath: filepath.Join(t.TempDir(), "b.tar.zst")}, func(string) {}); err == nil {
+		t.Fatal("expected the export to fail")
+	}
+	if !instances.started {
+		t.Error("expected the running instance to be resumed after the failed stop")
 	}
 }

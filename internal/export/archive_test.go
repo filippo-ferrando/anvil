@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // TestWriteExtractTarZstRoundTrip builds a real bundle (manifest, a file, and a directory tree)
@@ -94,5 +95,34 @@ func TestExtractAllRejectsPathTraversal(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(destDir), "evil.txt")); err == nil {
 		t.Fatal("path traversal escaped destDir")
+	}
+}
+
+// TestWriteTarZstReturnsWhenCompressorStops makes sure a cancelled export doesn't leave
+// the tar writer blocked on a pipe nobody reads.
+func TestWriteTarZstReturnsWhenCompressorStops(t *testing.T) {
+	if _, err := exec.LookPath("zstd"); err != nil {
+		t.Skip("zstd not installed, skipping")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- writeTarZst(ctx, filepath.Join(t.TempDir(), "b.tar.zst"), func(tw *tar.Writer) error {
+			data := make([]byte, 8<<20)
+			if err := tw.WriteHeader(&tar.Header{Name: "big", Mode: 0o640, Size: int64(len(data))}); err != nil {
+				return err
+			}
+			_, err := tw.Write(data)
+			return err
+		})
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("expected an error from a cancelled export")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("writeTarZst hung after the compressor stopped")
 	}
 }

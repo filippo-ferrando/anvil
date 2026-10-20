@@ -119,7 +119,7 @@ func launchFields(kind string, values map[string]string) []formField {
 		hypervisor.Suggestions = []string{"qemu", "firecracker"}
 		fields = append(fields,
 			hypervisor,
-			textField("Disk GiB", "", v("Disk GiB", "8")),
+			textField("Disk GiB", "0 = image minimum", v("Disk GiB", "0")),
 			textField(cloudInitNameField, "a saved library entry, or ctrl+e to edit ad hoc for just this launch", v(cloudInitNameField, "")),
 			toggleField(guestAgentField, "install qemu-guest-agent: guest IPs, clean shutdown, cloud-init status", true),
 			toggleField(waitField, "keep the progress view open until cloud-init finished", false),
@@ -454,7 +454,7 @@ func buildLaunchRequest(m launchModel) (*anvilv1.LaunchRequest, error) {
 	if err != nil {
 		return nil, err
 	}
-	ports, err := parsePortsField(form.Value("Ports"))
+	ports, err := client.ParsePorts(splitCommaList(form.Value("Ports")))
 	if err != nil {
 		return nil, err
 	}
@@ -471,11 +471,11 @@ func buildLaunchRequest(m launchModel) (*anvilv1.LaunchRequest, error) {
 
 	if m.kind == "container" {
 		req.Kind = anvilv1.Kind_KIND_CONTAINER
-		env, err := parseEnvField(form.Value("Env"))
+		env, err := client.ParseEnv(splitCommaList(form.Value("Env")))
 		if err != nil {
 			return nil, err
 		}
-		volumes, err := parseVolumesField(form.Value("Volumes"))
+		volumes, err := client.ParseVolumes(splitCommaList(form.Value("Volumes")))
 		if err != nil {
 			return nil, err
 		}

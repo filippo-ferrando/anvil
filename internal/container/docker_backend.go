@@ -4,6 +4,7 @@ package container
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/container/docker"
@@ -138,10 +139,10 @@ func (b *DockerBackend) AddPort(ctx context.Context, spec *instance.Spec, port i
 			return fmt.Errorf("docker: %s already publishes host port %d/%s", spec.Name, port.HostPort, proto)
 		}
 	}
-	spec.Container.Ports = append(spec.Container.Ports, instance.PortMapping{
+	ports := append(slices.Clone(spec.Container.Ports), instance.PortMapping{
 		HostPort: port.HostPort, GuestPort: port.GuestPort, Protocol: proto,
 	})
-	return b.recreate(ctx, spec)
+	return b.recreate(ctx, spec, ports)
 }
 
 // RemovePort removes a published port previously added with AddPort or at
@@ -162,13 +163,12 @@ func (b *DockerBackend) RemovePort(ctx context.Context, spec *instance.Spec, hos
 		return fmt.Errorf("docker: %s has no published port for host port %d/%s (currently exposed: %s)",
 			spec.Name, hostPort, proto, instance.FormatPorts(spec.Container.Ports))
 	}
-	spec.Container.Ports = append(spec.Container.Ports[:idx], spec.Container.Ports[idx+1:]...)
-	return b.recreate(ctx, spec)
+	return b.recreate(ctx, spec, slices.Delete(slices.Clone(spec.Container.Ports), idx, idx+1))
 }
 
-// recreate destroys and rebuilds spec's underlying container from its current fields, restarting it if it was running.
-// Used when a setting fixed at docker-create time (like published ports) changes on an existing container.
-func (b *DockerBackend) recreate(ctx context.Context, spec *instance.Spec) error {
+// recreate rebuilds spec's container with ports, restarting it if it was running. On failure it
+// rebuilds the old config; spec.Container.ContainerID always names the container that exists.
+func (b *DockerBackend) recreate(ctx context.Context, spec *instance.Spec, ports []instance.PortMapping) error {
 	state, err := b.Status(ctx, spec)
 	if err != nil {
 		return fmt.Errorf("docker: checking %s's state before recreating it: %w", spec.Name, err)
@@ -183,11 +183,28 @@ func (b *DockerBackend) recreate(ctx context.Context, spec *instance.Spec) error
 	if err := b.Delete(ctx, spec); err != nil {
 		return fmt.Errorf("docker: removing %s's old container: %w", spec.Name, err)
 	}
+	spec.Container.ContainerID = ""
+	old := spec.Container.Ports
+	spec.Container.Ports = ports
+	err = b.rebuild(ctx, spec, wasRunning)
+	if err != nil {
+		spec.Container.Ports = old
+		if rerr := b.rebuild(ctx, spec, wasRunning); rerr != nil {
+			return fmt.Errorf("%w (restoring the old container also failed: %v)", err, rerr)
+		}
+	}
+	return err
+}
+
+// rebuild creates spec's container and starts it if start is set. On failure no container is left.
+func (b *DockerBackend) rebuild(ctx context.Context, spec *instance.Spec, start bool) error {
 	if err := b.Create(ctx, spec, nil); err != nil {
 		return fmt.Errorf("docker: recreating %s: %w", spec.Name, err)
 	}
-	if wasRunning {
+	if start {
 		if err := b.Start(ctx, spec); err != nil {
+			_ = b.Client.RemoveContainer(ctx, spec.Container.ContainerID, true)
+			spec.Container.ContainerID = ""
 			return fmt.Errorf("docker: restarting %s after recreating it: %w", spec.Name, err)
 		}
 	}
@@ -237,6 +254,7 @@ func (b *DockerBackend) Stop(ctx context.Context, spec *instance.Spec, force boo
 	}
 	b.expectExit(spec.Container.ContainerID)
 	if err := b.Client.StopContainer(ctx, spec.Container.ContainerID, timeoutSeconds); err != nil {
+		b.clearExpectedExit(spec.Container.ContainerID) // a stale mark would hide a later crash
 		return fmt.Errorf("docker: stopping %s: %w", spec.Name, err)
 	}
 	return nil
@@ -252,6 +270,7 @@ func (b *DockerBackend) Delete(ctx context.Context, spec *instance.Spec) error {
 	}
 	b.expectExit(spec.Container.ContainerID)
 	if err := b.Client.RemoveContainer(ctx, spec.Container.ContainerID, true); err != nil {
+		b.clearExpectedExit(spec.Container.ContainerID)
 		return fmt.Errorf("docker: removing %s: %w", spec.Name, err)
 	}
 	if spec.GUI {

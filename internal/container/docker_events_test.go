@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -20,11 +21,12 @@ type fakeDocker struct {
 	events chan map[string]any
 	mu     sync.Mutex
 	states map[string]map[string]any // container ID -> inspect State
+	since  chan string               // the since query of each /events request
 }
 
 func startFakeDocker(t *testing.T) (*fakeDocker, *docker.Client) {
 	t.Helper()
-	fd := &fakeDocker{events: make(chan map[string]any, 8), states: map[string]map[string]any{}}
+	fd := &fakeDocker{events: make(chan map[string]any, 8), states: map[string]map[string]any{}, since: make(chan string, 8)}
 	dir, err := os.MkdirTemp("", "anvil-docker")
 	if err != nil {
 		t.Fatal(err)
@@ -38,6 +40,7 @@ func startFakeDocker(t *testing.T) (*fakeDocker, *docker.Client) {
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/events"):
+			fd.since <- r.URL.Query().Get("since")
 			w.WriteHeader(http.StatusOK)
 			w.(http.Flusher).Flush()
 			for {
@@ -179,6 +182,15 @@ func TestExitsMissedWhileDisconnectedAreReconciled(t *testing.T) {
 		t.Errorf("got %+v, want web error", r)
 	}
 	noRecord(t, got)
+}
+
+func TestEventsReplayFromBeforeReconcile(t *testing.T) {
+	before := time.Now().Unix()
+	fd, _, _ := watchedBackend(t, nil)
+	since, err := strconv.ParseInt(<-fd.since, 10, 64)
+	if err != nil || since < before || since > time.Now().Unix() {
+		t.Errorf("since = %d (%v), want between %d and now", since, err, before)
+	}
 }
 
 func TestExitState(t *testing.T) {

@@ -122,8 +122,13 @@ manager. They hold no state of their own.
 | Backend | Package | Talks to |
 |---|---|---|
 | QEMU VMs (Linux) | `internal/vm`, `internal/vm/qemu` | `qemu-system-*` processes over QMP and the QEMU guest agent, `qemu-img`, `virtiofsd`, Linux bridges and tap devices |
+| Firecracker VMs (Linux) | `internal/vm` (`fc_*.go`), `internal/vm/firecracker` | `firecracker` (under `jailer` when installed) over its REST API, the guest agent over vsock, raw disks, taps on the intent bridge or `anvil-fc0` |
 | Apple Virtualization.framework VMs (darwin) | `internal/vm/vz` | in progress, every method currently returns a "not implemented yet" error |
 | Docker containers | `internal/container`, `internal/container/docker` | the Docker Engine HTTP API (`v1.41`) on `/var/run/docker.sock` |
+
+Both Linux VM backends sit behind `vm.Hypervisors` (`internal/vm/hypervisors.go`), the one
+`KindVM` backend the manager sees. It picks QEMU or Firecracker per instance from
+`VMSpec.Hypervisor`.
 
 `internal/container/backend.go` is a small dispatcher that picks an engine per instance
 from `ContainerSpec.Engine`. Docker is the default. Podman is a recognised value, but

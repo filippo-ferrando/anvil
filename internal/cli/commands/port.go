@@ -2,12 +2,11 @@ package commands
 
 import (
 	"fmt"
-	"strconv"
-	"strings"
 
 	"github.com/spf13/cobra"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newPortCommand(flags *globalFlags) *cobra.Command {
@@ -31,7 +30,7 @@ func newPortAddCommand(flags *globalFlags) *cobra.Command {
 			"address and don't use host-forwarded ports at all.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			port, err := parsePortMapping(args[1])
+			port, err := client.ParsePortMapping(args[1])
 			if err != nil {
 				return err
 			}
@@ -52,7 +51,7 @@ func newPortRemoveCommand(flags *globalFlags) *cobra.Command {
 		Short: "Remove a host-to-guest port forward added with `anvil port add`",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			hostPort, protocol, err := parseHostPort(args[1])
+			hostPort, protocol, err := client.ParseHostPort(args[1])
 			if err != nil {
 				return err
 			}
@@ -70,11 +69,15 @@ func newPortRemoveCommand(flags *globalFlags) *cobra.Command {
 }
 
 func newPortListCommand(flags *globalFlags) *cobra.Command {
-	return &cobra.Command{
+	var output string
+	cmd := &cobra.Command{
 		Use:   "list <name>",
 		Short: "List an instance's host-to-guest port forwards",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkOutput(output); err != nil {
+				return err
+			}
 			c, err := dial(flags)
 			if err != nil {
 				return err
@@ -95,6 +98,10 @@ func newPortListCommand(flags *globalFlags) *cobra.Command {
 			if inst.GetKind() == anvilv1.Kind_KIND_CONTAINER {
 				ports = inst.GetContainer().GetPorts()
 			}
+			if output == "json" {
+				// No list reply exists for ports, so print the instance's own reply.
+				return printJSON(cmd.OutOrStdout(), reply)
+			}
 			if len(ports) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "no port forwards")
 				return nil
@@ -109,52 +116,6 @@ func newPortListCommand(flags *globalFlags) *cobra.Command {
 			return nil
 		},
 	}
-}
-
-// parsePortMapping parses "<host>:<guest>[/tcp|udp]".
-func parsePortMapping(s string) (*anvilv1.PortMapping, error) {
-	spec, protocol, err := splitProtocol(s)
-	if err != nil {
-		return nil, err
-	}
-	hostStr, guestStr, ok := strings.Cut(spec, ":")
-	if !ok {
-		return nil, fmt.Errorf(`port must be "<host>:<guest>[/tcp|udp]", got %q`, s)
-	}
-	hostPort, err := strconv.Atoi(hostStr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid host port %q: %w", hostStr, err)
-	}
-	guestPort, err := strconv.Atoi(guestStr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid guest port %q: %w", guestStr, err)
-	}
-	return &anvilv1.PortMapping{HostPort: int32(hostPort), GuestPort: int32(guestPort), Protocol: protocol}, nil
-}
-
-// parseHostPort parses "<host>[/tcp|udp]".
-func parseHostPort(s string) (hostPort int, protocol string, err error) {
-	spec, protocol, err := splitProtocol(s)
-	if err != nil {
-		return 0, "", err
-	}
-	hostPort, err = strconv.Atoi(spec)
-	if err != nil {
-		return 0, "", fmt.Errorf("invalid host port %q: %w", spec, err)
-	}
-	return hostPort, protocol, nil
-}
-
-// splitProtocol splits "<rest>[/tcp|udp]", validating an explicit protocol
-// and defaulting to "" (which every consumer already treats as "tcp").
-func splitProtocol(s string) (rest, protocol string, err error) {
-	rest, protocol, ok := strings.Cut(s, "/")
-	if !ok {
-		return s, "", nil
-	}
-	protocol = strings.ToLower(protocol)
-	if protocol != "tcp" && protocol != "udp" {
-		return "", "", fmt.Errorf(`protocol must be "tcp" or "udp", got %q`, protocol)
-	}
-	return rest, protocol, nil
+	addOutputFlag(cmd, &output)
+	return cmd
 }

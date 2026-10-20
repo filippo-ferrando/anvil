@@ -374,14 +374,15 @@ The paths come from `internal/config` (`paths.go` plus `paths_linux.go`):
 | Path | Content |
 |------|---------|
 | `/run/anvil/anvild.sock` | gRPC socket, mode 0660 for the `anvil` group. |
-| `/var/lib/anvil/anvil.db` | bbolt registry: instances, intents, images, mirrors, hosts, cloud-init library. |
+| `/var/lib/anvil/anvil.db` | bbolt registry: instances, intents, mirrors, hosts, cloud-init library, events. |
 | `/var/lib/anvil/instances/<id>/` | One VM's files, see below. |
+| `/var/lib/anvil/jailer/` | Per-VM chroots of jailed Firecracker VMs. |
 | `/var/lib/anvil/vm-mounts/<name>/<n>/` | A VM shared folder restored by a migration or import. |
 | `/var/lib/anvil/container-volumes/<name>/<n>/` | A container volume restored by an import. |
 | `/var/lib/anvil/.ssh/id_ed25519` | Key for outbound migration SSH. |
 | `/var/lib/anvil/migrate-known-hosts` | known_hosts for migration targets. |
-| `/var/lib/anvil/cloud-init/` | Created at startup, but the library itself is stored in `anvil.db`. |
 | `/var/cache/anvil/images/prepared/` | Downloaded, checksum-verified base images. |
+| `/var/cache/anvil/images/firecracker/` | Firecracker guest kernels and raw copies of the prepared images. |
 | `/var/cache/anvil/migrate-staging/`, `export-staging/` | Temporary data for migration and import. |
 
 Inside a VM's instance directory:
@@ -396,6 +397,17 @@ Inside a VM's instance directory:
 | `console.log` | Serial console, append-only; what `anvil logs` streams for a VM. |
 | `qemu.log` | QEMU's own stdout and stderr. |
 | `fs-<tag>.sock`, `virtiofsd-<tag>.log` | One per shared folder. |
+
+A Firecracker VM's directory differs (`internal/vm/fc_*.go`):
+
+- the disk is `disk.raw`, a full raw copy (reflinked when the filesystem allows) of the
+  cached raw base image, not a QCOW2 overlay;
+- `firecracker.sock`, `firecracker.json` and `vsock.sock` (the guest agent over vsock)
+  replace the QMP and guest agent sockets; `firecracker.log` replaces `qemu.log`;
+- snapshots are files under `snapshots/<name>.raw`;
+- under the jailer, the sockets and config live in the VM's chroot
+  (`/var/lib/anvil/jailer/<firecracker binary name>/<id>/root/`) and the disk is hard-linked there;
+  `console.log` and `firecracker.log` stay in the instance directory.
 
 A container keeps no files of its own here: its state is the Docker container
 `anvil-<name>` plus the registry record.

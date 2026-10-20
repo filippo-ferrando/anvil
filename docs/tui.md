@@ -36,8 +36,8 @@ path must then be absolute on the remote host.
 ```
 
 - **Header**: local `user@hostname`, the socket (or `host:socket` with `--remote`), the
-  daemon state (`connecting…`, `daemon connected`, `daemon unreachable`, taken from the
-  last instance list request), the running/total instance count and a clock.
+  daemon state (`connecting…`, `daemon connected` with the daemon's version,
+  `daemon unreachable`, taken from the last instance list request), the running/total instance count and a clock.
 - **Sidebar**: the eight screens of `screenOrder` in `internal/tui/app.go`. The entry with
   the arrow is the active screen; it is highlighted when the sidebar itself has focus.
 - **Status line**: the result of the last action. A success stays 4 s, an error 10 s; known
@@ -158,8 +158,8 @@ fields depend on it:
   images, or from local container images), CPUs, Memory MiB.
 - VM: Hypervisor (`qemu`, the default, or `firecracker`; with `firecracker` the Image
   suggestions only list images it can boot, see [firecracker.md](firecracker.md)),
-  Disk GiB (default 8), Cloud-init name (suggestions from the library), Guest agent
-  toggle (on by default), Wait toggle.
+  Disk GiB (default 0, the image minimum, as in the CLI), Cloud-init name (suggestions
+  from the library), Guest agent toggle (on by default), Wait toggle.
 - Container: Env (`K=V,K2=V2`), Volumes (`host:guest[:ro],...`).
 - Both, at the end: Autostart toggle, Restart policy (suggestions `no`, `on-failure`,
   `on-failure:5`, `always`), Intent name, Role, Ports (`host:guest[/tcp|udp],...`).
@@ -239,6 +239,7 @@ The list of intents, each with its member count and subnet.
 |-----|--------|
 | `i` `enter` | Show the members (role, kind, IP, DNS name) and the intent's DNS zone and server. Any key goes back. |
 | `x` | Remove the intent: `y`/`enter` ungroups only, `p` ungroups and also deletes every member instance, any other key cancels. |
+| `U` | Remove one member from the intent (role or instance ID; `tab` suggests the roles). The instance is kept as a standalone one. |
 | `E` | Export the intent to a bundle. |
 | `I` | Import a bundle (optional rename of the intent). |
 | `A` | Apply a manifest: path, Prune toggle, Recreate VMs toggle. A dry run shows the plan first; `enter` or `y` applies it, `esc`, `q` or `n` cancels. See [apply.md](apply.md). |
@@ -293,6 +294,7 @@ host alias or `user@host[:port]`, and the Copy, Best-effort and Dry run toggles)
 | `enter` | On a discovered host: open the add form, pre-filled with its name and `root@<address>`. |
 | `x` | Remove the selected saved host, after a confirmation. |
 | `t` | Test the connection to the selected saved host. |
+| `K` | Show anvild's migration public key (`anvil migrate-key`), to add to `authorized_keys` on a target host. Any key goes back. |
 | `r` | Reload the saved hosts. |
 | `esc` `q` | Leave the discovery results; from the saved hosts, back to the sidebar. |
 

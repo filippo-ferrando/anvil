@@ -10,14 +10,17 @@ import (
 )
 
 func newExportCommand(flags *globalFlags) *cobra.Command {
-	var output string
+	var (
+		output   string
+		isIntent bool
+	)
 	cmd := &cobra.Command{
 		Use:   "export <name|intent> -o <bundle.tar.zst>",
 		Short: "Package a single instance, or a whole intent, into a portable bundle",
 		Long: "Package a single instance, or a whole intent as one group, into a single " +
 			"tar.zst bundle: VM disks (as qcow2 diffs against their base image, not " +
 			"flattened), container specs, bind-mounted volume contents, and cloud-init " +
-			"configs. name is looked up as a single instance first, a whole intent second. " +
+			"configs. name is looked up as a single instance first, a whole intent second (--intent skips the instance lookup). " +
 			"Every member is stopped for a consistent snapshot, then resumed to whatever " +
 			"state it was in before. `anvil import` brings a bundle back up.",
 		Args: cobra.ExactArgs(1),
@@ -35,7 +38,7 @@ func newExportCommand(flags *globalFlags) *cobra.Command {
 				return err
 			}
 
-			stream, err := c.Export.Export(cmd.Context(), &anvilv1.ExportRequest{Name: args[0], OutputPath: absOutput})
+			stream, err := c.Export.Export(cmd.Context(), &anvilv1.ExportRequest{Name: args[0], OutputPath: absOutput, IsIntent: isIntent})
 			if err != nil {
 				return err
 			}
@@ -59,6 +62,7 @@ func newExportCommand(flags *globalFlags) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&output, "output", "o", "", "path to write the bundle to (required)")
+	cmd.Flags().BoolVar(&isIntent, "intent", false, "treat the name as an intent, even if an instance has the same name")
 	return cmd
 }
 

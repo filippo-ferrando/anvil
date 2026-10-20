@@ -12,6 +12,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -452,6 +454,10 @@ func (c *Client) CreateContainer(ctx context.Context, p CreateContainerParams) (
 		req.Env = append(req.Env, fmt.Sprintf("%s=%s", k, v))
 	}
 	for _, v := range p.Volumes {
+		// Docker splits a bind on ':', so one inside either path would change what gets mounted.
+		if strings.Contains(v.HostPath, ":") || strings.Contains(v.ContainerPath, ":") || !path.IsAbs(v.ContainerPath) {
+			return "", fmt.Errorf("docker: invalid volume %q -> %q: paths can't contain ':' and the container path must be absolute", v.HostPath, v.ContainerPath)
+		}
 		bind := v.HostPath + ":" + v.ContainerPath
 		if v.ReadOnly {
 			bind += ":ro"
@@ -768,15 +774,23 @@ type Event struct {
 }
 
 // Events streams Docker events matching filters (e.g. {"type": ["container"]}) to onEvent
-// until ctx ends or the connection breaks. It always returns a non-nil error.
-func (c *Client) Events(ctx context.Context, filters map[string][]string, onEvent func(Event)) error {
-	path := "/events"
+// until ctx ends or the connection breaks, starting from since when it is not zero.
+// It always returns a non-nil error.
+func (c *Client) Events(ctx context.Context, since time.Time, filters map[string][]string, onEvent func(Event)) error {
+	q := url.Values{}
+	if !since.IsZero() {
+		q.Set("since", strconv.FormatInt(since.Unix(), 10))
+	}
 	if len(filters) > 0 {
 		data, err := json.Marshal(filters)
 		if err != nil {
 			return fmt.Errorf("docker: encoding event filters: %w", err)
 		}
-		path += "?filters=" + url.QueryEscape(string(data))
+		q.Set("filters", string(data))
+	}
+	path := "/events"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
 	}
 	resp, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {

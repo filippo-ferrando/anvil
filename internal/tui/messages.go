@@ -767,3 +767,36 @@ func testHost(c *client.Client, alias string) tea.Cmd {
 		return hostTestedMsg{alias: alias, ok: reply.GetOk(), detail: reply.GetMessage()}
 	}
 }
+
+// migrateKeyMsg carries anvild's public key for migration, from MigrateService.Key.
+type migrateKeyMsg struct {
+	key string
+	err error
+}
+
+func loadMigrateKey(c *client.Client) tea.Cmd {
+	return func() tea.Msg {
+		reply, err := c.Migrate.Key(context.Background(), &anvilv1.MigrateKeyRequest{})
+		return migrateKeyMsg{key: reply.GetPublicKey(), err: err}
+	}
+}
+
+// versionMsg carries the daemon's version for the header, empty on an error.
+type versionMsg struct{ version string }
+
+func loadVersion(c *client.Client) tea.Cmd {
+	return func() tea.Msg {
+		reply, err := c.Version(context.Background(), &anvilv1.VersionRequest{})
+		if err != nil {
+			return versionMsg{}
+		}
+		return versionMsg{version: reply.GetVersion()}
+	}
+}
+
+func removeIntentMember(c *client.Client, name, member string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := c.Intent.Remove(context.Background(), &anvilv1.IntentRemoveRequest{Name: name, Member: member})
+		return actionDoneMsg{screen: screenIntents, verb: "member removed", err: err}
+	}
+}

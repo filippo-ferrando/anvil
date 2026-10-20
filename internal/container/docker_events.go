@@ -100,7 +100,8 @@ func (b *DockerBackend) watchEvents(ctx context.Context) {
 	for ctx.Err() == nil {
 		connected := time.Now()
 		b.reconcileExits(ctx)
-		err := b.Client.Events(ctx, map[string][]string{"type": {"container"}, "event": {"die", "start"}}, func(ev docker.Event) {
+		// since replays events from the reconcile onward, so an exit between the two is not lost.
+		err := b.Client.Events(ctx, connected, map[string][]string{"type": {"container"}, "event": {"die", "start"}}, func(ev docker.Event) {
 			switch ev.Action {
 			case "die":
 				b.handleDie(ev.Actor.ID, ev.Actor.Attributes["exitCode"])

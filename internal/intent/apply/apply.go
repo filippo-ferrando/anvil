@@ -292,7 +292,7 @@ func diff(mem Member, cur *instance.Spec) (replace []string, upd instance.Update
 		if !slices.Equal(want.Volumes, have.Volumes) {
 			replace = append(replace, "volumes changed")
 		}
-		if !slices.Equal(want.Ports, have.Ports) {
+		if !slices.EqualFunc(want.Ports, have.Ports, samePort) {
 			replace = append(replace, was("ports", instance.FormatPorts(have.Ports), instance.FormatPorts(want.Ports)))
 		}
 	}
@@ -388,4 +388,9 @@ func (a *Applier) launch(ctx context.Context, m *Manifest, role string, opts Opt
 			say("%s", ev.Status)
 		}
 	})
+}
+
+// samePort compares two mappings with "" read as tcp, as launch and `port add` may store either.
+func samePort(a, b instance.PortMapping) bool {
+	return a.HostPort == b.HostPort && a.GuestPort == b.GuestPort && instance.Protocol(a.Protocol) == instance.Protocol(b.Protocol)
 }

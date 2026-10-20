@@ -35,8 +35,8 @@ type Mounter interface {
 	Umount(ctx context.Context, spec *Spec, guestPath string) error
 }
 
-// PortForwarder is implemented by a Backend that can add or remove a
-// host-to-guest port forward without the caller needing to relaunch the instance.
+// PortForwarder is implemented by a Backend that can add or remove a host-to-guest port
+// forward without a relaunch. spec must match the live instance even when a call fails.
 type PortForwarder interface {
 	AddPort(ctx context.Context, spec *Spec, port PortMapping) error
 

@@ -2,7 +2,7 @@
 .TH "ANVILD" "8" "Oct 2026" "Anvil" "Anvil Manual"
 
 .SH NAME
-anvild \- daemon that drives QEMU VMs and Docker containers for anvil
+anvild \- daemon that drives QEMU and Firecracker VMs and Docker containers for anvil
 
 .SH SYNOPSIS
 \fBanvild\fP
@@ -13,8 +13,9 @@ instance's lifecycle, the image vault, and the on-disk registry, and exposes
 all of it over gRPC on a unix socket; the CLI and TUI are dumb clients that
 just build a request and send it over that socket.
 
-It drives QEMU processes directly over QMP for VMs (no libvirt) and talks to
-Docker's real HTTP API for containers (no SDK). It takes no command-line
+It drives QEMU processes directly over QMP for VMs (no libvirt), or
+Firecracker processes over their REST API, and talks to Docker's real HTTP
+API for containers (no SDK). It takes no command-line
 flags or subcommands and its on-disk layout is fixed. Its runtime behavior is
 controlled through the requests it receives over the socket, with a few
 exceptions read from its environment, described under ENVIRONMENT:
@@ -43,14 +44,25 @@ The gRPC unix socket the CLI and TUI connect to. Created mode 0660, group
 .PP
 \fB/var/lib/anvil/anvil.db\fP
 .RS 4
-bbolt registry: instances, intents, images, mirrors, hosts, and the saved
-cloud-init library.
+bbolt registry: instances, intents, mirrors, hosts, the saved cloud-init
+library, and instance events.
 .RE
 .PP
 \fB/var/lib/anvil/instances/\fP
 .RS 4
 Per-instance mutable state that doesn't belong in the registry: VM disks and
 runtime files.
+.RE
+.PP
+\fB/var/lib/anvil/jailer/\fP
+.RS 4
+Per-VM chroots for Firecracker VMs run under the jailer.
+.RE
+.PP
+\fB/var/lib/anvil-jailer/jailer\fP
+.RS 4
+Copy of the jailer with file capabilities, prepared by \fBanvild.service\fR and
+runnable only by the \fBanvil\fR user.
 .RE
 .PP
 \fB/var/lib/anvil/container-volumes/\fP
@@ -61,11 +73,6 @@ An imported container's restored bind-mount contents.
 \fB/var/lib/anvil/vm-mounts/\fP
 .RS 4
 An imported VM's restored shared-folder contents.
-.RE
-.PP
-\fB/var/lib/anvil/cloud-init/\fP
-.RS 4
-The saved cloud-init template library.
 .RE
 .PP
 \fB/var/lib/anvil/migrate-known-hosts\fP
@@ -85,6 +92,16 @@ target.
 \fB/var/cache/anvil/images/prepared/\fP
 .RS 4
 Downloaded and checksum-verified base VM images.
+.RE
+.PP
+\fB/var/cache/anvil/images/firecracker/\fP
+.RS 4
+Firecracker guest kernels and raw copies of the prepared images.
+.RE
+.PP
+\fB/var/cache/anvil/migrate-staging/\fP, \fB/var/cache/anvil/export-staging/\fP
+.RS 4
+Temporary data while a migration or an import is in progress.
 .RE
 .PP
 \fB/run/anvil/gui/\fIid\fB/\fP

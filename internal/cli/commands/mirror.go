@@ -85,11 +85,15 @@ func newMirrorAddCommand(flags *globalFlags) *cobra.Command {
 
 func newMirrorListCommand(flags *globalFlags) *cobra.Command {
 	var kindStr string
+	var output string
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List configured mirrors",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkOutput(output); err != nil {
+				return err
+			}
 			var kindFilter anvilv1.MirrorKind
 			if kindStr != "" {
 				var err error
@@ -108,6 +112,9 @@ func newMirrorListCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if output == "json" {
+				return printJSON(cmd.OutOrStdout(), reply)
+			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(tw, "NAME\tKIND\tSOURCE\tPRIORITY\tENABLED")
 			for _, m := range reply.GetMirrors() {
@@ -123,6 +130,7 @@ func newMirrorListCommand(flags *globalFlags) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&kindStr, "kind", "", `filter by kind: "vm" or "container" (default: both)`)
+	addOutputFlag(cmd, &output)
 	return cmd
 }
 

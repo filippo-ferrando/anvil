@@ -111,11 +111,11 @@ func runVMGUI(c *client.Client, inst *anvilv1.Instance, session *anvilv1.GUISess
 	if err != nil {
 		return err
 	}
-	target, err := resolveSSHTarget(c, inst, opts.user)
+	target, err := c.SSHTarget(inst, opts.user)
 	if err != nil {
 		return err
 	}
-	sshArgs, err := commonSSHArgs(target, "-p", key)
+	sshArgs, err := client.SSHArgs(target, "-p", key)
 	if err != nil {
 		return err
 	}

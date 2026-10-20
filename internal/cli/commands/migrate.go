@@ -1,18 +1,13 @@
 package commands
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
-	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newMigrateCommand(flags *globalFlags) *cobra.Command {
@@ -48,7 +43,11 @@ func newMigrateCommand(flags *globalFlags) *cobra.Command {
 			// Authorize the target's guest-access key on the source VM before migrating,
 			// since a migrated disk skips cloud-init on relaunch.
 			if !dryRun {
-				if err := injectGuestKeys(cmd.Context(), c, args[0], to); err != nil {
+				warnings, err := c.InjectGuestKeys(cmd.Context(), args[0], to)
+				for _, w := range warnings {
+					fmt.Fprintln(os.Stderr, "anvil: "+w)
+				}
+				if err != nil {
 					return fmt.Errorf("preparing guest SSH access on the target: %w", err)
 				}
 			}
@@ -110,93 +109,4 @@ func newMigrateCommand(flags *globalFlags) *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "check connectivity and report the plan, transfer nothing")
 	cmd.Flags().BoolVar(&bestEffort, "best-effort", false, "intent only: keep whatever members succeed instead of rolling back the whole group on any failure")
 	return cmd
-}
-
-// injectGuestKeys authorizes the target host's guest-access key in every
-// running VM about to be migrated (name: a single instance, or a whole intent).
-func injectGuestKeys(ctx context.Context, c *client.Client, name, to string) error {
-	vms, err := resolveMigratingVMs(ctx, c, name)
-	if err != nil {
-		return err
-	}
-	if len(vms) == 0 {
-		return nil
-	}
-
-	reply, err := c.Migrate.GuestKey(ctx, &anvilv1.MigrateGuestKeyRequest{To: to})
-	if err != nil {
-		return fmt.Errorf("fetching the target's guest-access key: %w", err)
-	}
-	key := reply.GetPublicKey()
-
-	identity, err := resolveIdentity("")
-	if err != nil {
-		return err
-	}
-
-	// Appends the key (piped via stdin) to authorized_keys unless it's already present.
-	const remoteCommand = `mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && ` +
-		`key=$(cat) && (grep -qxF "$key" ~/.ssh/authorized_keys || echo "$key" >> ~/.ssh/authorized_keys) && ` +
-		`chmod 600 ~/.ssh/authorized_keys`
-
-	for _, inst := range vms {
-		if inst.GetState() != anvilv1.State_STATE_RUNNING {
-			fmt.Fprintf(os.Stderr, "anvil: %s isn't running, skipping guest-key setup. Add the target's key to it manually if needed\n", inst.GetName())
-			continue
-		}
-		target, err := resolveSSHTarget(c, inst, "")
-		if err != nil {
-			return fmt.Errorf("%s: %w", inst.GetName(), err)
-		}
-		if err := runSSHWithStdin(target, identity, []string{remoteCommand}, strings.NewReader(key)); err != nil {
-			return fmt.Errorf("authorizing the target's key on %s: %w", inst.GetName(), err)
-		}
-	}
-	return nil
-}
-
-// resolveMigratingVMs looks up name as a single instance first, then as an intent,
-// and returns every VM involved. Container members are skipped.
-func resolveMigratingVMs(ctx context.Context, c *client.Client, name string) ([]*anvilv1.Instance, error) {
-	infoReply, err := c.Info(ctx, &anvilv1.InfoRequest{Names: []string{name}})
-	switch {
-	case err == nil && len(infoReply.GetInstances()) > 0:
-		inst := infoReply.GetInstances()[0]
-		if inst.GetVm() == nil {
-			return nil, nil
-		}
-		return []*anvilv1.Instance{inst}, nil
-	case err != nil && status.Code(err) != codes.NotFound:
-		return nil, fmt.Errorf("migrate: looking up %q: %w", name, err)
-	}
-
-	intentReply, err := c.Intent.Info(ctx, &anvilv1.IntentInfoRequest{Name: name})
-	if err != nil {
-		if status.Code(err) == codes.NotFound {
-			return nil, fmt.Errorf("no instance or intent named %q", name)
-		}
-		return nil, fmt.Errorf("migrate: looking up %q as an intent: %w", name, err)
-	}
-	memberIDs := make(map[string]bool)
-	for _, mem := range intentReply.GetIntent().GetMembers() {
-		if mem.GetKind() == anvilv1.Kind_KIND_VM {
-			memberIDs[mem.GetInstanceId()] = true
-		}
-	}
-	if len(memberIDs) == 0 {
-		return nil, nil
-	}
-
-	// List all instances and match by ID, since Info only resolves by name.
-	listReply, err := c.List(ctx, &anvilv1.ListRequest{})
-	if err != nil {
-		return nil, err
-	}
-	var vms []*anvilv1.Instance
-	for _, inst := range listReply.GetInstances() {
-		if memberIDs[inst.GetId()] {
-			vms = append(vms, inst)
-		}
-	}
-	return vms, nil
 }

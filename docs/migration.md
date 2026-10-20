@@ -96,7 +96,7 @@ target's `anvil` group, the same requirement as any other local `anvil` command.
 ## Guest access keys
 
 A migrated VM disk is relaunched without a cloud-init seed (see "Relaunch on the target").
-The SSH key that the target's `anvil ssh`/`shell`/`exec` would use to log into the guest is
+The SSH key that the target's `anvil shell`/`exec`/`transfer` would use to log into the guest is
 therefore never injected by cloud-init. To cover this, the CLI does one extra step before
 the migration starts, unless `--dry-run` is set (`injectGuestKeys` in
 `internal/cli/commands/migrate.go`):

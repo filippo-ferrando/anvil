@@ -135,6 +135,10 @@ Several RPCs take host paths, and the daemon acts on them with its own permissio
 | `Import` | bundle path | read as the daemon user; tar entries are checked so `../` cannot escape the staging directory (`internal/export/archive.go`) |
 | `HostService.Add` | identity file | passed to `ssh -i` by the daemon (`internal/migrate/ssh.go`) |
 
+The daemon user reaches a caller-owned directory only through ACLs. `anvil create-dir
+<path>` creates the directory and grants the `anvil` user access to it with `setfacl`
+(`internal/hostpath`), so it is ready for `anvil mount` or a container volume.
+
 With `--remote`, these are paths on the remote host (`Client.HostPath` in
 `pkg/client/ssh.go` requires them to be absolute).
 

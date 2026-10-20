@@ -17,7 +17,11 @@ func NewExportServer(mgr *export.Manager) *ExportServer {
 }
 
 func (s *ExportServer) Export(req *anvilv1.ExportRequest, stream anvilv1.ExportService_ExportServer) error {
-	params := export.ExportParams{Name: req.GetName(), OutputPath: req.GetOutputPath(), IsIntent: req.GetIsIntent()}
+	output := req.GetOutputPath()
+	if err := checkCallerFile(stream.Context(), &output, false); err != nil {
+		return err
+	}
+	params := export.ExportParams{Name: req.GetName(), OutputPath: output, IsIntent: req.GetIsIntent()}
 	err := s.Manager.Export(stream.Context(), params, func(status string) {
 		_ = stream.Send(&anvilv1.ExportProgress{Event: &anvilv1.ExportProgress_Status{Status: status}})
 	})
@@ -30,7 +34,11 @@ func (s *ExportServer) Export(req *anvilv1.ExportRequest, stream anvilv1.ExportS
 }
 
 func (s *ExportServer) Import(req *anvilv1.ImportRequest, stream anvilv1.ExportService_ImportServer) error {
-	params := export.ImportParams{BundlePath: req.GetBundlePath(), Name: req.GetName()}
+	bundle := req.GetBundlePath()
+	if err := checkCallerFile(stream.Context(), &bundle, true); err != nil {
+		return err
+	}
+	params := export.ImportParams{BundlePath: bundle, Name: req.GetName()}
 	result, err := s.Manager.Import(stream.Context(), params, func(status string) {
 		_ = stream.Send(&anvilv1.ImportProgress{Event: &anvilv1.ImportProgress_Status{Status: status}})
 	})

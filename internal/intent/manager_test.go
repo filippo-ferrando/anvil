@@ -3,6 +3,7 @@ package intent
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
@@ -11,16 +12,21 @@ import (
 
 // fakeStore is a minimal in-memory Store for testing Manager without bbolt.
 type fakeStore struct {
+	mu   sync.Mutex
 	byID map[string]store.Intent
 }
 
 func newFakeStore() *fakeStore { return &fakeStore{byID: map[string]store.Intent{}} }
 
 func (s *fakeStore) PutIntent(it store.Intent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.byID[it.ID] = it
 	return nil
 }
 func (s *fakeStore) GetIntentByID(id string) (store.Intent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	it, ok := s.byID[id]
 	if !ok {
 		return store.Intent{}, instance.ErrNotFound
@@ -28,6 +34,8 @@ func (s *fakeStore) GetIntentByID(id string) (store.Intent, error) {
 	return it, nil
 }
 func (s *fakeStore) GetIntentByName(name string) (store.Intent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, it := range s.byID {
 		if it.Name == name {
 			return it, nil
@@ -36,6 +44,8 @@ func (s *fakeStore) GetIntentByName(name string) (store.Intent, error) {
 	return store.Intent{}, instance.ErrNotFound
 }
 func (s *fakeStore) ListIntents() ([]store.Intent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	out := make([]store.Intent, 0, len(s.byID))
 	for _, it := range s.byID {
 		out = append(out, it)
@@ -43,17 +53,22 @@ func (s *fakeStore) ListIntents() ([]store.Intent, error) {
 	return out, nil
 }
 func (s *fakeStore) DeleteIntentByID(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	delete(s.byID, id)
 	return nil
 }
 
-// fakeInstances is a minimal Instances fake; only GetByID/Delete are
-// exercised by the tests in this file.
+// fakeInstances is a minimal Instances fake; Launch fails unless launch is set.
 type fakeInstances struct {
-	specs map[string]*instance.Spec
+	specs  map[string]*instance.Spec
+	launch func(params instance.LaunchParams, progress func(instance.LaunchEvent)) error
 }
 
 func (f *fakeInstances) Launch(ctx context.Context, params instance.LaunchParams, progress func(instance.LaunchEvent)) error {
+	if f.launch != nil {
+		return f.launch(params, progress)
+	}
 	return errors.New("not implemented in fakeInstances")
 }
 func (f *fakeInstances) GetByID(id string) (*instance.Spec, error) {
@@ -62,6 +77,13 @@ func (f *fakeInstances) GetByID(id string) (*instance.Spec, error) {
 		return nil, instance.ErrNotFound
 	}
 	return spec, nil
+}
+func (f *fakeInstances) List(instance.Kind) ([]*instance.Spec, error) {
+	var out []*instance.Spec
+	for _, s := range f.specs {
+		out = append(out, s)
+	}
+	return out, nil
 }
 func (f *fakeInstances) Delete(ctx context.Context, names []string) error {
 	return nil
@@ -281,5 +303,95 @@ func TestLaunchKeepsNetworkOfAnExistingIntent(t *testing.T) {
 	}
 	if !net.networks["anvil-intent1"] {
 		t.Error("an existing intent's network must survive a failed launch")
+	}
+}
+
+// TestLaunchDoesNotBlockOtherIntents checks a slow member launch only holds its own intent.
+func TestLaunchDoesNotBlockOtherIntents(t *testing.T) {
+	unblock := make(chan struct{})
+	slowStarted := make(chan struct{})
+	insts := &fakeInstances{launch: func(p instance.LaunchParams, progress func(instance.LaunchEvent)) error {
+		if p.IntentName == "slow" {
+			close(slowStarted)
+			<-unblock
+		}
+		progress(instance.LaunchEvent{Instance: &instance.Spec{ID: p.Name, Name: p.Name, Kind: instance.KindContainer}})
+		return nil
+	}}
+	m := NewManager(newFakeStore(), insts, nil)
+	launch := func(name, intentName string) error {
+		return m.Launch(t.Context(), instance.LaunchParams{
+			Name: name, IntentName: intentName, Container: &instance.ContainerSpec{ImageRef: "nginx"},
+		}, func(instance.LaunchEvent) {})
+	}
+
+	slowDone := make(chan error, 1)
+	go func() { slowDone <- launch("a", "slow") }()
+	<-slowStarted
+	if err := launch("b", "fast"); err != nil {
+		t.Fatalf("launch into another intent: %v", err)
+	}
+	close(unblock)
+	if err := <-slowDone; err != nil {
+		t.Fatalf("slow launch: %v", err)
+	}
+	if its, _ := m.List(); len(its) != 2 {
+		t.Errorf("expected 2 intents, got %+v", its)
+	}
+}
+
+func TestRemoveKeepsNetworkWhileInstanceStillAttached(t *testing.T) {
+	s := newFakeStore()
+	net := newFakeNetworker("anvil-intent1")
+	_ = s.PutIntent(store.Intent{
+		ID: "intent1", Name: "myapp",
+		Members: []store.IntentMember{{InstanceID: "inst1", Role: "web"}},
+		Network: &store.IntentNetwork{EngineNetworkName: "anvil-intent1", BridgeInterface: "anvilintent1"},
+	})
+	// Ungrouped, not deleted: the VM still sits on the bridge.
+	insts := &fakeInstances{specs: map[string]*instance.Spec{
+		"inst1": {ID: "inst1", Name: "web", VM: &instance.VMSpec{BridgeInterface: "anvilintent1"}},
+	}}
+	m := NewManager(s, insts, net)
+	updated, err := m.Remove(t.Context(), "myapp", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !net.networks["anvil-intent1"] || updated.Network == nil {
+		t.Error("expected the network to stay while an instance is attached to it")
+	}
+}
+
+func TestLaunchRecreatesVanishedNetwork(t *testing.T) {
+	s := newFakeStore()
+	net := newFakeNetworker() // pruned behind anvil's back
+	_ = s.PutIntent(store.Intent{
+		ID: "intent1", Name: "myapp",
+		Members: []store.IntentMember{{InstanceID: "inst1", Role: "db"}},
+		Network: &store.IntentNetwork{EngineNetworkName: "anvil-intent1", Subnet: "10.0.0.0/24", Gateway: "10.0.0.1"},
+	})
+	m := NewManager(s, &fakeInstances{}, net)
+	_ = m.Launch(t.Context(), instance.LaunchParams{
+		Name: "web", IntentName: "myapp", Container: &instance.ContainerSpec{ImageRef: "nginx"},
+	}, func(instance.LaunchEvent) {})
+	if !net.networks["anvil-intent1"] {
+		t.Error("expected the missing network to be created again")
+	}
+}
+
+func TestLaunchRefusesDuplicateRole(t *testing.T) {
+	s := newFakeStore()
+	_ = s.PutIntent(store.Intent{ID: "intent1", Name: "myapp", Members: []store.IntentMember{{InstanceID: "inst1", Role: "db"}}})
+	launched := false
+	insts := &fakeInstances{launch: func(instance.LaunchParams, func(instance.LaunchEvent)) error {
+		launched = true
+		return nil
+	}}
+	m := NewManager(s, insts, nil)
+	err := m.Launch(t.Context(), instance.LaunchParams{
+		Name: "db2", Role: "db", IntentName: "myapp", Container: &instance.ContainerSpec{ImageRef: "postgres"},
+	}, func(instance.LaunchEvent) {})
+	if err == nil || launched {
+		t.Errorf("expected a second %q member to be refused before launching, got %v", "db", err)
 	}
 }

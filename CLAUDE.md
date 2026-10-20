@@ -16,7 +16,7 @@ make build   # anvil (CGO_ENABLED=0) + anvild
 make test    # go test ./...
 make vet     # go vet ./...
 make fmt     # gofmt -l -s . (lists files that need formatting; doesn't rewrite them)
-make man     # regenerate man/man1 from the live command tree, plus docs/man/anvild.8
+make man     # regenerate man/man1 from the live command tree, copy hand-written docs/man/anvild.8 to man/man8
 make gui-tools  # static waypipe/xwayland-satellite for `anvil gui` into build/gui-tools (needs docker)
 make fc-kernel  # anvil's Firecracker guest kernel into build/fc-kernel (needs docker, ARCH=aarch64 for arm64)
 ```
@@ -48,7 +48,7 @@ anvil (CLI + TUI, one binary)  ──gRPC over a unix socket──▶  anvild (d
                                                                   │
                                                                   ├─ QEMU processes, driven over QMP
                                                                   ├─ Docker's real HTTP API
-                                                                  ├─ bbolt (instances / intents / mirrors / hosts)
+                                                                  ├─ bbolt (instances / intents / mirrors / hosts / events)
                                                                   └─ SSH, for migration to another anvild
 ```
 
@@ -81,24 +81,37 @@ internal/
   vm/            VM backends (Linux): QEMU (backend.go) and Firecracker (fc_*.go) behind
                  Hypervisors (hypervisors.go), cloud-init, image catalog
   vm/firecracker/  Firecracker process, REST API client, vsock, jailer
+  vm/qemu/       QEMU process, args, QMP and guest agent clients, qemu-img, virtiofsd
+  vm/image/      image catalog, mirrors, downloads and the prepared-image vault (plus Firecracker raw cache)
+  vm/cloudinit/  NoCloud seed builder
+  vm/network/    tap devices on a Linux bridge (netlink)
   vm/vz/         Apple Virtualization.framework backend (darwin), a stub, not implemented yet
   container/docker/   Docker backend
-  container/      the Backend that picks an engine; Podman is rejected, not implemented (see PLAN.md)
+  container/      the Backend that picks an engine; Podman is rejected, not implemented (see PLAN.md);
+                 container/podman/ is an empty placeholder dir
   intent/        grouping VMs/containers together, shared per-intent bridge network + IPAM
   intent/dns/    per-intent DNS server on each intent's gateway ("<role>.<intent>.anvil")
+  intent/ipam/   subnet and address allocation for intent networks
   migrate/       SSH-driven cross-host migration
+  migrate/payload/  JSON payload migrate sends to the target's anvil CLI
   discovery/     mDNS announce and browse behind `anvil host discover`
   export/        bundle export/import behind `anvil export` and `anvil import`
   gui/           `anvil gui`: fd-passing socket relay + xauth (gui/relay), app .desktop/icon lookup (gui/appinfo)
   config/        fixed on-disk paths (run/state/cache dirs, GUI relay and tools dirs)
   intent/apply/  the compare-and-apply engine behind `anvil apply`
-  store/         bbolt-backed registry (instances, intents, mirrors, hosts, cloud-init)
+  store/         bbolt-backed registry (instances, intents, mirrors, hosts, cloud-init, events)
+  cloudinitrepo/ fetches a cloud-init template repo manifest and its templates
+  hostpath/      ACL grants and path checks for host dirs the anvil user must reach (`anvil create-dir`)
+  progress/      progress line formatting shared by the CLI and TUI
+  sshkey/        anvil's default guest-access SSH keypair
+  version/       build version stamped from git
   cli/commands/  cobra commands (one file per command/command group)
   tui/           the Bubble Tea app
 data/distros/    built-in VM image catalog (embedded in the binary)
 catalog/         official extra catalogue (distro manifests + cloud-init templates), a git
                  submodule consumed via `anvil mirror add` / `cloud-init import-repo`, not embedded
 scripts/         verify-catalog.sh (checksums), release-notes.sh (used by the release workflow),
+                 changelog.sh (CHANGELOG.md from commit subjects),
                  build-gui-tools.sh (static GUI tools, used by `make gui-tools` and releases),
                  build-fc-kernel.sh + fc-kernel.config (the Firecracker guest kernel, `make fc-kernel`)
 packaging/       PKGBUILD/deb/rpm build scripts, systemd unit, sysusers/tmpfiles rules
@@ -108,8 +121,9 @@ packaging/       PKGBUILD/deb/rpm build scripts, systemd unit, sysusers/tmpfiles
 
 `internal/instance/backend.go` defines the core `Backend` interface (Create/Start/Stop/
 Delete/Status/Logs) that both the QEMU/vz backend and the Docker backend implement.
-Optional capabilities (mount, port-forward, snapshot, fork, GUI apps) are separate interfaces
-(`Mounter`, `PortForwarder`, `Snapshotter`, `Forker`, `GUIPreparer`, `GuestFileReader`) that a backend implements only if
+Optional capabilities are separate interfaces (`Mounter`, `PortForwarder`, `Snapshotter`,
+`Forker`, `Reconciler`, `StatsProvider`, `GuestInspector`, `ReadyWaiter`, `ExitNotifier`,
+`GUIPreparer`, `GuestFileReader`, and `Resizer`/`LiveResizer` in `update.go`) that a backend implements only if
 it supports that operation, so a container backend has no `Snapshotter`.
 `internal/instance/manager.go`'s `Manager` type-asserts against these before calling
 them. When adding a capability to one backend, extend this interface set rather than
@@ -118,7 +132,7 @@ adding backend-specific branching in the daemon or manager.
 ### Cross-platform VM backend selection
 
 `newVMBackend` is defined per-platform via build tags (`cmd/anvild/platform_linux.go`,
-`platform_darwin.go`): Linux builds compile in `internal/vm` (QEMU), darwin builds
+`platform_darwin.go`): Linux builds compile in `internal/vm` (QEMU + Firecracker), darwin builds
 compile in `internal/vm/vz` (Virtualization.framework, currently unimplemented). Despite
 this scaffolding, the vz backend is still a stub: basic macOS support is in progress, so treat darwin/`vz` as
 in-progress, not a supported target.

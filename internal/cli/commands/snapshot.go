@@ -85,11 +85,15 @@ func newSnapshotDeleteCommand(flags *globalFlags) *cobra.Command {
 }
 
 func newSnapshotListCommand(flags *globalFlags) *cobra.Command {
-	return &cobra.Command{
+	var output string
+	cmd := &cobra.Command{
 		Use:   "list <instance>",
 		Short: "List an instance's snapshots",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkOutput(output); err != nil {
+				return err
+			}
 			c, err := dial(flags)
 			if err != nil {
 				return err
@@ -99,6 +103,9 @@ func newSnapshotListCommand(flags *globalFlags) *cobra.Command {
 			reply, err := c.Snapshot.List(cmd.Context(), &anvilv1.SnapshotListRequest{Name: args[0]})
 			if err != nil {
 				return err
+			}
+			if output == "json" {
+				return printJSON(cmd.OutOrStdout(), reply)
 			}
 			snaps := reply.GetSnapshots()
 			if len(snaps) == 0 {
@@ -116,6 +123,8 @@ func newSnapshotListCommand(flags *globalFlags) *cobra.Command {
 			return nil
 		},
 	}
+	addOutputFlag(cmd, &output)
+	return cmd
 }
 
 func newSnapshotScheduleCommand(flags *globalFlags) *cobra.Command {

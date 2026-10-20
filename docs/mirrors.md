@@ -2,7 +2,7 @@
 
 A mirror is a runtime-added source anvil pulls images from, on top of whatever it
 already knows about by default. There are two completely different kinds under one
-name, because they solve the same problem ("I want images to come from somewhere else")
+name, because they solve the same problem (images should come from somewhere else)
 for two different systems:
 
 - **VM mirrors** add or override entries in the distro catalog `anvil launch --kind vm`
@@ -28,14 +28,14 @@ A disabled mirror stays in the registry but is skipped everywhere: `anvil find`,
 
 anvil ships with a built-in catalog of common distros (Ubuntu, Debian, Arch, Fedora,
 Rocky, and a few others), embedded in the binary. A VM mirror adds to that catalog, or
-overrides an entry in it, without needing a new anvil release. Two real reasons you'd
-want one:
+overrides an entry in it, without needing a new anvil release. Two real reasons to
+add one:
 
-- **A faster or internal copy of the same distro images.** Say your org already mirrors
-  Ubuntu cloud images internally. Point a mirror at your own manifest that re-lists the
-  same `id`s with your own URLs, give it a higher priority than the default (which is
-  priority 0), and every `anvil launch --kind vm ubuntu-24.04` now pulls from your
-  mirror instead of the public one, with zero changes anywhere else.
+- **A faster or internal copy of the same distro images.** Say an organization already
+  mirrors Ubuntu cloud images internally. Point a mirror at its own manifest that
+  re-lists the same `id`s with the internal URLs, give it a higher priority than the
+  default (which is priority 0), and every `anvil launch --kind vm ubuntu-24.04` now
+  pulls from that mirror instead of the public one, with zero changes anywhere else.
 - **Distros the built-in catalog doesn't have at all.** Add entries under new `id`s and
   they show up in `anvil find` and are launchable immediately.
 
@@ -65,7 +65,7 @@ catalog:
 
 Field notes:
 
-- `id` is what you pass to `anvil launch --kind vm <id>` and `anvil find`. If it
+- `id` is what `anvil launch --kind vm <id>` and `anvil find` take. If it
   collides with an existing entry (built-in or from another mirror), the one with the
   higher `priority` wins. Same `id`, different `arch`, are two separate images, not a
   collision.
@@ -76,11 +76,11 @@ Field notes:
   is sized against the image's own actual virtual size at download time, so a stale
   `min_disk_gib` in an old manifest doesn't cause a broken launch.
 - `default_user` is the account cloud-init already sets up in that image, used so
-  `anvil shell`/`exec`/`transfer` know who to log in as without you passing `--user`
+  `anvil shell`/`exec`/`transfer` know who to log in as without `--user`
   every time. Best-effort: if it's wrong, `anvil shell --user <actual-user>` still
   works.
 - `schema_version` must be `1` (the only version that exists right now). A manifest
-  with an unrecognized major version is rejected outright when you try to add it,
+  with an unrecognized major version is rejected outright by `anvil mirror add`,
   rather than silently misread.
 - `firecracker` is optional. It lists the guest kernel per arch and the distro ids that
   boot under `--hypervisor firecracker`, each with optional extra kernel arguments. A
@@ -102,10 +102,10 @@ anvil mirror add corp-ubuntu --kind vm \
   --priority 10
 ```
 
-The manifest is fetched and validated once, right when you run `add`, not on every
+The manifest is fetched and validated once, when `add` runs, not on every
 later launch. The fetched JSON is cached in anvil's own registry, so a machine with no
-network access can still launch from a mirror it already knows about; you only need
-connectivity again to add a new one or to actually download an image for the first
+network access can still launch from a mirror it already knows about; connectivity is
+only needed again to add a new one or to actually download an image for the first
 time.
 
 ```
@@ -117,7 +117,7 @@ anvil mirror remove corp-ubuntu
 
 ### Creating a cloud-image mirror from scratch
 
-A worked example, start to finish: you want to host a small internal mirror serving one
+A worked example, start to finish: a small internal mirror serving one
 custom distro image (or a faster re-hosted copy of an existing one) from a plain static
 file server.
 
@@ -171,7 +171,7 @@ file server.
    cp distros.json /srv/anvil-mirror/
    ```
 
-4. **Serve it** (skip this if you're using a bucket/CDN that's already serving over
+4. **Serve it** (skip this for a bucket/CDN that's already serving over
    HTTP):
 
    ```
@@ -189,7 +189,7 @@ file server.
    anvil fetches `distros.json` immediately, validates every entry (rejects the whole
    manifest if `schema_version` isn't `1`, or if any entry is missing `id`/`url`), and
    caches the parsed result. If this succeeds, `anvil find` shows `my-distro-1.0`
-   right away: you don't need to already have the qcow2 downloaded, only the manifest
+   right away: the qcow2 doesn't need to be downloaded yet, only the manifest
    needs to be reachable at add-time.
 
 6. **Launch from it** like any other catalog entry:
@@ -233,7 +233,7 @@ anvil launch --kind container nginx:alpine
 ```
 
 A reference that already names an explicit registry host (`quay.io/something:latest`)
-is untouched unless you *also* add a mirror with `--mirror-of quay.io`. Multiple
+is untouched unless a mirror with `--mirror-of quay.io` is *also* added. Multiple
 enabled mirrors for the same upstream resolve by priority, same as VM mirrors: highest
 wins.
 
@@ -254,7 +254,7 @@ hasn't landed.
 ## Cloud-init template repos
 
 This is a separate, related mechanism, not a third `--kind` on `anvil mirror`: it
-bulk-imports whole cloud-init configs into your saved library (`anvil cloud-init list`)
+bulk-imports whole cloud-init configs into the saved library (`anvil cloud-init list`)
 rather than adding launchable catalog entries. Think of a VM mirror as "where the disk
 image comes from" and a template repo as "a bundle of ready-made `#cloud-config`
 documents someone else already wrote" -> nginx-with-TLS, a Postgres instance with a data
@@ -266,9 +266,9 @@ anvil cloud-init import-repo <manifest-url> [--force]
 
 Every listed template is fetched and saved into the library under its own `name`, ready
 to use immediately as `anvil launch --kind vm ... --cloud-init-name <name>`. A name
-already in your library is left untouched unless you pass `--force`; a single template
-failing to fetch doesn't stop the rest of the repo from importing, you get a per-
-template result either way (`imported`, `skipped`, or `FAILED: <reason>`).
+already in the library is left untouched unless `--force` is given; a single template
+failing to fetch doesn't stop the rest of the repo from importing, and each template
+gets a result either way (`imported`, `skipped`, or `FAILED: <reason>`).
 
 ### The manifest
 
@@ -305,17 +305,17 @@ Field notes:
   rule as the VM mirror manifest.
 
 Unlike a VM mirror, a template repo isn't a standing, re-consulted registry entry,
-`import-repo` is a one-shot bulk copy into your library. There's nothing to `list`/
+`import-repo` is a one-shot bulk copy into the library. There's nothing to `list`/
 `remove`/`enable`/`disable` afterward; once imported, a template is just a normal saved
-cloud-init config like any other, indistinguishable from one you wrote by hand.
+cloud-init config like any other, indistinguishable from one written by hand.
 
-### Creating your own template repo
+### Creating a template repo
 
 Same static-hosting story as a VM mirror: anything that serves plain files over
 HTTP(S) works.
 
 1. **Write the cloud-init YAML files**, one per template, each a normal
-   `#cloud-config` document exactly as you'd write it for `anvil cloud-init new`/`edit`:
+   `#cloud-config` document exactly as written for `anvil cloud-init new`/`edit`:
 
    ```
    mkdir -p /srv/anvil-templates
@@ -368,8 +368,8 @@ HTTP(S) works.
 
    Or from `anvil tui`'s Cloud Init page, press `R` and enter the same URL.
 
-Updating a template later is just editing the YAML file (and `templates.json` if you
-added/removed one) on the server and re-running `import-repo --force`, it *re-fetches*
+Updating a template later is just editing the YAML file (and `templates.json` if a template
+was added or removed) on the server and re-running `import-repo --force`, it *re-fetches*
 and overwrites the matching saved configs by name.
 
 ## The official catalogue
@@ -392,7 +392,7 @@ anvil cloud-init import-repo <templates.json url>
 
 The Mirrors page (`anvil tui`, sidebar) shows the same list `anvil mirror list` does,
 with `a` to add (the form has a field for both kinds; only the ones relevant to whichever
-kind you pick actually get sent), `e` to enable/disable the selected one, and `x` to
+kind is picked actually get sent), `e` to enable/disable the selected one, and `x` to
 remove it.
 
 The Cloud Init page has its own, separate import action: `R` opens a form for a template
