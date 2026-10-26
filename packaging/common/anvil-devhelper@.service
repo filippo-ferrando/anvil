@@ -1,0 +1,11 @@
+[Unit]
+Description=anvil device helper (USB/PCI passthrough)
+
+# Runs as root: binds PCI devices to vfio-pci and hands device files to the anvil
+# user. It refuses devices behind the root filesystem, the default route or the display.
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/anvild devhelper
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal

@@ -213,7 +213,8 @@ anvil fork <instance> <new-name> [--start]
 ```
 
 `--start` boots the fork right after it is created; without it the fork is left
-stopped. Progress is streamed (`InstanceService.Fork` returns `stream LaunchProgress`)
+stopped. A VM with USB/PCI passthrough devices can't be forked, see
+[passthrough.md](passthrough.md). Progress is streamed (`InstanceService.Fork` returns `stream LaunchProgress`)
 and printed like `anvil launch`.
 
 ### What is copied

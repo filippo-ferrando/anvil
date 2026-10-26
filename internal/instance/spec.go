@@ -4,6 +4,7 @@ package instance
 import (
 	"crypto/sha256"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -194,6 +195,10 @@ type VMSpec struct {
 
 	// Hypervisor runs this VM; empty means VMHypervisorQEMU.
 	Hypervisor VMHypervisor
+
+	// Devices are host USB/PCI devices passed to the guest, in ParseDevice's form. Set
+	// at create only, QEMU only; such a VM can't be migrated or forked.
+	Devices []string
 }
 
 // VMHypervisor selects which hypervisor runs a VMSpec.
@@ -341,6 +346,25 @@ func ParsePortMapping(s string) (PortMapping, error) {
 		return PortMapping{}, fmt.Errorf("port %q: ports must be numbers from 1 to 65535", s)
 	}
 	return PortMapping{HostPort: host, GuestPort: guest, Protocol: proto}, nil
+}
+
+var (
+	usbIDRe   = regexp.MustCompile(`^[0-9a-f]{4}:[0-9a-f]{4}$`)
+	usbPortRe = regexp.MustCompile(`^[0-9]+-[0-9]+(\.[0-9]+)*$`)
+	pciAddrRe = regexp.MustCompile(`^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$`)
+)
+
+// ParseDevice checks a passthrough device and returns it lowercased: "usb:<vendor>:<product>",
+// "usb:<bus>-<port>[.<port>...]" or "pci:<domain>:<bus>:<slot>.<function>".
+func ParseDevice(s string) (string, error) {
+	d := strings.ToLower(strings.TrimSpace(s))
+	bus, id, _ := strings.Cut(d, ":")
+	switch {
+	case bus == "usb" && (usbIDRe.MatchString(id) || usbPortRe.MatchString(id)),
+		bus == "pci" && pciAddrRe.MatchString(id):
+		return d, nil
+	}
+	return "", fmt.Errorf(`device %q must be "usb:<vendor>:<product>", "usb:<bus>-<port>" or "pci:<domain>:<bus>:<slot>.<fn>"`, s)
 }
 
 // ParseVolumeMount reads "<host-path>:<container-path>[:ro]".

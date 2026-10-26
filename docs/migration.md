@@ -180,7 +180,9 @@ login shell is. It collects:
 ### 3. Preflight
 
 `preflight` (`internal/migrate/preflight.go`) turns the probe into fatal problems and
-warnings. All fatal problems are collected and reported together.
+warnings. All fatal problems are collected and reported together. A VM with USB/PCI
+passthrough devices is refused before the target is even probed, see
+[passthrough.md](passthrough.md).
 
 | Check | Fatal | Warning |
 |---|---|---|

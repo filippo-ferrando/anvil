@@ -7,6 +7,8 @@ import (
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/internal/discovery"
+	"git.fferrando.cc/rdfilippo/anvil/internal/hostdev"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/migrate"
 	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 )
@@ -17,6 +19,11 @@ type HostServer struct {
 	anvilv1.UnimplementedHostServiceServer
 	Store   *store.Store
 	Migrate *migrate.Manager
+
+	// Devices and Instances show which running instance holds a device; Devices is nil
+	// on a platform without passthrough.
+	Devices   instance.DeviceHolder
+	Instances *instance.Manager
 }
 
 func NewHostServer(s *store.Store, m *migrate.Manager) *HostServer {
@@ -88,6 +95,39 @@ func (s *HostServer) Discover(ctx context.Context, req *anvilv1.HostDiscoverRequ
 		reply.Hosts = append(reply.Hosts, &anvilv1.DiscoveredHost{
 			Name: h.Name, Address: h.Addr.String(), SshPort: int32(h.Port),
 		})
+	}
+	return reply, nil
+}
+
+func (s *HostServer) ListHostDevices(ctx context.Context, req *anvilv1.ListHostDevicesRequest) (*anvilv1.ListHostDevicesReply, error) {
+	devices, err := hostdev.List()
+	if err != nil {
+		return nil, err
+	}
+	var held map[string]string
+	if s.Devices != nil {
+		held = s.Devices.HeldDevices()
+	}
+	reply := &anvilv1.ListHostDevicesReply{}
+	for _, d := range devices {
+		pb := &anvilv1.HostDevice{
+			Id: d.ID, Bus: d.Bus, VendorId: d.VendorID, ProductId: d.ProductID, Name: d.Name,
+			Driver: d.Driver, IommuGroup: int32(d.IOMMUGroup), GroupMembers: d.GroupMembers,
+			BlockedReason: d.Blocked,
+		}
+		for _, addr := range append([]string{d.Addr}, d.GroupMembers...) {
+			if id, ok := held[addr]; ok {
+				pb.InUseBy = id
+				if s.Instances != nil {
+					if spec, err := s.Instances.GetByID(id); err == nil {
+						pb.InUseBy = spec.Name
+					}
+				}
+				pb.BlockedReason = ""
+				break
+			}
+		}
+		reply.Devices = append(reply.Devices, pb)
 	}
 	return reply, nil
 }

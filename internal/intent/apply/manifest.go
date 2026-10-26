@@ -39,6 +39,7 @@ type Member struct {
 	SSHKeys       []string `yaml:"ssh_keys"`
 	NoGuestAgent  bool     `yaml:"no_guest_agent"`
 	Hypervisor    string   `yaml:"hypervisor"`
+	Devices       []string `yaml:"devices"`
 
 	Engine     string            `yaml:"engine"`
 	Env        map[string]string `yaml:"env"`
@@ -164,6 +165,13 @@ func (mem *Member) parseVM() error {
 		SSHPublicKeys:     mem.SSHKeys,
 		NoGuestAgent:      mem.NoGuestAgent,
 	}
+	for _, d := range mem.Devices {
+		norm, err := instance.ParseDevice(d)
+		if err != nil {
+			return err
+		}
+		v.Devices = append(v.Devices, norm)
+	}
 	switch mem.Hypervisor {
 	case "", "qemu":
 		v.Hypervisor = instance.VMHypervisorQEMU
@@ -184,8 +192,8 @@ func (mem *Member) parseVM() error {
 
 func (mem *Member) parseContainer() error {
 	if mem.CPUs != 0 || mem.Memory != 0 || mem.Disk != 0 || mem.CloudInit != "" || mem.CloudInitName != "" ||
-		len(mem.SSHKeys) > 0 || mem.NoGuestAgent || mem.Hypervisor != "" {
-		return errors.New("cpus, memory, disk, cloud_init, cloud_init_name, ssh_keys, no_guest_agent and hypervisor only apply to a VM")
+		len(mem.SSHKeys) > 0 || mem.NoGuestAgent || mem.Hypervisor != "" || len(mem.Devices) > 0 {
+		return errors.New("cpus, memory, disk, cloud_init, cloud_init_name, ssh_keys, no_guest_agent, hypervisor and devices only apply to a VM")
 	}
 	c := &instance.ContainerSpec{
 		ImageRef:   mem.Image,

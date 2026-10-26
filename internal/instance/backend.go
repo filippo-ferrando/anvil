@@ -150,6 +150,12 @@ type GUIPreparer interface {
 	PrepareGUI(ctx context.Context, spec *Spec, x11 bool, progress func(status string)) (GUISession, error)
 }
 
+// DeviceHolder is implemented by a Backend that passes host devices to its instances.
+// HeldDevices maps each claimed device's sysfs name (e.g. "3-2.1", "0000:01:00.0") to the instance ID.
+type DeviceHolder interface {
+	HeldDevices() map[string]string
+}
+
 // GuestFileReader is implemented by a Backend that can read files inside a running instance.
 type GuestFileReader interface {
 	// ListGuestDir returns the names in dir, nil when it doesn't exist.

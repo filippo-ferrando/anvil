@@ -207,6 +207,62 @@ need a guest kernel: `ANVIL_FC_KERNEL=<path>` overrides the catalog kernel.
   (`CAP_SYS_ADMIN CAP_SYS_CHROOT CAP_MKNOD CAP_SETUID CAP_SETGID CAP_CHOWN
   CAP_DAC_OVERRIDE`); disks and kernel are hard-linked into the chroot.
 
+## Device passthrough (implemented, not yet tested on real hardware)
+
+Pass host USB and PCI devices to a VM at `anvil launch`. QEMU backend only: Firecracker
+VMs and containers reject `--device` with a clear error. Code in `internal/hostdev` and
+`internal/vm/devices.go`, user docs in `docs/passthrough.md`. The notes below record the
+design decisions.
+
+#### Decisions
+
+- **Spec.** `instance.VMSpec.Devices`, set at create and fixed afterwards (no edit while
+  stopped, no live hotplug). A repeatable `--device` flag on `anvil launch`:
+  `usb:046d:c52b` (vendor:product), `usb:3-2.1` (bus-port path) or
+  `pci:0000:01:00.0`. A vendor:product that matches more than one connected device is
+  rejected and the bus-port form is required.
+- **QEMU args.** `usb-host` devices on a `qemu-xhci` controller added only when USB
+  devices are present, `vfio-pci` for PCI. Plain PCI devices only: no GPU display
+  options (x-vga, romfile) for now.
+- **IOMMU groups.** A PCI device takes its whole IOMMU group: every endpoint device in
+  the group is bound and passed too, and the device list shows the group.
+- **Root helper.** anvild stays unprivileged. A socket-activated root service
+  (`anvil-devhelper.socket`/`.service`), reachable only by anvild, accepts
+  claim/release requests: on claim it unbinds the host driver, binds `vfio-pci` and
+  chowns the `/dev/vfio/<group>` or `/dev/bus/usb/...` node to anvil; on release it gives
+  the node back and rebinds the original driver. The anvild unit gains the matching
+  `DeviceAllow=` lines.
+- **Safety.** Any device can be passed, except a built-in denylist the helper enforces:
+  the device holding the root filesystem, the NIC of the default route and the GPU
+  driving the host display (and anything sharing an IOMMU group with them).
+- **Start/stop.** Claim at VM start, release at stop and exit. Start fails with a clear
+  error if a device is missing or held by another running VM. Two stopped VMs may list
+  the same device.
+- **Blocked operations.** Migration and fork refuse an instance with devices. Snapshots
+  work as usual. Export keeps the device list, and the imported VM fails at start if a
+  device isn't on the new host (same missing-device rule). `anvil apply` and intents
+  accept devices (`devices:` in `anvil.yaml`).
+- **Listing.** Read `/sys/bus/pci` and `/sys/bus/usb` directly, names from `pci.ids`/
+  `usb.ids` when installed; no lspci/lsusb dependency. Each entry shows id, name,
+  current driver, IOMMU group (PCI) and status: free, in use by `<instance>`, or blocked
+  (denylist).
+- **Surface.** gRPC `ListHostDevices` plus `anvil host devices [-o json]` (works with
+  `--remote`). TUI: a multi-select device picker in the launch form (qemu VMs only),
+  the assigned devices on the instance detail page, and a host devices screen with the
+  status of every device.
+- **Tests.** Unit tests for id parsing and ambiguity, sysfs listing against a fake sysfs
+  tree, IOMMU group expansion, denylist, QEMU args and the migrate/fork refusal; the
+  helper claim/release against a fake sysfs root.
+
+- **Locked memory.** VFIO pins all guest RAM against QEMU's `RLIMIT_MEMLOCK`, so the
+  anvild unit sets `LimitMEMLOCK=infinity` and QEMU inherits it. virtio-mem works with
+  VFIO (QEMU 6.1+, only plugged blocks are mapped). The balloon stays: QEMU turns off its
+  discard on its own, so free page reporting returns nothing for these VMs.
+- **Claim state.** Kept in the VM's runtime state file next to the QEMU pid: devices held
+  and the original driver of each. The helper stays stateless. Reconcile rebuilds
+  "in use" from it after an anvild restart; if the QEMU is gone, `removeLeftovers` asks
+  the helper to release its devices (chown back, rebind the original driver).
+
 ## Container engines
 
 ### Podman backend

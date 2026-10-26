@@ -162,6 +162,9 @@ func (m *Manager) Launch(ctx context.Context, params LaunchParams, progress func
 	if err == nil && params.VM != nil {
 		err = CheckHypervisor(params.VM.Hypervisor)
 	}
+	if err == nil && params.VM != nil {
+		err = checkDevices(params.VM)
+	}
 	if err != nil {
 		progress(LaunchEvent{Err: err})
 		return err
@@ -239,6 +242,29 @@ func (m *Manager) Launch(ctx context.Context, params LaunchParams, progress func
 	return nil
 }
 
+// checkDevices normalizes v.Devices and rejects them on a hypervisor other than QEMU.
+func checkDevices(v *VMSpec) error {
+	if len(v.Devices) == 0 {
+		return nil
+	}
+	if v.HypervisorOf() != VMHypervisorQEMU {
+		return fmt.Errorf("instance: passthrough devices need the qemu hypervisor, not %s", v.HypervisorOf())
+	}
+	seen := make(map[string]bool, len(v.Devices))
+	for i, d := range v.Devices {
+		norm, err := ParseDevice(d)
+		if err != nil {
+			return fmt.Errorf("instance: %w", err)
+		}
+		if seen[norm] {
+			return fmt.Errorf("instance: device %s is listed twice", norm)
+		}
+		seen[norm] = true
+		v.Devices[i] = norm
+	}
+	return nil
+}
+
 // rollbackTimeout bounds a rollback that runs after the request that started it is gone.
 const rollbackTimeout = 2 * time.Minute
 
@@ -299,6 +325,11 @@ func (m *Manager) Fork(ctx context.Context, params ForkParams, progress func(Lau
 		return err
 	}
 
+	if source.VM != nil && len(source.VM.Devices) > 0 {
+		err := fmt.Errorf("instance: %s has passthrough devices and can't be forked", source.Name)
+		progress(LaunchEvent{Err: err})
+		return err
+	}
 	b, err := m.backendFor(source.Kind)
 	if err != nil {
 		progress(LaunchEvent{Err: err})

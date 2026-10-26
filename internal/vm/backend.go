@@ -24,6 +24,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/config"
+	"git.fferrando.cc/rdfilippo/anvil/internal/hostdev"
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/cloudinit"
@@ -47,6 +48,7 @@ type Backend struct {
 	Seed      cloudinit.Builder
 	Source    Source
 	Networker Networker
+	Devices   DeviceClaimer
 
 	mu       sync.Mutex
 	running  map[string]*qemu.Process // instance ID -> live process
@@ -57,6 +59,7 @@ type Backend struct {
 	// Guarded by mu, like running.
 	virtiofs map[string]map[string]*qemu.Virtiofsd // instance ID -> mount tag -> its virtiofsd
 	stopping map[string]struct{}                   // instance ID -> Stop in progress, so its exit isn't reported
+	held     map[string]string                     // passthrough device sysfs name -> instance ID
 	exitHook func(instanceID string, state instance.State, reason string)
 }
 
@@ -75,6 +78,7 @@ func NewBackend(catalog *image.Catalog, vault *image.Vault, source Source) *Back
 		Seed:      cloudinit.NewBuilder(),
 		Source:    source,
 		Networker: network.LinuxBridge{},
+		Devices:   hostdev.Client{Socket: config.DevHelperSocket()},
 		running:   make(map[string]*qemu.Process),
 		starting:  make(map[string]struct{}),
 		guestTracker: newGuestTracker(func(id string) *qemu.GuestAgent {
@@ -82,6 +86,7 @@ func NewBackend(catalog *image.Catalog, vault *image.Vault, source Source) *Back
 		}, "powerdown"),
 		virtiofs: make(map[string]map[string]*qemu.Virtiofsd),
 		stopping: make(map[string]struct{}),
+		held:     make(map[string]string),
 	}
 }
 
@@ -756,10 +761,30 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 
 	// Undoes everything set up below, so a new failure path can't forget a piece.
 	// killVirtiofsds is a no-op when none were started.
+	var claims []hostdev.Claim
 	unwind := func() {
 		b.killVirtiofsds(spec.ID)
 		if cfg.BridgeTapDevice != "" {
 			_ = b.Networker.Detach(spec.ID)
+		}
+		if len(v.Devices) > 0 {
+			b.releaseDevices(spec.ID, claims)
+			b.unhold(spec.ID)
+			removeRuntimeState(dir)
+		}
+	}
+
+	claims, err := b.claimDevices(ctx, spec, &cfg)
+	if err != nil {
+		unwind()
+		return err
+	}
+	rt := runtimeState{Devices: claims}
+	if len(claims) > 0 {
+		// Saved before QEMU runs, so a crash in between still lets Reconcile give them back.
+		if err := saveRuntimeState(dir, rt); err != nil {
+			unwind()
+			return fmt.Errorf("vm: saving claimed devices: %w", err)
 		}
 	}
 
@@ -784,9 +809,10 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		unwind()
 		return fmt.Errorf("vm: attaching QMP: %w", err)
 	}
-	rt := runtimeState{
+	rt = runtimeState{
 		Pid: proc.Pid(), QMPSocket: cfg.QMPSocket, StartedAt: time.Now(),
 		BootMemoryMiB: v.MemoryMiB, MaxCPUs: cfg.MaxCPUs, MaxMemoryMiB: cfg.MaxMemoryMiB,
+		Devices: claims,
 	}
 	if err := saveRuntimeState(dir, rt); err != nil {
 		log.Printf("vm: failed to persist runtime state for %s: %v", spec.ID, err)
@@ -880,6 +906,7 @@ func (b *Backend) Reconcile(ctx context.Context, spec *instance.Spec) (instance.
 	b.mu.Lock()
 	b.running[spec.ID] = proc
 	b.mu.Unlock()
+	b.holdClaims(spec.ID, rt.Devices)
 
 	if err := proc.AttachQMP(ctx); err != nil {
 		// Left running untracked, a later Start would open the same disk in a second QEMU.
@@ -904,6 +931,7 @@ func (b *Backend) removeLeftovers(spec *instance.Spec) {
 			log.Printf("vm: removing %s's tap: %v", spec.ID, err)
 		}
 	}
+	b.releaseRuntimeDevices(spec.ID)
 	removeRuntimeState(instanceDir(spec.ID))
 }
 

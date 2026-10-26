@@ -12,6 +12,10 @@ import (
 // preflight checks t can actually run spec before anything is stopped or
 // transferred. It returns the probe result and any non-blocking warnings.
 func (m *Manager) preflight(ctx context.Context, t target, spec *instance.Spec, destName string) (remoteCaps, []string, error) {
+	if spec.VM != nil && len(spec.VM.Devices) > 0 {
+		return remoteCaps{}, nil, fmt.Errorf("migrate: %q has passthrough devices (%s) and can't be migrated",
+			spec.Name, strings.Join(spec.VM.Devices, ", "))
+	}
 	caps, err := probeRemote(ctx, t, spec, destName)
 	if err != nil {
 		return caps, nil, err

@@ -49,6 +49,11 @@ type Config struct {
 
 	// GuestAgentSocket, when set, exposes a virtio-serial channel for qemu-guest-agent on this unix socket.
 	GuestAgentSocket string
+
+	// USBDevices ("3-2.1") and PCIDevices ("0000:01:00.0") are host devices passed through,
+	// by sysfs name; they must already be accessible to QEMU (see internal/hostdev).
+	USBDevices []string
+	PCIDevices []string
 }
 
 type HostForward struct {
@@ -323,6 +328,8 @@ func BuildArgs(cfg Config) ([]string, error) {
 		)
 	}
 
+	args = append(args, buildPassthrough(cfg)...)
+
 	// virtio-rng avoids a stalled first boot waiting on guest entropy; the balloon's
 	// free page reporting hands memory the guest has freed back to the host.
 	args = append(args,
@@ -351,6 +358,28 @@ func buildMounts(mounts []Mount) []string {
 			"-chardev", fmt.Sprintf("socket,id=%s,path=%s", VirtiofsChardevID(m.Tag), escapeQEMUOpt(m.SocketPath)),
 			"-device", fmt.Sprintf("vhost-user-fs-pci,id=%s,chardev=%s,tag=%s,queue-size=1024,bus=%s",
 				VirtiofsDeviceID(m.Tag), VirtiofsChardevID(m.Tag), m.Tag, HotplugPortID(i)),
+		)
+	}
+	return args
+}
+
+// buildPassthrough adds a USB controller only when USB devices are passed, and gives each
+// PCI device its own root port after the hot-plug ones.
+// ponytail: functions of one multi-function device land on separate ports, share one if a driver needs it.
+func buildPassthrough(cfg Config) []string {
+	var args []string
+	if len(cfg.USBDevices) > 0 {
+		args = append(args, "-device", "qemu-xhci,id=xhci0")
+	}
+	for _, addr := range cfg.USBDevices {
+		bus, port, _ := strings.Cut(addr, "-")
+		args = append(args, "-device", fmt.Sprintf("usb-host,bus=xhci0.0,hostbus=%s,hostport=%s", bus, port))
+	}
+	for i, addr := range cfg.PCIDevices {
+		port := fmt.Sprintf("pt%d", i)
+		args = append(args,
+			"-device", fmt.Sprintf("pcie-root-port,id=%s,chassis=%d", port, HotplugPorts+1+i),
+			"-device", fmt.Sprintf("vfio-pci,host=%s,bus=%s", addr, port),
 		)
 	}
 	return args

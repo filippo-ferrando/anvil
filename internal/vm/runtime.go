@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"git.fferrando.cc/rdfilippo/anvil/internal/hostdev"
 )
 
 // runtimeState is the per-instance state Reconcile uses to find and
@@ -25,6 +27,9 @@ type runtimeState struct {
 	Jailed bool `json:"jailed,omitempty"`
 	// JailExec is the firecracker binary the jail ran, whose file name is part of the jail path.
 	JailExec string `json:"jail_exec,omitempty"`
+
+	// Devices are the passthrough devices claimed for this run, released when it ends.
+	Devices []hostdev.Claim `json:"devices,omitempty"`
 }
 
 func runtimeStatePath(instanceDir string) string {

@@ -242,6 +242,9 @@ func diff(mem Member, cur *instance.Spec) (replace []string, upd instance.Update
 		if want.HypervisorOf() != have.HypervisorOf() {
 			replace = append(replace, was("hypervisor", have.HypervisorOf(), want.HypervisorOf()))
 		}
+		if !slices.Equal(want.Devices, have.Devices) {
+			replace = append(replace, was("devices", have.Devices, want.Devices))
+		}
 		if want.NoGuestAgent != have.NoGuestAgent {
 			replace = append(replace, was("no_guest_agent", have.NoGuestAgent, want.NoGuestAgent))
 		}

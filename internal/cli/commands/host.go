@@ -2,12 +2,14 @@ package commands
 
 import (
 	"fmt"
+	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newHostCommand(flags *globalFlags) *cobra.Command {
@@ -24,6 +26,7 @@ func newHostCommand(flags *globalFlags) *cobra.Command {
 		newHostRemoveCommand(flags),
 		newHostTestCommand(flags),
 		newHostDiscoverCommand(flags),
+		newHostDevicesCommand(flags),
 	)
 	return cmd
 }
@@ -189,6 +192,52 @@ func newHostDiscoverCommand(flags *globalFlags) *cobra.Command {
 		},
 	}
 	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Second, "how long to wait for answers")
+	addOutputFlag(cmd, &output)
+	return cmd
+}
+
+func newHostDevicesCommand(flags *globalFlags) *cobra.Command {
+	var output string
+	cmd := &cobra.Command{
+		Use:   "devices",
+		Short: "List the host's USB and PCI devices that can be passed to a VM",
+		Long: "List the daemon host's USB and PCI devices, with the id `anvil launch --device` takes. " +
+			"A PCI device brings the other devices of its IOMMU group along. Devices behind the root " +
+			"filesystem, the default route or the host display are blocked.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkOutput(output); err != nil {
+				return err
+			}
+			c, err := dial(flags)
+			if err != nil {
+				return err
+			}
+			defer c.Close()
+
+			reply, err := c.Host.ListHostDevices(cmd.Context(), &anvilv1.ListHostDevicesRequest{})
+			if err != nil {
+				return err
+			}
+			if output == "json" {
+				return printJSON(cmd.OutOrStdout(), reply)
+			}
+			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+			fmt.Fprintln(tw, "ID\tVENDOR:PRODUCT\tNAME\tDRIVER\tSTATUS")
+			for _, d := range reply.GetDevices() {
+				driver := d.GetDriver()
+				if driver == "" {
+					driver = "-"
+				}
+				status := client.DeviceStatus(d)
+				if len(d.GetGroupMembers()) > 0 {
+					status += " (with " + strings.Join(d.GetGroupMembers(), ", ") + ")"
+				}
+				fmt.Fprintf(tw, "%s\t%s:%s\t%s\t%s\t%s\n", d.GetId(), d.GetVendorId(), d.GetProductId(), d.GetName(), driver, status)
+			}
+			return tw.Flush()
+		},
+	}
 	addOutputFlag(cmd, &output)
 	return cmd
 }

@@ -73,6 +73,8 @@ func TestParseErrors(t *testing.T) {
 		"bad hypervisor": "intent: x\nmembers:\n  a: {kind: vm, image: u, hypervisor: xen}\n",
 		"ct hypervisor":  "intent: x\nmembers:\n  a: {kind: container, image: u, hypervisor: qemu}\n",
 		"ssh key path":   "intent: x\nmembers:\n  a: {kind: vm, image: u, ssh_keys: [~/.ssh/id.pub]}\n",
+		"bad device":     "intent: x\nmembers:\n  a: {kind: vm, image: u, devices: [sda]}\n",
+		"ct device":      "intent: x\nmembers:\n  a: {kind: container, image: u, devices: ['usb:3-2']}\n",
 	}
 	for name, s := range cases {
 		if _, err := Parse([]byte(s)); err == nil {
@@ -353,5 +355,23 @@ func TestSamePortReadsEmptyProtocolAsTCP(t *testing.T) {
 	}
 	if samePort(a, instance.PortMapping{HostPort: 8080, GuestPort: 80, Protocol: "udp"}) {
 		t.Error("expected tcp and udp to differ")
+	}
+}
+
+func TestDevicesNeedReplace(t *testing.T) {
+	m, err := Parse([]byte("intent: x\nmembers:\n  a: {kind: vm, image: u, devices: ['USB:3-2']}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mem := m.Members["a"]
+	if !slices.Equal(mem.vm.Devices, []string{"usb:3-2"}) {
+		t.Fatalf("devices = %v", mem.vm.Devices)
+	}
+	cur := &instance.Spec{Name: mem.Name, Kind: instance.KindVM, VM: &instance.VMSpec{
+		ImageRef: "u", CPUs: mem.vm.CPUs, MemoryMiB: mem.vm.MemoryMiB, Hypervisor: instance.VMHypervisorQEMU,
+	}}
+	replace, _, _ := diff(mem, cur)
+	if len(replace) != 1 || !strings.Contains(replace[0], "devices") {
+		t.Errorf("replace = %v, want a devices change", replace)
 	}
 }

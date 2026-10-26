@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -102,6 +103,9 @@ func newInfoCommand(flags *globalFlags) *cobra.Command {
 					fmt.Fprintf(cmd.OutOrStdout(), "CPUs:\t%d\n", vmSpec.GetCpus())
 					fmt.Fprintf(cmd.OutOrStdout(), "Memory:\t%d MiB\n", vmSpec.GetMemoryMib())
 					fmt.Fprintf(cmd.OutOrStdout(), "Disk:\t%d GiB\n", vmSpec.GetDiskGib())
+					if devs := vmSpec.GetDevices(); len(devs) > 0 {
+						fmt.Fprintf(cmd.OutOrStdout(), "Devices:\t%s\n", strings.Join(devs, ", "))
+					}
 					if vmSpec.GetSshPort() != 0 {
 						user := vmSpec.GetDefaultUser()
 						if user == "" {

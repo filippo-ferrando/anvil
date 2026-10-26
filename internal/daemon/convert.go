@@ -74,6 +74,7 @@ func vmSpecFromPB(v *anvilv1.VMSpec) *instance.VMSpec {
 		NoGuestAgent:         v.GetNoGuestAgent(),
 		MACAddress:           v.GetMacAddress(),
 		Hypervisor:           vmHypervisorFromPB(v.GetHypervisor()),
+		Devices:              v.GetDevices(),
 	}
 	// Only a migrated Firecracker VM brings its address; anywhere else the daemon assigns it.
 	if spec.Hypervisor == instance.VMHypervisorFirecracker {
@@ -145,6 +146,7 @@ func vmSpecToPB(v *instance.VMSpec) *anvilv1.VMSpec {
 		SnapshotSchedule:     snapshotScheduleToPB(v.SnapshotSchedule),
 		MacAddress:           v.MACAddress,
 		Hypervisor:           vmHypervisorToPB(v.Hypervisor),
+		Devices:              v.Devices,
 	}
 	for _, m := range v.Mounts {
 		pb.Mounts = append(pb.Mounts, &anvilv1.Mount{

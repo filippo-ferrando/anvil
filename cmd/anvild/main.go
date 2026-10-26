@@ -21,6 +21,7 @@ import (
 	"git.fferrando.cc/rdfilippo/anvil/internal/daemon"
 	"git.fferrando.cc/rdfilippo/anvil/internal/discovery"
 	"git.fferrando.cc/rdfilippo/anvil/internal/export"
+	"git.fferrando.cc/rdfilippo/anvil/internal/hostdev"
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/intent"
 	"git.fferrando.cc/rdfilippo/anvil/internal/intent/dns"
@@ -40,6 +41,13 @@ type VMBackend interface {
 }
 
 func main() {
+	// Run by anvil-devhelper@.service as root, one connection per call: see internal/hostdev.
+	if len(os.Args) == 2 && os.Args[1] == "devhelper" {
+		if err := hostdev.Serve(); err != nil {
+			log.Fatalf("anvild devhelper: %v", err)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		log.Fatalf("anvild: %v", err)
 	}
@@ -152,7 +160,12 @@ func run() error {
 		&image.FCCache{Dir: config.FirecrackerImageDir(), Vault: vault})
 	anvilv1.RegisterImageServiceServer(grpcServer, imageServer)
 	anvilv1.RegisterIntentServiceServer(grpcServer, daemon.NewIntentServer(intentMgr, mgr))
-	anvilv1.RegisterHostServiceServer(grpcServer, daemon.NewHostServer(db, migrateMgr))
+	hostServer := daemon.NewHostServer(db, migrateMgr)
+	hostServer.Instances = mgr
+	if dh, ok := vmBackend.(instance.DeviceHolder); ok {
+		hostServer.Devices = dh
+	}
+	anvilv1.RegisterHostServiceServer(grpcServer, hostServer)
 	anvilv1.RegisterMigrateServiceServer(grpcServer, daemon.NewMigrateServer(migrateMgr))
 	anvilv1.RegisterExportServiceServer(grpcServer, daemon.NewExportServer(exportMgr))
 	anvilv1.RegisterSnapshotServiceServer(grpcServer, daemon.NewSnapshotServer(mgr))

@@ -1,0 +1,14 @@
+[Unit]
+Description=anvil device helper socket (USB/PCI passthrough)
+
+# Only the anvil user (anvild) can connect. Each connection starts one
+# anvil-devhelper@.service, which claims or releases a single device as root.
+[Socket]
+ListenStream=/run/anvil/devhelper.sock
+SocketUser=anvil
+SocketGroup=anvil
+SocketMode=0600
+Accept=yes
+
+[Install]
+WantedBy=sockets.target

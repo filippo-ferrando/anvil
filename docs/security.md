@@ -87,6 +87,14 @@ The packaged unit (`packaging/common/anvild.service`) runs `anvild` as the syste
   controls the daemon user can use the jailer to get root; this is no worse than the
   `docker` group below. Without `jailer` or `setcap` there is no copy, and firecracker runs
   unjailed like QEMU.
+- `DeviceAllow=` `rw` for USB device files, VFIO groups and `/dev/vfio/vfio`, and
+  `LimitMEMLOCK=infinity`, for USB/PCI passthrough. The daemon user can only open a device
+  file once the root helper `anvild devhelper` (started per connection by
+  `anvil-devhelper.socket`, reachable only by the `anvil` user) handed it over. The helper
+  refuses devices behind the root filesystem, the default route or the host display, and
+  on release gives files back to root and the udev rules, never to an owner the caller names.
+  Whoever controls the daemon user can still take any other host device, see
+  [passthrough.md](passthrough.md).
 - Membership of the `docker` group, added by the post-install script
   (`packaging/common/post-install.sh`) when that group exists.
 

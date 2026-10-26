@@ -58,3 +58,55 @@ func TestLaunchImageSuggestionsFollowHypervisor(t *testing.T) {
 		t.Errorf("firecracker suggestions = %q", got)
 	}
 }
+
+func TestLaunchDevicePicker(t *testing.T) {
+	m := model{screen: screenLaunch, launch: newLaunchModel()}
+	next, _ := m.Update(hostDevicesLoadedMsg{devices: []*anvilv1.HostDevice{
+		{Id: "usb:3-2.1", Name: "Keyboard"},
+		{Id: "pci:0000:01:00.0", InUseBy: "web"},
+		{Id: "pci:0000:00:02.0", BlockedReason: "drives the host display"},
+	}})
+	l := next.(model).launch
+	var toggles []string
+	for i, f := range l.form.fields {
+		if id, ok := strings.CutPrefix(f.Label, devicePrefix); ok {
+			toggles = append(toggles, id)
+			l.form.fields[i].on = true
+		}
+	}
+	if strings.Join(toggles, ",") != "usb:3-2.1" {
+		t.Fatalf("picker offers %v, want only the free device", toggles)
+	}
+	if un := l.unavailableDevices(); len(un) != 2 {
+		t.Errorf("unavailable = %v, want the in-use and blocked devices", un)
+	}
+
+	l.form.fields[1].input.SetValue("img")
+	req, err := buildLaunchRequest(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := req.GetVm().GetDevices(); len(got) != 1 || got[0] != "usb:3-2.1" {
+		t.Errorf("request devices = %v", got)
+	}
+
+	// Firecracker hides the picker, switching back restores the pick.
+	setHypervisor := func(v string) {
+		for i := range l.form.fields {
+			if l.form.fields[i].Label == hypervisorField {
+				l.form.fields[i].input.SetValue(v)
+			}
+		}
+		l.syncDeviceFields()
+	}
+	setHypervisor("firecracker")
+	for _, f := range l.form.fields {
+		if strings.HasPrefix(f.Label, devicePrefix) {
+			t.Fatal("expected no device toggles for firecracker")
+		}
+	}
+	setHypervisor("qemu")
+	if !l.form.Bool(devicePrefix + "usb:3-2.1") {
+		t.Error("expected the pick to survive the hypervisor switch")
+	}
+}

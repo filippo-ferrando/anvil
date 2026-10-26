@@ -45,6 +45,56 @@ type launchModel struct {
 	// suggest holds Tab-completion candidates gathered from the other
 	// screens' data, (re)fetched fresh each time Launch is entered.
 	suggest launchSuggestions
+
+	// devices are the host's passthrough candidates; picked keeps toggles across a field rebuild.
+	devices []*anvilv1.HostDevice
+	picked  map[string]bool
+}
+
+// devicePrefix labels the per-device toggles a qemu VM's launch form ends with.
+const devicePrefix = "Pass "
+
+// wantsDevices is true when the form describes a VM that can take passthrough devices.
+func (m launchModel) wantsDevices() bool {
+	return m.kind == "vm" && strings.TrimSpace(m.form.Value(hypervisorField)) != "firecracker"
+}
+
+// syncDeviceFields keeps one toggle per free host device at the end of the form, only for a qemu VM.
+func (m *launchModel) syncDeviceFields() {
+	if m.picked == nil {
+		m.picked = make(map[string]bool)
+	}
+	fields := m.form.fields[:0]
+	for _, f := range m.form.fields {
+		if id, ok := strings.CutPrefix(f.Label, devicePrefix); ok {
+			m.picked[id] = f.on
+		} else {
+			fields = append(fields, f)
+		}
+	}
+	if m.wantsDevices() {
+		for _, d := range m.devices {
+			if client.DeviceStatus(d) == "free" {
+				fields = append(fields, toggleField(devicePrefix+d.GetId(), deviceName(d), m.picked[d.GetId()]))
+			}
+		}
+	}
+	m.form.fields = fields
+	if m.form.focus >= len(fields) {
+		m.form.focus = len(fields) - 1
+		m.form.focusCurrent()
+	}
+}
+
+// unavailableDevices lists the devices left out of the picker, with why.
+func (m launchModel) unavailableDevices() []string {
+	var out []string
+	for _, d := range m.devices {
+		if st := client.DeviceStatus(d); st != "free" {
+			out = append(out, d.GetId()+" ("+st+")")
+		}
+	}
+	return out
 }
 
 // launchSuggestions holds autocomplete candidates for the launch form.
@@ -297,6 +347,12 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.launch.applySuggestions()
 		}
 		return m, nil
+	case hostDevicesLoadedMsg:
+		if msg.err == nil {
+			m.launch.devices = msg.devices
+			m.launch.syncDeviceFields()
+		}
+		return m, nil
 	case containerImagesLoadedMsg:
 		if msg.err == nil {
 			var refs []string
@@ -328,6 +384,7 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.launch.form.fields = launchFields(m.launch.kind, values)
 			m.launch.form.tabField = -1 // stale index into the fields slice we just replaced
 			m.launch.applySuggestions() // the new fields start with no Suggestions of their own
+			m.launch.syncDeviceFields()
 			if m.launch.form.focus >= len(m.launch.form.fields) {
 				m.launch.form.focus = 0
 			}
@@ -343,6 +400,7 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var submitted, cancelled bool
 		m.launch.form, submitted, cancelled = m.launch.form.update(msg)
 		m.launch.applySuggestions() // the Image candidates follow the Hypervisor field
+		m.launch.syncDeviceFields() // and so does the device picker
 		if cancelled {
 			m.screen = screenInstances
 			return m, tea.ClearScreen
@@ -416,7 +474,11 @@ func (m launchModel) View() string {
 		return styleTitle.Render(" Cloud-init for this launch (not saved to the library) ") + "\n\n" +
 			body + "\n" + helpBar("ctrl+s", "use for this launch", "esc", "cancel")
 	}
-	return styleSubtitle.Render("kind: "+m.kind+cloudInitStatusSuffix(m)) + "\n\n" + m.form.View()
+	head := styleSubtitle.Render("kind: " + m.kind + cloudInitStatusSuffix(m))
+	if un := m.unavailableDevices(); m.wantsDevices() && len(un) > 0 {
+		head += "\n" + styleSubtitle.Render("devices not available: "+strings.Join(un, ", "))
+	}
+	return head + "\n\n" + m.form.View()
 }
 
 // cloudInitStatusSuffix appends a short cloud-init status to the launch
@@ -505,6 +567,11 @@ func buildLaunchRequest(m launchModel) (*anvilv1.LaunchRequest, error) {
 		Ports:         ports,
 		NoGuestAgent:  !form.Bool(guestAgentField),
 		Hypervisor:    hypervisor,
+	}
+	for _, f := range form.fields {
+		if id, ok := strings.CutPrefix(f.Label, devicePrefix); ok && f.on {
+			req.Vm.Devices = append(req.Vm.Devices, id)
+		}
 	}
 	req.Wait = form.Bool(waitField)
 	// The ad hoc editor, when used, always wins over the saved-library name:

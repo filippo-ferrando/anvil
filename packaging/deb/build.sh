@@ -87,10 +87,12 @@ else
   echo "==> warning: no GUI tools in $gui_tools (run make gui-tools), anvil gui won't work with VMs" >&2
 fi
 install -m755 "$common/post-install.sh" "$pkg_anvild/usr/lib/anvil/post-install.sh"
-# Hand-written, not generated: anvild takes no flags/subcommands, so
+# Hand-written, not generated: anvild has no cobra command tree, so
 # there's no command tree for `anvil man`'s equivalent to walk.
 gzip -9n -c "$repo/docs/man/anvild.8" > "$pkg_anvild/usr/share/man/man8/anvild.8.gz"
 install -m644 "$common/anvild.service" "$pkg_anvild/usr/lib/systemd/system/anvild.service"
+install -m644 "$common/anvil-devhelper.socket" "$pkg_anvild/usr/lib/systemd/system/anvil-devhelper.socket"
+install -m644 "$common/anvil-devhelper@.service" "$pkg_anvild/usr/lib/systemd/system/anvil-devhelper@.service"
 install -m644 "$common/anvil.sysusers" "$pkg_anvild/usr/lib/sysusers.d/anvil.conf"
 install -m644 "$common/anvil.tmpfiles" "$pkg_anvild/usr/lib/tmpfiles.d/anvil.conf"
 install -m755 "$common/prepare-jailer.sh" "$pkg_anvild/usr/lib/anvil/prepare-jailer.sh"

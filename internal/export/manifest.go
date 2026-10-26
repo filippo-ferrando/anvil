@@ -68,6 +68,9 @@ type VM struct {
 
 	// Hypervisor is "qemu" or "firecracker"; empty in older bundles, which means qemu.
 	Hypervisor string `json:",omitempty"`
+
+	// Devices are kept as they were; the imported VM fails to start where one is missing.
+	Devices []string `json:",omitempty"`
 }
 
 // Mount is one folder shared into a VM's guest, with its contents.

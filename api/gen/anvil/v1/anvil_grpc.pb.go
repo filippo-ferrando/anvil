@@ -2042,11 +2042,12 @@ var IntentService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	HostService_Add_FullMethodName      = "/anvil.v1.HostService/Add"
-	HostService_List_FullMethodName     = "/anvil.v1.HostService/List"
-	HostService_Remove_FullMethodName   = "/anvil.v1.HostService/Remove"
-	HostService_Test_FullMethodName     = "/anvil.v1.HostService/Test"
-	HostService_Discover_FullMethodName = "/anvil.v1.HostService/Discover"
+	HostService_Add_FullMethodName             = "/anvil.v1.HostService/Add"
+	HostService_List_FullMethodName            = "/anvil.v1.HostService/List"
+	HostService_Remove_FullMethodName          = "/anvil.v1.HostService/Remove"
+	HostService_Test_FullMethodName            = "/anvil.v1.HostService/Test"
+	HostService_Discover_FullMethodName        = "/anvil.v1.HostService/Discover"
+	HostService_ListHostDevices_FullMethodName = "/anvil.v1.HostService/ListHostDevices"
 )
 
 // HostServiceClient is the client API for HostService service.
@@ -2064,6 +2065,8 @@ type HostServiceClient interface {
 	// network over mDNS. Nothing is saved and no trust is granted, it just
 	// fills in what `anvil host add` would otherwise have to be told.
 	Discover(ctx context.Context, in *HostDiscoverRequest, opts ...grpc.CallOption) (*HostDiscoverReply, error)
+	// ListHostDevices lists this host's USB and PCI devices that can be passed to a QEMU VM.
+	ListHostDevices(ctx context.Context, in *ListHostDevicesRequest, opts ...grpc.CallOption) (*ListHostDevicesReply, error)
 }
 
 type hostServiceClient struct {
@@ -2124,6 +2127,16 @@ func (c *hostServiceClient) Discover(ctx context.Context, in *HostDiscoverReques
 	return out, nil
 }
 
+func (c *hostServiceClient) ListHostDevices(ctx context.Context, in *ListHostDevicesRequest, opts ...grpc.CallOption) (*ListHostDevicesReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListHostDevicesReply)
+	err := c.cc.Invoke(ctx, HostService_ListHostDevices_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // HostServiceServer is the server API for HostService service.
 // All implementations must embed UnimplementedHostServiceServer
 // for forward compatibility.
@@ -2139,6 +2152,8 @@ type HostServiceServer interface {
 	// network over mDNS. Nothing is saved and no trust is granted, it just
 	// fills in what `anvil host add` would otherwise have to be told.
 	Discover(context.Context, *HostDiscoverRequest) (*HostDiscoverReply, error)
+	// ListHostDevices lists this host's USB and PCI devices that can be passed to a QEMU VM.
+	ListHostDevices(context.Context, *ListHostDevicesRequest) (*ListHostDevicesReply, error)
 	mustEmbedUnimplementedHostServiceServer()
 }
 
@@ -2163,6 +2178,9 @@ func (UnimplementedHostServiceServer) Test(context.Context, *HostTestRequest) (*
 }
 func (UnimplementedHostServiceServer) Discover(context.Context, *HostDiscoverRequest) (*HostDiscoverReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Discover not implemented")
+}
+func (UnimplementedHostServiceServer) ListHostDevices(context.Context, *ListHostDevicesRequest) (*ListHostDevicesReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListHostDevices not implemented")
 }
 func (UnimplementedHostServiceServer) mustEmbedUnimplementedHostServiceServer() {}
 func (UnimplementedHostServiceServer) testEmbeddedByValue()                     {}
@@ -2275,6 +2293,24 @@ func _HostService_Discover_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _HostService_ListHostDevices_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListHostDevicesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).ListHostDevices(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_ListHostDevices_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).ListHostDevices(ctx, req.(*ListHostDevicesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // HostService_ServiceDesc is the grpc.ServiceDesc for HostService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2301,6 +2337,10 @@ var HostService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Discover",
 			Handler:    _HostService_Discover_Handler,
+		},
+		{
+			MethodName: "ListHostDevices",
+			Handler:    _HostService_ListHostDevices_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

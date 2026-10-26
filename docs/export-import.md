@@ -278,6 +278,8 @@ as before.
   special files are dropped, ownership is not restored.
 - **Custom member names are kept on an intent rename**, so importing such a bundle next
   to the intent it was exported from fails on the name check.
+- **Passthrough devices** travel as ids only: the imported VM fails to start where a
+  device isn't on the new host, see [passthrough.md](passthrough.md).
 - **Not exported:** snapshot schedule, autostart, restart policy, labels other than the
   role, the container's writable layer, and the intent's other settings.
 

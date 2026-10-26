@@ -42,7 +42,8 @@ Fields for every member: `kind` (`vm` or `container`, required), `image` (requir
 
 VM only: `cpus` (default 1), `memory` (default 1024), `disk`, `cloud_init` (inline) or
 `cloud_init_name` (from the saved library), `ssh_keys` (literal public keys),
-`no_guest_agent`, `hypervisor` (`qemu`, the default, or `firecracker`). The caller's own
+`no_guest_agent`, `hypervisor` (`qemu`, the default, or `firecracker`), `devices` (host USB/PCI
+devices, qemu only, see [passthrough.md](passthrough.md); a change recreates the VM). The caller's own
 anvil key is always added. A VM in an intent has its own address on the intent network,
 so it takes no `ports`.
 

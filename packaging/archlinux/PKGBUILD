@@ -46,6 +46,8 @@ package_anvild() {
     'podman: run containers via Podman (backend not implemented yet)'
     'firecracker: run VMs with --hypervisor firecracker (jailer included)'
     'nftables: outbound NAT for standalone Firecracker VMs'
+    'qemu-hw-usb-host: pass USB devices to VMs with --device'
+    'hwdata: device names in anvil host devices'
   )
 
   install=anvild.install
@@ -63,6 +65,8 @@ package_anvild() {
   # are all shared verbatim across every packaging format (packaging/deb,
   # packaging/rpm too), not duplicated per format (see packaging/common/).
   install -Dm644 "$startdir/../common/anvild.service" "$pkgdir/usr/lib/systemd/system/anvild.service"
+  install -Dm644 "$startdir/../common/anvil-devhelper.socket" "$pkgdir/usr/lib/systemd/system/anvil-devhelper.socket"
+  install -Dm644 "$startdir/../common/anvil-devhelper@.service" "$pkgdir/usr/lib/systemd/system/anvil-devhelper@.service"
   install -Dm644 "$startdir/../common/anvil.sysusers" "$pkgdir/usr/lib/sysusers.d/anvil.conf"
   install -Dm644 "$startdir/../common/anvil.tmpfiles" "$pkgdir/usr/lib/tmpfiles.d/anvil.conf"
   install -Dm755 "$startdir/../common/prepare-jailer.sh" "$pkgdir/usr/lib/anvil/prepare-jailer.sh"
@@ -73,7 +77,7 @@ package_anvild() {
   # packaging/deb/build.sh inlines this file's content into DEBIAN/postrm
   # instead of shipping it as a regular file there.
   install -Dm755 "$startdir/../common/purge.sh" "$pkgdir/usr/lib/anvil/purge.sh"
-  # Hand-written, not generated: anvild takes no flags/subcommands, so
+  # Hand-written, not generated: anvild has no cobra command tree, so
   # there's no cobra command tree for `anvil man`'s equivalent to walk.
   install -Dm644 "$srcdir/anvil/docs/man/anvild.8" "$pkgdir/usr/share/man/man8/anvild.8"
   install -Dm644 "$srcdir/anvil/LICENSE.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE.md"

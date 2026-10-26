@@ -434,6 +434,7 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			loadCatalog(m.client),
 			loadCachedImages(m.client),
 			loadContainerImages(m.client),
+			loadHostDevices(m.client),
 		)
 	case "l":
 		if inst := m.selectedInstance(); inst != nil {
@@ -854,6 +855,9 @@ func (m instancesModel) detailInfo() string {
 	}
 	if vm := inst.GetVm(); vm != nil {
 		b = append(b, detailRow("Size", resourcesText(vm)))
+		if devs := vm.GetDevices(); len(devs) > 0 {
+			b = append(b, detailRow("Devices", strings.Join(devs, ", ")))
+		}
 	}
 	policy := "restart " + restartPolicyText(inst.GetRestartPolicy())
 	if inst.GetAutostart() {

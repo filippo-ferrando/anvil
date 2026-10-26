@@ -25,6 +25,9 @@ func GUIToolsDir() string {
 // SocketPath is the daemon's gRPC listen address.
 func SocketPath() string { return filepath.Join(RunDir, "anvild.sock") }
 
+// DevHelperSocket is where anvil-devhelper.socket listens, for USB/PCI passthrough claims.
+func DevHelperSocket() string { return filepath.Join(RunDir, "devhelper.sock") }
+
 // DBPath is the bbolt registry file (instances, intents, mirrors, hosts, cloud-init, events).
 func DBPath() string { return filepath.Join(StateDir, "anvil.db") }
 

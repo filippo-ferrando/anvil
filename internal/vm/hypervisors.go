@@ -361,3 +361,6 @@ func (h *Hypervisors) PrepareImportedDisk(ctx context.Context, hypervisor instan
 	}
 	return d.PrepareImportedDisk(ctx, imageRef, arch, diskPath, baseSHA256)
 }
+
+// HeldDevices is QEMU's: it is the only hypervisor with device passthrough.
+func (h *Hypervisors) HeldDevices() map[string]string { return h.QEMU.HeldDevices() }

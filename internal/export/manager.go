@@ -171,6 +171,7 @@ func (m *Manager) Export(ctx context.Context, p ExportParams, progress func(stat
 				DiskFile:         "disks/" + spec.ID + ".qcow2",
 				MACAddress:       v.MAC(spec.ID),
 				Hypervisor:       string(v.HypervisorOf()),
+				Devices:          v.Devices,
 			}
 			// A disk with no base image (one adopted from a flattened migration) has
 			// no checksum to record, which only means the import can't cross-check it.
@@ -485,6 +486,7 @@ func (m *Manager) fillLaunchParams(ctx context.Context, params *instance.LaunchP
 			SourceDiskPath:    diskPath,
 			MACAddress:        mem.VM.MACAddress,
 			Hypervisor:        hypervisor,
+			Devices:           mem.VM.Devices,
 		}
 		// A standalone Firecracker guest keeps the address configured inside its disk;
 		// an intent member's goes through PinnedStaticIP instead.

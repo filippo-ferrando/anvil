@@ -421,3 +421,33 @@ func TestOVMFPathReportsAMissingFirmware(t *testing.T) {
 		t.Fatal("expected an error when no firmware is installed")
 	}
 }
+
+func TestBuildArgsPassthrough(t *testing.T) {
+	fakeOVMFRoot(t)
+	args, err := BuildArgs(Config{DiskPath: "/d.qcow2", QMPSocket: "/q.sock"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if joined := strings.Join(args, " "); strings.Contains(joined, "qemu-xhci") || strings.Contains(joined, "vfio-pci") {
+		t.Errorf("no devices should add no controller: %s", joined)
+	}
+
+	args, err = BuildArgs(Config{
+		DiskPath: "/d.qcow2", QMPSocket: "/q.sock",
+		USBDevices: []string{"3-2.1"}, PCIDevices: []string{"0000:04:00.0", "0000:04:00.1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		"-device qemu-xhci,id=xhci0",
+		"-device usb-host,bus=xhci0.0,hostbus=3,hostport=2.1",
+		"-device pcie-root-port,id=pt0,chassis=9 -device vfio-pci,host=0000:04:00.0,bus=pt0",
+		"-device pcie-root-port,id=pt1,chassis=10 -device vfio-pci,host=0000:04:00.1,bus=pt1",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("expected %q in args, got: %s", want, joined)
+		}
+	}
+}

@@ -189,3 +189,13 @@ func TestParseRemoteCapsFirecracker(t *testing.T) {
 		t.Errorf("parsed %+v", caps)
 	}
 }
+
+// A passthrough VM is refused before the target is even contacted.
+func TestPreflightRefusesPassthroughVM(t *testing.T) {
+	spec := vmSpec()
+	spec.VM.Devices = []string{"usb:3-2"}
+	_, _, err := (&Manager{}).preflight(context.Background(), target{User: "u", Host: "h"}, spec, "web")
+	if err == nil || !strings.Contains(err.Error(), "can't be migrated") {
+		t.Fatalf("got %v, want a passthrough refusal", err)
+	}
+}

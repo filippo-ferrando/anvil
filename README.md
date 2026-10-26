@@ -113,6 +113,7 @@ The longer write-up is in [docs/comparison.md](docs/comparison.md).
   [docs/aarch64-on-x86.md](docs/aarch64-on-x86.md)
 - Firecracker microVMs with `--hypervisor firecracker`, the same commands and features,
   see [docs/firecracker.md](docs/firecracker.md)
+- USB and PCI passthrough to QEMU VMs with `--device`, see [docs/passthrough.md](docs/passthrough.md)
 - real cloud-init under the hood, plus a saved cloud-init config library to write,
   edit, and reuse (`anvil cloud-init`)
 - `anvil shell` / `anvil exec` / `anvil transfer` over real SSH, using a keypair Anvil
@@ -380,6 +381,7 @@ internal/
   migrate/       SSH-driven migration
   discovery/     mDNS announce and browse behind `anvil host discover`
   export/        bundles behind `anvil export` and `anvil import`
+  hostdev/       host USB/PCI listing and the root helper behind `--device`
   gui/           `anvil gui`: socket relay for containers, app name/icon lookup
   config/        fixed on-disk paths (run, state, cache, GUI tools)
   store/         bbolt-backed registry
@@ -409,6 +411,7 @@ scripts/         catalog checksum check, release notes and changelog from commit
 | The TUI, screen by screen | [docs/tui.md](docs/tui.md) |
 | GUI apps from instances (`anvil gui`) | [docs/gui.md](docs/gui.md) |
 | Firecracker microVMs (`--hypervisor firecracker`) | [docs/firecracker.md](docs/firecracker.md) |
+| USB and PCI passthrough (`--device`) | [docs/passthrough.md](docs/passthrough.md) |
 | Security model | [docs/security.md](docs/security.md) |
 | Comparison with similar tools | [docs/comparison.md](docs/comparison.md) |
 

@@ -96,6 +96,8 @@ internal/
   migrate/payload/  JSON payload migrate sends to the target's anvil CLI
   discovery/     mDNS announce and browse behind `anvil host discover`
   export/        bundle export/import behind `anvil export` and `anvil import`
+  hostdev/       USB/PCI device listing, boot-device denylist, and the root helper
+                 (`anvild devhelper`, anvil-devhelper.socket) behind `launch --device`
   gui/           `anvil gui`: fd-passing socket relay + xauth (gui/relay), app .desktop/icon lookup (gui/appinfo)
   config/        fixed on-disk paths (run/state/cache dirs, GUI relay and tools dirs)
   intent/apply/  the compare-and-apply engine behind `anvil apply`
@@ -123,7 +125,7 @@ packaging/       PKGBUILD/deb/rpm build scripts, systemd unit, sysusers/tmpfiles
 Delete/Status/Logs) that both the QEMU/vz backend and the Docker backend implement.
 Optional capabilities are separate interfaces (`Mounter`, `PortForwarder`, `Snapshotter`,
 `Forker`, `Reconciler`, `StatsProvider`, `GuestInspector`, `ReadyWaiter`, `ExitNotifier`,
-`GUIPreparer`, `GuestFileReader`, and `Resizer`/`LiveResizer` in `update.go`) that a backend implements only if
+`GUIPreparer`, `GuestFileReader`, `DeviceHolder`, and `Resizer`/`LiveResizer` in `update.go`) that a backend implements only if
 it supports that operation, so a container backend has no `Snapshotter`.
 `internal/instance/manager.go`'s `Manager` type-asserts against these before calling
 them. When adding a capability to one backend, extend this interface set rather than

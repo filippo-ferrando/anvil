@@ -6,6 +6,8 @@ anvild \- daemon that drives QEMU and Firecracker VMs and Docker containers for 
 
 .SH SYNOPSIS
 \fBanvild\fP
+.br
+\fBanvild devhelper\fP
 
 .SH DESCRIPTION
 anvild is the daemon behind \fBanvil\fR(1) and \fBanvil tui\fR. It owns every
@@ -16,7 +18,7 @@ just build a request and send it over that socket.
 It drives QEMU processes directly over QMP for VMs (no libvirt), or
 Firecracker processes over their REST API, and talks to Docker's real HTTP
 API for containers (no SDK). It takes no command-line
-flags or subcommands and its on-disk layout is fixed. Its runtime behavior is
+flags and its on-disk layout is fixed. Its runtime behavior is
 controlled through the requests it receives over the socket, with a few
 exceptions read from its environment, described under ENVIRONMENT:
 \fBANVIL_MDNS\fR, \fBANVIL_METRICS\fR, \fBANVIL_GUI_TOOLS\fR and the
@@ -33,6 +35,13 @@ local network over mDNS as \fB_anvil._tcp\fR, which is what \fBanvil host
 discover\fR finds; the announcement grants no access by itself. It shuts down gracefully on
 \fBSIGINT\fR or \fBSIGTERM\fR, waiting up to 10 seconds for in-flight RPCs
 (such as \fBanvil logs --follow\fR) to finish before forcing a stop.
+
+\fBanvild devhelper\fR is the root helper for USB and PCI passthrough
+(\fBanvil launch \-\-device\fR). It is not run by hand:
+\fBanvil\-devhelper.socket\fR starts it as root for each connection on
+\fB/run/anvil/devhelper.sock\fR, which only the anvil user can reach. It
+answers one claim or release, refusing devices behind the root filesystem, the
+default route or the host display. See \fBdocs/passthrough.md\fR.
 
 .SH FILES
 .PP

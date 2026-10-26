@@ -38,7 +38,7 @@ path must then be absolute on the remote host.
 - **Header**: local `user@hostname`, the socket (or `host:socket` with `--remote`), the
   daemon state (`connecting…`, `daemon connected` with the daemon's version,
   `daemon unreachable`, taken from the last instance list request), the running/total instance count and a clock.
-- **Sidebar**: the eight screens of `screenOrder` in `internal/tui/app.go`. The entry with
+- **Sidebar**: the nine screens of `screenOrder` in `internal/tui/app.go`. The entry with
   the arrow is the active screen; it is highlighted when the sidebar itself has focus.
 - **Status line**: the result of the last action. A success stays 4 s, an error 10 s; known
   errors get a `hint:` line under them (`friendlyError`).
@@ -57,7 +57,7 @@ and **Logs** (`l` on Instances).
 | Key | Action |
 |-----|--------|
 | `ctrl+c` | Quit, from any screen, even during a launch. |
-| `alt+1` … `alt+8` | Jump to that sidebar entry, focused on its content. Not in the Launch and Logs takeovers. This is checked before any form, so it also leaves a half-filled form. |
+| `alt+1` … `alt+9` | Jump to that sidebar entry, focused on its content. Not in the Launch and Logs takeovers. This is checked before any form, so it also leaves a half-filled form. |
 
 ### Sidebar (when it has focus)
 
@@ -67,7 +67,7 @@ and **Logs** (`l` on Instances).
 | `↓` `j` `tab` | Next screen (wraps around). |
 | `home` `g` / `end` `G` | First / last screen. |
 | `enter` `→` `l` | Move focus into the screen's content. |
-| `1` … `8` | Jump to that screen, focused on its content. |
+| `1` … `9` | Jump to that screen, focused on its content. |
 | `q` | Quit. |
 
 Inside a screen, `esc` or `q` gives focus back to the sidebar when no form, confirmation
@@ -160,6 +160,8 @@ fields depend on it:
   suggestions only list images it can boot, see [firecracker.md](firecracker.md)),
   Disk GiB (default 0, the image minimum, as in the CLI), Cloud-init name (suggestions
   from the library), Guest agent toggle (on by default), Wait toggle.
+- qemu VM, at the very end: a `Pass <id>` toggle per free host device (`--device`, see
+  [passthrough.md](passthrough.md)). Blocked and in-use devices are listed above the form.
 - Container: Env (`K=V,K2=V2`), Volumes (`host:guest[:ro],...`).
 - Both, at the end: Autostart toggle, Restart policy (suggestions `no`, `on-failure`,
   `on-failure:5`, `always`), Intent name, Role, Ports (`host:guest[/tcp|udp],...`).
@@ -307,6 +309,17 @@ The event log (`anvil events`), newest first: time, instance, action, the user w
 it (or `anvild`) and the message or error. A failed operation is marked `✕`. The newest
 500 events are loaded when the screen opens and again after instance changes. With the
 cursor on the newest event it follows new ones; elsewhere it stays on the same event.
+
+| Key | Action |
+|-----|--------|
+| `r` | Reload. |
+| `esc` `q` | Back to the sidebar. |
+
+## 9. Devices
+
+The host's USB and PCI devices (`anvil host devices`): id and name, then vendor:product,
+driver and status (free, in use by an instance, or blocked and why). A PCI device also
+shows the other IOMMU group members it brings along. See [passthrough.md](passthrough.md).
 
 | Key | Action |
 |-----|--------|

@@ -40,6 +40,7 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 		noGuestAgent  bool
 		autostart     bool
 		restart       string
+		devices       []string
 	)
 
 	cmd := &cobra.Command{
@@ -93,6 +94,9 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if len(devices) > 0 && (kind != anvilv1.Kind_KIND_VM || hypervisorStr == "firecracker") {
+				return fmt.Errorf("--device only applies to --kind vm with the qemu hypervisor")
+			}
 			if noGuestAgent && kind != anvilv1.Kind_KIND_VM {
 				return fmt.Errorf("--no-guest-agent only applies to --kind vm")
 			}
@@ -136,6 +140,10 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 				if err != nil {
 					return err
 				}
+				devs, err := client.ParseDevices(devices)
+				if err != nil {
+					return err
+				}
 				req.Vm = &anvilv1.VMSpec{
 					ImageRef:          imageRef,
 					Cpus:              cpus,
@@ -149,6 +157,7 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 					DefaultUser:       defaultUser,
 					NoGuestAgent:      noGuestAgent,
 					Hypervisor:        hypervisor,
+					Devices:           devs,
 				}
 
 			case anvilv1.Kind_KIND_CONTAINER:
@@ -221,6 +230,8 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 15*time.Minute, "give up on --wait after this long")
 	cmd.Flags().BoolVar(&autostart, "autostart", false, "start the instance whenever anvild starts, unless it was stopped on purpose")
 	cmd.Flags().StringVar(&restart, "restart", "", "restart policy when it stops on its own: no (default), on-failure[:N] or always")
+	cmd.Flags().StringArrayVar(&devices, "device", nil, "pass a host device to the VM: usb:<vendor>:<product>, usb:<bus>-<port> or "+
+		"pci:<domain>:<bus>:<slot>.<fn>, see anvil host devices (repeatable; qemu VMs only, which then can't be migrated or forked)")
 	cmd.Flags().BoolVar(&noGuestAgent, "no-guest-agent", false, "don't install qemu-guest-agent through cloud-init (VM only); disables guest IP reporting and agent shutdown")
 	cmd.Flags().StringVar(&defaultUser, "default-user", "", "override the SSH login user normally read from the image catalog (VM only, mainly for internal use by anvil migrate)")
 	return cmd

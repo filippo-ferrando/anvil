@@ -57,6 +57,7 @@ func (b *Backend) releaseStopped(instanceID, networkMode string, proc *qemu.Proc
 			log.Printf("vm: failed to detach network device for %s: %v", instanceID, err)
 		}
 	}
+	b.releaseRuntimeDevices(instanceID)
 	removeRuntimeState(instanceDir(instanceID))
 
 	b.mu.Lock()
