@@ -5,6 +5,7 @@ current state and applies the difference. Running it again with no changes does 
 
 ```
 anvil apply -f anvil.yaml [--dry-run] [--prune] [--recreate] [--wait-timeout 15m]
+            [--var KEY=VALUE]... [--env-file FILE]
 ```
 
 The plan is always printed first. `--dry-run` stops there. In the TUI, press `A` on the
@@ -52,6 +53,44 @@ Container only: `engine` (`docker`, the default, or `podman`), `env`, `entrypoin
 and `ports` (`host:guest[/tcp|udp]`).
 
 Unknown fields are errors, so a typo never passes silently. [example.yaml](example.yaml) uses every field.
+
+## Variables
+
+Values can use variables, with the same syntax as docker compose:
+
+| Syntax | Result |
+| --- | --- |
+| `${VAR}` or `$VAR` | the value of `VAR`, an error if unset |
+| `${VAR:-default}` | `default` if `VAR` is unset or empty |
+| `${VAR-default}` | `default` if `VAR` is unset |
+| `${VAR:?message}` | an error with `message` if `VAR` is unset or empty |
+| `${VAR?message}` | an error with `message` if `VAR` is unset |
+| `$$` | a literal `$` |
+
+Values come from, first match wins:
+
+1. `--var KEY=VALUE` (CLI only, can be repeated)
+2. the environment of the shell running `anvil apply` or `anvil tui`
+3. a `.env` file beside the manifest (`KEY=VALUE` lines, `#` comments), or `--env-file`
+4. the manifest's own top-level `vars:` map
+
+```yaml
+vars:
+  PG_TAG: "16"
+intent: shop
+members:
+  db:
+    kind: container
+    image: postgres:${PG_TAG}
+    env:
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+```
+
+Every unset variable without a default is listed in one error, and nothing is applied.
+Only values are expanded, never keys. Variables are expanded inside inline `cloud_init` too,
+so a shell `$HOME` there has to be written as `$$HOME`. Inside a `{...}` flow map, quote a
+value that uses `${...}`, since YAML ends the map at the first `}`. Only the variables the
+manifest uses are sent to the daemon, also with `--remote`, and the plan never shows their values.
 
 ## What apply does
 

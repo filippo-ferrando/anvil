@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/intent/vars"
 	"git.fferrando.cc/rdfilippo/anvil/internal/sshkey"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
@@ -28,11 +29,15 @@ func newApplyRequest(path string, prune, recreate bool) (*anvilv1.IntentApplyReq
 	if err != nil {
 		return nil, fmt.Errorf("reading manifest: %w", err)
 	}
+	values, err := vars.Load(path, "", data, nil)
+	if err != nil {
+		return nil, err
+	}
 	pub, err := sshkey.EnsureDefaultPublic()
 	if err != nil {
 		return nil, err
 	}
-	return &anvilv1.IntentApplyRequest{Manifest: data, Prune: prune, Recreate: recreate, SshPublicKeys: []string{pub}}, nil
+	return &anvilv1.IntentApplyRequest{Manifest: data, Prune: prune, Recreate: recreate, SshPublicKeys: []string{pub}, Vars: values}, nil
 }
 
 func startApplyStream(c *client.Client, req *anvilv1.IntentApplyRequest) tea.Cmd {

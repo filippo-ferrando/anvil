@@ -14,11 +14,13 @@ import (
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/intent"
+	"git.fferrando.cc/rdfilippo/anvil/internal/intent/vars"
 )
 
 // Manifest is one parsed anvil.yaml: an intent and its members, keyed by role.
 type Manifest struct {
 	Intent  string            `yaml:"intent"`
+	Vars    map[string]string `yaml:"vars"` // defaults for ${VAR} in the values below
 	Members map[string]Member `yaml:"members"`
 }
 
@@ -75,8 +77,13 @@ const (
 	defaultMemoryMiB = instance.DefaultMemoryMiB
 )
 
-// Parse reads and validates a manifest. Unknown fields are errors, so typos don't pass silently.
-func Parse(data []byte) (*Manifest, error) {
+// Parse expands variables (given wins over the vars: block) and validates a manifest.
+// Unknown fields are errors, so typos don't pass silently.
+func Parse(data []byte, given map[string]string) (*Manifest, error) {
+	data, err := vars.Interpolate(data, given)
+	if err != nil {
+		return nil, fmt.Errorf("apply: %w", err)
+	}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	var m Manifest

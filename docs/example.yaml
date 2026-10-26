@@ -3,6 +3,10 @@
 # Volume host paths (/srv/shop/...) must exist and be owned by the caller, even for a dry run.
 # Field reference and apply rules: docs/apply.md
 
+vars: # defaults for ${VAR} below; --var, the shell env and .env override them
+  PG_TAG: "16"
+  DB_PASSWORD: secret
+
 intent: shop # intent name, required; members resolve each other as <role>.shop.anvil
 
 members:
@@ -10,12 +14,12 @@ members:
 
   db:
     kind: container # "vm" or "container", required
-    image: postgres:16 # required
+    image: postgres:${PG_TAG} # required; values can use compose-style ${VAR}, see docs/apply.md
     name: shop-postgres # instance name, defaults to "<intent>-<role>" (here "shop-db")
     engine: docker # "docker" (default) or "podman" (not implemented yet)
     env:
       POSTGRES_USER: shop
-      POSTGRES_PASSWORD: secret
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: shop
     volumes:
       - /srv/shop/db:/var/lib/postgresql/data # host path must be absolute

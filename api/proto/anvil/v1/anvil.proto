@@ -795,6 +795,7 @@ message IntentApplyRequest {
   bool recreate = 4;                // allow replacing a VM, which loses its disk
   repeated string ssh_public_keys = 5; // authorized on every new VM, e.g. the caller's anvil key
   int32 wait_timeout_seconds = 6;   // readiness wait per depended-on member, defaults to 900
+  map<string, string> vars = 7;     // values for ${VAR} in the manifest, over its own vars: block
 }
 
 // IntentApplyStep is one planned change to a member.

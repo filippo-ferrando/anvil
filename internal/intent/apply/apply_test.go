@@ -33,7 +33,7 @@ members:
 
 func mustParse(t *testing.T, s string) *Manifest {
 	t.Helper()
-	m, err := Parse([]byte(s))
+	m, err := Parse([]byte(s), nil)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestParseErrors(t *testing.T) {
 		"ct device":      "intent: x\nmembers:\n  a: {kind: container, image: u, devices: ['usb:3-2']}\n",
 	}
 	for name, s := range cases {
-		if _, err := Parse([]byte(s)); err == nil {
+		if _, err := Parse([]byte(s), nil); err == nil {
 			t.Errorf("%s: Parse succeeded, want an error", name)
 		}
 	}
@@ -299,7 +299,7 @@ func TestDocsExampleParses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, err := Parse(data)
+	m, err := Parse(data, nil)
 	if err != nil {
 		t.Fatalf("docs/example.yaml: %v", err)
 	}
@@ -359,7 +359,7 @@ func TestSamePortReadsEmptyProtocolAsTCP(t *testing.T) {
 }
 
 func TestDevicesNeedReplace(t *testing.T) {
-	m, err := Parse([]byte("intent: x\nmembers:\n  a: {kind: vm, image: u, devices: ['USB:3-2']}\n"))
+	m, err := Parse([]byte("intent: x\nmembers:\n  a: {kind: vm, image: u, devices: ['USB:3-2']}\n"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,5 +373,19 @@ func TestDevicesNeedReplace(t *testing.T) {
 	replace, _, _ := diff(mem, cur)
 	if len(replace) != 1 || !strings.Contains(replace[0], "devices") {
 		t.Errorf("replace = %v, want a devices change", replace)
+	}
+}
+
+func TestParseVars(t *testing.T) {
+	s := "vars: {IMG: u, CPUS: 1}\nintent: ${NAME}\nmembers:\n  a:\n    kind: vm\n    image: $IMG\n    cpus: ${CPUS}\n"
+	m, err := Parse([]byte(s), map[string]string{"NAME": "x", "CPUS": "3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := m.Members["a"]; m.Intent != "x" || a.Image != "u" || a.vm.CPUs != 3 {
+		t.Errorf("got intent %q, member %+v", m.Intent, a)
+	}
+	if _, err := Parse([]byte(s), nil); err == nil || !strings.Contains(err.Error(), "NAME is not set") {
+		t.Errorf("err = %v, want NAME is not set", err)
 	}
 }

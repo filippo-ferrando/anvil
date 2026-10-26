@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/intent/vars"
 	"git.fferrando.cc/rdfilippo/anvil/internal/sshkey"
 )
 
@@ -21,6 +22,8 @@ func newApplyCommand(flags *globalFlags) *cobra.Command {
 		prune       bool
 		recreate    bool
 		waitTimeout time.Duration
+		varFlags    []string
+		envFile     string
 	)
 	cmd := &cobra.Command{
 		Use:   "apply -f <anvil.yaml>",
@@ -32,6 +35,18 @@ func newApplyCommand(flags *globalFlags) *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			data, err := readManifest(file)
+			if err != nil {
+				return err
+			}
+			overrides := map[string]string{}
+			for _, kv := range varFlags {
+				k, v, ok := strings.Cut(kv, "=")
+				if !ok || k == "" {
+					return fmt.Errorf("--var %q: expected KEY=VALUE", kv)
+				}
+				overrides[k] = v
+			}
+			values, err := vars.Load(file, envFile, data, overrides)
 			if err != nil {
 				return err
 			}
@@ -52,6 +67,7 @@ func newApplyCommand(flags *globalFlags) *cobra.Command {
 				Recreate:           recreate,
 				SshPublicKeys:      []string{anvilPub},
 				WaitTimeoutSeconds: int32(waitTimeout.Seconds()),
+				Vars:               values,
 			})
 			if err != nil {
 				return err
@@ -63,6 +79,8 @@ func newApplyCommand(flags *globalFlags) *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "only show what would change")
 	cmd.Flags().BoolVar(&prune, "prune", false, "delete members that are no longer in the manifest")
 	cmd.Flags().BoolVar(&recreate, "recreate", false, "allow replacing a VM whose image, cloud-init or SSH keys changed (its disk is lost)")
+	cmd.Flags().StringArrayVar(&varFlags, "var", nil, "set a manifest variable as KEY=VALUE, over the shell env, .env and vars:")
+	cmd.Flags().StringVar(&envFile, "env-file", "", "file of KEY=VALUE manifest variables (default: .env beside the manifest, if present)")
 	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 15*time.Minute, "how long to wait for each member others depend on to be ready")
 	return cmd
 }

@@ -96,7 +96,7 @@ func (s *IntentServer) Apply(req *anvilv1.IntentApplyRequest, stream anvilv1.Int
 		_ = stream.Send(&anvilv1.IntentApplyProgress{Event: &anvilv1.IntentApplyProgress_Error{Error: err.Error()}})
 		return nil // reported in-band, like a failed launch
 	}
-	m, err := apply.Parse(req.GetManifest())
+	m, err := apply.Parse(req.GetManifest(), req.GetVars())
 	if err != nil {
 		return sendErr(err)
 	}
