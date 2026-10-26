@@ -2,6 +2,16 @@
 
 Built from commit subjects by `scripts/changelog.sh`.
 
+## v1.2.7 (2026-10-26)
+
+### Features
+
+- USB/PCI device passthrough (3ae82e0)
+
+### Fixes
+
+- fixed rpm spec file (bfd8e64)
+
 ## v1.2.6 (2026-10-20)
 
 ### Fixes
