@@ -87,8 +87,6 @@ install -m644 man1/*.1 %{buildroot}%{_mandir}/man1/
 # reaches them here.
 install -Dm755 packaging/common/post-install.sh %{buildroot}/usr/lib/anvil/post-install.sh
 install -Dm644 packaging/common/anvild.service %{buildroot}/usr/lib/systemd/system/anvild.service
-/usr/lib/systemd/system/anvil-devhelper.socket
-/usr/lib/systemd/system/anvil-devhelper@.service
 install -Dm644 packaging/common/anvil-devhelper.socket %{buildroot}/usr/lib/systemd/system/anvil-devhelper.socket
 install -Dm644 packaging/common/anvil-devhelper@.service %{buildroot}/usr/lib/systemd/system/anvil-devhelper@.service
 install -Dm644 packaging/common/anvil.sysusers %{buildroot}/usr/lib/sysusers.d/anvil.conf
@@ -120,6 +118,8 @@ fi
 %{_bindir}/anvild
 /usr/lib/anvil/post-install.sh
 /usr/lib/systemd/system/anvild.service
+/usr/lib/systemd/system/anvil-devhelper.socket
+/usr/lib/systemd/system/anvil-devhelper@.service
 /usr/lib/sysusers.d/anvil.conf
 /usr/lib/tmpfiles.d/anvil.conf
 /usr/lib/anvil/prepare-jailer.sh
