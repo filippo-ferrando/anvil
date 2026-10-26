@@ -2,6 +2,12 @@
 
 Built from commit subjects by `scripts/changelog.sh`.
 
+## v1.2.8 (2026-10-26)
+
+### Features
+
+- variables in declarative intents (8efc152)
+
 ## v1.2.7 (2026-10-26)
 
 ### Features
