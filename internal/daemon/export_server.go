@@ -29,7 +29,7 @@ func (s *ExportServer) Export(req *anvilv1.ExportRequest, stream anvilv1.ExportS
 		_ = stream.Send(&anvilv1.ExportProgress{Event: &anvilv1.ExportProgress_Error{Error: err.Error()}})
 		return err
 	}
-	_ = stream.Send(&anvilv1.ExportProgress{Event: &anvilv1.ExportProgress_Done{Done: req.GetOutputPath()}})
+	_ = stream.Send(&anvilv1.ExportProgress{Event: &anvilv1.ExportProgress_Done{Done: output}})
 	return nil
 }
 

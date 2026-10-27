@@ -454,6 +454,14 @@ func (m *Manager) resolve(names []string) ([]*Spec, error) {
 	return specs, nil
 }
 
+// resolveNamed is resolve for actions that change state: an empty list is an error, not "all".
+func (m *Manager) resolveNamed(names []string) ([]*Spec, error) {
+	if len(names) == 0 {
+		return nil, ErrNoNames
+	}
+	return m.resolve(names)
+}
+
 // Info returns the named instances, with live guest detail filled in.
 func (m *Manager) Info(names []string) ([]*Spec, error) {
 	specs, err := m.resolve(names)
@@ -738,7 +746,7 @@ func (m *Manager) Start(ctx context.Context, names []string) error {
 
 // start is Start, recording each instance's event as action.
 func (m *Manager) start(ctx context.Context, names []string, action string) error {
-	specs, err := m.resolve(names)
+	specs, err := m.resolveNamed(names)
 	if err != nil {
 		return err
 	}
@@ -765,7 +773,7 @@ func (m *Manager) startOne(ctx context.Context, spec *Spec) error {
 // every one even if an earlier instance fails. A VM escalates from the guest
 // agent to ACPI to a hard stop, all inside timeout; force skips to the end.
 func (m *Manager) Stop(ctx context.Context, names []string, force bool, timeout time.Duration) error {
-	specs, err := m.resolve(names)
+	specs, err := m.resolveNamed(names)
 	if err != nil {
 		return err
 	}
@@ -796,7 +804,7 @@ func (m *Manager) stopOne(ctx context.Context, spec *Spec, force bool, timeout t
 // Delete tears down each named instance's backend resources (disk, container) and
 // removes its record; every name is attempted even if an earlier one fails.
 func (m *Manager) Delete(ctx context.Context, names []string) error {
-	specs, err := m.resolve(names)
+	specs, err := m.resolveNamed(names)
 	if err != nil {
 		return err
 	}

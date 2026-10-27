@@ -32,7 +32,10 @@ type GuestAgent struct {
 	SocketPath string
 	// Dial, if set, replaces the unix socket dial (Firecracker reaches the agent over vsock).
 	Dial func(ctx context.Context) (net.Conn, error)
-	mu   sync.Mutex
+
+	// sem holds one token per running call; a channel so waiting can stop on ctx.
+	semOnce sync.Once
+	sem     chan struct{}
 }
 
 func NewGuestAgent(socketPath string) *GuestAgent {
@@ -67,8 +70,13 @@ type qgaResponse struct {
 // Do opens a connection, syncs it with guest-sync-delimited, and runs fn on it.
 // Returns ErrAgentUnavailable when the agent doesn't answer the sync.
 func (a *GuestAgent) Do(ctx context.Context, fn func(c *QGAConn) error) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.semOnce.Do(func() { a.sem = make(chan struct{}, 1) })
+	select {
+	case a.sem <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-a.sem }()
 
 	conn, err := a.dial(ctx)
 	if err != nil {
@@ -146,7 +154,9 @@ func (c *QGAConn) readResponse() (qgaResponse, error) {
 		return qgaResponse{}, err
 	}
 	// A stray 0xFF from an earlier sync may precede the JSON.
-	line = []byte(strings.TrimLeft(string(line), "\xff"))
+	for len(line) > 0 && line[0] == 0xFF {
+		line = line[1:]
+	}
 	var resp qgaResponse
 	if err := json.Unmarshal(line, &resp); err != nil {
 		return qgaResponse{}, fmt.Errorf("qga: decoding response %q: %w", line, err)

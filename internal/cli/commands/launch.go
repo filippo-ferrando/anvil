@@ -66,10 +66,6 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 				return fmt.Errorf("a trailing command only makes sense for --kind container")
 			}
 
-			if name == "" {
-				name = imageRef
-			}
-
 			if role != "" && intentName == "" {
 				return fmt.Errorf("--role only makes sense with --intent")
 			}
@@ -208,7 +204,7 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 
 	cmd.Flags().StringVar(&kindStr, "kind", "", `instance kind: "vm" or "container" (required)`)
 	_ = cmd.MarkFlagRequired("kind")
-	cmd.Flags().StringVar(&name, "name", "", "instance name (defaults to the image reference)")
+	cmd.Flags().StringVar(&name, "name", "", "instance name (defaults to one derived from the image, e.g. ubuntu-24.04)")
 	cmd.Flags().Int32Var(&cpus, "cpus", 1, "number of vCPUs (VM only)")
 	cmd.Flags().Int64Var(&memoryMiB, "memory", 1024, "memory in MiB (VM only)")
 	cmd.Flags().Int64Var(&diskGiB, "disk", 0, "disk size in GiB (VM only; 0 = catalog minimum)")

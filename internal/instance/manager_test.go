@@ -2,7 +2,9 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 )
 
 func TestCloneVMSpecForForkDeepCopiesSlices(t *testing.T) {
@@ -65,5 +67,20 @@ func TestDeleteRemovesRecord(t *testing.T) {
 	}
 	if _, err := reg.GetByID("01"); err == nil {
 		t.Error("expected the record to be removed")
+	}
+}
+
+// TestStateActionsRejectEmptyNames guards against an empty list acting on every instance.
+func TestStateActionsRejectEmptyNames(t *testing.T) {
+	m := NewManager(&memRegistry{}, map[Kind]Backend{KindVM: &plainBackend{}})
+	ctx := context.Background()
+	if err := m.Start(ctx, nil); !errors.Is(err, ErrNoNames) {
+		t.Errorf("Start: got %v, want ErrNoNames", err)
+	}
+	if err := m.Stop(ctx, nil, false, time.Second); !errors.Is(err, ErrNoNames) {
+		t.Errorf("Stop: got %v, want ErrNoNames", err)
+	}
+	if err := m.Delete(ctx, nil); !errors.Is(err, ErrNoNames) {
+		t.Errorf("Delete: got %v, want ErrNoNames", err)
 	}
 }

@@ -7,7 +7,7 @@ func TestParsePortMapping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.GetHostPort() != 8080 || p.GetGuestPort() != 80 || p.GetProtocol() != "" {
+	if p.GetHostPort() != 8080 || p.GetGuestPort() != 80 || p.GetProtocol() != "tcp" {
 		t.Fatalf("got %+v", p)
 	}
 
@@ -19,7 +19,7 @@ func TestParsePortMapping(t *testing.T) {
 		t.Fatalf("got %+v", p)
 	}
 
-	for _, bad := range []string{"8080", "8080-80", "x:80", "8080:x", "8080:80/sctp"} {
+	for _, bad := range []string{"8080", "8080-80", "x:80", "8080:x", "8080:80/sctp", "0:80", "8080:70000", ":80", "8080:"} {
 		if _, err := ParsePortMapping(bad); err == nil {
 			t.Fatalf("ParsePortMapping(%q): expected an error", bad)
 		}
@@ -31,7 +31,7 @@ func TestParseHostPort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hostPort != 8080 || protocol != "" {
+	if hostPort != 8080 || protocol != "tcp" {
 		t.Fatalf("got (%d, %q)", hostPort, protocol)
 	}
 
@@ -43,7 +43,7 @@ func TestParseHostPort(t *testing.T) {
 		t.Fatalf("got (%d, %q)", hostPort, protocol)
 	}
 
-	for _, bad := range []string{"x", "8080/sctp"} {
+	for _, bad := range []string{"x", "8080/sctp", "0", "65536", "", "/udp"} {
 		if _, _, err := ParseHostPort(bad); err == nil {
 			t.Fatalf("ParseHostPort(%q): expected an error", bad)
 		}
@@ -74,7 +74,7 @@ func TestParseVolumes(t *testing.T) {
 	if len(vols) != 2 || vols[0].GetReadOnly() || !vols[1].GetReadOnly() || vols[1].GetContainerPath() != "/d" {
 		t.Fatalf("got %v", vols)
 	}
-	for _, bad := range []string{"/a", "/a:/b:rw", "/a:/b:ro:x"} {
+	for _, bad := range []string{"/a", "/a:/b:rw", "/a:/b:ro:x", ":/b", "/a:", "/a::ro"} {
 		if _, err := ParseVolumes([]string{bad}); err == nil {
 			t.Fatalf("ParseVolumes(%q): expected an error", bad)
 		}

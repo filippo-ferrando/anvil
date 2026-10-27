@@ -190,16 +190,29 @@ func (p *Process) Stop(ctx context.Context, timeout time.Duration) error {
 	return p.kill()
 }
 
+// killTimeout bounds the wait for a process to go after SIGKILL.
+var killTimeout = 10 * time.Second
+
 func (p *Process) kill() error {
 	if p.pid == 0 {
 		return nil
 	}
-	// Negative pid targets the whole process group; a process that isn't a group leader
-	// would otherwise never get the signal and this would wait forever.
-	if err := syscall.Kill(-p.pid, syscall.SIGKILL); err != nil {
-		_ = syscall.Kill(p.pid, syscall.SIGKILL)
+	select {
+	case <-p.exited:
+		// Already gone: its pid may belong to another process by now.
+	default:
+		// Negative pid targets the whole process group; a process that isn't a
+		// group leader only gets the signal through its own pid.
+		if err := syscall.Kill(-p.pid, syscall.SIGKILL); err != nil {
+			_ = syscall.Kill(p.pid, syscall.SIGKILL)
+		}
+		select {
+		case <-p.exited:
+		case <-time.After(killTimeout):
+			// An Attach'd process that nothing reaps stays a zombie and never looks gone.
+			return fmt.Errorf("qemu: pid %d still there %s after SIGKILL", p.pid, killTimeout)
+		}
 	}
-	<-p.exited
 	if p.cmd == nil {
 		return nil
 	}

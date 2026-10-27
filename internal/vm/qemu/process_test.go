@@ -146,3 +146,40 @@ func TestKillReachesProcessOutsideItsOwnGroup(t *testing.T) {
 		t.Fatal("kill never reached a process outside its own group")
 	}
 }
+
+// TestKillSkipsExitedProcess checks that a process already seen exiting is not signalled,
+// since its pid may have been reused.
+func TestKillSkipsExitedProcess(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Skip("cannot start sleep:", err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+
+	exited := make(chan struct{})
+	close(exited)
+	p := &Process{pid: cmd.Process.Pid, exited: exited}
+	if err := p.kill(); err != nil {
+		t.Fatal(err)
+	}
+	if !processAlive(cmd.Process.Pid) {
+		t.Fatal("kill signalled a pid whose process had already exited")
+	}
+}
+
+// TestKillTimesOut checks that kill gives up when the exit is never observed.
+func TestKillTimesOut(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Skip("cannot start sleep:", err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+
+	old := killTimeout
+	killTimeout = 50 * time.Millisecond
+	defer func() { killTimeout = old }()
+	p := &Process{pid: cmd.Process.Pid, exited: make(chan struct{})}
+	if err := p.kill(); err == nil {
+		t.Fatal("kill returned nil although the exit was never seen")
+	}
+}

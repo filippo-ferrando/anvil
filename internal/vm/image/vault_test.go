@@ -319,3 +319,26 @@ func TestEnsureNeverReplacesCachedBase(t *testing.T) {
 		t.Error("the cached base was changed")
 	}
 }
+
+// TestMoveChecksum checks that the sidecar follows a moved image and is trusted there.
+func TestMoveChecksum(t *testing.T) {
+	dir := t.TempDir()
+	src, dst := filepath.Join(dir, "upload.qcow2"), filepath.Join(dir, "base.qcow2")
+	if err := os.WriteFile(src, []byte("base image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := FileChecksum(src); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	fake := strings.Repeat("b", 64)
+	MoveChecksum(src, dst, fake)
+	if _, err := os.Stat(src + checksumSuffix); !os.IsNotExist(err) {
+		t.Errorf("source sidecar left behind: %v", err)
+	}
+	if got, _ := FileChecksum(dst); got != fake {
+		t.Errorf("expected the moved sidecar value %s, got %s", fake, got)
+	}
+}

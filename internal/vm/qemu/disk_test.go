@@ -6,6 +6,7 @@ import (
 	"context"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -27,5 +28,28 @@ func TestProbeDiskTuning(t *testing.T) {
 func TestSupportsDirectIOMissingFile(t *testing.T) {
 	if supportsDirectIO(filepath.Join(t.TempDir(), "missing")) {
 		t.Error("expected false for a missing file")
+	}
+}
+
+// TestIOUringProbeIgnoresCallerCancel checks that a cancelled caller ctx doesn't get
+// cached as "no io_uring".
+func TestIOUringProbeIgnoresCallerCancel(t *testing.T) {
+	if _, err := exec.LookPath("qemu-img"); err != nil {
+		t.Skip("qemu-img not installed, skipping")
+	}
+	diskPath := filepath.Join(t.TempDir(), "disk.qcow2")
+	if out, err := exec.Command("qemu-img", "create", "-f", "qcow2", diskPath, "16M").CombinedOutput(); err != nil {
+		t.Fatalf("creating disk: %v: %s", err, out)
+	}
+	probe := func(ctx context.Context) bool {
+		ioUringOnce = sync.Once{}
+		return qemuSupportsIOUring(ctx, diskPath)
+	}
+	t.Cleanup(func() { ioUringOnce = sync.Once{} })
+	want := probe(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := probe(ctx); got != want {
+		t.Fatalf("probe with cancelled ctx = %v, want %v", got, want)
 	}
 }

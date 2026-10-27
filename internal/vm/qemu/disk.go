@@ -61,7 +61,8 @@ func supportsDirectIO(path string) bool {
 // QEMU is built without liburing or io_uring is disabled by the kernel.
 func qemuSupportsIOUring(ctx context.Context, diskPath string) bool {
 	ioUringOnce.Do(func() {
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		// Detached from the caller: the result is cached, so a cancelled caller must not decide it.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "qemu-img", "bench", "-U", "-c", "1", "-i", "io_uring", "-f", "qcow2", diskPath)
 		ioUringOK = cmd.Run() == nil

@@ -158,7 +158,7 @@ func launchFields(kind string, values map[string]string) []formField {
 	}
 
 	fields := []formField{
-		textField("Name", "defaults to the image ref", v("Name", "")),
+		textField("Name", "defaults to a name derived from the image", v("Name", "")),
 		textField("Image", "e.g. ubuntu:24.04, or nginx:alpine", v("Image", "")),
 		textField("CPUs", "", v("CPUs", "1")),
 		textField("Memory MiB", "", v("Memory MiB", "1024")),
@@ -504,9 +504,6 @@ func buildLaunchRequest(m launchModel) (*anvilv1.LaunchRequest, error) {
 		return nil, errors.New("image is required")
 	}
 	name := form.Value("Name")
-	if name == "" {
-		name = image
-	}
 
 	cpus, err := parseInt32(form.Value("CPUs"), "CPUs")
 	if err != nil {

@@ -9,6 +9,9 @@ import (
 // ErrNotFound means a registry lookup found no matching record.
 var ErrNotFound = errors.New("not found")
 
+// ErrNoNames is returned by actions that need at least one instance name.
+var ErrNoNames = errors.New("instance: no instance names given")
+
 // Backend dispatches lifecycle operations for one instance Kind (VM or container).
 type Backend interface {
 	// Create provisions spec but does not start it.

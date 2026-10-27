@@ -131,7 +131,7 @@ func (b *Backend) Create(ctx context.Context, spec *instance.Spec, progress func
 		return fmt.Errorf("vm: invalid MAC address %q: %w", v.MACAddress, err)
 	}
 
-	dir := config.InstanceDir(spec.ID)
+	dir := instanceDir(spec.ID)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("vm: creating instance dir: %w", err)
 	}
@@ -271,6 +271,7 @@ func (b *Backend) adoptSentBase(ctx context.Context, v *instance.VMSpec, dir str
 	if err := moveFile(v.SourceBaseImagePath, dest); err != nil {
 		return "", fmt.Errorf("vm: adopting the base image that came with the disk: %w", err)
 	}
+	image.MoveChecksum(v.SourceBaseImagePath, dest, sum)
 	return dest, nil
 }
 
@@ -437,7 +438,7 @@ func (b *Backend) Fork(ctx context.Context, source, dest *instance.Spec, progres
 		return fmt.Errorf("vm: %s's disk has no backing file to preserve", source.Name)
 	}
 
-	dir := config.InstanceDir(dest.ID)
+	dir := instanceDir(dest.ID)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("vm: creating instance dir: %w", err)
 	}
@@ -717,7 +718,7 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		}
 	}
 
-	dir := config.InstanceDir(spec.ID)
+	dir := instanceDir(spec.ID)
 	cfg := qemu.Config{
 		Arch:          arch,
 		CPUs:          v.CPUs,
@@ -999,7 +1000,7 @@ func (b *Backend) Logs(ctx context.Context, spec *instance.Spec, follow bool, ta
 	if spec.VM == nil {
 		return fmt.Errorf("vm: Logs called with a nil VMSpec")
 	}
-	path := filepath.Join(config.InstanceDir(spec.ID), "console.log")
+	path := filepath.Join(instanceDir(spec.ID), "console.log")
 
 	f, err := os.Open(path)
 	if err != nil {

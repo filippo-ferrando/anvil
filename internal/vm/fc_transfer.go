@@ -115,7 +115,11 @@ func (b *FCBackend) PrepareImportedDisk(ctx context.Context, imageRef, arch, dis
 		return fmt.Errorf("vm: preparing imported disk's base image: %w", err)
 	}
 	if baseSHA256 != "" {
-		if sum, err := image.FileChecksum(base); err != nil || sum != baseSHA256 {
+		sum, err := image.FileChecksum(base)
+		if err != nil {
+			return fmt.Errorf("vm: hashing local base image %s: %w", entry.ID, err)
+		}
+		if sum != baseSHA256 {
 			return fmt.Errorf("vm: local base image %s differs from the one this bundle was made against "+
 				"(sha256 %s, want %s), importing it would corrupt the disk", entry.ID, sum, baseSHA256)
 		}

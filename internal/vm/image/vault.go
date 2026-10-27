@@ -361,6 +361,13 @@ func FileChecksum(path string) (string, error) {
 	return sum, nil
 }
 
+// MoveChecksum moves src's checksum sidecar to dst, after src itself was moved there.
+// A fresh sidecar is written so it is not older than dst, which would make it stale.
+func MoveChecksum(src, dst, sum string) {
+	_ = os.Remove(src + checksumSuffix)
+	writeChecksumSidecar(dst, sum)
+}
+
 // writeChecksumSidecar is best effort: a missing sidecar only costs a rehash later.
 func writeChecksumSidecar(path, sum string) {
 	_ = os.WriteFile(path+checksumSuffix, []byte(sum+"\n"), 0o640)

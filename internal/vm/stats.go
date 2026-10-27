@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"git.fferrando.cc/rdfilippo/anvil/internal/config"
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
 )
@@ -112,7 +111,7 @@ func sampleStats(ctx context.Context, spec *instance.Spec, pid int, networker Ne
 
 // vmUptimeSeconds reads how long ago instanceID's process was started, 0 if unknown.
 func vmUptimeSeconds(instanceID string) int64 {
-	rt, found, err := loadRuntimeState(config.InstanceDir(instanceID))
+	rt, found, err := loadRuntimeState(instanceDir(instanceID))
 	if err != nil || !found || rt.StartedAt.IsZero() {
 		return 0
 	}

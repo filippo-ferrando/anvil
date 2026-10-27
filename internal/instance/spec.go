@@ -320,23 +320,54 @@ type Snapshot struct {
 
 // ParsePortMapping reads "<host-port>:<guest-port>[/tcp|udp]"; the protocol defaults to tcp.
 func ParsePortMapping(s string) (PortMapping, error) {
-	spec, proto, hasProto := strings.Cut(s, "/")
-	if !hasProto {
-		proto = "tcp"
-	}
-	if proto != "tcp" && proto != "udp" {
-		return PortMapping{}, fmt.Errorf("port %q: protocol must be tcp or udp", s)
+	spec, proto, err := splitProtocol(s)
+	if err != nil {
+		return PortMapping{}, err
 	}
 	hostStr, guestStr, ok := strings.Cut(spec, ":")
 	if !ok {
 		return PortMapping{}, fmt.Errorf(`port %q must be "<host-port>:<guest-port>[/tcp|udp]"`, s)
 	}
-	host, err1 := strconv.Atoi(hostStr)
-	guest, err2 := strconv.Atoi(guestStr)
-	if err1 != nil || err2 != nil || host < 1 || host > 65535 || guest < 1 || guest > 65535 {
+	host, err1 := parsePort(hostStr)
+	guest, err2 := parsePort(guestStr)
+	if err1 != nil || err2 != nil {
 		return PortMapping{}, fmt.Errorf("port %q: ports must be numbers from 1 to 65535", s)
 	}
 	return PortMapping{HostPort: host, GuestPort: guest, Protocol: proto}, nil
+}
+
+// ParseHostPort reads "<host-port>[/tcp|udp]"; the protocol defaults to tcp.
+func ParseHostPort(s string) (int, string, error) {
+	spec, proto, err := splitProtocol(s)
+	if err != nil {
+		return 0, "", err
+	}
+	port, err := parsePort(spec)
+	if err != nil {
+		return 0, "", fmt.Errorf("port %q: must be a number from 1 to 65535", s)
+	}
+	return port, proto, nil
+}
+
+// splitProtocol splits "<rest>[/tcp|udp]", matching the protocol case-insensitively.
+func splitProtocol(s string) (string, string, error) {
+	rest, proto, ok := strings.Cut(s, "/")
+	if !ok {
+		return s, "tcp", nil
+	}
+	proto = strings.ToLower(proto)
+	if proto != "tcp" && proto != "udp" {
+		return "", "", fmt.Errorf("port %q: protocol must be tcp or udp", s)
+	}
+	return rest, proto, nil
+}
+
+func parsePort(s string) (int, error) {
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 1 || n > 65535 {
+		return 0, fmt.Errorf("invalid port %q", s)
+	}
+	return n, nil
 }
 
 var (

@@ -55,8 +55,11 @@ func (s *Server) Launch(req *anvilv1.LaunchRequest, stream anvilv1.InstanceServi
 		return err
 	}
 	ctx := stream.Context()
-	if params.Name == "" && params.IntentName != "" && params.Role != "" {
-		params.Name = intent.MemberName(params.IntentName, params.Role)
+	if params.Name == "" {
+		if err := s.defaultLaunchName(&params); err != nil {
+			sendLaunchEvent(stream, instance.LaunchEvent{Err: err})
+			return err
+		}
 	}
 	// Checked before anything is named after it on disk.
 	if err := instance.ValidateName(params.Name); err != nil {
@@ -97,6 +100,25 @@ func (s *Server) Launch(req *anvilv1.LaunchRequest, stream anvilv1.InstanceServi
 		return err
 	}
 	return s.waitReady(ctx, launched.Name, req.GetWaitTimeoutSeconds(), stream)
+}
+
+// defaultLaunchName names an unnamed launch: "<intent>-<role>" for an intent member,
+// otherwise a free name derived from the image ref.
+func (s *Server) defaultLaunchName(params *instance.LaunchParams) error {
+	if params.IntentName != "" && params.Role != "" {
+		params.Name = intent.MemberName(params.IntentName, params.Role)
+		return nil
+	}
+	var ref string
+	switch {
+	case params.VM != nil:
+		ref = params.VM.ImageRef
+	case params.Container != nil:
+		ref = params.Container.ImageRef
+	}
+	name, err := s.Manager.DefaultName(ref)
+	params.Name = name
+	return err
 }
 
 func (s *Server) WaitReady(req *anvilv1.WaitReadyRequest, stream anvilv1.InstanceService_WaitReadyServer) error {
@@ -170,6 +192,9 @@ func (s *Server) Stop(ctx context.Context, req *anvilv1.StopRequest) (*anvilv1.S
 }
 
 func (s *Server) Delete(ctx context.Context, req *anvilv1.DeleteRequest) (*anvilv1.DeleteReply, error) {
+	if len(req.GetNames()) == 0 {
+		return nil, instance.ErrNoNames
+	}
 	// Resolved before deleting so each instance's intent-membership label
 	// is still available afterward.
 	specs, err := s.Manager.Info(req.GetNames())

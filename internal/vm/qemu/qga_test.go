@@ -229,3 +229,33 @@ func TestGuestAgentCustomDial(t *testing.T) {
 		t.Fatalf("err = %v, want ErrAgentUnavailable when Dial fails", err)
 	}
 }
+
+// TestGuestAgentDoWaitHonoursCtx checks that a call waiting behind a long one gives up on ctx.
+func TestGuestAgentDoWaitHonoursCtx(t *testing.T) {
+	fa := startFakeAgent(t)
+	agent := NewGuestAgent(fa.socket)
+	held := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- agent.Do(context.Background(), func(*QGAConn) error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := agent.Do(ctx, func(*QGAConn) error { return nil }); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("waiting call: got %v, want DeadlineExceeded", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("holding call: %v", err)
+	}
+	if err := agent.Do(context.Background(), func(*QGAConn) error { return nil }); err != nil {
+		t.Fatalf("call after release: %v", err)
+	}
+}

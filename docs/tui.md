@@ -154,7 +154,7 @@ Either choice removes the instance and its disk. See [lifecycle.md](lifecycle.md
 A form for a new instance. The subtitle shows the kind (`vm` or `container`), and the
 fields depend on it:
 
-- Both: Name (defaults to the image), Image (suggestions from the VM catalog and cached
+- Both: Name (defaults to a name derived from the image, e.g. `ubuntu-24.04`), Image (suggestions from the VM catalog and cached
   images, or from local container images), CPUs, Memory MiB.
 - VM: Hypervisor (`qemu`, the default, or `firecracker`; with `firecracker` the Image
   suggestions only list images it can boot, see [firecracker.md](firecracker.md)),
