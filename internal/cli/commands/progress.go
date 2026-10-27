@@ -31,16 +31,36 @@ const spinnerInterval = 100 * time.Millisecond
 // streamProgress prints a launch-like stream, ending with "<verb> <name>".
 func streamProgress(out io.Writer, stream launchProgressStream, verb string) error {
 	return streamStatus(out, stream.Recv, func(l *liveLine, ev *anvilv1.LaunchProgress) (bool, error) {
+		return false, printLaunchEvent(l, ev, verb)
+	})
+}
+
+// printLaunchEvent prints one launch event, an error event becomes the returned error.
+func printLaunchEvent(l *liveLine, ev *anvilv1.LaunchProgress, verb string) error {
+	switch e := ev.GetEvent().(type) {
+	case *anvilv1.LaunchProgress_Status:
+		l.set(e.Status)
+	case *anvilv1.LaunchProgress_Error:
+		return errors.New(e.Error)
+	case *anvilv1.LaunchProgress_Instance:
+		l.printf("%s %q (%s)\n", verb, e.Instance.GetName(), e.Instance.GetId())
+		if ips := e.Instance.GetGuest().GetIpAddresses(); len(ips) > 0 {
+			l.printf("IP: %s\n", strings.Join(ips, ", "))
+		}
+	}
+	return nil
+}
+
+// streamAddMembers prints IntentService.AddMembers progress like one launch per member.
+func streamAddMembers(out io.Writer, stream interface {
+	Recv() (*anvilv1.IntentAddMembersProgress, error)
+}) error {
+	return streamStatus(out, stream.Recv, func(l *liveLine, ev *anvilv1.IntentAddMembersProgress) (bool, error) {
 		switch e := ev.GetEvent().(type) {
-		case *anvilv1.LaunchProgress_Status:
-			l.set(e.Status)
-		case *anvilv1.LaunchProgress_Error:
+		case *anvilv1.IntentAddMembersProgress_Member:
+			return false, printLaunchEvent(l, e.Member.GetLaunch(), "Launched")
+		case *anvilv1.IntentAddMembersProgress_Error:
 			return false, errors.New(e.Error)
-		case *anvilv1.LaunchProgress_Instance:
-			l.printf("%s %q (%s)\n", verb, e.Instance.GetName(), e.Instance.GetId())
-			if ips := e.Instance.GetGuest().GetIpAddresses(); len(ips) > 0 {
-				l.printf("IP: %s\n", strings.Join(ips, ", "))
-			}
 		}
 		return false, nil
 	})

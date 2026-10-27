@@ -267,7 +267,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateEvents(msg)
 	case imageChecksumMsg:
 		return m.updateImages(msg)
-	case applyStreamMsg:
+	case applyStreamMsg, intentMembersStreamMsg:
 		return m.updateIntents(msg)
 	}
 

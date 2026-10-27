@@ -49,12 +49,16 @@ func sendLaunchEvent(stream launchProgressSender, ev instance.LaunchEvent) {
 const defaultWaitTimeout = 15 * time.Minute
 
 func (s *Server) Launch(req *anvilv1.LaunchRequest, stream anvilv1.InstanceService_LaunchServer) error {
+	return s.launch(stream.Context(), req, stream)
+}
+
+// launch runs one Launch request, also used for each member of IntentService.AddMembers.
+func (s *Server) launch(ctx context.Context, req *anvilv1.LaunchRequest, stream launchProgressSender) error {
 	params, err := launchParamsFromPB(req)
 	if err != nil {
 		sendLaunchEvent(stream, instance.LaunchEvent{Err: err})
 		return err
 	}
-	ctx := stream.Context()
 	if params.Name == "" {
 		if err := s.defaultLaunchName(&params); err != nil {
 			sendLaunchEvent(stream, instance.LaunchEvent{Err: err})

@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
@@ -15,12 +17,13 @@ import (
 // *intent.Manager.
 type IntentServer struct {
 	anvilv1.UnimplementedIntentServiceServer
-	Manager *intent.Manager
-	Applier *apply.Applier
+	Manager  *intent.Manager
+	Applier  *apply.Applier
+	Launcher *Server // launches AddMembers' members the way InstanceService.Launch does
 }
 
-func NewIntentServer(mgr *intent.Manager, instances *instance.Manager) *IntentServer {
-	return &IntentServer{Manager: mgr, Applier: &apply.Applier{Instances: instances, Intents: mgr}}
+func NewIntentServer(mgr *intent.Manager, instances *instance.Manager, launcher *Server) *IntentServer {
+	return &IntentServer{Manager: mgr, Applier: &apply.Applier{Instances: instances, Intents: mgr}, Launcher: launcher}
 }
 
 func intentMemberToPB(it store.Intent, m store.IntentMember) *anvilv1.IntentMember {
@@ -133,4 +136,94 @@ func (s *IntentServer) Apply(req *anvilv1.IntentApplyRequest, stream anvilv1.Int
 		return sendErr(err)
 	}
 	return stream.Send(&anvilv1.IntentApplyProgress{Event: &anvilv1.IntentApplyProgress_Intent{Intent: intentToPB(it)}})
+}
+
+// memberSender wraps one member's launch events as AddMembers progress. An error
+// is kept back in err, AddMembers reports it once as the final event.
+type memberSender struct {
+	role   string
+	stream anvilv1.IntentService_AddMembersServer
+	err    string
+}
+
+func (m *memberSender) Send(ev *anvilv1.LaunchProgress) error {
+	if e := ev.GetError(); e != "" {
+		m.err = e
+		return nil
+	}
+	return m.stream.Send(&anvilv1.IntentAddMembersProgress{Event: &anvilv1.IntentAddMembersProgress_Member{
+		Member: &anvilv1.IntentMemberProgress{Role: m.role, Launch: ev},
+	}})
+}
+
+// checkMembers rejects an empty or malformed member list before anything is launched.
+func checkMembers(members []*anvilv1.IntentMemberSpec) error {
+	if len(members) == 0 {
+		return fmt.Errorf("intent: at least one member is needed")
+	}
+	roles := make(map[string]bool, len(members))
+	for _, m := range members {
+		switch {
+		case m.GetRole() == "":
+			return fmt.Errorf("intent: a member has no role")
+		case m.GetImage() == "":
+			return fmt.Errorf("intent: member %q has no image", m.GetRole())
+		case m.GetKind() != anvilv1.Kind_KIND_VM && m.GetKind() != anvilv1.Kind_KIND_CONTAINER:
+			return fmt.Errorf("intent: member %q needs kind vm or container", m.GetRole())
+		case roles[m.GetRole()]:
+			return fmt.Errorf("intent: role %q is given twice", m.GetRole())
+		}
+		roles[m.GetRole()] = true
+	}
+	return nil
+}
+
+// memberLaunchRequest is the Launch request for one member; the daemon names it "<intent>-<role>".
+func memberLaunchRequest(req *anvilv1.IntentAddMembersRequest, m *anvilv1.IntentMemberSpec) *anvilv1.LaunchRequest {
+	launch := &anvilv1.LaunchRequest{Kind: m.GetKind(), IntentName: req.GetName(), Role: m.GetRole()}
+	if m.GetKind() == anvilv1.Kind_KIND_VM {
+		launch.Vm = &anvilv1.VMSpec{ImageRef: m.GetImage(), SshPublicKeys: req.GetSshPublicKeys(), Hypervisor: req.GetHypervisor()}
+	} else {
+		launch.Container = &anvilv1.ContainerSpec{ImageRef: m.GetImage()}
+	}
+	return launch
+}
+
+func (s *IntentServer) AddMembers(req *anvilv1.IntentAddMembersRequest, stream anvilv1.IntentService_AddMembersServer) error {
+	sendErr := func(err error) error {
+		_ = stream.Send(&anvilv1.IntentAddMembersProgress{Event: &anvilv1.IntentAddMembersProgress_Error{Error: err.Error()}})
+		return nil // reported in-band, like a failed launch
+	}
+	name := req.GetName()
+	if name == "" {
+		return sendErr(fmt.Errorf("intent: a name is needed"))
+	}
+	if err := checkMembers(req.GetMembers()); err != nil {
+		return sendErr(err)
+	}
+	_, err := s.Manager.Info(name)
+	switch {
+	case err == nil && req.GetCreate():
+		return sendErr(fmt.Errorf("intent %q already exists, use `anvil intent add` to grow it", name))
+	case errors.Is(err, instance.ErrNotFound) && !req.GetCreate():
+		return sendErr(fmt.Errorf("no such intent %q, use `anvil intent create` first", name))
+	case err != nil && !errors.Is(err, instance.ErrNotFound):
+		return sendErr(fmt.Errorf("intent: looking up %q: %w", name, err))
+	}
+
+	for _, m := range req.GetMembers() {
+		send := &memberSender{role: m.GetRole(), stream: stream}
+		err := s.Launcher.launch(stream.Context(), memberLaunchRequest(req, m), send)
+		if send.err != "" {
+			return sendErr(errors.New(send.err))
+		}
+		if err != nil {
+			return sendErr(err)
+		}
+	}
+	it, err := s.Manager.Info(name)
+	if err != nil {
+		return sendErr(err)
+	}
+	return stream.Send(&anvilv1.IntentAddMembersProgress{Event: &anvilv1.IntentAddMembersProgress_Intent{Intent: intentToPB(it)}})
 }

@@ -3,12 +3,9 @@ package commands
 import (
 	"fmt"
 	"io"
-	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/internal/format"
@@ -35,89 +32,50 @@ func newIntentCommand(flags *globalFlags) *cobra.Command {
 	return cmd
 }
 
-// memberFlag is one parsed `--vm role:image` or `--container role:image`
-// value.
-type memberFlag struct {
-	kind  anvilv1.Kind
-	role  string
-	image string
-}
-
 // parseMemberFlags turns --vm/--container repeated flag values (each "role:image",
 // split on the first colon) into an ordered member list, VMs before containers.
-func parseMemberFlags(vmSpecs, containerSpecs []string) ([]memberFlag, error) {
-	var out []memberFlag
-	for _, spec := range vmSpecs {
-		role, image, ok := strings.Cut(spec, ":")
-		if !ok {
-			return nil, fmt.Errorf(`--vm %q must be "<role>:<image>"`, spec)
+func parseMemberFlags(vmSpecs, containerSpecs []string) ([]*anvilv1.IntentMemberSpec, error) {
+	var out []*anvilv1.IntentMemberSpec
+	for _, flag := range []struct {
+		name  string
+		kind  anvilv1.Kind
+		specs []string
+	}{{"--vm", anvilv1.Kind_KIND_VM, vmSpecs}, {"--container", anvilv1.Kind_KIND_CONTAINER, containerSpecs}} {
+		for _, spec := range flag.specs {
+			m, err := client.ParseMemberSpec(flag.kind, spec)
+			if err != nil {
+				return nil, fmt.Errorf("%s %w", flag.name, err)
+			}
+			out = append(out, m)
 		}
-		out = append(out, memberFlag{kind: anvilv1.Kind_KIND_VM, role: role, image: image})
-	}
-	for _, spec := range containerSpecs {
-		role, image, ok := strings.Cut(spec, ":")
-		if !ok {
-			return nil, fmt.Errorf(`--container %q must be "<role>:<image>"`, spec)
-		}
-		out = append(out, memberFlag{kind: anvilv1.Kind_KIND_CONTAINER, role: role, image: image})
 	}
 	return out, nil
 }
 
 func newIntentCreateCommand(flags *globalFlags) *cobra.Command {
-	var vmSpecs, containerSpecs []string
-	var hypervisor string
-	cmd := &cobra.Command{
-		Use:   "create <name>",
-		Short: "Create a new intent with one or more members",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
-			members, err := parseMemberFlags(vmSpecs, containerSpecs)
-			if err != nil {
-				return err
-			}
-			hv, err := parseVMHypervisor(hypervisor)
-			if err != nil {
-				return err
-			}
-			if len(members) == 0 {
-				return fmt.Errorf("intent create needs at least one --vm or --container member")
-			}
-
-			return withClient(flags, func(c *client.Client) error {
-				_, err = c.Intent.Info(cmd.Context(), &anvilv1.IntentInfoRequest{Name: name})
-				switch {
-				case err == nil:
-					return fmt.Errorf("intent %q already exists, use `anvil intent add` to grow it", name)
-				case status.Code(err) == codes.NotFound:
-				default:
-					return fmt.Errorf("intent: checking whether %q already exists: %w", name, err)
-				}
-				for _, m := range members {
-					if err := launchMember(cmd, c, name, m, hv); err != nil {
-						return err
-					}
-				}
-				return nil
-			})
-		},
-	}
-	cmd.Flags().StringArrayVar(&vmSpecs, "vm", nil, "VM member as <role>:<image>, repeatable")
-	cmd.Flags().StringArrayVar(&containerSpecs, "container", nil, "container member as <role>:<image>, repeatable")
-	cmd.Flags().StringVar(&hypervisor, "hypervisor", "", `hypervisor for the --vm members: "qemu" (default) or "firecracker"`)
-	return cmd
+	return newIntentMembersCommand(flags, true, "create <name>", "Create a new intent with one or more members")
 }
 
 func newIntentAddCommand(flags *globalFlags) *cobra.Command {
+	return newIntentMembersCommand(flags, false, "add <name>", "Add one or more members to an existing intent")
+}
+
+// newIntentMembersCommand builds `intent create` (create=true) and `intent add`, both
+// served by IntentService.AddMembers, which launches the members in order.
+func newIntentMembersCommand(flags *globalFlags, create bool, use, short string) *cobra.Command {
 	var vmSpecs, containerSpecs []string
 	var hypervisor string
+	verb := "add"
+	if create {
+		verb = "create"
+	}
 	cmd := &cobra.Command{
-		Use:   "add <name>",
-		Short: "Add one or more members to an existing intent",
-		Args:  cobra.ExactArgs(1),
+		Use:   use,
+		Short: short,
+		Long: short + ". Members launch one at a time, VMs first; the first failure stops " +
+			"the rest, and members launched before it are kept.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
 			members, err := parseMemberFlags(vmSpecs, containerSpecs)
 			if err != nil {
 				return err
@@ -127,22 +85,18 @@ func newIntentAddCommand(flags *globalFlags) *cobra.Command {
 				return err
 			}
 			if len(members) == 0 {
-				return fmt.Errorf("intent add needs at least one --vm or --container member")
+				return fmt.Errorf("intent %s needs at least one --vm or --container member", verb)
 			}
-
+			req, err := client.NewAddMembersRequest(args[0], create, members, hv)
+			if err != nil {
+				return err
+			}
 			return withClient(flags, func(c *client.Client) error {
-				if _, err := c.Intent.Info(cmd.Context(), &anvilv1.IntentInfoRequest{Name: name}); err != nil {
-					if status.Code(err) == codes.NotFound {
-						return fmt.Errorf("no such intent %q, use `anvil intent create` first", name)
-					}
-					return fmt.Errorf("intent: looking up %q: %w", name, err)
+				stream, err := c.Intent.AddMembers(cmd.Context(), req)
+				if err != nil {
+					return err
 				}
-				for _, m := range members {
-					if err := launchMember(cmd, c, name, m, hv); err != nil {
-						return err
-					}
-				}
-				return nil
+				return streamAddMembers(cmd.OutOrStdout(), stream)
 			})
 		},
 	}
@@ -150,32 +104,6 @@ func newIntentAddCommand(flags *globalFlags) *cobra.Command {
 	cmd.Flags().StringArrayVar(&containerSpecs, "container", nil, "container member as <role>:<image>, repeatable")
 	cmd.Flags().StringVar(&hypervisor, "hypervisor", "", `hypervisor for the --vm members: "qemu" (default) or "firecracker"`)
 	return cmd
-}
-
-// launchMember runs one member through the streaming Launch RPC, tagged with intentName/role.
-func launchMember(cmd *cobra.Command, c *client.Client, intentName string, m memberFlag, hv anvilv1.VmHypervisor) error {
-	// The daemon names the member "<intent>-<role>" and fills in default sizes.
-	req := &anvilv1.LaunchRequest{
-		Kind:       m.kind,
-		IntentName: intentName,
-		Role:       m.role,
-	}
-	switch m.kind {
-	case anvilv1.Kind_KIND_VM:
-		resolvedKeys, err := client.ResolveSSHKeys(nil)
-		if err != nil {
-			return err
-		}
-		req.Vm = &anvilv1.VMSpec{ImageRef: m.image, SshPublicKeys: resolvedKeys, Hypervisor: hv}
-	case anvilv1.Kind_KIND_CONTAINER:
-		req.Container = &anvilv1.ContainerSpec{ImageRef: m.image}
-	}
-
-	stream, err := c.Launch(cmd.Context(), req)
-	if err != nil {
-		return err
-	}
-	return streamLaunchProgress(cmd.OutOrStdout(), stream)
 }
 
 func newIntentListCommand(flags *globalFlags) *cobra.Command {

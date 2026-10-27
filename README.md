@@ -149,7 +149,8 @@ anvil intent create myapp --vm db:postgres:16 --container cache:redis:7
 ```
 
 Every member gets its own bridge network, a real IP, and can resolve every other member
-by name -> no manual networking required. Names are served by `anvild` itself, so a
+by name -> no manual networking required. Members launch one at a time; if one fails, the
+rest are skipped and the members already launched are kept. Names are served by `anvild` itself, so a
 member added later with `anvil intent add` is resolvable right away by the ones already
 running, as `db`, `db.myapp.anvil` or `myapp-db`. See [docs/intent-dns.md](docs/intent-dns.md).
 

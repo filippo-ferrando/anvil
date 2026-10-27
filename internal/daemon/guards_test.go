@@ -64,7 +64,7 @@ func TestIntentApplyRefusesVolumeCallerDoesNotOwn(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("running as root, every caller is the daemon's own user")
 	}
-	srv := NewIntentServer(nil, nil) // refused before either manager is reached
+	srv := NewIntentServer(nil, nil, nil) // refused before either manager is reached
 	stream := &progressStream[*anvilv1.IntentApplyProgress]{ctx: asUID(54321)}
 	manifest := "intent: app\nmembers:\n  web:\n    kind: container\n    image: nginx\n    volumes:\n      - /:/host\n"
 	if err := srv.Apply(&anvilv1.IntentApplyRequest{Manifest: []byte(manifest)}, stream); err != nil {

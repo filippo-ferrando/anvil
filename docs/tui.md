@@ -131,26 +131,28 @@ who caused each one and any error (see `anvil events`).
 | Key | Action |
 |-----|--------|
 | `n` | Open the Launch takeover. |
-| `s` | Stop the selected instance if it is running, otherwise start it. Stop uses the daemon's default 30 s graceful timeout. |
-| `S` | Stop a running instance with options: Force (skip the graceful shutdown) and Timeout seconds (`anvil stop --force --timeout`). |
+| `space` | Mark or unmark the selected instance (a `✓` in front of its name) and move down. While any instance is marked, `s`, `S` and `d` act on the marked ones instead of the selected one. |
+| `s` | Stop the selected instance if it is running, otherwise start it. Stop uses the daemon's default 30 s graceful timeout. With marks: stop the marked ones that run, or start them all when none runs. |
+| `S` | Stop a running instance with options: Force (skip the graceful shutdown) and Timeout seconds (`anvil stop --force --timeout`). With marks: the same for every marked instance that runs. |
 | `x` | Open a shell in a VM: asks for a user (blank means the image's default user) and an optional private key (`--identity`, blank means anvil's own key), then suspends the TUI and runs `ssh` into the VM until the session ends. On a container it opens `/bin/sh` through `docker exec`, like `anvil shell`. |
 | `e` | Run one command: asks for the command (and a user and private key, for a VM), then runs it over `ssh` for a VM or `docker exec -it` for a container. |
 | `g` | Run a graphical app: command, X11 toggle, user, private key (VM), and whether to add it to this desktop's app launcher, with an optional launcher title and icon file (`anvil gui` and `anvil gui export`, see [gui.md](gui.md)). |
 | `l` | Open the Logs takeover. |
 | `L` | Open the Logs takeover from the last N lines only (`anvil logs --tail`). |
-| `d` | Delete, after a confirmation: `y`/`enter` deletes, `p` also removes the base image if no other VM uses it, any other key cancels. |
+| `d` | Delete, after a confirmation that names the instance, or the count and names of the marked ones: `y`/`enter` deletes, `p` also removes the base image if no other VM uses it, any other key cancels. |
 | `f` | Fork the selected VM: new name, and whether to start it at once. Shows the progress until dismissed. |
 | `u` | Settings: vCPUs, memory, disk (VM), autostart and restart policy, pre-filled with the current values. Only changed fields are sent (`anvil set`). |
 | `w` | Wait for first-boot setup (cloud-init) of a running instance, streaming progress. `esc` stops waiting. |
-| `m` | Mount a host directory into a VM: host path, guest path, read-only toggle. |
+| `m` | Mount a host directory into a VM: host path, guest path, read-only toggle. Without `--remote` a "Create and grant access" toggle first creates the host directory and grants the `anvil` user access to it, like `anvil create-dir`. |
 | `M` | Unmount from a VM; the guest path field suggests the current mounts. |
 | `p` | Add a port forward: host port, guest port, UDP toggle. |
 | `P` | Remove a port forward; the host port field suggests the current ones. |
 | `E` | Export the selected instance to a bundle (output path). |
 | `i` | Import a bundle (bundle path, optional rename). |
 | `r` | Reload the list. |
-| `esc` `q` | Back to the sidebar. |
+| `esc` `q` | Clear the marks if any, otherwise back to the sidebar. |
 
+Marks are cleared once `s`, `S` or `d` runs, and dropped for instances that disappear.
 While an export, import or fork runs, every key is ignored; when it ends, its transcript
 stays on screen until `esc`, `enter` or `q`. The same keys dismiss a finished wait.
 
@@ -238,6 +240,7 @@ Two modes, shown as tabs at the top.
 |-----|--------|
 | `v` / `c` | Switch to VM images / container images. |
 | `tab` | VM mode: switch focus between cached images and the catalog. |
+| `/` | VM mode: filter the catalog by id, distro, version or name, case-insensitive, like `anvil find <term>`. The list updates while typing; `enter` keeps the filter, `esc` clears it. |
 | `h` | VM mode, cached panel: compute a base image's sha256 (not offered for raw copies or the kernel). |
 | `x` | Delete the selected cached VM image (only the download, not the catalog entry; deleting a base also deletes its Firecracker raw copy) or container image, after a confirmation. There `f` deletes even if an instance still uses it (`--force`, this breaks that instance). |
 | `r` | Reload. |
@@ -249,6 +252,8 @@ The list of intents, each with its member count and subnet.
 
 | Key | Action |
 |-----|--------|
+| `n` | Create an intent with members (`anvil intent create`): Name, VM members and Container members (each `role:image,...`), Hypervisor for the VMs. |
+| `a` | Add members to the selected intent (`anvil intent add`), with the same fields minus the name. |
 | `i` `enter` | Show the members (role, kind, instance ID, IP, DNS name) and the intent's network: engine network and bridge, subnet and gateway, DNS zone and server. Any key goes back. |
 | `x` | Remove the intent: `y`/`enter` ungroups only, `p` ungroups and also deletes every member instance, any other key cancels. |
 | `U` | Remove one member from the intent (role or instance ID; `tab` suggests the roles). The instance is kept as a standalone one. |
@@ -258,8 +263,12 @@ The list of intents, each with its member count and subnet.
 | `r` | Reload. |
 | `esc` `q` | Back to the sidebar. |
 
-While an export, import or apply runs, keys are ignored; the finished transcript stays
-until `esc`, `enter` or `q`.
+`n` and `a` launch the members one at a time (VMs first) with `IntentService.AddMembers`,
+showing each member's progress prefixed with its role. The first failure stops the rest;
+members launched before it are kept, as with the CLI.
+
+While an export, import, apply or member launch runs, keys are ignored; the finished
+transcript stays until `esc`, `enter` or `q`.
 
 ## 5. Cloud-Init
 

@@ -2,14 +2,17 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/internal/format"
 	"git.fferrando.cc/rdfilippo/anvil/internal/progress"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 type cachedImageItem struct {
@@ -85,6 +88,11 @@ type imagesModel struct {
 	focusCatalog  bool
 	confirmDelete *anvilv1.CachedImage
 
+	// The full catalog and the "/" filter over it, matched like `anvil find <term>`.
+	catalogAll    []*anvilv1.CatalogEntry
+	catalogFilter textinput.Model
+	filtering     bool // the filter input has the keyboard
+
 	containerImages        list.Model
 	confirmDeleteContainer *anvilv1.ContainerImage
 
@@ -107,7 +115,11 @@ func newImagesModel() imagesModel {
 	containerImages.SetShowHelp(false)
 	containerImages.SetFilteringEnabled(false)
 
-	return imagesModel{cached: cached, catalog: catalog, containerImages: containerImages}
+	filter := textinput.New()
+	filter.Prompt = "/"
+	filter.Placeholder = "id, distro or version"
+
+	return imagesModel{cached: cached, catalog: catalog, containerImages: containerImages, catalogFilter: filter}
 }
 
 func (m *imagesModel) setSize(width, height int) {
@@ -150,11 +162,8 @@ func (m model) updateImages(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus("listing the catalog: "+msg.err.Error(), true)
 			return m, nil
 		}
-		items := make([]list.Item, len(msg.entries))
-		for i, e := range msg.entries {
-			items[i] = catalogItem{entry: e}
-		}
-		m.images.catalog.SetItems(items)
+		m.images.catalogAll = msg.entries
+		m.images.applyCatalogFilter()
 		return m, nil
 
 	case containerImagesLoadedMsg:
@@ -200,8 +209,47 @@ func (m model) updateImages(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// applyCatalogFilter shows the catalog entries matching the filter term.
+func (m *imagesModel) applyCatalogFilter() {
+	term := strings.TrimSpace(m.catalogFilter.Value())
+	var items []list.Item
+	for _, e := range m.catalogAll {
+		if client.MatchesFindTerm(e, term) {
+			items = append(items, catalogItem{entry: e})
+		}
+	}
+	m.catalog.SetItems(items)
+	m.catalog.Title = "Available to launch"
+	if term != "" {
+		m.catalog.Title += fmt.Sprintf(" (%d match %q)", len(items), term)
+	}
+}
+
+// updateCatalogFilter edits the filter: enter keeps it, esc clears it.
+func (m *imagesModel) updateCatalogFilter(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "enter":
+		m.filtering = false
+		m.catalogFilter.Blur()
+		return nil
+	case "esc":
+		m.filtering = false
+		m.catalogFilter.Blur()
+		m.catalogFilter.SetValue("")
+		m.applyCatalogFilter()
+		return nil
+	}
+	var cmd tea.Cmd
+	m.catalogFilter, cmd = m.catalogFilter.Update(msg)
+	m.applyCatalogFilter()
+	return cmd
+}
+
 func (m model) updateImagesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	im := &m.images
+	if im.filtering {
+		return m, im.updateCatalogFilter(msg)
+	}
 
 	if im.confirmDelete != nil {
 		switch k := msg.String(); k {
@@ -236,6 +284,12 @@ func (m model) updateImagesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "c":
 		im.mode = imagesModeContainer
 		return m, loadContainerImages(m.client)
+	case "/":
+		if im.mode == imagesModeVM {
+			im.focusCatalog, im.filtering = true, true
+			return m, im.catalogFilter.Focus()
+		}
+		return m, nil
 	case "tab":
 		if im.mode == imagesModeVM {
 			im.focusCatalog = !im.focusCatalog
@@ -320,8 +374,11 @@ func (m imagesModel) View() string {
 	left := cachedBox.Render(pin.Render(m.cached.View()))
 	right := catalogBox.Render(pin.Render(m.catalog.View()))
 
-	help := helpBar("v", "VM images", "c", "container images", "tab", "switch panel",
+	help := helpBar("v", "VM images", "c", "container images", "tab", "switch panel", "/", "filter catalog",
 		"h", "checksum", "x", "delete cached", "r", "refresh", "esc", "back")
+	if m.filtering {
+		help = m.catalogFilter.View() + "  " + helpBar("enter", "keep filter", "esc", "clear filter")
+	}
 	return tabs + "\n" + lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right) + "\n" + help
 }
 

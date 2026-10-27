@@ -21,7 +21,10 @@ import (
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
-type instanceItem struct{ inst *anvilv1.Instance }
+type instanceItem struct {
+	inst   *anvilv1.Instance
+	marked bool // picked with space for a multi-instance start/stop/delete
+}
 
 // stateGlyph is a plain, uncolored marker: bubbles' list.DefaultDelegate re-styles selected items wholesale, and an
 // embedded ANSI reset from a colored Render() would cut that off mid-line. See stateDot, used only in the detail panel.
@@ -40,7 +43,11 @@ func stateGlyph(s anvilv1.State) string {
 
 func (i instanceItem) FilterValue() string { return i.inst.GetName() }
 func (i instanceItem) Title() string {
-	return stateGlyph(i.inst.GetState()) + " " + i.inst.GetName()
+	mark := ""
+	if i.marked {
+		mark = "✓ "
+	}
+	return mark + stateGlyph(i.inst.GetState()) + " " + i.inst.GetName()
 }
 func (i instanceItem) Description() string {
 	kind, image := "vm", i.inst.GetVm().GetImageRef()
@@ -79,8 +86,11 @@ const (
 
 type instancesModel struct {
 	list          list.Model
-	confirmDelete *anvilv1.Instance // non-nil while the delete confirmation overlay is up
+	confirmDelete []*anvilv1.Instance // non-empty while the delete confirmation overlay is up
 	loading       bool
+
+	marked    map[string]bool // instance IDs picked with space
+	stopNames []string        // what the stop options prompt stops
 
 	prompt         instancesPrompt
 	promptTarget   *anvilv1.Instance
@@ -169,6 +179,75 @@ func (m *instancesModel) selected() *anvilv1.Instance {
 	return item.inst
 }
 
+// toggleMark marks or unmarks the selected instance.
+func (m *instancesModel) toggleMark() {
+	item, ok := m.list.SelectedItem().(instanceItem)
+	if !ok {
+		return
+	}
+	if m.marked == nil {
+		m.marked = map[string]bool{}
+	}
+	id := item.inst.GetId()
+	if m.marked[id] {
+		delete(m.marked, id)
+	} else {
+		m.marked[id] = true
+	}
+	item.marked = m.marked[id]
+	m.list.SetItem(m.list.Index(), item)
+}
+
+// clearMarks unmarks every instance.
+func (m *instancesModel) clearMarks() {
+	m.marked = nil
+	for i, it := range m.list.Items() {
+		if item, ok := it.(instanceItem); ok && item.marked {
+			item.marked = false
+			m.list.SetItem(i, item)
+		}
+	}
+}
+
+// targets returns the marked instances in list order, or the selected one when none is marked.
+func (m *instancesModel) targets() []*anvilv1.Instance {
+	var out []*anvilv1.Instance
+	for _, it := range m.list.Items() {
+		if item, ok := it.(instanceItem); ok && m.marked[item.inst.GetId()] {
+			out = append(out, item.inst)
+		}
+	}
+	if len(out) == 0 {
+		if inst := m.selected(); inst != nil {
+			out = append(out, inst)
+		}
+	}
+	return out
+}
+
+// setInstances replaces the list, keeping marks only on instances that still exist.
+func (m *instancesModel) setInstances(insts []*anvilv1.Instance) {
+	items := make([]list.Item, len(insts))
+	kept := map[string]bool{}
+	for i, inst := range insts {
+		marked := m.marked[inst.GetId()]
+		if marked {
+			kept[inst.GetId()] = true
+		}
+		items[i] = instanceItem{inst: inst, marked: marked}
+	}
+	m.marked = kept
+	m.list.SetItems(items)
+}
+
+func instanceNames(insts []*anvilv1.Instance) []string {
+	names := make([]string, len(insts))
+	for i, inst := range insts {
+		names[i] = inst.GetName()
+	}
+	return names
+}
+
 func (m *instancesModel) selectedName() string {
 	return m.selected().GetName()
 }
@@ -186,9 +265,10 @@ func (m *instancesModel) patch(ev *anvilv1.WatchEvent) bool {
 			continue
 		}
 		if ev.GetType() == anvilv1.WatchEventType_WATCH_EVENT_TYPE_DELETED {
+			delete(m.marked, inst.GetId())
 			m.list.RemoveItem(i)
 		} else {
-			m.list.SetItem(i, instanceItem{inst: inst})
+			m.list.SetItem(i, instanceItem{inst: inst, marked: it.marked})
 		}
 		return true
 	}
@@ -240,11 +320,7 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus("listing instances: "+msg.err.Error(), true)
 			return m, nil
 		}
-		items := make([]list.Item, len(msg.instances))
-		for i, inst := range msg.instances {
-			items[i] = instanceItem{inst: inst}
-		}
-		m.instances.list.SetItems(items)
+		m.instances.setInstances(msg.instances)
 		cmd := m.reloadSelected()
 		return m, cmd
 
@@ -375,15 +451,13 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// The delete confirmation overlay eats every key: y=delete, p=delete with base image, else cancel.
-	if m.instances.confirmDelete != nil {
-		inst := m.instances.confirmDelete
+	if len(m.instances.confirmDelete) > 0 {
+		names := instanceNames(m.instances.confirmDelete)
 		switch msg.String() {
-		case "y", "enter":
+		case "y", "enter", "p":
 			m.instances.confirmDelete = nil
-			return m, deleteInstance(m.client, inst.GetName(), false)
-		case "p":
-			m.instances.confirmDelete = nil
-			return m, deleteInstance(m.client, inst.GetName(), true)
+			m.instances.clearMarks()
+			return m, deleteInstances(m.client, names, msg.String() == "p")
 		default:
 			m.instances.confirmDelete = nil
 			return m, nil
@@ -396,7 +470,15 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "esc", "q":
+		if len(m.instances.marked) > 0 {
+			m.instances.clearMarks()
+			return m, nil
+		}
 		m.sidebarFocused = true
+		return m, nil
+	case " ":
+		m.instances.toggleMark()
+		m.instances.list.CursorDown()
 		return m, nil
 	case "n":
 		m.screen = screenLaunch
@@ -429,25 +511,27 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.instances.loading = true
 		return m, loadInstances(m.client)
 	case "s":
-		if inst := m.selectedInstance(); inst != nil {
-			if inst.GetState() == anvilv1.State_STATE_RUNNING {
-				return m, stopInstance(m.client, &anvilv1.StopRequest{Names: []string{inst.GetName()}})
-			}
-			return m, startInstance(m.client, inst.GetName())
+		targets := m.instances.targets()
+		if len(targets) == 0 {
+			return m, nil
 		}
-		return m, nil
+		m.instances.clearMarks()
+		// With any target running, s stops the running ones; otherwise it starts them all.
+		if running := runningNames(targets); len(running) > 0 {
+			return m, stopInstance(m.client, &anvilv1.StopRequest{Names: running})
+		}
+		return m, startInstances(m.client, instanceNames(targets))
 	case "S":
-		if inst := m.selectedInstance(); inst != nil && inst.GetState() == anvilv1.State_STATE_RUNNING {
-			m.instances.startPrompt(instancesPromptStop, inst, newSimpleForm("Stop "+inst.GetName(), []formField{
+		if running := runningNames(m.instances.targets()); len(running) > 0 {
+			m.instances.stopNames = running
+			m.instances.startPrompt(instancesPromptStop, nil, newSimpleForm("Stop "+namesSummary(running), []formField{
 				toggleField("Force", "skip the graceful shutdown", false),
 				textField("Timeout seconds", "graceful shutdown wait before escalating", "30"),
 			}))
 		}
 		return m, nil
 	case "d":
-		if inst := m.selectedInstance(); inst != nil {
-			m.instances.confirmDelete = inst
-		}
+		m.instances.confirmDelete = m.instances.targets()
 		return m, nil
 	case "f":
 		if inst := m.selectedInstance(); inst != nil && inst.GetVm() != nil {
@@ -485,11 +569,16 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "m":
 		if inst := m.selectedInstance(); inst != nil && inst.GetVm() != nil {
-			m.instances.startPrompt(instancesPromptMount, inst, newSimpleForm("Mount", []formField{
+			fields := []formField{
 				m.hostPathField("Host path", "directory to share", ""),
 				textField("Guest path", "absolute path inside the guest", ""),
 				toggleField("Read-only", "mount read-only", false),
-			}))
+			}
+			// Same as `anvil create-dir`: a local filesystem change, so only for a local daemon.
+			if m.remote() == "" {
+				fields = append(fields, toggleField(createDirField, "create the host dir and grant the anvil user access", false))
+			}
+			m.instances.startPrompt(instancesPromptMount, inst, newSimpleForm("Mount", fields))
 		}
 		return m, nil
 	case "M":
@@ -607,7 +696,8 @@ func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setStatus(err.Error(), true)
 			return m, nil
 		}
-		return m, mountInstance(m.client, target.GetName(), absHostPath, guestPath, ins.promptForm.Bool("Read-only"))
+		createDir := m.remote() == "" && ins.promptForm.Bool(createDirField)
+		return m, mountInstance(m.client, target.GetName(), absHostPath, guestPath, ins.promptForm.Bool("Read-only"), createDir)
 
 	case instancesPromptUmount:
 		guestPath := ins.promptForm.Value("Guest path")
@@ -645,11 +735,12 @@ func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.shellInto(target, user, identity)
 
 	case instancesPromptStop:
-		req, err := buildStopRequest(target.GetName(), ins.promptForm)
+		req, err := buildStopRequest(ins.stopNames, ins.promptForm)
 		if err != nil {
 			m.setStatus(err.Error(), true)
 			return m, nil
 		}
+		ins.clearMarks()
 		return m, stopInstance(m.client, req)
 
 	case instancesPromptLogs:
@@ -740,9 +831,9 @@ func (m instancesModel) View() string {
 	if m.fork.active() {
 		return m.fork.view("Forking…")
 	}
-	if m.confirmDelete != nil {
+	if len(m.confirmDelete) > 0 {
 		return styleBox.BorderForeground(colorWarn).Render(
-			styleWarn.Bold(true).Render(fmt.Sprintf("⚠  Delete %q?", m.confirmDelete.GetName()))+"\n\n"+
+			styleWarn.Bold(true).Render("⚠  Delete "+namesSummary(instanceNames(m.confirmDelete))+"?")+"\n\n"+
 				styleSubtitle.Render("The disk is removed either way. p also removes the base image if nothing else uses it.")) + "\n\n" +
 			helpBar("y", "delete", "p", "delete with base image", "any other key", "cancel")
 	}
@@ -761,9 +852,28 @@ func (m instancesModel) View() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right) + "\n" + help
 }
 
+// runningNames returns the names of the running instances in insts.
+func runningNames(insts []*anvilv1.Instance) []string {
+	var names []string
+	for _, inst := range insts {
+		if inst.GetState() == anvilv1.State_STATE_RUNNING {
+			names = append(names, inst.GetName())
+		}
+	}
+	return names
+}
+
+// namesSummary renders one name quoted, or several as a count plus the names.
+func namesSummary(names []string) string {
+	if len(names) == 1 {
+		return fmt.Sprintf("%q", names[0])
+	}
+	return fmt.Sprintf("%d instances (%s)", len(names), strings.Join(names, ", "))
+}
+
 // instancesHelp is the Instances legend, most used actions first.
 var instancesHelp = []string{
-	"n", "launch", "s", "start/stop", "S", "stop options", "x", "shell", "e", "exec", "g", "gui app", "l/L", "logs/tail", "d", "delete",
+	"n", "launch", "space", "mark", "s", "start/stop", "S", "stop options", "x", "shell", "e", "exec", "g", "gui app", "l/L", "logs/tail", "d", "delete",
 	"f", "fork", "u", "settings", "w", "wait cloud-init", "m/M", "mount/umount", "p/P", "add/rm port",
 	"E/i", "export/import", "r", "refresh", "esc", "menu",
 }

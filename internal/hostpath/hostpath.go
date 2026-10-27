@@ -99,3 +99,15 @@ func Under(base, rel string) (string, error) {
 	}
 	return p, nil
 }
+
+// CreateDir creates path (and its parents) if missing, then grants the
+// "anvil" user access to it. Shared by `anvil create-dir` and the TUI.
+func CreateDir(path string) error {
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return fmt.Errorf("create-dir: %w", err)
+	}
+	if err := Grant(path); err != nil {
+		return fmt.Errorf("create-dir: %w", err)
+	}
+	return nil
+}

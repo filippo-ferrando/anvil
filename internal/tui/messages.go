@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/hostpath"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
@@ -303,9 +304,9 @@ func deleteContainerImage(c *client.Client, id string, engine anvilv1.ContainerE
 	}
 }
 
-func startInstance(c *client.Client, name string) tea.Cmd {
+func startInstances(c *client.Client, names []string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := c.Start(context.Background(), &anvilv1.StartRequest{Names: []string{name}})
+		_, err := c.Start(context.Background(), &anvilv1.StartRequest{Names: names})
 		return actionDoneMsg{screen: screenInstances, verb: "started", err: err}
 	}
 }
@@ -318,18 +319,18 @@ func stopInstance(c *client.Client, req *anvilv1.StopRequest) tea.Cmd {
 }
 
 // buildStopRequest reads the stop form: a Force toggle and a graceful timeout in seconds.
-func buildStopRequest(name string, form simpleForm) (*anvilv1.StopRequest, error) {
+func buildStopRequest(names []string, form simpleForm) (*anvilv1.StopRequest, error) {
 	timeout, err := parseInt64(form.Value("Timeout seconds"), "Timeout seconds")
 	if err != nil {
 		return nil, err
 	}
-	return &anvilv1.StopRequest{Names: []string{name}, Force: form.Bool("Force"), TimeoutSeconds: timeout}, nil
+	return &anvilv1.StopRequest{Names: names, Force: form.Bool("Force"), TimeoutSeconds: timeout}, nil
 }
 
-// deleteInstance deletes an instance; purge also removes its unused base image.
-func deleteInstance(c *client.Client, name string, purge bool) tea.Cmd {
+// deleteInstances deletes instances; purge also removes their unused base images.
+func deleteInstances(c *client.Client, names []string, purge bool) tea.Cmd {
 	return func() tea.Msg {
-		_, err := c.Delete(context.Background(), &anvilv1.DeleteRequest{Names: []string{name}, Purge: purge})
+		_, err := c.Delete(context.Background(), &anvilv1.DeleteRequest{Names: names, Purge: purge})
 		verb := "deleted"
 		if purge {
 			verb = "deleted with its base image"
@@ -338,8 +339,16 @@ func deleteInstance(c *client.Client, name string, purge bool) tea.Cmd {
 	}
 }
 
-func mountInstance(c *client.Client, name, hostPath, guestPath string, readOnly bool) tea.Cmd {
+// createDirField is the Mount prompt toggle that runs `anvil create-dir` on the host path first.
+const createDirField = "Create and grant access"
+
+func mountInstance(c *client.Client, name, hostPath, guestPath string, readOnly, createDir bool) tea.Cmd {
 	return func() tea.Msg {
+		if createDir {
+			if err := hostpath.CreateDir(hostPath); err != nil {
+				return actionDoneMsg{screen: screenInstances, verb: "mount", err: err}
+			}
+		}
 		_, err := c.Mount(context.Background(), &anvilv1.MountRequest{
 			Name: name, HostPath: hostPath, GuestPath: guestPath, ReadOnly: readOnly,
 		})

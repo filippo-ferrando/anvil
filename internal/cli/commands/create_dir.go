@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -24,11 +23,8 @@ func newCreateDirCommand(flags *globalFlags) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := args[0]
 
-			if err := os.MkdirAll(path, 0o755); err != nil {
-				return fmt.Errorf("create-dir: %w", err)
-			}
-			if err := hostpath.Grant(path); err != nil {
-				return fmt.Errorf("create-dir: %w", err)
+			if err := hostpath.CreateDir(path); err != nil {
+				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%s is ready to mount\n", path)
 			return nil

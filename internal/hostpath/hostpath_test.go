@@ -114,3 +114,15 @@ func TestUnder(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateDirMakesNestedDir(t *testing.T) {
+	lookupUser = func(string) (*user.User, error) { return nil, user.UnknownUserError("anvil") }
+	t.Cleanup(func() { lookupUser = user.Lookup })
+	dir := filepath.Join(t.TempDir(), "a", "b")
+	if err := CreateDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		t.Fatalf("dir not created: %v", err)
+	}
+}

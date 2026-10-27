@@ -153,13 +153,14 @@ func run() error {
 	_ = os.Chmod(socketPath, 0o660)
 
 	grpcServer := grpc.NewServer(daemon.ActorInterceptors()...)
-	anvilv1.RegisterInstanceServiceServer(grpcServer, daemon.NewServer(mgr, intentMgr, vault))
+	instanceServer := daemon.NewServer(mgr, intentMgr, vault)
+	anvilv1.RegisterInstanceServiceServer(grpcServer, instanceServer)
 	anvilv1.RegisterCloudInitServiceServer(grpcServer, daemon.NewCloudInitServer(db))
 	anvilv1.RegisterMirrorServiceServer(grpcServer, daemon.NewMirrorServer(db))
 	imageServer := daemon.NewImageServer(db, vault, vmBackend, containerBackend,
 		&image.FCCache{Dir: config.FirecrackerImageDir(), Vault: vault})
 	anvilv1.RegisterImageServiceServer(grpcServer, imageServer)
-	anvilv1.RegisterIntentServiceServer(grpcServer, daemon.NewIntentServer(intentMgr, mgr))
+	anvilv1.RegisterIntentServiceServer(grpcServer, daemon.NewIntentServer(intentMgr, mgr, instanceServer))
 	hostServer := daemon.NewHostServer(db, migrateMgr)
 	hostServer.Instances = mgr
 	if dh, ok := vmBackend.(instance.DeviceHolder); ok {

@@ -49,6 +49,13 @@ type intentsModel struct {
 	applyRunning   bool
 	applyConfirm   bool // a dry run finished cleanly and waits for enter to apply
 	applyLines     []string
+
+	// The n (create) and a (add members) forms; membersCreate tells them apart.
+	membersPrompting bool
+	membersCreate    bool
+	membersOf        string // the intent a gets members for
+	membersForm      simpleForm
+	members          transcript // launch progress; a running one blocks other keys
 }
 
 func newIntentsModel() intentsModel {
@@ -108,6 +115,14 @@ func (m model) updateIntents(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case importStreamMsg:
 		return m, follow(&m.intents.imp, msg.lineStep, loadIntents(m.client))
 
+	case intentMembersStreamMsg:
+		// Reload on failure too, since members launched before it are kept.
+		cmd := follow(&m.intents.members, msg.lineStep, loadIntents(m.client))
+		if msg.err != nil {
+			cmd = loadIntents(m.client)
+		}
+		return m, cmd
+
 	case applyStreamMsg:
 		in := &m.intents
 		in.applyLines = append(in.applyLines, msg.result...)
@@ -138,12 +153,28 @@ func (m model) updateIntents(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	in := &m.intents
 
-	if in.export.running || in.imp.running || in.applyRunning {
+	if in.export.running || in.imp.running || in.applyRunning || in.members.running {
 		return m, nil // block input until the stream finishes
 	}
-	// A finished export/import's transcript stays on screen until dismissed here.
-	if in.export.dismiss(msg.String()) || in.imp.dismiss(msg.String()) {
+	// A finished export/import/members transcript stays on screen until dismissed here.
+	if in.export.dismiss(msg.String()) || in.imp.dismiss(msg.String()) || in.members.dismiss(msg.String()) {
 		return m, nil
+	}
+	if in.membersPrompting {
+		var submitted, cancelled bool
+		in.membersForm, submitted, cancelled = in.membersForm.update(msg)
+		if cancelled || !submitted {
+			in.membersPrompting = !cancelled
+			return m, nil
+		}
+		req, err := newIntentMembersRequest(in.membersForm, in.membersCreate, in.membersOf)
+		if err != nil {
+			in.membersForm.errMsg = err.Error()
+			return m, nil // the form stays up to fix it
+		}
+		in.membersPrompting = false
+		in.members.start()
+		return m, startIntentMembersStream(m.client, req)
 	}
 	if len(in.applyLines) > 0 {
 		switch msg.String() {
@@ -258,6 +289,16 @@ func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "r":
 		return m, loadIntents(m.client)
+	case "n":
+		in.membersPrompting, in.membersCreate, in.membersOf = true, true, ""
+		in.membersForm = newIntentMembersForm(true, "")
+		return m, nil
+	case "a":
+		if item, ok := in.list.SelectedItem().(intentItem); ok {
+			in.membersPrompting, in.membersCreate, in.membersOf = true, false, item.intent.GetName()
+			in.membersForm = newIntentMembersForm(false, item.intent.GetName())
+		}
+		return m, nil
 	case "i", "enter":
 		if item, ok := in.list.SelectedItem().(intentItem); ok {
 			in.showingInfo = item.intent
@@ -315,6 +356,12 @@ func (m intentsModel) View() string {
 	if m.imp.active() {
 		return m.imp.view("Importing…")
 	}
+	if m.members.active() {
+		return m.members.view("Launching members…")
+	}
+	if m.membersPrompting {
+		return m.membersForm.View()
+	}
 	if m.importPrompting {
 		return m.importForm.View()
 	}
@@ -350,7 +397,7 @@ func (m intentsModel) View() string {
 		return styleTitle.Render(" "+m.showingInfo.GetName()+" ") + "\n\n" + body + "\n\n" +
 			helpBar("any key", "back")
 	}
-	return m.list.View() + "\n" + helpBar("i", "members", "x", "remove", "U", "remove member", "E", "export", "I", "import", "A", "apply", "r", "refresh", "esc", "back")
+	return m.list.View() + "\n" + helpBar("n", "create", "a", "add members", "i", "members", "x", "remove", "U", "remove member", "E", "export", "I", "import", "A", "apply", "r", "refresh", "esc", "back")
 }
 
 // networkLines renders an intent's shared network: engine network, bridge, subnet and DNS.

@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -35,12 +34,12 @@ func newFindCommand(flags *globalFlags) *cobra.Command {
 
 				var term string
 				if len(args) == 1 {
-					term = strings.ToLower(args[0])
+					term = args[0]
 				}
 
 				var entries []*anvilv1.CatalogEntry
 				for _, e := range reply.GetEntries() {
-					if term == "" || matchesFindTerm(e, term) {
+					if client.MatchesFindTerm(e, term) {
 						entries = append(entries, e)
 					}
 				}
@@ -60,11 +59,4 @@ func newFindCommand(flags *globalFlags) *cobra.Command {
 	}
 	addOutputFlag(cmd, &output)
 	return cmd
-}
-
-func matchesFindTerm(e *anvilv1.CatalogEntry, term string) bool {
-	return strings.Contains(strings.ToLower(e.GetId()), term) ||
-		strings.Contains(strings.ToLower(e.GetDistro()), term) ||
-		strings.Contains(strings.ToLower(e.GetVersion()), term) ||
-		strings.Contains(strings.ToLower(e.GetName()), term)
 }

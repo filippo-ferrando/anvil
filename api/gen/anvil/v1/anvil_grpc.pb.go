@@ -1774,11 +1774,12 @@ var ImageService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	IntentService_List_FullMethodName   = "/anvil.v1.IntentService/List"
-	IntentService_Info_FullMethodName   = "/anvil.v1.IntentService/Info"
-	IntentService_Remove_FullMethodName = "/anvil.v1.IntentService/Remove"
-	IntentService_Delete_FullMethodName = "/anvil.v1.IntentService/Delete"
-	IntentService_Apply_FullMethodName  = "/anvil.v1.IntentService/Apply"
+	IntentService_List_FullMethodName       = "/anvil.v1.IntentService/List"
+	IntentService_Info_FullMethodName       = "/anvil.v1.IntentService/Info"
+	IntentService_Remove_FullMethodName     = "/anvil.v1.IntentService/Remove"
+	IntentService_Delete_FullMethodName     = "/anvil.v1.IntentService/Delete"
+	IntentService_Apply_FullMethodName      = "/anvil.v1.IntentService/Apply"
+	IntentService_AddMembers_FullMethodName = "/anvil.v1.IntentService/AddMembers"
 )
 
 // IntentServiceClient is the client API for IntentService service.
@@ -1786,7 +1787,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // IntentService manages named groups of VM/container instances. Members are
-// created via InstanceService.Launch(intent_name, role); this service only reads and manages the group afterward.
+// created via InstanceService.Launch(intent_name, role), AddMembers or Apply.
 type IntentServiceClient interface {
 	List(ctx context.Context, in *IntentListRequest, opts ...grpc.CallOption) (*IntentListReply, error)
 	Info(ctx context.Context, in *IntentInfoRequest, opts ...grpc.CallOption) (*IntentInfoReply, error)
@@ -1795,6 +1796,9 @@ type IntentServiceClient interface {
 	// Apply compares a manifest (anvil.yaml) with the intent's current state and applies the
 	// difference. The plan is always sent first; dry_run stops there.
 	Apply(ctx context.Context, in *IntentApplyRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[IntentApplyProgress], error)
+	// AddMembers launches members into an intent one at a time, in order. The first failure
+	// ends the stream with an error; members launched before it are kept, not rolled back.
+	AddMembers(ctx context.Context, in *IntentAddMembersRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[IntentAddMembersProgress], error)
 }
 
 type intentServiceClient struct {
@@ -1864,12 +1868,31 @@ func (c *intentServiceClient) Apply(ctx context.Context, in *IntentApplyRequest,
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type IntentService_ApplyClient = grpc.ServerStreamingClient[IntentApplyProgress]
 
+func (c *intentServiceClient) AddMembers(ctx context.Context, in *IntentAddMembersRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[IntentAddMembersProgress], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &IntentService_ServiceDesc.Streams[1], IntentService_AddMembers_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[IntentAddMembersRequest, IntentAddMembersProgress]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type IntentService_AddMembersClient = grpc.ServerStreamingClient[IntentAddMembersProgress]
+
 // IntentServiceServer is the server API for IntentService service.
 // All implementations must embed UnimplementedIntentServiceServer
 // for forward compatibility.
 //
 // IntentService manages named groups of VM/container instances. Members are
-// created via InstanceService.Launch(intent_name, role); this service only reads and manages the group afterward.
+// created via InstanceService.Launch(intent_name, role), AddMembers or Apply.
 type IntentServiceServer interface {
 	List(context.Context, *IntentListRequest) (*IntentListReply, error)
 	Info(context.Context, *IntentInfoRequest) (*IntentInfoReply, error)
@@ -1878,6 +1901,9 @@ type IntentServiceServer interface {
 	// Apply compares a manifest (anvil.yaml) with the intent's current state and applies the
 	// difference. The plan is always sent first; dry_run stops there.
 	Apply(*IntentApplyRequest, grpc.ServerStreamingServer[IntentApplyProgress]) error
+	// AddMembers launches members into an intent one at a time, in order. The first failure
+	// ends the stream with an error; members launched before it are kept, not rolled back.
+	AddMembers(*IntentAddMembersRequest, grpc.ServerStreamingServer[IntentAddMembersProgress]) error
 	mustEmbedUnimplementedIntentServiceServer()
 }
 
@@ -1902,6 +1928,9 @@ func (UnimplementedIntentServiceServer) Delete(context.Context, *IntentDeleteReq
 }
 func (UnimplementedIntentServiceServer) Apply(*IntentApplyRequest, grpc.ServerStreamingServer[IntentApplyProgress]) error {
 	return status.Error(codes.Unimplemented, "method Apply not implemented")
+}
+func (UnimplementedIntentServiceServer) AddMembers(*IntentAddMembersRequest, grpc.ServerStreamingServer[IntentAddMembersProgress]) error {
+	return status.Error(codes.Unimplemented, "method AddMembers not implemented")
 }
 func (UnimplementedIntentServiceServer) mustEmbedUnimplementedIntentServiceServer() {}
 func (UnimplementedIntentServiceServer) testEmbeddedByValue()                       {}
@@ -2007,6 +2036,17 @@ func _IntentService_Apply_Handler(srv interface{}, stream grpc.ServerStream) err
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type IntentService_ApplyServer = grpc.ServerStreamingServer[IntentApplyProgress]
 
+func _IntentService_AddMembers_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(IntentAddMembersRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(IntentServiceServer).AddMembers(m, &grpc.GenericServerStream[IntentAddMembersRequest, IntentAddMembersProgress]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type IntentService_AddMembersServer = grpc.ServerStreamingServer[IntentAddMembersProgress]
+
 // IntentService_ServiceDesc is the grpc.ServiceDesc for IntentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2035,6 +2075,11 @@ var IntentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Apply",
 			Handler:       _IntentService_Apply_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "AddMembers",
+			Handler:       _IntentService_AddMembers_Handler,
 			ServerStreams: true,
 		},
 	},

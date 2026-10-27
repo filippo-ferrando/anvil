@@ -717,7 +717,7 @@ message UmountRequest {
 message UmountReply {}
 
 // IntentService manages named groups of VM/container instances. Members are
-// created via InstanceService.Launch(intent_name, role); this service only reads and manages the group afterward.
+// created via InstanceService.Launch(intent_name, role), AddMembers or Apply.
 service IntentService {
   rpc List(IntentListRequest) returns (IntentListReply);
   rpc Info(IntentInfoRequest) returns (IntentInfoReply);
@@ -727,6 +727,10 @@ service IntentService {
   // Apply compares a manifest (anvil.yaml) with the intent's current state and applies the
   // difference. The plan is always sent first; dry_run stops there.
   rpc Apply(IntentApplyRequest) returns (stream IntentApplyProgress);
+
+  // AddMembers launches members into an intent one at a time, in order. The first failure
+  // ends the stream with an error; members launched before it are kept, not rolled back.
+  rpc AddMembers(IntentAddMembersRequest) returns (stream IntentAddMembersProgress);
 }
 
 message IntentMember {
@@ -817,6 +821,35 @@ message IntentApplyProgress {
     string status = 2;
     Intent intent = 3;        // final event on success, unset on a dry run
     string error = 4;
+  }
+}
+
+// IntentMemberSpec is one member for AddMembers, named "<intent>-<role>" with default sizes.
+message IntentMemberSpec {
+  string role = 1;
+  Kind kind = 2;    // KIND_VM or KIND_CONTAINER
+  string image = 3; // VM catalog id / image ref, or container image ref
+}
+
+message IntentAddMembersRequest {
+  string name = 1;
+  bool create = 2; // the intent must not exist yet; false: it must already exist
+  repeated IntentMemberSpec members = 3;
+  VmHypervisor hypervisor = 4;         // for the VM members
+  repeated string ssh_public_keys = 5; // authorized on every VM member
+}
+
+// IntentMemberProgress is one launch event of one member.
+message IntentMemberProgress {
+  string role = 1;
+  LaunchProgress launch = 2; // status or instance, never error (see IntentAddMembersProgress.error)
+}
+
+message IntentAddMembersProgress {
+  oneof event {
+    IntentMemberProgress member = 1;
+    Intent intent = 2; // final event on success
+    string error = 3;  // final event on failure
   }
 }
 
