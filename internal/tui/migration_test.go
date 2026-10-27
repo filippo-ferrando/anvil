@@ -69,3 +69,36 @@ func TestMigrateFormSuggestions(t *testing.T) {
 		t.Errorf("tab completion: got %q, want %q", got, "parrot")
 	}
 }
+
+func TestBuildMigrateRequest(t *testing.T) {
+	form := newMigrateForm()
+	if _, err := buildMigrateRequest(form); err == nil {
+		t.Error("expected an error without Name and To")
+	}
+	setField(&form, "Name", "web")
+	setField(&form, "To", "forge")
+	setField(&form, destNameField, "web-2")
+	toggle(&form, "Copy")
+	req, err := buildMigrateRequest(form)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.GetDestName() != "web-2" || !req.GetCopy() || req.GetDryRun() {
+		t.Errorf("unexpected request %+v", req)
+	}
+}
+
+func TestDiscoverTimeoutForm(t *testing.T) {
+	m := model{screen: screenMigration, migration: newMigrationModel()}
+	next, _ := m.Update(key("D"))
+	m = next.(model)
+	if !m.migration.discovering {
+		t.Fatal("expected D to open the discover form")
+	}
+	setField(&m.migration.discoverForm, "Timeout", "later")
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if !m.migration.discovering || m.migration.discoverForm.errMsg == "" {
+		t.Error("expected a bad timeout to keep the form open with an error")
+	}
+}

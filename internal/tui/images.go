@@ -204,22 +204,22 @@ func (m model) updateImagesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	im := &m.images
 
 	if im.confirmDelete != nil {
-		switch msg.String() {
-		case "y", "enter":
+		switch k := msg.String(); k {
+		case "y", "enter", "f":
 			img := im.confirmDelete
 			im.confirmDelete = nil
-			return m, deleteCachedImage(m.client, img.GetId(), img.GetArch(), img.GetKind())
+			return m, deleteCachedImage(m.client, img.GetId(), img.GetArch(), img.GetKind(), k == "f")
 		default:
 			im.confirmDelete = nil
 			return m, nil
 		}
 	}
 	if im.confirmDeleteContainer != nil {
-		switch msg.String() {
-		case "y", "enter":
+		switch k := msg.String(); k {
+		case "y", "enter", "f":
 			img := im.confirmDeleteContainer
 			im.confirmDeleteContainer = nil
-			return m, deleteContainerImage(m.client, img.GetId(), img.GetEngine())
+			return m, deleteContainerImage(m.client, img.GetId(), img.GetEngine(), k == "f")
 		default:
 			im.confirmDeleteContainer = nil
 			return m, nil
@@ -291,7 +291,7 @@ func (m imagesModel) View() string {
 			note += "; its firecracker raw copy goes too"
 		}
 		return styleWarn.Render(fmt.Sprintf("Delete cached image %q? (%s)", m.confirmDelete.GetId(), note)) +
-			"\n\n" + helpBar("y", "confirm", "any other key", "cancel")
+			"\n\n" + helpBar("y", "confirm", "f", "force, even if an instance's disk uses it", "any other key", "cancel")
 	}
 	if m.confirmDeleteContainer != nil {
 		label := m.confirmDeleteContainer.GetId()
@@ -299,7 +299,7 @@ func (m imagesModel) View() string {
 			label = tags[0]
 		}
 		return styleWarn.Render(fmt.Sprintf("Delete container image %q?", label)) +
-			"\n\n" + helpBar("y", "confirm", "any other key", "cancel")
+			"\n\n" + helpBar("y", "confirm", "f", "force, even if a container uses it", "any other key", "cancel")
 	}
 
 	tabs := imagesModeTabs(m.mode)

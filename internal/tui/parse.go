@@ -81,3 +81,15 @@ func splitCommaList(s string) []string {
 	}
 	return out
 }
+
+// parseDurationField parses a Go duration like "15m"; empty means 0, the daemon's default.
+func parseDurationField(s, field string) (time.Duration, error) {
+	if s == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", field, err)
+	}
+	return d, nil
+}

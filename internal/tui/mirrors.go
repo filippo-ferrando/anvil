@@ -27,6 +27,9 @@ func (i mirrorItem) Description() string {
 	if !i.mirror.GetEnabled() {
 		enabled = "disabled"
 	}
+	if i.mirror.GetInsecure() {
+		source += " (insecure)"
+	}
 	return fmt.Sprintf("%s  •  %s  •  priority %d  •  %s", kind, source, i.mirror.GetPriority(), enabled)
 }
 
@@ -47,13 +50,26 @@ func newMirrorsModel() mirrorsModel {
 }
 
 func newMirrorAddForm() simpleForm {
-	return newSimpleForm("Add mirror (ctrl+k: switch vm/container)", []formField{
-		textField("Name", "", ""),
-		textField("Manifest URL (vm only)", "", ""),
-		textField("Registry (container only)", "host[:port]", ""),
-		textField("Mirror of (container only, optional)", "upstream registry", ""),
-		textField("Priority", "higher wins on a collision", "0"),
-	})
+	return newSimpleForm("Add mirror (ctrl+k: switch vm/container)", mirrorFields("vm", nil))
+}
+
+// mirrorFields builds the add form for kind, carrying over values by label like launchFields.
+func mirrorFields(kind string, values map[string]string) []formField {
+	fields := []formField{textField("Name", "", values["Name"])}
+	if kind == "container" {
+		fields = append(fields,
+			textField("Registry", "host[:port]", values["Registry"]),
+			textField("Mirror of (optional)", "upstream registry", values["Mirror of (optional)"]),
+			toggleField("Insecure", "skip TLS verification", false),
+		)
+	} else {
+		fields = append(fields, textField("Manifest URL", "a distribution-info.json-shaped manifest", values["Manifest URL"]))
+	}
+	priority := values["Priority"]
+	if priority == "" {
+		priority = "0"
+	}
+	return append(fields, textField("Priority", "higher wins on a collision", priority))
 }
 
 func (m model) updateMirrors(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -106,6 +122,12 @@ func (m model) updateMirrorsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				mm.addKind = "vm"
 			}
+			mm.addForm.fields = mirrorFields(mm.addKind, formValues(mm.addForm))
+			mm.addForm.tabField = -1
+			if mm.addForm.focus >= len(mm.addForm.fields) {
+				mm.addForm.focus = 0
+			}
+			mm.addForm.focusCurrent()
 			return m, nil
 		}
 		var submitted, cancelled bool
@@ -175,11 +197,12 @@ func buildMirror(kind string, form simpleForm) (*anvilv1.Mirror, error) {
 	mirror := &anvilv1.Mirror{Name: name, Priority: int32(priority), Enabled: true}
 	if kind == "container" {
 		mirror.Kind = anvilv1.MirrorKind_MIRROR_KIND_CONTAINER
-		mirror.Registry = form.Value("Registry (container only)")
-		mirror.MirrorOf = form.Value("Mirror of (container only, optional)")
+		mirror.Registry = form.Value("Registry")
+		mirror.MirrorOf = form.Value("Mirror of (optional)")
+		mirror.Insecure = form.Bool("Insecure")
 	} else {
 		mirror.Kind = anvilv1.MirrorKind_MIRROR_KIND_VM
-		mirror.ManifestUrl = form.Value("Manifest URL (vm only)")
+		mirror.ManifestUrl = form.Value("Manifest URL")
 	}
 	return mirror, nil
 }

@@ -107,7 +107,7 @@ func prepareGUI(ctx context.Context, c *client.Client, name string, x11 bool, pr
 
 // runVMGUI runs command in the VM under waypipe, over the same SSH path as `anvil exec`.
 func runVMGUI(c *client.Client, inst *anvilv1.Instance, session *anvilv1.GUISession, opts guiOptions, command []string) error {
-	key, err := resolveIdentity(opts.identity)
+	key, err := client.ResolveIdentity(opts.identity)
 	if err != nil {
 		return err
 	}

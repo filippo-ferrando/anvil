@@ -238,15 +238,16 @@ func fetchEvents(c *client.Client, name string, limit int32) ([]*anvilv1.Instanc
 	}
 }
 
-// eventsScreenLimit and detailEventsLimit cap how many events the Events screen and the detail panel fetch.
+// eventsScreenLimit and detailEventsLimit cap how many events the Events screen (by default) and the detail panel fetch.
 const (
 	eventsScreenLimit = 500
 	detailEventsLimit = 50
 )
 
-func loadEvents(c *client.Client) tea.Cmd {
+// loadEvents fills the Events screen, filtered to name when set; limit 0 loads every stored event.
+func loadEvents(c *client.Client, name string, limit int32) tea.Cmd {
 	return func() tea.Msg {
-		events, err := fetchEvents(c, "", eventsScreenLimit)
+		events, err := fetchEvents(c, name, limit)
 		return eventsLoadedMsg{events: events, err: err}
 	}
 }
@@ -278,9 +279,9 @@ func loadCatalog(c *client.Client) tea.Cmd {
 	}
 }
 
-func deleteCachedImage(c *client.Client, id, arch, kind string) tea.Cmd {
+func deleteCachedImage(c *client.Client, id, arch, kind string, force bool) tea.Cmd {
 	return func() tea.Msg {
-		_, err := c.Image.Delete(context.Background(), &anvilv1.ImageDeleteRequest{Id: id, Arch: arch, Kind: kind})
+		_, err := c.Image.Delete(context.Background(), &anvilv1.ImageDeleteRequest{Id: id, Arch: arch, Kind: kind, Force: force})
 		return actionDoneMsg{screen: screenImages, verb: "deleted", err: err}
 	}
 }
@@ -295,9 +296,9 @@ func loadContainerImages(c *client.Client) tea.Cmd {
 	}
 }
 
-func deleteContainerImage(c *client.Client, id string, engine anvilv1.ContainerEngine) tea.Cmd {
+func deleteContainerImage(c *client.Client, id string, engine anvilv1.ContainerEngine, force bool) tea.Cmd {
 	return func() tea.Msg {
-		_, err := c.Image.DeleteContainerImage(context.Background(), &anvilv1.ContainerImageDeleteRequest{Id: id, Engine: engine})
+		_, err := c.Image.DeleteContainerImage(context.Background(), &anvilv1.ContainerImageDeleteRequest{Id: id, Engine: engine, Force: force})
 		return actionDoneMsg{screen: screenImages, verb: "deleted", err: err}
 	}
 }
@@ -309,11 +310,20 @@ func startInstance(c *client.Client, name string) tea.Cmd {
 	}
 }
 
-func stopInstance(c *client.Client, name string) tea.Cmd {
+func stopInstance(c *client.Client, req *anvilv1.StopRequest) tea.Cmd {
 	return func() tea.Msg {
-		_, err := c.Stop(context.Background(), &anvilv1.StopRequest{Names: []string{name}})
+		_, err := c.Stop(context.Background(), req)
 		return actionDoneMsg{screen: screenInstances, verb: "stopped", err: err}
 	}
+}
+
+// buildStopRequest reads the stop form: a Force toggle and a graceful timeout in seconds.
+func buildStopRequest(name string, form simpleForm) (*anvilv1.StopRequest, error) {
+	timeout, err := parseInt64(form.Value("Timeout seconds"), "Timeout seconds")
+	if err != nil {
+		return nil, err
+	}
+	return &anvilv1.StopRequest{Names: []string{name}, Force: form.Bool("Force"), TimeoutSeconds: timeout}, nil
 }
 
 // deleteInstance deletes an instance; purge also removes its unused base image.
@@ -567,9 +577,9 @@ func removeHost(c *client.Client, alias string) tea.Cmd {
 	}
 }
 
-func discoverHosts(c *client.Client) tea.Cmd {
+func discoverHosts(c *client.Client, timeout time.Duration) tea.Cmd {
 	return func() tea.Msg {
-		reply, err := c.Host.Discover(context.Background(), &anvilv1.HostDiscoverRequest{})
+		reply, err := c.Host.Discover(context.Background(), &anvilv1.HostDiscoverRequest{TimeoutSeconds: client.CeilSeconds(timeout)})
 		if err != nil {
 			return hostsDiscoveredMsg{err: err}
 		}

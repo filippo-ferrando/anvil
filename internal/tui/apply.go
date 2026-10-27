@@ -10,29 +10,44 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
-	"git.fferrando.cc/rdfilippo/anvil/internal/intent/vars"
-	"git.fferrando.cc/rdfilippo/anvil/internal/sshkey"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 // applyStreamMsg carries events off an IntentService.Apply stream; result holds a plan's lines.
 type applyStreamMsg struct{ streamStep[[]string] }
 
+// newApplyForm is the A form on the Intents screen, the same settings as `anvil apply`.
+func newApplyForm() simpleForm {
+	return newSimpleForm("Apply manifest", []formField{
+		pathField("Manifest path", "e.g. ./anvil.yaml", "anvil.yaml"),
+		textField("Vars (optional)", "KEY=VALUE,KEY2=VALUE2, over the shell env, .env and vars:", ""),
+		pathField("Env file (optional)", "KEY=VALUE file, blank = .env beside the manifest", ""),
+		textField("Wait timeout", "how long to wait for each member others depend on", "15m"),
+		toggleField("Prune", "delete members no longer in the manifest", false),
+		toggleField("Recreate VMs", "allow replacing a VM, its disk is lost", false),
+	})
+}
+
 // newApplyRequest reads the manifest on the client side, since the daemon can't see the caller's files.
-func newApplyRequest(path string, prune, recreate bool) (*anvilv1.IntentApplyRequest, error) {
+// The request is a dry run; it is sent again for real once the plan is confirmed.
+func newApplyRequest(form simpleForm) (*anvilv1.IntentApplyRequest, error) {
+	path := form.Value("Manifest path")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading manifest: %w", err)
 	}
-	values, err := vars.Load(path, "", data, nil)
+	timeout, err := parseDurationField(form.Value("Wait timeout"), "Wait timeout")
 	if err != nil {
 		return nil, err
 	}
-	pub, err := sshkey.EnsureDefaultPublic()
-	if err != nil {
-		return nil, err
-	}
-	return &anvilv1.IntentApplyRequest{Manifest: data, Prune: prune, Recreate: recreate, SshPublicKeys: []string{pub}, Vars: values}, nil
+	return client.NewApplyRequest(path, data, client.ApplyOptions{
+		DryRun:      true,
+		Prune:       form.Bool("Prune"),
+		Recreate:    form.Bool("Recreate VMs"),
+		Vars:        splitCommaList(form.Value("Vars (optional)")),
+		EnvFile:     form.Value("Env file (optional)"),
+		WaitTimeout: timeout,
+	})
 }
 
 func startApplyStream(c *client.Client, req *anvilv1.IntentApplyRequest) tea.Cmd {

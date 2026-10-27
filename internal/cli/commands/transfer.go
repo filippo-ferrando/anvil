@@ -50,7 +50,7 @@ func newTransferCommand(flags *globalFlags) *cobra.Command {
 				return runContainerCopy(c, inst, srcPath, dstPath, true)
 			}
 
-			key, err := resolveIdentity(identity)
+			key, err := client.ResolveIdentity(identity)
 			if err != nil {
 				return err
 			}

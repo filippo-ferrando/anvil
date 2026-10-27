@@ -18,8 +18,10 @@ ANVIL_REMOTE=user@host anvil tui   # same, from the environment
 `--remote` works for the TUI exactly as for the CLI (`tui.Run` calls `client.DialSSH`):
 anvil runs `ssh <host> anvil dial-stdio` and speaks gRPC over that pipe. The pieces that
 run local programs follow the remote too: a VM shell or exec goes through `ssh -J <host>`,
-a container exec runs `docker exec` with `DOCKER_HOST=ssh://<host>`, and a mount's host
-path must then be absolute on the remote host.
+a container exec runs `docker exec` with `DOCKER_HOST=ssh://<host>`, and a path the
+daemon reads or writes (a mount's host path, an export's output, an import's bundle) must
+then be absolute on the remote host. Those fields then have no local Tab completion and
+the export output has no default.
 
 ## Layout
 
@@ -35,7 +37,7 @@ path must then be absolute on the remote host.
  ✓ status line (transient)
 ```
 
-- **Header**: local `user@hostname`, the socket (or `host:socket` with `--remote`), the
+- **Header**: the TUI's own version, local `user@hostname`, the socket (or `host:socket` with `--remote`), the
   daemon state (`connecting…`, `daemon connected` with the daemon's version,
   `daemon unreachable`, taken from the last instance list request), the running/total instance count and a clock.
 - **Sidebar**: the nine screens of `screenOrder` in `internal/tui/app.go`. The entry with
@@ -102,7 +104,8 @@ All prompts (launch, settings, mount, port, host, mirror, ...) use the same form
 ### Confirmations
 
 Destructive actions ask first. `y` or `enter` confirms; any other key cancels. The
-instance and intent delete prompts have an extra `p` choice, described below.
+instance and intent delete prompts have an extra `p` choice, and the image delete prompts
+an extra `f` choice, described below.
 
 ## 1. Instances
 
@@ -113,9 +116,11 @@ Each list row shows a state marker, the name, the kind (`vm`, `vm/firecracker` o
 `container`), the state, the image and an
 address (a bridged VM's static IP, otherwise the first IP the guest agent reported).
 
-The detail panel shows kind, state, image, creation time, size (vCPUs, memory, disk) for
-a VM, the autostart flag and restart policy, the snapshot schedule, the intent and role,
-port forwards and mounts. For a running instance it adds live data, streamed every 2 s
+The detail panel shows kind, state, image, creation time, size (vCPUs, memory, disk) and
+the SSH user and forwarded port for a VM, the engine, short container ID, network alias
+and volumes for a container, the autostart flag and restart policy, whether it can run
+GUI apps, the snapshot schedule, the intent and role, port forwards, mounts and the other
+intent members' host names it resolves. For a running instance it adds live data, streamed every 2 s
 for the selected row only (`StreamStats`),
 while the Instances screen is open: address, uptime, the guest agent state, cloud-init state and
 guest IPs (VM), and gauges for CPU, memory, disk usage (VM) or disk read/write rate
@@ -127,10 +132,12 @@ who caused each one and any error (see `anvil events`).
 |-----|--------|
 | `n` | Open the Launch takeover. |
 | `s` | Stop the selected instance if it is running, otherwise start it. Stop uses the daemon's default 30 s graceful timeout. |
-| `x` | Open a shell in a VM: asks for a user (blank means the image's default user), then suspends the TUI and runs `ssh` into the VM until the session ends. On a container it opens `/bin/sh` through `docker exec`, like `anvil shell`. |
-| `e` | Run one command: asks for the command (and a user, for a VM), then runs it over `ssh` for a VM or `docker exec -it` for a container. |
-| `g` | Run a graphical app: command, X11 toggle, and whether to add it to this desktop's app launcher (`anvil gui`, see [gui.md](gui.md)). |
+| `S` | Stop a running instance with options: Force (skip the graceful shutdown) and Timeout seconds (`anvil stop --force --timeout`). |
+| `x` | Open a shell in a VM: asks for a user (blank means the image's default user) and an optional private key (`--identity`, blank means anvil's own key), then suspends the TUI and runs `ssh` into the VM until the session ends. On a container it opens `/bin/sh` through `docker exec`, like `anvil shell`. |
+| `e` | Run one command: asks for the command (and a user and private key, for a VM), then runs it over `ssh` for a VM or `docker exec -it` for a container. |
+| `g` | Run a graphical app: command, X11 toggle, user, private key (VM), and whether to add it to this desktop's app launcher, with an optional launcher title and icon file (`anvil gui` and `anvil gui export`, see [gui.md](gui.md)). |
 | `l` | Open the Logs takeover. |
+| `L` | Open the Logs takeover from the last N lines only (`anvil logs --tail`). |
 | `d` | Delete, after a confirmation: `y`/`enter` deletes, `p` also removes the base image if no other VM uses it, any other key cancels. |
 | `f` | Fork the selected VM: new name, and whether to start it at once. Shows the progress until dismissed. |
 | `u` | Settings: vCPUs, memory, disk (VM), autostart and restart policy, pre-filled with the current values. Only changed fields are sent (`anvil set`). |
@@ -155,18 +162,20 @@ A form for a new instance. The subtitle shows the kind (`vm` or `container`), an
 fields depend on it:
 
 - Both: Name (defaults to a name derived from the image, e.g. `ubuntu-24.04`), Image (suggestions from the VM catalog and cached
-  images, or from local container images), CPUs, Memory MiB.
-- VM: Hypervisor (`qemu`, the default, or `firecracker`; with `firecracker` the Image
+  images, or from local container images).
+- VM: CPUs, Memory MiB, Hypervisor (`qemu`, the default, or `firecracker`; with `firecracker` the Image
   suggestions only list images it can boot, see [firecracker.md](firecracker.md)),
   Disk GiB (default 0, the image minimum, as in the CLI), Cloud-init name (suggestions
-  from the library), Guest agent toggle (on by default), Wait toggle.
+  from the library), Extra SSH keys (literal keys or `.pub` paths, comma-separated, on top
+  of anvil's own key, `--ssh-key`), Guest agent toggle (on by default).
 - qemu VM, at the very end: a `Pass <id>` toggle per free host device (`--device`, see
   [passthrough.md](passthrough.md)). Blocked and in-use devices are listed above the form.
-- Container: Env (`K=V,K2=V2`), Volumes (`host:guest[:ro],...`).
+- Container: Env (`K=V,K2=V2`), Volumes (`host:guest[:ro],...`), Entrypoint, Command
+  (split on spaces, overrides the image's command like `anvil launch image -- cmd`).
+- Both: Start toggle (on by default; off is `--no-start`), Wait until ready toggle
+  (cloud-init for a VM, `--wait`), Wait timeout (default `15m`).
 - Both, at the end: Autostart toggle, Restart policy (suggestions `no`, `on-failure`,
   `on-failure:5`, `always`), Intent name, Role, Ports (`host:guest[/tcp|udp],...`).
-
-For a container, the CPUs and Memory fields are shown but not sent with the request.
 
 | Key | Action |
 |-----|--------|
@@ -181,11 +190,12 @@ without keeping it.
 During the launch the progress lines redraw in place and all keys except `ctrl+c` are
 ignored. On success the TUI returns to Instances; on failure the form stays open with the
 error in the status line. With the Wait toggle on, the launch view stays open until
-cloud-init finished (`launch --wait`).
+the instance finished its first-boot setup (`launch --wait`). Wait needs Start on.
 
 ## Logs (takeover)
 
-Streams the selected instance's log with `follow` from the start of the available output:
+Streams the selected instance's log with `follow` from the start of the available output
+(or from the last N lines, with `L`):
 the serial console for a VM, the container's output for a container. At most the last
 2000 lines are kept in memory. Follow mode is on when the view opens.
 
@@ -229,7 +239,7 @@ Two modes, shown as tabs at the top.
 | `v` / `c` | Switch to VM images / container images. |
 | `tab` | VM mode: switch focus between cached images and the catalog. |
 | `h` | VM mode, cached panel: compute a base image's sha256 (not offered for raw copies or the kernel). |
-| `x` | Delete the selected cached VM image (only the download, not the catalog entry; deleting a base also deletes its Firecracker raw copy) or container image, after a confirmation. |
+| `x` | Delete the selected cached VM image (only the download, not the catalog entry; deleting a base also deletes its Firecracker raw copy) or container image, after a confirmation. There `f` deletes even if an instance still uses it (`--force`, this breaks that instance). |
 | `r` | Reload. |
 | `esc` `q` | Back to the sidebar. |
 
@@ -239,12 +249,12 @@ The list of intents, each with its member count and subnet.
 
 | Key | Action |
 |-----|--------|
-| `i` `enter` | Show the members (role, kind, IP, DNS name) and the intent's DNS zone and server. Any key goes back. |
+| `i` `enter` | Show the members (role, kind, instance ID, IP, DNS name) and the intent's network: engine network and bridge, subnet and gateway, DNS zone and server. Any key goes back. |
 | `x` | Remove the intent: `y`/`enter` ungroups only, `p` ungroups and also deletes every member instance, any other key cancels. |
 | `U` | Remove one member from the intent (role or instance ID; `tab` suggests the roles). The instance is kept as a standalone one. |
 | `E` | Export the intent to a bundle. |
 | `I` | Import a bundle (optional rename of the intent). |
-| `A` | Apply a manifest: path, Prune toggle, Recreate VMs toggle. A dry run shows the plan first; `enter` or `y` applies it, `esc`, `q` or `n` cancels. See [apply.md](apply.md). |
+| `A` | Apply a manifest: path, Vars (`KEY=VALUE,...`, `--var`), Env file (`--env-file`), Wait timeout, Prune toggle, Recreate VMs toggle. A dry run shows the plan first; `enter` or `y` applies it, `esc`, `q` or `n` cancels. See [apply.md](apply.md). |
 | `r` | Reload. |
 | `esc` `q` | Back to the sidebar. |
 
@@ -277,7 +287,7 @@ it mirrors) and whether it is enabled. See [mirrors.md](mirrors.md).
 
 | Key | Action |
 |-----|--------|
-| `a` | Add a mirror: Name, Manifest URL (VM), Registry and Mirror of (container), Priority. `ctrl+k` switches between VM and container. |
+| `a` | Add a mirror: Name, Manifest URL (VM), Registry, Mirror of and Insecure toggle (container), Priority. `ctrl+k` switches between VM and container, showing only that kind's fields. |
 | `e` | Enable or disable the selected mirror. |
 | `x` | Remove it, after a confirmation. |
 | `r` | Reload. |
@@ -286,13 +296,15 @@ it mirrors) and whether it is enabled. See [mirrors.md](mirrors.md).
 ## 7. Migration
 
 Known hosts on the left, a migrate form on the right (Name of an instance or intent, To a
-host alias or `user@host[:port]`, and the Copy, Best-effort and Dry run toggles).
+host alias or `user@host[:port]`, an optional Dest name to rename a single instance on the
+target, and the Copy, Best-effort and Dry run toggles).
 
 | Key | Action |
 |-----|--------|
 | `tab` | Move focus to the migrate form. In the form, the form keys apply and `esc` returns to the host list. |
 | `a` | Add a known host: alias, `user@host[:port]`, optional identity path, strict host key toggle. |
 | `d` | Look for anvil hosts on the local network over mDNS. The results replace the host list. |
+| `D` | The same, asking first how long to wait for answers (`anvil host discover --timeout`). |
 | `enter` | On a discovered host: open the add form, pre-filled with its name and `root@<address>`. |
 | `x` | Remove the selected saved host, after a confirmation. |
 | `t` | Test the connection to the selected saved host. |
@@ -307,11 +319,13 @@ During a migration keys are ignored. When it ends, `tab` returns to the host lis
 
 The event log (`anvil events`), newest first: time, instance, action, the user who caused
 it (or `anvild`) and the message or error. A failed operation is marked `✕`. The newest
-500 events are loaded when the screen opens and again after instance changes. With the
+500 events are loaded when the screen opens and again after instance changes; `f` changes
+the instance and the number of events loaded. With the
 cursor on the newest event it follows new ones; elsewhere it stays on the same event.
 
 | Key | Action |
 |-----|--------|
+| `f` | Filter: only one instance's events (blank for all) and how many of the newest to load (0 for all), like `anvil events <name> -n`. |
 | `r` | Reload. |
 | `esc` `q` | Back to the sidebar. |
 

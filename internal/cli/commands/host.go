@@ -149,11 +149,8 @@ func newHostDiscoverCommand(flags *globalFlags) *cobra.Command {
 				return err
 			}
 			return withClient(flags, func(c *client.Client) error {
-				// Rounds up: the field is whole seconds, and truncating a
-				// sub-second timeout to 0 would silently mean "use the default".
-				secs := int32((timeout + time.Second - 1) / time.Second)
 				reply, err := c.Host.Discover(cmd.Context(), &anvilv1.HostDiscoverRequest{
-					TimeoutSeconds: secs,
+					TimeoutSeconds: client.CeilSeconds(timeout),
 				})
 				if err != nil {
 					return err

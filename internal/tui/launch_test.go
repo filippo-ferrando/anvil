@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -19,10 +21,84 @@ func TestLaunchFieldsGuestToggles(t *testing.T) {
 		t.Errorf("hypervisor defaults to %q, want qemu", got)
 	}
 
-	for _, f := range launchFields("container", nil) {
-		if f.Label == guestAgentField || f.Label == waitField || f.Label == hypervisorField {
+	for _, f := range launchFields("vm", nil) {
+		if f.Label == entrypointField || f.Label == commandField || f.Label == "Env" {
+			t.Errorf("expected no %q field for a VM", f.Label)
+		}
+	}
+	container := newSimpleForm("", launchFields("container", nil))
+	for _, f := range container.fields {
+		switch f.Label {
+		case guestAgentField, hypervisorField, sshKeysField, "CPUs", "Memory MiB", "Disk GiB":
 			t.Errorf("expected no %q field for a container", f.Label)
 		}
+	}
+	if !container.Bool(startField) || container.Bool(waitField) {
+		t.Error("expected Start on and Wait off for a container too")
+	}
+}
+
+func TestBuildLaunchRequestContainer(t *testing.T) {
+	m := newLaunchModel()
+	m.kind = "container"
+	m.form.fields = launchFields("container", nil)
+	setField(&m.form, "Image", "nginx:alpine")
+	setField(&m.form, entrypointField, "/bin/sh")
+	setField(&m.form, commandField, "-c  'sleep 1'")
+	setField(&m.form, waitTimeoutField, "90s")
+	toggle(&m.form, startField)
+
+	req, err := buildLaunchRequest(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := req.GetContainer()
+	if req.GetKind() != anvilv1.Kind_KIND_CONTAINER || !req.GetNoStart() || req.GetWaitTimeoutSeconds() != 90 {
+		t.Errorf("unexpected request %+v", req)
+	}
+	if strings.Join(c.GetEntrypoint(), "|") != "/bin/sh" || strings.Join(c.GetCmd(), "|") != "-c|'sleep|1'" {
+		t.Errorf("entrypoint %q, cmd %q", c.GetEntrypoint(), c.GetCmd())
+	}
+	if req.GetVm() != nil {
+		t.Error("expected no VM spec for a container")
+	}
+
+	toggle(&m.form, waitField)
+	if _, err := buildLaunchRequest(m); err == nil {
+		t.Error("expected wait without start to fail")
+	}
+	toggle(&m.form, startField)
+	if req, err = buildLaunchRequest(m); err != nil || !req.GetWait() || req.GetNoStart() {
+		t.Errorf("expected a waiting started launch, got %+v, %v", req, err)
+	}
+
+	setField(&m.form, waitTimeoutField, "soon")
+	if _, err := buildLaunchRequest(m); err == nil {
+		t.Error("expected a bad wait timeout to fail")
+	}
+}
+
+func TestBuildLaunchRequestVMKeys(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	pubFile := filepath.Join(t.TempDir(), "id.pub")
+	if err := os.WriteFile(pubFile, []byte("ssh-ed25519 BBBB file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := newLaunchModel()
+	setField(&m.form, "Image", "debian:12")
+	setField(&m.form, "CPUs", "2")
+	setField(&m.form, sshKeysField, "ssh-ed25519 AAAA me, "+pubFile)
+
+	req, err := buildLaunchRequest(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := req.GetVm().GetSshPublicKeys()
+	if len(keys) != 3 || keys[1] != "ssh-ed25519 AAAA me" || keys[2] != "ssh-ed25519 BBBB file" {
+		t.Errorf("keys = %q, want anvil's own key plus the two extra ones", keys)
+	}
+	if req.GetVm().GetCpus() != 2 || req.GetNoStart() || req.GetWaitTimeoutSeconds() != 900 {
+		t.Errorf("unexpected request %+v", req)
 	}
 }
 

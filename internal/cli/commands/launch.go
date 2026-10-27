@@ -4,13 +4,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
-	"git.fferrando.cc/rdfilippo/anvil/internal/sshkey"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
@@ -108,7 +106,7 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 				Role:       role,
 
 				Wait:               wait,
-				WaitTimeoutSeconds: int32(waitTimeout.Seconds()),
+				WaitTimeoutSeconds: client.CeilSeconds(waitTimeout),
 				Autostart:          autostart,
 			}
 			if restart != "" {
@@ -128,7 +126,7 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 					}
 					cloudInitData = data
 				}
-				resolvedKeys, err := resolveSSHKeys(sshKeys)
+				resolvedKeys, err := client.ResolveSSHKeys(sshKeys)
 				if err != nil {
 					return err
 				}
@@ -268,38 +266,4 @@ func readCloudInitFile(path string) (string, error) {
 		return "", fmt.Errorf("reading cloud-init file %s: %w", path, err)
 	}
 	return string(data), nil
-}
-
-// resolveSSHKeys always includes anvil's own managed public key, generated on
-// first use, plus any additional explicit keys or .pub file paths.
-func resolveSSHKeys(explicit []string) ([]string, error) {
-	anvilPub, err := sshkey.EnsureDefaultPublic()
-	if err != nil {
-		return nil, err
-	}
-	keys := []string{anvilPub}
-
-	for _, k := range explicit {
-		resolved, err := resolveSSHKey(k)
-		if err != nil {
-			return nil, err
-		}
-		keys = append(keys, resolved)
-	}
-	return keys, nil
-}
-
-func resolveSSHKey(k string) (string, error) {
-	// Treat k as a literal public key if it starts with a known key-type prefix,
-	// otherwise as a path to a .pub file.
-	for _, prefix := range []string{"ssh-", "ecdsa-", "sk-"} {
-		if strings.HasPrefix(k, prefix) {
-			return k, nil
-		}
-	}
-	data, err := os.ReadFile(k)
-	if err != nil {
-		return "", fmt.Errorf("reading SSH key file %s: %w", k, err)
-	}
-	return strings.TrimSpace(string(data)), nil
 }

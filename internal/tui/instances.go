@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -72,6 +73,8 @@ const (
 	instancesPromptFork
 	instancesPromptSettings
 	instancesPromptGUI
+	instancesPromptStop
+	instancesPromptLogs
 )
 
 type instancesModel struct {
@@ -83,8 +86,10 @@ type instancesModel struct {
 	promptTarget   *anvilv1.Instance
 	promptForm     simpleForm
 	lastShellUser  string // remembered across shell/exec calls, pre-filled into the user field
+	lastIdentity   string // remembered across shell/exec/gui calls, pre-filled into the identity field
 	lastGUICommand string // remembered across GUI launches
 	lastGUIX11     bool
+	lastLogsTail   string // remembered across logs calls
 
 	// Export, import and fork progress; a running one blocks other keys.
 	export, imp, fork transcript
@@ -410,11 +415,14 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		)
 	case "l":
 		if inst := m.selectedInstance(); inst != nil {
-			m.screen = screenLogs
-			m.logs = newLogsModel(inst, m.width, logsViewportHeight(m.height))
-			cmd, cancel := startLogsStream(m.client, inst.GetName())
-			m.logs.cancel = cancel
-			return m, tea.Batch(tea.ClearScreen, cmd)
+			return m.openLogs(inst, 0)
+		}
+		return m, nil
+	case "L":
+		if inst := m.selectedInstance(); inst != nil {
+			m.instances.startPrompt(instancesPromptLogs, inst, newSimpleForm("Logs of "+inst.GetName(), []formField{
+				textField(logsTailField, "only the last N lines, 0 = from the beginning", m.instances.lastLogsTail),
+			}))
 		}
 		return m, nil
 	case "r":
@@ -423,9 +431,17 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "s":
 		if inst := m.selectedInstance(); inst != nil {
 			if inst.GetState() == anvilv1.State_STATE_RUNNING {
-				return m, stopInstance(m.client, inst.GetName())
+				return m, stopInstance(m.client, &anvilv1.StopRequest{Names: []string{inst.GetName()}})
 			}
 			return m, startInstance(m.client, inst.GetName())
+		}
+		return m, nil
+	case "S":
+		if inst := m.selectedInstance(); inst != nil && inst.GetState() == anvilv1.State_STATE_RUNNING {
+			m.instances.startPrompt(instancesPromptStop, inst, newSimpleForm("Stop "+inst.GetName(), []formField{
+				toggleField("Force", "skip the graceful shutdown", false),
+				textField("Timeout seconds", "graceful shutdown wait before escalating", "30"),
+			}))
 		}
 		return m, nil
 	case "d":
@@ -444,11 +460,12 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "x":
 		if inst := m.selectedInstance(); inst != nil {
 			if inst.GetVm() == nil {
-				return m.shellInto(inst, "") // containers have no user concept
+				return m.shellInto(inst, "", "") // containers have no user concept
 			}
 			m.instances.startPrompt(instancesPromptShellUser, inst,
 				newSimpleForm("Shell", []formField{
 					textField("As user (optional, blank = default)", "", m.instances.lastShellUser),
+					identityField(m.instances.lastIdentity),
 				}))
 		}
 		return m, nil
@@ -456,24 +473,20 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if inst := m.selectedInstance(); inst != nil {
 			fields := []formField{textField("Command", "e.g. uptime", "")}
 			if inst.GetVm() != nil {
-				fields = append(fields, textField("As user (optional)", "", m.instances.lastShellUser))
+				fields = append(fields, textField("As user (optional)", "", m.instances.lastShellUser), identityField(m.instances.lastIdentity))
 			}
 			m.instances.startPrompt(instancesPromptExec, inst, newSimpleForm("Exec", fields))
 		}
 		return m, nil
 	case "g":
 		if inst := m.selectedInstance(); inst != nil {
-			m.instances.startPrompt(instancesPromptGUI, inst, newSimpleForm("GUI app", []formField{
-				textField("Command", "e.g. ghidraRun", m.instances.lastGUICommand),
-				toggleField("X11 app", "Java/Swing and other X11 apps need XWayland", m.instances.lastGUIX11),
-				toggleField("Add to desktop", "also add it to this desktop's app launcher", false),
-			}))
+			m.instances.startPrompt(instancesPromptGUI, inst, newSimpleForm("GUI app", guiFields(inst, m.instances)))
 		}
 		return m, nil
 	case "m":
 		if inst := m.selectedInstance(); inst != nil && inst.GetVm() != nil {
 			m.instances.startPrompt(instancesPromptMount, inst, newSimpleForm("Mount", []formField{
-				pathField("Host path", "absolute path on this host", ""),
+				m.hostPathField("Host path", "directory to share", ""),
 				textField("Guest path", "absolute path inside the guest", ""),
 				toggleField("Read-only", "mount read-only", false),
 			}))
@@ -524,13 +537,13 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "E":
 		if inst := m.selectedInstance(); inst != nil {
 			m.instances.startPrompt(instancesPromptExport, inst, newSimpleForm("Export "+inst.GetName(), []formField{
-				pathField("Output path", "e.g. ./"+inst.GetName()+".tar.zst", inst.GetName()+".tar.zst"),
+				m.exportPathField(inst.GetName()),
 			}))
 		}
 		return m, nil
 	case "i":
 		m.instances.startPrompt(instancesPromptImport, nil, newSimpleForm("Import bundle", []formField{
-			pathField("Bundle path", "e.g. ./bundle.tar.zst", ""),
+			m.hostPathField("Bundle path", "e.g. ./bundle.tar.zst", ""),
 			textField("Rename (optional)", "renames the imported intent, or the instance", ""),
 		}))
 		return m, nil
@@ -608,24 +621,45 @@ func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if command == "" {
 			return m, nil
 		}
-		user := ins.promptForm.Value("As user (optional)")
-		ins.lastShellUser = user
-		return m.execInto(target, user, command)
+		user, identity := ins.promptForm.Value("As user (optional)"), ins.promptForm.Value(identityLabel)
+		if target.GetVm() != nil {
+			ins.lastShellUser, ins.lastIdentity = user, identity
+		}
+		return m.execInto(target, user, identity, command)
 
 	case instancesPromptGUI:
-		command := ins.promptForm.Value("Command")
-		if command == "" {
+		g := guiRequestFrom(ins.promptForm)
+		if g.command == "" {
 			return m, nil
 		}
-		x11 := ins.promptForm.Bool("X11 app")
-		ins.lastGUICommand, ins.lastGUIX11 = command, x11
-		m.setStatus("starting "+command+" in "+target.GetName()+"…", false)
-		return m, launchGUIApp(m.socketPath, m.client.Remote, target.GetName(), command, x11, ins.promptForm.Bool("Add to desktop"))
+		ins.lastGUICommand, ins.lastGUIX11 = g.command, g.x11
+		if target.GetVm() != nil {
+			ins.lastIdentity = g.identity
+		}
+		m.setStatus("starting "+g.command+" in "+target.GetName()+"…", false)
+		return m, launchGUIApp(m.socketPath, m.client.Remote, target.GetName(), g)
 
 	case instancesPromptShellUser:
-		user := ins.promptForm.Value("As user (optional, blank = default)")
-		ins.lastShellUser = user
-		return m.shellInto(target, user)
+		user, identity := ins.promptForm.Value("As user (optional, blank = default)"), ins.promptForm.Value(identityLabel)
+		ins.lastShellUser, ins.lastIdentity = user, identity
+		return m.shellInto(target, user, identity)
+
+	case instancesPromptStop:
+		req, err := buildStopRequest(target.GetName(), ins.promptForm)
+		if err != nil {
+			m.setStatus(err.Error(), true)
+			return m, nil
+		}
+		return m, stopInstance(m.client, req)
+
+	case instancesPromptLogs:
+		tail, err := parseInt32(ins.promptForm.Value(logsTailField), logsTailField)
+		if err != nil || tail < 0 {
+			m.setStatus("tail lines must be a number of 0 or more", true)
+			return m, nil
+		}
+		ins.lastLogsTail = ins.promptForm.Value(logsTailField)
+		return m.openLogs(target, tail)
 
 	case instancesPromptExport:
 		outputPath := ins.promptForm.Value("Output path")
@@ -729,7 +763,7 @@ func (m instancesModel) View() string {
 
 // instancesHelp is the Instances legend, most used actions first.
 var instancesHelp = []string{
-	"n", "launch", "s", "start/stop", "x", "shell", "e", "exec", "g", "gui app", "l", "logs", "d", "delete",
+	"n", "launch", "s", "start/stop", "S", "stop options", "x", "shell", "e", "exec", "g", "gui app", "l/L", "logs/tail", "d", "delete",
 	"f", "fork", "u", "settings", "w", "wait cloud-init", "m/M", "mount/umount", "p/P", "add/rm port",
 	"E/i", "export/import", "r", "refresh", "esc", "menu",
 }
@@ -802,13 +836,25 @@ func (m instancesModel) detailInfo() string {
 		if devs := vm.GetDevices(); len(devs) > 0 {
 			b = append(b, detailRow("Devices", strings.Join(devs, ", ")))
 		}
+		if port := vm.GetSshPort(); port != 0 {
+			user := vm.GetDefaultUser()
+			if user == "" {
+				user = "root"
+			}
+			b = append(b, detailRow("SSH", fmt.Sprintf("%s@localhost, port %d", user, port)))
+		}
 	}
+	b = append(b, containerRows(inst.GetContainer())...)
 	policy := "restart " + format.RestartPolicy(inst.GetRestartPolicy())
 	if inst.GetAutostart() {
 		policy = "autostart  •  " + policy
 	}
 	b = append(b, detailRow("Policy", policy))
-	b = append(b, detailRow("GUI", "g to run an app"))
+	gui := styleSubtitle.Render("not available (created before GUI support)")
+	if inst.GetGuiEnabled() {
+		gui = "g to run an app"
+	}
+	b = append(b, detailRow("GUI", gui))
 	if sched := format.Schedule(inst.GetVm().GetSnapshotSchedule(), "01-02 15:04"); sched != "" {
 		b = append(b, detailRow("Snaps", sched))
 	}
@@ -825,6 +871,7 @@ func (m instancesModel) detailInfo() string {
 		}
 		b = append(b, detailRow("Mount", line))
 	}
+	b = append(b, extraHostRows(inst)...)
 
 	if inst.GetState() != anvilv1.State_STATE_RUNNING {
 		b = append(b, "", styleSubtitle.Render("not running: no live stats"))
@@ -884,6 +931,46 @@ func (m instancesModel) detailInfo() string {
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, b...)
+}
+
+// containerRows renders a container's engine, ID, network alias and volumes; nothing for a VM.
+func containerRows(c *anvilv1.ContainerSpec) []string {
+	if c == nil {
+		return nil
+	}
+	rows := []string{detailRow("Engine", format.Engine(c.GetEngine()))}
+	if id := c.GetContainerId(); id != "" {
+		rows = append(rows, detailRow("ID", format.ShortImageID(id)))
+	}
+	if alias := c.GetNetworkAlias(); alias != "" {
+		rows = append(rows, detailRow("Alias", alias))
+	}
+	for _, v := range c.GetVolumes() {
+		line := v.GetContainerPath() + " ← " + v.GetHostPath()
+		if v.GetReadOnly() {
+			line += " (ro)"
+		}
+		rows = append(rows, detailRow("Volume", line))
+	}
+	return rows
+}
+
+// extraHostRows renders the other intent members' names this instance resolves, sorted by name.
+func extraHostRows(inst *anvilv1.Instance) []string {
+	hosts := inst.GetVm().GetExtraHosts()
+	if inst.GetContainer() != nil {
+		hosts = inst.GetContainer().GetExtraHosts()
+	}
+	names := make([]string, 0, len(hosts))
+	for name := range hosts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	rows := make([]string, len(names))
+	for i, name := range names {
+		rows[i] = detailRow("Host", name+" → "+hosts[name])
+	}
+	return rows
 }
 
 // guestRows renders what a running VM's guest agent reports; nothing for a container.

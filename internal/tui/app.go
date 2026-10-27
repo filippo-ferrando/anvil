@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"git.fferrando.cc/rdfilippo/anvil/internal/version"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
@@ -72,6 +73,7 @@ type model struct {
 
 	daemonState   string // "" before the first reply, then "ok" or "down", from the last instance list
 	daemonVersion string // from the Version RPC, empty until it answers
+	clientVersion string // this binary's own version
 
 	screen         screen
 	sidebarFocused bool // true: up/down/enter on the sidebar; false: keys go to the active screen
@@ -125,6 +127,7 @@ func Run(dial func() (*client.Client, error), socketPath string) error {
 		socket:         addr,
 		socketPath:     socketPath,
 		who:            who,
+		clientVersion:  clientVersion(),
 		screen:         screenInstances,
 		sidebarFocused: true,
 		instances:      newInstancesModel(),
@@ -210,7 +213,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch m.screen {
 		case screenInstances, screenSnapshots, screenIntents, screenEvents:
-			return m, loadCmdForScreen(m.screen, m.client)
+			return m, m.loadCmdForScreen(m.screen)
 		}
 		return m, nil
 	case tea.WindowSizeMsg:
@@ -325,7 +328,7 @@ func (m model) updateSidebar(msg tea.Msg) (tea.Model, tea.Cmd) {
 	idx, n := screenIndex(m.screen), len(screenOrder)
 	move := func(i int) (tea.Model, tea.Cmd) {
 		m.screen = screenOrder[(i+n)%n]
-		return m, loadCmdForScreen(m.screen, m.client)
+		return m, m.loadCmdForScreen(m.screen)
 	}
 	switch k := keyMsg.String(); k {
 	case "up", "k", "shift+tab":
@@ -359,7 +362,7 @@ func screenForDigit(k string) (screen, bool) {
 // jumpTo opens s with focus on its content, reloading it.
 func (m model) jumpTo(s screen) (tea.Model, tea.Cmd) {
 	m.screen, m.sidebarFocused = s, false
-	return m, loadCmdForScreen(s, m.client)
+	return m, m.loadCmdForScreen(s)
 }
 
 func screenIndex(s screen) int {
@@ -371,7 +374,8 @@ func screenIndex(s screen) int {
 	return 0
 }
 
-func loadCmdForScreen(s screen, c *client.Client) tea.Cmd {
+func (m model) loadCmdForScreen(s screen) tea.Cmd {
+	c := m.client
 	switch s {
 	case screenInstances:
 		return loadInstances(c)
@@ -389,7 +393,7 @@ func loadCmdForScreen(s screen, c *client.Client) tea.Cmd {
 		// Instances and intents feed the migrate form's Name suggestions.
 		return tea.Batch(loadHosts(c), loadInstances(c), loadIntents(c))
 	case screenEvents:
-		return loadEvents(c)
+		return m.events.load(c)
 	case screenDevices:
 		return loadHostDevices(c)
 	}
@@ -415,9 +419,19 @@ func (m model) View() string {
 	return header + "\n\n" + body + m.statusView()
 }
 
-// headerView is the top bar: app name, user, socket, then daemon state, instance counts and clock on the right.
+// clientVersion is this binary's version as the header shows it.
+func clientVersion() string {
+	v, _ := version.Get()
+	return v
+}
+
+// headerView is the top bar: app name and version, user, socket, then daemon state, instance counts and clock on the right.
 func (m model) headerView() string {
-	left := styleTitle.Render("⚒ anvil") + styleSubtitle.Render("  "+m.who+"  "+m.socket)
+	left := styleTitle.Render("⚒ anvil")
+	if m.clientVersion != "" {
+		left += styleSubtitle.Render(" " + m.clientVersion)
+	}
+	left += styleSubtitle.Render("  " + m.who + "  " + m.socket)
 
 	var right []string
 	switch m.daemonState {

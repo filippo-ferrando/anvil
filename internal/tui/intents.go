@@ -167,12 +167,11 @@ func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		in.applyPrompting = false
-		req, err := newApplyRequest(in.applyForm.Value("Manifest path"), in.applyForm.Bool("Prune"), in.applyForm.Bool("Recreate VMs"))
+		req, err := newApplyRequest(in.applyForm)
 		if err != nil {
 			m.setStatus(err.Error(), true)
 			return m, nil
 		}
-		req.DryRun = true
 		in.applyReq, in.applyRunning = req, true
 		return m, startApplyStream(m.client, req)
 	}
@@ -283,22 +282,19 @@ func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if item, ok := in.list.SelectedItem().(intentItem); ok {
 			in.exportTarget = item.intent
 			in.exportForm = newSimpleForm("Export "+item.intent.GetName(), []formField{
-				pathField("Output path", "e.g. ./"+item.intent.GetName()+".tar.zst", item.intent.GetName()+".tar.zst"),
+				m.exportPathField(item.intent.GetName()),
 			})
 		}
 		return m, nil
 	case "A":
 		in.applyPrompting = true
-		in.applyForm = newSimpleForm("Apply manifest", []formField{
-			pathField("Manifest path", "e.g. ./anvil.yaml", "anvil.yaml"),
-			toggleField("Prune", "delete members no longer in the manifest", false),
-			toggleField("Recreate VMs", "allow replacing a VM, its disk is lost", false),
-		})
+		in.applyForm = newApplyForm()
+		in.applyForm.SetHeight(contentHeight(m.height) - 2)
 		return m, nil
 	case "I":
 		in.importPrompting = true
 		in.importForm = newSimpleForm("Import bundle", []formField{
-			pathField("Bundle path", "e.g. ./bundle.tar.zst", ""),
+			m.hostPathField("Bundle path", "e.g. ./bundle.tar.zst", ""),
 			textField("Rename (optional)", "renames the imported intent", ""),
 		})
 		return m, nil
@@ -343,10 +339,7 @@ func (m intentsModel) View() string {
 			helpBar("y", "ungroup only", "p", "ungroup and purge members", "any other key", "cancel")
 	}
 	if m.showingInfo != nil {
-		var lines []string
-		if n := m.showingInfo.GetNetwork(); n != nil && n.GetDnsDomain() != "" {
-			lines = append(lines, fmt.Sprintf("  DNS zone %s, server %s", n.GetDnsDomain(), n.GetDnsServer()), "")
-		}
+		lines := networkLines(m.showingInfo.GetNetwork())
 		for _, mem := range m.showingInfo.GetMembers() {
 			lines = append(lines, memberLine(mem))
 		}
@@ -360,10 +353,34 @@ func (m intentsModel) View() string {
 	return m.list.View() + "\n" + helpBar("i", "members", "x", "remove", "U", "remove member", "E", "export", "I", "import", "A", "apply", "r", "refresh", "esc", "back")
 }
 
-// memberLine renders one member as "role (kind)", plus its address and
+// networkLines renders an intent's shared network: engine network, bridge, subnet and DNS.
+func networkLines(n *anvilv1.IntentNetwork) []string {
+	if n == nil {
+		return nil
+	}
+	var lines []string
+	if n.GetEngineNetworkName() != "" || n.GetBridgeInterface() != "" {
+		lines = append(lines, fmt.Sprintf("  Network %s, bridge %s", n.GetEngineNetworkName(), n.GetBridgeInterface()))
+	}
+	if n.GetSubnet() != "" {
+		lines = append(lines, fmt.Sprintf("  Subnet %s, gateway %s", n.GetSubnet(), n.GetGateway()))
+	}
+	if n.GetDnsDomain() != "" {
+		lines = append(lines, fmt.Sprintf("  DNS zone %s, server %s", n.GetDnsDomain(), n.GetDnsServer()))
+	}
+	if len(lines) > 0 {
+		lines = append(lines, "")
+	}
+	return lines
+}
+
+// memberLine renders one member as "role (kind)", plus its instance ID, address and
 // DNS name when it has them.
 func memberLine(mem *anvilv1.IntentMember) string {
 	line := fmt.Sprintf("  %s  (%s)", mem.GetRole(), format.Kind(mem.GetKind()))
+	if id := mem.GetInstanceId(); id != "" {
+		line += "  " + id
+	}
 	if mem.GetIp() != "" {
 		line += "  " + mem.GetIp()
 	}

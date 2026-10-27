@@ -33,13 +33,24 @@ func newLogsModel(inst *anvilv1.Instance, width, height int) logsModel {
 	return logsModel{inst: inst, viewport: vp, following: true, streaming: true}
 }
 
+// logsTailField is the Logs prompt's field: how many of the last lines to start from.
+const logsTailField = "Tail lines"
+
+// openLogs switches to the Logs takeover for inst, starting from its last tail lines (0: all of it).
+func (m model) openLogs(inst *anvilv1.Instance, tail int32) (tea.Model, tea.Cmd) {
+	m.screen = screenLogs
+	m.logs = newLogsModel(inst, m.width, logsViewportHeight(m.height))
+	cmd, cancel := startLogsStream(m.client, inst.GetName(), tail)
+	m.logs.cancel = cancel
+	return m, tea.Batch(tea.ClearScreen, cmd)
+}
+
 // startLogsStream returns the Cmd that kicks off the stream and the CancelFunc for its RPC context.
-func startLogsStream(c *client.Client, name string) (tea.Cmd, context.CancelFunc) {
+func startLogsStream(c *client.Client, name string, tail int32) (tea.Cmd, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	return func() tea.Msg {
-		// TailLines: 0 means "everything available" server-side (see
-		// vm.Backend.Logs); maxLogLines below bounds memory instead. A fixed tail here previously lost history on reopening Logs.
-		stream, err := c.Logs(ctx, &anvilv1.LogsRequest{Name: name, Follow: true, TailLines: 0})
+		// TailLines 0 means everything available; maxLogLines bounds memory instead.
+		stream, err := c.Logs(ctx, &anvilv1.LogsRequest{Name: name, Follow: true, TailLines: tail})
 		if err != nil {
 			return logsStreamMsg{failed[[]byte](err)}
 		}

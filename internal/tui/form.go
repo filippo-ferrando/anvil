@@ -66,6 +66,33 @@ func pathField(label, hint, value string) formField {
 	return f
 }
 
+// hostPathField is a path on the daemon's host. With --remote, local completion
+// would list the wrong machine, so it's a plain field asking for an absolute path.
+func (m model) hostPathField(label, hint, value string) formField {
+	if r := m.remote(); r != "" {
+		return textField(label, "absolute path on "+r, value)
+	}
+	return pathField(label, hint, value)
+}
+
+// exportPathField is the export output path, defaulting to name's bundle in the
+// current directory; with --remote there is no sensible default.
+func (m model) exportPathField(name string) formField {
+	value := name + ".tar.zst"
+	if m.remote() != "" {
+		value = ""
+	}
+	return m.hostPathField("Output path", "e.g. ./"+name+".tar.zst", value)
+}
+
+// remote is the --remote host, "" for the local daemon.
+func (m model) remote() string {
+	if m.client == nil {
+		return ""
+	}
+	return m.client.Remote
+}
+
 func toggleField(label, hint string, on bool) formField {
 	return formField{Label: label, Hint: hint, Kind: fieldToggle, on: on}
 }

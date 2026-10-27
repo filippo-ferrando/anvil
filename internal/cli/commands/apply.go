@@ -12,8 +12,6 @@ import (
 	"github.com/spf13/cobra"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
-	"git.fferrando.cc/rdfilippo/anvil/internal/intent/vars"
-	"git.fferrando.cc/rdfilippo/anvil/internal/sshkey"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
@@ -40,32 +38,15 @@ func newApplyCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			overrides := map[string]string{}
-			for _, kv := range varFlags {
-				k, v, ok := strings.Cut(kv, "=")
-				if !ok || k == "" {
-					return fmt.Errorf("--var %q: expected KEY=VALUE", kv)
-				}
-				overrides[k] = v
-			}
-			values, err := vars.Load(file, envFile, data, overrides)
-			if err != nil {
-				return err
-			}
-			anvilPub, err := sshkey.EnsureDefaultPublic()
+			req, err := client.NewApplyRequest(file, data, client.ApplyOptions{
+				DryRun: dryRun, Prune: prune, Recreate: recreate,
+				Vars: varFlags, EnvFile: envFile, WaitTimeout: waitTimeout,
+			})
 			if err != nil {
 				return err
 			}
 			return withClient(flags, func(c *client.Client) error {
-				stream, err := c.Intent.Apply(cmd.Context(), &anvilv1.IntentApplyRequest{
-					Manifest:           data,
-					DryRun:             dryRun,
-					Prune:              prune,
-					Recreate:           recreate,
-					SshPublicKeys:      []string{anvilPub},
-					WaitTimeoutSeconds: int32(waitTimeout.Seconds()),
-					Vars:               values,
-				})
+				stream, err := c.Intent.Apply(cmd.Context(), req)
 				if err != nil {
 					return err
 				}

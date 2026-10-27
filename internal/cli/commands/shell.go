@@ -39,7 +39,7 @@ func runInInstance(cmd *cobra.Command, flags *globalFlags, f sshFlags, name stri
 		run, err = c.ContainerExecCommand(inst, command, isStdinTerminal())
 	} else {
 		var key string
-		if key, err = resolveIdentity(f.identity); err != nil {
+		if key, err = client.ResolveIdentity(f.identity); err != nil {
 			return err
 		}
 		target, terr := c.SSHTarget(inst, f.user)

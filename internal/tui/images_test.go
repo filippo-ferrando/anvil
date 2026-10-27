@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -17,5 +18,23 @@ func TestChecksumOnlyForBaseImages(t *testing.T) {
 	m.images.cached.SetItems([]list.Item{cachedImageItem{image: &anvilv1.CachedImage{Id: "debian:12", Kind: "base"}}})
 	if _, cmd := m.Update(key("h")); cmd == nil {
 		t.Error("expected a checksum request for a base image")
+	}
+}
+
+func TestImageDeleteOffersForce(t *testing.T) {
+	m := model{screen: screenImages, images: newImagesModel()}
+	m.images.confirmDelete = &anvilv1.CachedImage{Id: "debian:12", Kind: "base"}
+	if !strings.Contains(m.images.View(), "force") {
+		t.Error("expected the confirmation to offer a forced delete")
+	}
+	next, cmd := m.Update(key("f"))
+	if cmd == nil || next.(model).images.confirmDelete != nil {
+		t.Error("expected f to delete and close the confirmation")
+	}
+
+	m.images.confirmDelete = nil
+	m.images.confirmDeleteContainer = &anvilv1.ContainerImage{Id: "sha256:abc"}
+	if !strings.Contains(m.images.View(), "force") {
+		t.Error("expected the container confirmation to offer a forced delete")
 	}
 }

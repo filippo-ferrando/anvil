@@ -162,7 +162,7 @@ func launchMember(cmd *cobra.Command, c *client.Client, intentName string, m mem
 	}
 	switch m.kind {
 	case anvilv1.Kind_KIND_VM:
-		resolvedKeys, err := resolveSSHKeys(nil)
+		resolvedKeys, err := client.ResolveSSHKeys(nil)
 		if err != nil {
 			return err
 		}

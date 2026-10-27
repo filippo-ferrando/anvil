@@ -11,7 +11,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
-	"git.fferrando.cc/rdfilippo/anvil/internal/sshkey"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
@@ -19,11 +18,16 @@ import (
 // It's shared between newLaunchModel/launchFields and buildLaunchRequest so they can't drift out of sync.
 const cloudInitNameField = "Cloud-init name (optional)"
 
-// VM-only toggles, shared the same way as cloudInitNameField.
+// Field labels shared the same way as cloudInitNameField.
 const (
-	guestAgentField = "Guest agent"
-	hypervisorField = "Hypervisor"
-	waitField       = "Wait for cloud-init"
+	guestAgentField  = "Guest agent"
+	hypervisorField  = "Hypervisor"
+	sshKeysField     = "Extra SSH keys"
+	entrypointField  = "Entrypoint"
+	commandField     = "Command"
+	startField       = "Start"
+	waitField        = "Wait until ready"
+	waitTimeoutField = "Wait timeout"
 )
 
 type launchModel struct {
@@ -159,26 +163,36 @@ func launchFields(kind string, values map[string]string) []formField {
 	fields := []formField{
 		textField("Name", "defaults to a name derived from the image", v("Name", "")),
 		textField("Image", "e.g. ubuntu:24.04, or nginx:alpine", v("Image", "")),
-		textField("CPUs", "", v("CPUs", "1")),
-		textField("Memory MiB", "", v("Memory MiB", "1024")),
 	}
 
+	waitHint := "keep the progress view open until the container is ready"
 	if kind == "vm" {
 		hypervisor := textField(hypervisorField, "qemu or firecracker", v(hypervisorField, "qemu"))
 		hypervisor.Suggestions = []string{"qemu", "firecracker"}
 		fields = append(fields,
+			textField("CPUs", "", v("CPUs", "1")),
+			textField("Memory MiB", "", v("Memory MiB", "1024")),
 			hypervisor,
 			textField("Disk GiB", "0 = image minimum", v("Disk GiB", "0")),
 			textField(cloudInitNameField, "a saved library entry, or ctrl+e to edit ad hoc for just this launch", v(cloudInitNameField, "")),
+			textField(sshKeysField, "on top of anvil's own key: literal keys or .pub file paths, comma-separated", v(sshKeysField, "")),
 			toggleField(guestAgentField, "install qemu-guest-agent: guest IPs, clean shutdown, cloud-init status", true),
-			toggleField(waitField, "keep the progress view open until cloud-init finished", false),
 		)
+		waitHint = "keep the progress view open until cloud-init finished"
 	} else {
 		fields = append(fields,
 			textField("Env", "K=V,K2=V2", v("Env", "")),
 			textField("Volumes", "host:guest[:ro],...", v("Volumes", "")),
+			textField(entrypointField, "overrides the image's entrypoint", v(entrypointField, "")),
+			textField(commandField, "overrides the image's command, e.g. sleep infinity", v(commandField, "")),
 		)
 	}
+
+	fields = append(fields,
+		toggleField(startField, "start it right after creating it", true),
+		toggleField(waitField, waitHint, false),
+		textField(waitTimeoutField, "how long the wait may take, e.g. 15m", v(waitTimeoutField, "15m")),
+	)
 
 	restart := textField(settingsRestart, "no, on-failure[:N] or always", v(settingsRestart, "no"))
 	restart.Suggestions = restartPolicySuggestions
@@ -504,24 +518,27 @@ func buildLaunchRequest(m launchModel) (*anvilv1.LaunchRequest, error) {
 	}
 	name := form.Value("Name")
 
-	cpus, err := parseInt32(form.Value("CPUs"), "CPUs")
-	if err != nil {
-		return nil, err
-	}
-	memMiB, err := parseInt64(form.Value("Memory MiB"), "Memory MiB")
-	if err != nil {
-		return nil, err
-	}
 	ports, err := client.ParsePorts(splitCommaList(form.Value("Ports")))
+	if err != nil {
+		return nil, err
+	}
+	start, wait := form.Bool(startField), form.Bool(waitField)
+	if wait && !start {
+		return nil, errors.New("wait needs Start on")
+	}
+	waitTimeout, err := parseDurationField(form.Value(waitTimeoutField), waitTimeoutField)
 	if err != nil {
 		return nil, err
 	}
 
 	req := &anvilv1.LaunchRequest{
-		Name:       name,
-		IntentName: form.Value("Intent name (optional)"),
-		Role:       form.Value("Role (optional, needs intent)"),
-		Autostart:  form.Bool(settingsAutostart),
+		Name:               name,
+		IntentName:         form.Value("Intent name (optional)"),
+		Role:               form.Value("Role (optional, needs intent)"),
+		Autostart:          form.Bool(settingsAutostart),
+		NoStart:            !start,
+		Wait:               wait,
+		WaitTimeoutSeconds: client.CeilSeconds(waitTimeout),
 	}
 	if p := strings.TrimSpace(form.Value(settingsRestart)); p != "" && p != "no" {
 		req.RestartPolicy = &anvilv1.RestartPolicy{Mode: p}
@@ -537,11 +554,25 @@ func buildLaunchRequest(m launchModel) (*anvilv1.LaunchRequest, error) {
 		if err != nil {
 			return nil, err
 		}
-		req.Container = &anvilv1.ContainerSpec{ImageRef: image, Env: env, Volumes: volumes, Ports: ports}
+		req.Container = &anvilv1.ContainerSpec{
+			ImageRef: image, Env: env, Volumes: volumes, Ports: ports,
+			Cmd: strings.Fields(form.Value(commandField)),
+		}
+		if ep := form.Value(entrypointField); ep != "" {
+			req.Container.Entrypoint = []string{ep}
+		}
 		return req, nil
 	}
 
 	req.Kind = anvilv1.Kind_KIND_VM
+	cpus, err := parseInt32(form.Value("CPUs"), "CPUs")
+	if err != nil {
+		return nil, err
+	}
+	memMiB, err := parseInt64(form.Value("Memory MiB"), "Memory MiB")
+	if err != nil {
+		return nil, err
+	}
 	diskGiB, err := parseInt64(form.Value("Disk GiB"), "Disk GiB")
 	if err != nil {
 		return nil, err
@@ -550,7 +581,7 @@ func buildLaunchRequest(m launchModel) (*anvilv1.LaunchRequest, error) {
 	if err != nil {
 		return nil, err
 	}
-	pub, err := sshkey.EnsureDefaultPublic()
+	keys, err := client.ResolveSSHKeys(splitCommaList(form.Value(sshKeysField)))
 	if err != nil {
 		return nil, err
 	}
@@ -559,7 +590,7 @@ func buildLaunchRequest(m launchModel) (*anvilv1.LaunchRequest, error) {
 		Cpus:          cpus,
 		MemoryMib:     memMiB,
 		DiskGib:       diskGiB,
-		SshPublicKeys: []string{pub},
+		SshPublicKeys: keys,
 		Ports:         ports,
 		NoGuestAgent:  !form.Bool(guestAgentField),
 		Hypervisor:    hypervisor,
@@ -569,7 +600,6 @@ func buildLaunchRequest(m launchModel) (*anvilv1.LaunchRequest, error) {
 			req.Vm.Devices = append(req.Vm.Devices, id)
 		}
 	}
-	req.Wait = form.Bool(waitField)
 	// The ad hoc editor, when used, always wins over the saved-library name:
 	// editing is meant as "just for this launch" and shouldn't silently lose to whatever's still in the name field.
 	if m.cloudInitOverrideOK {

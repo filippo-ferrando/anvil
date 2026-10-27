@@ -50,6 +50,9 @@ type migrationModel struct {
 	confirmRemove *anvilv1.Host
 	migrateKey    string // anvild's own public key, shown until any key is pressed
 
+	discovering  bool // the discover timeout form is up
+	discoverForm simpleForm
+
 	focusForm     bool // false: hosts list has focus; true: the migrate form does
 	migrateForm   simpleForm
 	migrating     bool
@@ -85,10 +88,14 @@ func newAddHostForm(alias, target string) simpleForm {
 	})
 }
 
+// destNameField is the migrate form's optional rename on the target.
+const destNameField = "Dest name (optional)"
+
 func newMigrateForm() simpleForm {
 	return newSimpleForm("Migrate", []formField{
 		textField("Name", "an instance name, or a whole intent's name", ""),
 		textField("To", "known host alias, or user@host[:port]", ""),
+		textField(destNameField, "rename on the target, single instance only", ""),
 		toggleField("Copy", "keep the source instead of deleting it", false),
 		toggleField("Best-effort", "intent only: keep whatever members succeed", false),
 		toggleField("Dry run", "check connectivity and report the plan only", false),
@@ -259,6 +266,25 @@ func (m model) updateMigrationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	if mg.discovering {
+		var submitted, cancelled bool
+		mg.discoverForm, submitted, cancelled = mg.discoverForm.update(msg)
+		if cancelled {
+			mg.discovering = false
+		}
+		if !submitted {
+			return m, nil
+		}
+		timeout, err := parseDurationField(mg.discoverForm.Value("Timeout"), "Timeout")
+		if err != nil {
+			mg.discoverForm.errMsg = err.Error()
+			return m, nil
+		}
+		mg.discovering = false
+		m.setStatus("looking for anvil hosts on this network...", false)
+		return m, discoverHosts(m.client, timeout)
+	}
+
 	if mg.adding {
 		var submitted, cancelled bool
 		mg.addForm, submitted, cancelled = mg.addForm.update(msg)
@@ -288,17 +314,10 @@ func (m model) updateMigrationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if submitted {
-			name, to := mg.migrateForm.Value("Name"), mg.migrateForm.Value("To")
-			if name == "" || to == "" {
-				mg.migrateForm.errMsg = "both Name and To are required"
+			req, err := buildMigrateRequest(mg.migrateForm)
+			if err != nil {
+				mg.migrateForm.errMsg = err.Error()
 				return m, nil
-			}
-			req := &anvilv1.MigrateRequest{
-				Name:       name,
-				To:         to,
-				Copy:       mg.migrateForm.Bool("Copy"),
-				BestEffort: mg.migrateForm.Bool("Best-effort"),
-				DryRun:     mg.migrateForm.Bool("Dry run"),
 			}
 			mg.migrating = true
 			mg.progressLines = nil
@@ -331,7 +350,13 @@ func (m model) updateMigrationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "d":
 		m.setStatus("looking for anvil hosts on this network...", false)
-		return m, discoverHosts(m.client)
+		return m, discoverHosts(m.client, 0)
+	case "D":
+		mg.discovering = true
+		mg.discoverForm = newSimpleForm("Discover hosts", []formField{
+			textField("Timeout", "how long to wait for answers, e.g. 10s", "3s"),
+		})
+		return m, nil
 	case "enter":
 		if h := m.selectedDiscovered(); h != nil {
 			mg.adding = true
@@ -392,6 +417,9 @@ func (m migrationModel) View() string {
 	if m.adding {
 		return m.addForm.View()
 	}
+	if m.discovering {
+		return m.discoverForm.View()
+	}
 	if m.migrateKey != "" {
 		return styleTitle.Render(" Migration key ") + "\n\n" +
 			"Add this to the target user's ~/.ssh/authorized_keys on each host to migrate to:\n\n" +
@@ -422,11 +450,27 @@ func (m migrationModel) View() string {
 	left := hostsBox.Render(lipgloss.NewStyle().Height(m.panelHeight).Render(listView))
 	right := formBox.Render(m.migrateForm.View())
 
-	help := helpBar("tab", "switch focus", "a", "add host", "d", "discover", "x", "remove", "t", "test", "K", "migration key", "esc", "back")
+	help := helpBar("tab", "switch focus", "a", "add host", "d/D", "discover/with timeout", "x", "remove", "t", "test", "K", "migration key", "esc", "back")
 	if m.browsing {
-		help = helpBar("enter", "add this host", "d", "rescan", "esc", "saved hosts")
+		help = helpBar("enter", "add this host", "d/D", "rescan/with timeout", "esc", "saved hosts")
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right) + "\n" + help
+}
+
+// buildMigrateRequest reads the migrate form; Name and To are required.
+func buildMigrateRequest(form simpleForm) (*anvilv1.MigrateRequest, error) {
+	name, to := form.Value("Name"), form.Value("To")
+	if name == "" || to == "" {
+		return nil, errors.New("both Name and To are required")
+	}
+	return &anvilv1.MigrateRequest{
+		Name:       name,
+		To:         to,
+		DestName:   form.Value(destNameField),
+		Copy:       form.Bool("Copy"),
+		BestEffort: form.Bool("Best-effort"),
+		DryRun:     form.Bool("Dry run"),
+	}, nil
 }
 
 func startMigrateStream(c *client.Client, req *anvilv1.MigrateRequest) tea.Cmd {
