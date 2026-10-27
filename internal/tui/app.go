@@ -99,20 +99,18 @@ type model struct {
 	watchSelectedHit   bool // a pending Watch event touched the selected instance
 }
 
-// Run dials socketPath (on the ssh host remote, if set) and blocks running
-// the TUI until the user quits or an error occurs.
-func Run(socketPath, remote string) error {
-	addr := socketPath
-	dial := func() (*client.Client, error) { return client.Dial(socketPath) }
-	if remote != "" {
-		dial = func() (*client.Client, error) { return client.DialSSH(remote, socketPath) }
-		addr = remote + ":" + socketPath
-	}
+// Run dials anvild with dial and blocks running the TUI until the user quits or an error
+// occurs. socketPath is the daemon socket, passed on to anvil commands run from the TUI.
+func Run(dial func() (*client.Client, error), socketPath string) error {
 	c, err := dial()
 	if err != nil {
-		return fmt.Errorf("tui: dialing anvild at %s: %w", addr, err)
+		return fmt.Errorf("tui: %w", err) // the dial error already names the socket or host
 	}
 	defer c.Close()
+	addr := socketPath
+	if c.Remote != "" {
+		addr = c.Remote + ":" + socketPath
+	}
 
 	who := "unknown"
 	if u, err := user.Current(); err == nil {

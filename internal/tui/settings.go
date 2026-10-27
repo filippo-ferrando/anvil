@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/format"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
@@ -38,7 +39,7 @@ func settingsForm(inst *anvilv1.Instance) simpleForm {
 			textField(settingsDisk, "grow only; applied live, empty keeps the current size", disk),
 		)
 	}
-	restart := textField(settingsRestart, "no, on-failure[:N] or always", restartPolicyText(inst.GetRestartPolicy()))
+	restart := textField(settingsRestart, "no, on-failure[:N] or always", format.RestartPolicy(inst.GetRestartPolicy()))
 	restart.Suggestions = restartPolicySuggestions
 	fields = append(fields,
 		toggleField(settingsAutostart, "start it whenever anvild starts, unless stopped on purpose", inst.GetAutostart()),
@@ -77,23 +78,11 @@ func buildUpdateRequest(inst *anvilv1.Instance, form simpleForm) (req *anvilv1.U
 	if auto := form.Bool(settingsAutostart); auto != inst.GetAutostart() {
 		req.Autostart = &auto
 	}
-	if p := strings.TrimSpace(form.Value(settingsRestart)); p != "" && p != restartPolicyText(inst.GetRestartPolicy()) {
+	if p := strings.TrimSpace(form.Value(settingsRestart)); p != "" && p != format.RestartPolicy(inst.GetRestartPolicy()) {
 		req.RestartPolicy = &anvilv1.RestartPolicy{Mode: p}
 	}
 	changed = req.Cpus != nil || req.MemoryMib != nil || req.DiskGib != nil || req.Autostart != nil || req.RestartPolicy != nil
 	return req, changed, nil
-}
-
-// restartPolicyText renders p the way the restart policy field takes it.
-func restartPolicyText(p *anvilv1.RestartPolicy) string {
-	mode := p.GetMode()
-	if mode == "" {
-		mode = "no"
-	}
-	if p.GetMaxRetries() > 0 {
-		return fmt.Sprintf("%s:%d", mode, p.GetMaxRetries())
-	}
-	return mode
 }
 
 // updateInstance sends req and reports the daemon's notes on the status line.
@@ -115,18 +104,6 @@ func resourcesText(vm *anvilv1.VMSpec) string {
 		disk = fmt.Sprintf("%d GiB", vm.GetDiskGib())
 	}
 	return fmt.Sprintf("%d vCPU  •  %d MiB  •  %s", vm.GetCpus(), vm.GetMemoryMib(), disk)
-}
-
-// scheduleText summarizes a snapshot schedule, or "" when there is none.
-func scheduleText(s *anvilv1.SnapshotSchedule) string {
-	if s.GetEverySeconds() <= 0 {
-		return ""
-	}
-	out := fmt.Sprintf("every %s, keep %d", time.Duration(s.GetEverySeconds())*time.Second, s.GetKeep())
-	if s.GetLastRunUnix() > 0 {
-		out += ", last " + time.Unix(s.GetLastRunUnix(), 0).Format("01-02 15:04")
-	}
-	return out
 }
 
 // scheduleForm is the Snapshots screen's "S" prompt, pre-filled with inst's schedule.

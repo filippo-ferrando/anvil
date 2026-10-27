@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,18 +28,36 @@ func streamLaunchProgress(out io.Writer, stream launchProgressStream) error {
 // spinnerInterval is how often the current line is redrawn on a terminal.
 const spinnerInterval = 100 * time.Millisecond
 
-// streamProgress prints a launch-like stream, ending with "<verb> <name>". On a terminal,
-// updates sharing a key redraw one line, with a bar and, during a long step, a spinner.
+// streamProgress prints a launch-like stream, ending with "<verb> <name>".
 func streamProgress(out io.Writer, stream launchProgressStream, verb string) error {
+	return streamStatus(out, stream.Recv, func(l *liveLine, ev *anvilv1.LaunchProgress) (bool, error) {
+		switch e := ev.GetEvent().(type) {
+		case *anvilv1.LaunchProgress_Status:
+			l.set(e.Status)
+		case *anvilv1.LaunchProgress_Error:
+			return false, errors.New(e.Error)
+		case *anvilv1.LaunchProgress_Instance:
+			l.printf("%s %q (%s)\n", verb, e.Instance.GetName(), e.Instance.GetId())
+			if ips := e.Instance.GetGuest().GetIpAddresses(); len(ips) > 0 {
+				l.printf("IP: %s\n", strings.Join(ips, ", "))
+			}
+		}
+		return false, nil
+	})
+}
+
+// streamStatus prints a server stream until it ends, handle returns stop or an error. On a
+// terminal, statuses sharing a key redraw one line, with a bar and a spinner on long steps.
+func streamStatus[E any](out io.Writer, recv func() (E, error), handle func(l *liveLine, ev E) (stop bool, err error)) error {
 	type recvResult struct {
-		ev  *anvilv1.LaunchProgress
+		ev  E
 		err error
 	}
 	events, done := make(chan recvResult), make(chan struct{})
 	defer close(done)
 	go func() {
 		for {
-			ev, err := stream.Recv()
+			ev, err := recv()
 			select {
 			case events <- recvResult{ev, err}:
 			case <-done:
@@ -51,6 +70,7 @@ func streamProgress(out io.Writer, stream launchProgressStream, verb string) err
 	}()
 
 	line := &liveLine{out: out, term: isTerminalWriter(out), width: terminalWidth(out)}
+	defer line.finish()
 	var tick <-chan time.Time
 	if line.term {
 		t := time.NewTicker(spinnerInterval)
@@ -63,25 +83,13 @@ func streamProgress(out io.Writer, stream launchProgressStream, verb string) err
 			line.redraw()
 		case r := <-events:
 			if r.err == io.EOF {
-				line.finish()
 				return nil
 			}
 			if r.err != nil {
-				line.finish()
 				return r.err
 			}
-			switch e := r.ev.GetEvent().(type) {
-			case *anvilv1.LaunchProgress_Status:
-				line.set(e.Status)
-			case *anvilv1.LaunchProgress_Error:
-				line.finish()
-				return fmt.Errorf("%s", e.Error)
-			case *anvilv1.LaunchProgress_Instance:
-				line.finish()
-				fmt.Fprintf(out, "%s %q (%s)\n", verb, e.Instance.GetName(), e.Instance.GetId())
-				if ips := e.Instance.GetGuest().GetIpAddresses(); len(ips) > 0 {
-					fmt.Fprintf(out, "IP: %s\n", strings.Join(ips, ", "))
-				}
+			if stop, err := handle(line, r.ev); stop || err != nil {
+				return err
 			}
 		}
 	}
@@ -131,6 +139,12 @@ func (l *liveLine) finish() {
 	}
 	fmt.Fprint(l.out, "\r\033[K"+l.fit(progress.Done(l.status, time.Since(l.since)))+"\n")
 	l.shown = false
+}
+
+// printf ends the current status line, then prints below it.
+func (l *liveLine) printf(format string, args ...any) {
+	l.finish()
+	fmt.Fprintf(l.out, format, args...)
 }
 
 // fit cuts s to the terminal width: a wrapped line can't be redrawn in place.

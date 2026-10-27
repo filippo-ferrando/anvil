@@ -11,13 +11,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	humanbytes "git.fferrando.cc/rdfilippo/anvil/internal/progress"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
 )
 
 // uploadAttempts is how many times one disk upload resumes after a broken connection.
@@ -150,7 +151,7 @@ func parseRemoteCaps(out string) remoteCaps {
 		case "anvild":
 			caps.anvild = value
 		case "arch":
-			caps.arch = normalizeArch(value)
+			caps.arch = instance.NormalizeArch(value)
 		case "mem":
 			caps.memTotalKB = parseKB(value)
 		case "staging":
@@ -176,21 +177,6 @@ func parseKB(s string) int64 {
 	return n
 }
 
-// normalizeArch maps what uname -m prints to the naming VM specs use.
-func normalizeArch(s string) string {
-	switch s := strings.TrimSpace(s); s {
-	case "amd64":
-		return "x86_64"
-	case "arm64":
-		return "aarch64"
-	default:
-		return s
-	}
-}
-
-// hostArch is this host's CPU arch in the same naming.
-func hostArch() string { return normalizeArch(runtime.GOARCH) }
-
 func isSHA256Hex(s string) bool {
 	if len(s) != 64 {
 		return false
@@ -209,7 +195,7 @@ func uploadDisk(ctx context.Context, t target, localPath, remotePath string, cap
 	size := info.Size()
 	compress := caps.zstd && localZstd() != ""
 
-	note := humanBytes(size)
+	note := humanbytes.Bytes(size)
 	if compress {
 		note += ", zstd"
 	}
@@ -252,7 +238,7 @@ func uploadDisk(ctx context.Context, t target, localPath, remotePath string, cap
 	progress("verifying uploaded disk")
 	want := hex.EncodeToString(h.Sum(nil))
 	if !streamed {
-		if want, err = fileSHA256(localPath); err != nil {
+		if want, err = image.FileSHA256(localPath); err != nil {
 			return fmt.Errorf("migrate: hashing %s: %w", localPath, err)
 		}
 	}
@@ -372,7 +358,7 @@ func reportUpload(c *countingReader, size int64, progress func(status string)) (
 				if size > 0 {
 					pct = float64(sent) / float64(size) * 100
 				}
-				progress(fmt.Sprintf("uploading disk to target: %.0f%% (%s / %s)", pct, humanBytes(sent), humanBytes(size)))
+				progress(fmt.Sprintf("uploading disk to target: %.0f%% (%s / %s)", pct, humanbytes.Bytes(sent), humanbytes.Bytes(size)))
 			}
 		}
 	}()
@@ -399,19 +385,6 @@ func localZstd() string {
 	return path
 }
 
-func fileSHA256(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
 // uploadDir streams localDir's contents to remoteDir on t as a tar, compressed with zstd
 // when both sides have it and gzip otherwise, so a shared folder's data travels with the instance.
 func uploadDir(ctx context.Context, t target, localDir, remoteDir string, caps remoteCaps, progress func(status string)) error {
@@ -423,7 +396,7 @@ func uploadDir(ctx context.Context, t target, localDir, remoteDir string, caps r
 	if caps.zstd {
 		zstdBin = localZstd()
 	}
-	note := humanBytes(dirSize(localDir))
+	note := humanbytes.Bytes(dirSize(localDir))
 	if zstdBin != "" {
 		note += ", zstd"
 	}

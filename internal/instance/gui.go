@@ -34,19 +34,11 @@ func (m *Manager) guiSpec(ctx context.Context, name string, progress func(status
 
 // PrepareGUI readies name for `anvil gui`, starting it first when stopped.
 func (m *Manager) PrepareGUI(ctx context.Context, name string, x11 bool, progress func(status string)) (*Spec, GUISession, error) {
-	spec, err := m.registry.GetByName(name)
+	_, gp, err := capability[GUIPreparer](m, name, "GUI apps")
 	if err != nil {
 		return nil, GUISession{}, err
 	}
-	b, err := m.backendFor(spec.Kind)
-	if err != nil {
-		return nil, GUISession{}, err
-	}
-	gp, ok := b.(GUIPreparer)
-	if !ok {
-		return nil, GUISession{}, fmt.Errorf("instance: %s instances don't support GUI apps", spec.Kind)
-	}
-	spec, _, err = m.guiSpec(ctx, name, progress)
+	spec, _, err := m.guiSpec(ctx, name, progress)
 	if err != nil {
 		return nil, GUISession{}, err
 	}

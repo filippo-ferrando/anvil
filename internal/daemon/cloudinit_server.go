@@ -36,7 +36,7 @@ func (s *CloudInitServer) List(ctx context.Context, req *anvilv1.CloudInitListRe
 func (s *CloudInitServer) Get(ctx context.Context, req *anvilv1.CloudInitGetRequest) (*anvilv1.CloudInitGetReply, error) {
 	cfg, err := s.Store.GetCloudInit(req.GetName())
 	if err != nil {
-		return nil, wrapErr(err)
+		return nil, err
 	}
 	return &anvilv1.CloudInitGetReply{
 		Name:           cfg.Name,
@@ -54,14 +54,14 @@ func (s *CloudInitServer) Save(ctx context.Context, req *anvilv1.CloudInitSaveRe
 
 func (s *CloudInitServer) Rename(ctx context.Context, req *anvilv1.CloudInitRenameRequest) (*anvilv1.CloudInitRenameReply, error) {
 	if err := s.Store.RenameCloudInit(req.GetOldName(), req.GetNewName()); err != nil {
-		return nil, wrapErr(err)
+		return nil, err
 	}
 	return &anvilv1.CloudInitRenameReply{}, nil
 }
 
 func (s *CloudInitServer) Delete(ctx context.Context, req *anvilv1.CloudInitDeleteRequest) (*anvilv1.CloudInitDeleteReply, error) {
 	if err := s.Store.DeleteCloudInit(req.GetName()); err != nil {
-		return nil, wrapErr(err)
+		return nil, err
 	}
 	return &anvilv1.CloudInitDeleteReply{}, nil
 }

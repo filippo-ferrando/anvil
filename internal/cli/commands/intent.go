@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/format"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
@@ -84,26 +85,22 @@ func newIntentCreateCommand(flags *globalFlags) *cobra.Command {
 				return fmt.Errorf("intent create needs at least one --vm or --container member")
 			}
 
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			_, err = c.Intent.Info(cmd.Context(), &anvilv1.IntentInfoRequest{Name: name})
-			switch {
-			case err == nil:
-				return fmt.Errorf("intent %q already exists, use `anvil intent add` to grow it", name)
-			case status.Code(err) == codes.NotFound:
-			default:
-				return fmt.Errorf("intent: checking whether %q already exists: %w", name, err)
-			}
-			for _, m := range members {
-				if err := launchMember(cmd, c, name, m, hv); err != nil {
-					return err
+			return withClient(flags, func(c *client.Client) error {
+				_, err = c.Intent.Info(cmd.Context(), &anvilv1.IntentInfoRequest{Name: name})
+				switch {
+				case err == nil:
+					return fmt.Errorf("intent %q already exists, use `anvil intent add` to grow it", name)
+				case status.Code(err) == codes.NotFound:
+				default:
+					return fmt.Errorf("intent: checking whether %q already exists: %w", name, err)
 				}
-			}
-			return nil
+				for _, m := range members {
+					if err := launchMember(cmd, c, name, m, hv); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
 		},
 	}
 	cmd.Flags().StringArrayVar(&vmSpecs, "vm", nil, "VM member as <role>:<image>, repeatable")
@@ -133,24 +130,20 @@ func newIntentAddCommand(flags *globalFlags) *cobra.Command {
 				return fmt.Errorf("intent add needs at least one --vm or --container member")
 			}
 
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			if _, err := c.Intent.Info(cmd.Context(), &anvilv1.IntentInfoRequest{Name: name}); err != nil {
-				if status.Code(err) == codes.NotFound {
-					return fmt.Errorf("no such intent %q, use `anvil intent create` first", name)
+			return withClient(flags, func(c *client.Client) error {
+				if _, err := c.Intent.Info(cmd.Context(), &anvilv1.IntentInfoRequest{Name: name}); err != nil {
+					if status.Code(err) == codes.NotFound {
+						return fmt.Errorf("no such intent %q, use `anvil intent create` first", name)
+					}
+					return fmt.Errorf("intent: looking up %q: %w", name, err)
 				}
-				return fmt.Errorf("intent: looking up %q: %w", name, err)
-			}
-			for _, m := range members {
-				if err := launchMember(cmd, c, name, m, hv); err != nil {
-					return err
+				for _, m := range members {
+					if err := launchMember(cmd, c, name, m, hv); err != nil {
+						return err
+					}
 				}
-			}
-			return nil
+				return nil
+			})
 		},
 	}
 	cmd.Flags().StringArrayVar(&vmSpecs, "vm", nil, "VM member as <role>:<image>, repeatable")
@@ -195,25 +188,21 @@ func newIntentListCommand(flags *globalFlags) *cobra.Command {
 			if err := checkOutput(output); err != nil {
 				return err
 			}
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			reply, err := c.Intent.List(cmd.Context(), &anvilv1.IntentListRequest{})
-			if err != nil {
-				return err
-			}
-			if output == "json" {
-				return printJSON(cmd.OutOrStdout(), reply)
-			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tMEMBERS")
-			for _, it := range reply.GetIntents() {
-				fmt.Fprintf(tw, "%s\t%d\n", it.GetName(), len(it.GetMembers()))
-			}
-			return tw.Flush()
+			return withClient(flags, func(c *client.Client) error {
+				reply, err := c.Intent.List(cmd.Context(), &anvilv1.IntentListRequest{})
+				if err != nil {
+					return err
+				}
+				if output == "json" {
+					return printJSON(cmd.OutOrStdout(), reply)
+				}
+				tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "NAME\tMEMBERS")
+				for _, it := range reply.GetIntents() {
+					fmt.Fprintf(tw, "%s\t%d\n", it.GetName(), len(it.GetMembers()))
+				}
+				return tw.Flush()
+			})
 		},
 	}
 	addOutputFlag(cmd, &output)
@@ -226,29 +215,25 @@ func newIntentInfoCommand(flags *globalFlags) *cobra.Command {
 		Short: "Show an intent's members",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			reply, err := c.Intent.Info(cmd.Context(), &anvilv1.IntentInfoRequest{Name: args[0]})
-			if err != nil {
-				return err
-			}
-			it := reply.GetIntent()
-			fmt.Fprintf(cmd.OutOrStdout(), "Name:\t%s\n", it.GetName())
-			if net := it.GetNetwork(); net != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "Network:\t%s (bridge %s, subnet %s)\n",
-					net.GetEngineNetworkName(), net.GetBridgeInterface(), net.GetSubnet())
-				if net.GetDnsDomain() != "" {
-					fmt.Fprintf(cmd.OutOrStdout(), "DNS:\t%s (server %s)\n", net.GetDnsDomain(), net.GetDnsServer())
+			return withClient(flags, func(c *client.Client) error {
+				reply, err := c.Intent.Info(cmd.Context(), &anvilv1.IntentInfoRequest{Name: args[0]})
+				if err != nil {
+					return err
 				}
-			} else {
-				fmt.Fprintln(cmd.OutOrStdout(), "Network:\tnone yet")
-			}
-			printIntentMembers(cmd.OutOrStdout(), it.GetMembers())
-			return nil
+				it := reply.GetIntent()
+				fmt.Fprintf(cmd.OutOrStdout(), "Name:\t%s\n", it.GetName())
+				if net := it.GetNetwork(); net != nil {
+					fmt.Fprintf(cmd.OutOrStdout(), "Network:\t%s (bridge %s, subnet %s)\n",
+						net.GetEngineNetworkName(), net.GetBridgeInterface(), net.GetSubnet())
+					if net.GetDnsDomain() != "" {
+						fmt.Fprintf(cmd.OutOrStdout(), "DNS:\t%s (server %s)\n", net.GetDnsDomain(), net.GetDnsServer())
+					}
+				} else {
+					fmt.Fprintln(cmd.OutOrStdout(), "Network:\tnone yet")
+				}
+				printIntentMembers(cmd.OutOrStdout(), it.GetMembers())
+				return nil
+			})
 		},
 	}
 }
@@ -259,7 +244,7 @@ func printIntentMembers(w io.Writer, members []*anvilv1.IntentMember) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "ROLE\tKIND\tIP\tDNS NAME\tINSTANCE ID")
 	for _, m := range members {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", m.GetRole(), kindLabel(m.GetKind()),
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", m.GetRole(), format.Kind(m.GetKind()),
 			orDash(m.GetIp()), orDash(m.GetDnsName()), m.GetInstanceId())
 	}
 	tw.Flush()
@@ -271,13 +256,10 @@ func newIntentRemoveCommand(flags *globalFlags) *cobra.Command {
 		Short: "Ungroup a member (by role or instance ID) from an intent, without deleting it",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				_, err := c.Intent.Remove(cmd.Context(), &anvilv1.IntentRemoveRequest{Name: args[0], Member: args[1]})
 				return err
-			}
-			defer c.Close()
-			_, err = c.Intent.Remove(cmd.Context(), &anvilv1.IntentRemoveRequest{Name: args[0], Member: args[1]})
-			return err
+			})
 		},
 	}
 }
@@ -289,13 +271,10 @@ func newIntentDeleteCommand(flags *globalFlags) *cobra.Command {
 		Short: "Delete an intent",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				_, err := c.Intent.Delete(cmd.Context(), &anvilv1.IntentDeleteRequest{Name: args[0], PurgeMembers: purgeMembers})
 				return err
-			}
-			defer c.Close()
-			_, err = c.Intent.Delete(cmd.Context(), &anvilv1.IntentDeleteRequest{Name: args[0], PurgeMembers: purgeMembers})
-			return err
+			})
 		},
 	}
 	cmd.Flags().BoolVar(&purgeMembers, "purge-members", false, "also delete every member instance, not just the group record")

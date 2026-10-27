@@ -67,7 +67,7 @@ func TestMissingRecordsMapToNotFound(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected an error for a record that doesn't exist")
 			}
-			if got := status.Code(err); got != codes.NotFound {
+			if got := status.Code(wrapErr(err)); got != codes.NotFound { // as the interceptor does
 				t.Errorf("status code is %v, want %v (error: %v)", got, codes.NotFound, err)
 			}
 		})
@@ -102,7 +102,7 @@ func TestCloudInitServerRoundTrip(t *testing.T) {
 	if _, err := ci.Rename(t.Context(), &anvilv1.CloudInitRenameRequest{OldName: "base", NewName: "renamed"}); err != nil {
 		t.Fatalf("Rename: %v", err)
 	}
-	if _, err := ci.Get(t.Context(), &anvilv1.CloudInitGetRequest{Name: "base"}); status.Code(err) != codes.NotFound {
+	if _, err := ci.Get(t.Context(), &anvilv1.CloudInitGetRequest{Name: "base"}); status.Code(wrapErr(err)) != codes.NotFound {
 		t.Errorf("the old name should be gone, got %v", err)
 	}
 	if _, err := ci.Delete(t.Context(), &anvilv1.CloudInitDeleteRequest{Name: "renamed"}); err != nil {

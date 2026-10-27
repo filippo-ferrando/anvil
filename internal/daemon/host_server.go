@@ -58,7 +58,7 @@ func (s *HostServer) List(ctx context.Context, req *anvilv1.HostListRequest) (*a
 
 func (s *HostServer) Remove(ctx context.Context, req *anvilv1.HostRemoveRequest) (*anvilv1.HostRemoveReply, error) {
 	if err := s.Store.DeleteHost(req.GetAlias()); err != nil {
-		return nil, wrapErr(err)
+		return nil, err
 	}
 	return &anvilv1.HostRemoveReply{}, nil
 }

@@ -168,7 +168,7 @@ func (s *Server) List(ctx context.Context, req *anvilv1.ListRequest) (*anvilv1.L
 func (s *Server) Info(ctx context.Context, req *anvilv1.InfoRequest) (*anvilv1.InfoReply, error) {
 	specs, err := s.Manager.Info(req.GetNames())
 	if err != nil {
-		return nil, wrapErr(err)
+		return nil, err
 	}
 	return &anvilv1.InfoReply{Instances: specsToPB(specs)}, nil
 }
@@ -315,7 +315,7 @@ func (s *Server) RemovePort(ctx context.Context, req *anvilv1.RemovePortRequest)
 func (s *Server) Stats(ctx context.Context, req *anvilv1.StatsRequest) (*anvilv1.StatsReply, error) {
 	stats, err := s.Manager.Stats(ctx, req.GetName())
 	if err != nil {
-		return nil, wrapErr(err)
+		return nil, err
 	}
 	return &anvilv1.StatsReply{Stats: statsToPB(stats)}, nil
 }
@@ -383,7 +383,7 @@ func (s *Server) Update(ctx context.Context, req *anvilv1.UpdateRequest) (*anvil
 
 	res, err := s.Manager.Update(ctx, req.GetName(), p)
 	if err != nil {
-		return nil, wrapErr(err)
+		return nil, err
 	}
 	return &anvilv1.UpdateReply{Instance: specToPB(res.Spec), RestartPending: res.RestartPending, Notes: res.Notes}, nil
 }

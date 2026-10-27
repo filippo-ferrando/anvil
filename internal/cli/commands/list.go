@@ -4,6 +4,7 @@ import (
 	"github.com/spf13/cobra"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newListCommand(flags *globalFlags) *cobra.Command {
@@ -17,21 +18,17 @@ func newListCommand(flags *globalFlags) *cobra.Command {
 			if err := checkOutput(output); err != nil {
 				return err
 			}
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			reply, err := c.List(cmd.Context(), &anvilv1.ListRequest{})
-			if err != nil {
-				return err
-			}
-			if output == "json" {
-				return printJSON(cmd.OutOrStdout(), reply)
-			}
-			printInstanceTable(cmd.OutOrStdout(), reply.GetInstances())
-			return nil
+			return withClient(flags, func(c *client.Client) error {
+				reply, err := c.List(cmd.Context(), &anvilv1.ListRequest{})
+				if err != nil {
+					return err
+				}
+				if output == "json" {
+					return printJSON(cmd.OutOrStdout(), reply)
+				}
+				printInstanceTable(cmd.OutOrStdout(), reply.GetInstances())
+				return nil
+			})
 		},
 	}
 	addOutputFlag(cmd, &output)

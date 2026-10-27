@@ -151,7 +151,7 @@ func (m model) updateCloudInit(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.done {
 			return m, loadCloudInitList(m.client)
 		}
-		return m, receiveCloudInitImportEvent(msg.stream)
+		return m, msg.next
 
 	case tea.KeyMsg:
 		return m.updateCloudInitKey(msg)

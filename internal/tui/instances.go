@@ -15,6 +15,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/format"
+	"git.fferrando.cc/rdfilippo/anvil/internal/progress"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
@@ -47,25 +49,11 @@ func (i instanceItem) Description() string {
 	if i.inst.GetKind() == anvilv1.Kind_KIND_CONTAINER {
 		kind, image = "container", i.inst.GetContainer().GetImageRef()
 	}
-	desc := fmt.Sprintf("%s  •  %s  •  %s", kind, stateLabel(i.inst.GetState()), image)
-	if ip := instanceIPTUI(i.inst); ip != "" {
+	desc := fmt.Sprintf("%s  •  %s  •  %s", kind, format.State(i.inst.GetState()), image)
+	if ip := format.InstanceIP(i.inst); ip != "" {
 		desc += "  •  " + ip
 	}
 	return desc
-}
-
-// instanceIPTUI is the address shown in the list: a bridged VM's static IP (reachable from
-// the host), else the guest agent's first report, else nothing.
-func instanceIPTUI(inst *anvilv1.Instance) string {
-	if ip := inst.GetVm().GetStaticIp(); ip != "" {
-		ip, _, _ = strings.Cut(ip, "/")
-		return ip
-	}
-	if ips := inst.GetGuest().GetIpAddresses(); len(ips) > 0 {
-		ip, _, _ := strings.Cut(ips[0], "/")
-		return ip
-	}
-	return ""
 }
 
 // instancesPrompt identifies which overlay form, if any, is showing over the instances list.
@@ -98,14 +86,8 @@ type instancesModel struct {
 	lastGUICommand string // remembered across GUI launches
 	lastGUIX11     bool
 
-	exporting   bool     // an export stream is in flight, blocking other keys
-	exportLines []string // the finished (or in-flight) export's progress transcript
-
-	importing   bool     // an import stream is in flight, blocking other keys
-	importLines []string // the finished (or in-flight) import's progress transcript
-
-	forking   bool     // a fork stream is in flight, blocking other keys
-	forkLines []string // the finished (or in-flight) fork's progress transcript
+	// Export, import and fork progress; a running one blocks other keys.
+	export, imp, fork transcript
 
 	waiting    bool               // a WaitReady stream is in flight; only esc (cancel) works
 	waitLines  []string           // the finished (or in-flight) wait's progress transcript
@@ -319,52 +301,16 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case exportStreamMsg:
-		if msg.line != "" {
-			m.instances.exportLines = appendProgressLine(m.instances.exportLines, msg.line)
-		}
-		if msg.err != nil {
-			m.instances.exporting = false
-			m.instances.exportLines = append(m.instances.exportLines, errLine(msg.err))
-			return m, nil
-		}
-		if msg.done {
-			m.instances.exporting = false
-			return m, nil
-		}
-		return m, receiveExportEvent(msg.stream)
+		return m, follow(&m.instances.export, msg.lineStep, nil)
 
 	case importStreamMsg:
-		if msg.line != "" {
-			m.instances.importLines = appendProgressLine(m.instances.importLines, msg.line)
-		}
-		if msg.err != nil {
-			m.instances.importing = false
-			m.instances.importLines = append(m.instances.importLines, errLine(msg.err))
-			return m, nil
-		}
-		if msg.done {
-			m.instances.importing = false
-			return m, loadInstances(m.client)
-		}
-		return m, receiveImportEvent(msg.stream)
+		return m, follow(&m.instances.imp, msg.lineStep, loadInstances(m.client))
 
 	case forkStreamMsg:
-		if msg.status != "" {
-			m.instances.forkLines = appendProgressLine(m.instances.forkLines, msg.status)
+		if msg.done && msg.result != nil {
+			msg.status = styleGood.Render("forked: " + msg.result.GetName())
 		}
-		if msg.err != nil {
-			m.instances.forking = false
-			m.instances.forkLines = append(m.instances.forkLines, errLine(msg.err))
-			return m, nil
-		}
-		if msg.done {
-			m.instances.forking = false
-			if msg.instance != nil {
-				m.instances.forkLines = append(m.instances.forkLines, styleGood.Render("forked: "+msg.instance.GetName()))
-			}
-			return m, loadInstances(m.client)
-		}
-		return m, receiveForkEvent(msg.stream)
+		return m, follow(&m.instances.fork, msg.instanceStep, loadInstances(m.client))
 
 	case waitStreamMsg:
 		if msg.status != "" {
@@ -382,16 +328,16 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.instances.waitLines = append(m.instances.waitLines, styleSubtitle.Render("stopped waiting (the VM keeps running)"))
 			case msg.err != nil:
 				m.instances.waitLines = append(m.instances.waitLines, errLine(msg.err))
-			case msg.instance != nil:
-				line := "ready: " + msg.instance.GetName()
-				if ips := msg.instance.GetGuest().GetIpAddresses(); len(ips) > 0 {
+			case msg.result != nil:
+				line := "ready: " + msg.result.GetName()
+				if ips := msg.result.GetGuest().GetIpAddresses(); len(ips) > 0 {
 					line += " (" + strings.Join(ips, ", ") + ")"
 				}
 				m.instances.waitLines = append(m.instances.waitLines, styleGood.Render(line))
 			}
 			return m, loadInstances(m.client)
 		}
-		return m, receiveWaitEvent(msg.stream)
+		return m, msg.next
 
 	case tea.KeyMsg:
 		return m.updateInstancesKey(msg)
@@ -413,16 +359,12 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if m.instances.exporting || m.instances.importing || m.instances.forking {
+	if m.instances.export.running || m.instances.imp.running || m.instances.fork.running {
 		return m, nil // block input until the stream finishes
 	}
 	// A finished export/import/fork's transcript stays on screen until dismissed here.
-	for _, lines := range []*[]string{&m.instances.exportLines, &m.instances.importLines, &m.instances.forkLines} {
-		if len(*lines) > 0 {
-			switch msg.String() {
-			case "esc", "enter", "q":
-				*lines = nil
-			}
+	for _, t := range []*transcript{&m.instances.export, &m.instances.imp, &m.instances.fork} {
+		if t.dismiss(msg.String()) {
 			return m, nil
 		}
 	}
@@ -690,8 +632,7 @@ func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if outputPath == "" {
 			return m, nil
 		}
-		ins.exporting = true
-		ins.exportLines = nil
+		ins.export.start()
 		return m, startExportStream(m.client, target.GetName(), outputPath, false)
 
 	case instancesPromptImport:
@@ -699,8 +640,7 @@ func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if bundlePath == "" {
 			return m, nil
 		}
-		ins.importing = true
-		ins.importLines = nil
+		ins.imp.start()
 		return m, startImportStream(m.client, bundlePath, ins.promptForm.Value("Rename (optional)"))
 
 	case instancesPromptAddPort:
@@ -725,8 +665,7 @@ func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if newName == "" {
 			return m, nil
 		}
-		ins.forking = true
-		ins.forkLines = nil
+		ins.fork.start()
 		return m, startForkStream(m.client, target.GetName(), newName, ins.promptForm.Bool("Start immediately"))
 
 	case instancesPromptRemovePort:
@@ -749,25 +688,11 @@ func (m model) selectedInstance() *anvilv1.Instance {
 }
 
 func (m instancesModel) View() string {
-	if m.exporting || len(m.exportLines) > 0 {
-		s := styleTitle.Render(" Exporting… ") + "\n\n"
-		for _, line := range m.exportLines {
-			s += line + "\n"
-		}
-		if !m.exporting {
-			s += "\n" + helpBar("esc", "dismiss")
-		}
-		return s
+	if m.export.active() {
+		return m.export.view("Exporting…")
 	}
-	if m.importing || len(m.importLines) > 0 {
-		s := styleTitle.Render(" Importing… ") + "\n\n"
-		for _, line := range m.importLines {
-			s += line + "\n"
-		}
-		if !m.importing {
-			s += "\n" + helpBar("esc", "dismiss")
-		}
-		return s
+	if m.imp.active() {
+		return m.imp.view("Importing…")
 	}
 	if m.waiting || len(m.waitLines) > 0 {
 		s := styleTitle.Render(" Waiting for first-boot setup… ") + "\n\n" + progressView(m.waitLines, m.waiting, m.waitSince)
@@ -778,15 +703,8 @@ func (m instancesModel) View() string {
 		}
 		return s
 	}
-	if m.forking || len(m.forkLines) > 0 {
-		s := styleTitle.Render(" Forking… ") + "\n\n"
-		for _, line := range m.forkLines {
-			s += line + "\n"
-		}
-		if !m.forking {
-			s += "\n" + helpBar("esc", "dismiss")
-		}
-		return s
+	if m.fork.active() {
+		return m.fork.view("Forking…")
 	}
 	if m.confirmDelete != nil {
 		return styleBox.BorderForeground(colorWarn).Render(
@@ -872,12 +790,12 @@ func (m instancesModel) detailInfo() string {
 	b = append(b, styleTitle.Render(" "+inst.GetName()+" "))
 	b = append(b, "")
 	b = append(b, detailRow("Kind", kind))
-	b = append(b, detailRow("State", stateDot(inst.GetState())+" "+stateLabel(inst.GetState())))
+	b = append(b, detailRow("State", stateDot(inst.GetState())+" "+format.State(inst.GetState())))
 	b = append(b, detailRow("Image", image))
 	if c := inst.GetCreatedAtUnix(); c > 0 {
 		t := time.Unix(c, 0)
 		b = append(b, detailRow("Created", t.Format("2006-01-02 15:04")+styleSubtitle.Render(
-			"  ("+humanDuration(int64(time.Since(t).Seconds()))+" ago)")))
+			"  ("+format.Uptime(int64(time.Since(t).Seconds()), " ")+" ago)")))
 	}
 	if vm := inst.GetVm(); vm != nil {
 		b = append(b, detailRow("Size", resourcesText(vm)))
@@ -885,13 +803,13 @@ func (m instancesModel) detailInfo() string {
 			b = append(b, detailRow("Devices", strings.Join(devs, ", ")))
 		}
 	}
-	policy := "restart " + restartPolicyText(inst.GetRestartPolicy())
+	policy := "restart " + format.RestartPolicy(inst.GetRestartPolicy())
 	if inst.GetAutostart() {
 		policy = "autostart  •  " + policy
 	}
 	b = append(b, detailRow("Policy", policy))
 	b = append(b, detailRow("GUI", "g to run an app"))
-	if sched := scheduleText(inst.GetVm().GetSnapshotSchedule()); sched != "" {
+	if sched := format.Schedule(inst.GetVm().GetSnapshotSchedule(), "01-02 15:04"); sched != "" {
 		b = append(b, detailRow("Snaps", sched))
 	}
 	if intentName := inst.GetLabels()["intent"]; intentName != "" {
@@ -931,7 +849,7 @@ func (m instancesModel) detailInfo() string {
 		address = "-"
 	}
 	b = append(b, detailRow("Address", address))
-	b = append(b, detailRow("Uptime", humanDuration(stats.GetUptimeSeconds())))
+	b = append(b, detailRow("Uptime", format.Uptime(stats.GetUptimeSeconds(), " ")))
 	b = append(b, guestRows(inst)...)
 	b = append(b, "")
 
@@ -947,12 +865,12 @@ func (m instancesModel) detailInfo() string {
 		memPercent = float64(stats.GetMemUsedBytes()) / float64(stats.GetMemLimitBytes()) * 100
 	}
 	b = append(b, gauge("Mem", memPercent, barWidth)+styleSubtitle.Render(
-		fmt.Sprintf("  %s / %s", humanBytesTUI(stats.GetMemUsedBytes()), humanBytesTUI(stats.GetMemLimitBytes()))))
+		fmt.Sprintf("  %s / %s", progress.Bytes(stats.GetMemUsedBytes()), progress.Bytes(stats.GetMemLimitBytes()))))
 
 	if stats.GetDiskTotalBytes() > 0 {
 		diskPercent := float64(stats.GetDiskUsedBytes()) / float64(stats.GetDiskTotalBytes()) * 100
 		b = append(b, gauge("Disk", diskPercent, barWidth)+styleSubtitle.Render(
-			fmt.Sprintf("  %s / %s", humanBytesTUI(stats.GetDiskUsedBytes()), humanBytesTUI(stats.GetDiskTotalBytes()))))
+			fmt.Sprintf("  %s / %s", progress.Bytes(stats.GetDiskUsedBytes()), progress.Bytes(stats.GetDiskTotalBytes()))))
 	} else {
 		b = append(b, styleFieldLabel.Render("Disk ")+fmt.Sprintf(
 			"read %s  write %s", humanRate(stats.GetDiskReadBytesPerSec()), humanRate(stats.GetDiskWriteBytesPerSec())))
@@ -988,17 +906,13 @@ func guestRows(inst *anvilv1.Instance) []string {
 }
 
 func cloudInitText(s anvilv1.CloudInitStatus) string {
-	switch s {
-	case anvilv1.CloudInitStatus_CLOUD_INIT_STATUS_RUNNING:
-		return "running"
-	case anvilv1.CloudInitStatus_CLOUD_INIT_STATUS_DONE:
-		return "done"
-	case anvilv1.CloudInitStatus_CLOUD_INIT_STATUS_ERROR:
-		return styleError.Render("error (see logs)")
-	case anvilv1.CloudInitStatus_CLOUD_INIT_STATUS_DISABLED:
-		return "disabled"
+	switch l := format.CloudInit(s); l {
+	case "error":
+		return styleError.Render(l + " (see logs)")
+	case "unknown":
+		return styleSubtitle.Render(l)
 	default:
-		return styleSubtitle.Render("unknown")
+		return l
 	}
 }
 
@@ -1037,27 +951,6 @@ func formatPorts(ports []*anvilv1.PortMapping) string {
 		parts[i] = fmt.Sprintf("%d:%d/%s", p.GetHostPort(), p.GetGuestPort(), proto)
 	}
 	return strings.Join(parts, ", ")
-}
-
-func stateLabel(s anvilv1.State) string {
-	switch s {
-	case anvilv1.State_STATE_STOPPED:
-		return "stopped"
-	case anvilv1.State_STATE_STARTING:
-		return "starting"
-	case anvilv1.State_STATE_RUNNING:
-		return "running"
-	case anvilv1.State_STATE_STOPPING:
-		return "stopping"
-	case anvilv1.State_STATE_DELETING:
-		return "deleting"
-	case anvilv1.State_STATE_DELETED:
-		return "deleted"
-	case anvilv1.State_STATE_ERROR:
-		return "error"
-	default:
-		return "unknown"
-	}
 }
 
 // stateDot is a small colored marker giving an at-a-glance state indicator

@@ -188,17 +188,13 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 				}
 			}
 
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			stream, err := c.Launch(cmd.Context(), req)
-			if err != nil {
-				return err
-			}
-			return streamLaunchProgress(cmd.OutOrStdout(), stream)
+			return withClient(flags, func(c *client.Client) error {
+				stream, err := c.Launch(cmd.Context(), req)
+				if err != nil {
+					return err
+				}
+				return streamLaunchProgress(cmd.OutOrStdout(), stream)
+			})
 		},
 	}
 

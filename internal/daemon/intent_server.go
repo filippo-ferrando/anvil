@@ -70,7 +70,7 @@ func (s *IntentServer) List(ctx context.Context, req *anvilv1.IntentListRequest)
 func (s *IntentServer) Info(ctx context.Context, req *anvilv1.IntentInfoRequest) (*anvilv1.IntentInfoReply, error) {
 	it, err := s.Manager.Info(req.GetName())
 	if err != nil {
-		return nil, wrapErr(err)
+		return nil, err
 	}
 	return &anvilv1.IntentInfoReply{Intent: intentToPB(it)}, nil
 }

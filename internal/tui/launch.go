@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -269,14 +268,14 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.done {
 			m.launch.launching = false
-			if msg.instance != nil {
-				m.setStatus("launched "+msg.instance.GetName(), false)
+			if msg.result != nil {
+				m.setStatus("launched "+msg.result.GetName(), false)
 				m.screen = screenInstances
 				return m, tea.Batch(tea.ClearScreen, loadInstances(m.client))
 			}
 			return m, nil
 		}
-		return m, receiveLaunchEvent(msg.stream)
+		return m, msg.next
 
 	case cloudInitContentLoadedMsg:
 		if !m.launch.loadingCloudInit {
@@ -597,31 +596,8 @@ func startLaunchStream(c *client.Client, req *anvilv1.LaunchRequest) tea.Cmd {
 	return func() tea.Msg {
 		stream, err := c.Launch(context.Background(), req)
 		if err != nil {
-			return launchStreamMsg{err: err, done: true}
+			return launchStreamMsg{failed[*anvilv1.Instance](err)}
 		}
-		return receiveLaunchEvent(stream)()
-	}
-}
-
-// receiveLaunchEvent reads the next event.
-func receiveLaunchEvent(stream anvilv1.InstanceService_LaunchClient) tea.Cmd {
-	return func() tea.Msg {
-		ev, err := stream.Recv()
-		if err != nil {
-			if err == io.EOF {
-				return launchStreamMsg{done: true}
-			}
-			return launchStreamMsg{err: err, done: true}
-		}
-		switch e := ev.GetEvent().(type) {
-		case *anvilv1.LaunchProgress_Status:
-			return launchStreamMsg{stream: stream, status: e.Status}
-		case *anvilv1.LaunchProgress_Error:
-			return launchStreamMsg{err: fmt.Errorf("%s", e.Error), done: true}
-		case *anvilv1.LaunchProgress_Instance:
-			return launchStreamMsg{instance: e.Instance, done: true}
-		default:
-			return launchStreamMsg{stream: stream}
-		}
+		return recvStream(stream.Recv, parseLaunchProgress, func(s instanceStep) tea.Msg { return launchStreamMsg{s} })()
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newSetCommand(flags *globalFlags) *cobra.Command {
@@ -48,22 +49,19 @@ func newSetCommand(flags *globalFlags) *cobra.Command {
 				return fmt.Errorf("nothing to change: pass at least one of --cpus, --memory, --disk, --autostart, --restart")
 			}
 
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-			reply, err := c.Update(cmd.Context(), req)
-			if err != nil {
-				return err
-			}
-			for _, note := range reply.GetNotes() {
-				fmt.Fprintln(cmd.OutOrStdout(), note)
-			}
-			if len(reply.GetNotes()) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "nothing changed")
-			}
-			return nil
+			return withClient(flags, func(c *client.Client) error {
+				reply, err := c.Update(cmd.Context(), req)
+				if err != nil {
+					return err
+				}
+				for _, note := range reply.GetNotes() {
+					fmt.Fprintln(cmd.OutOrStdout(), note)
+				}
+				if len(reply.GetNotes()) == 0 {
+					fmt.Fprintln(cmd.OutOrStdout(), "nothing changed")
+				}
+				return nil
+			})
 		},
 	}
 	cmd.Flags().Int32Var(&cpus, "cpus", 0, "number of vCPUs (VM only)")

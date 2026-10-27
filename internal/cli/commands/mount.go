@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newMountCommand(flags *globalFlags) *cobra.Command {
@@ -25,23 +26,20 @@ func newMountCommand(flags *globalFlags) *cobra.Command {
 			if !ok {
 				return fmt.Errorf(`second argument must be "<name>:<guest-path>"`)
 			}
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				// With --remote, host-path is a directory on the daemon's host.
+				absHostPath, err := c.HostPath(hostPath)
+				if err != nil {
+					return err
+				}
+				_, err = c.Mount(cmd.Context(), &anvilv1.MountRequest{
+					Name:      name,
+					HostPath:  absHostPath,
+					GuestPath: guestPath,
+					ReadOnly:  readOnly,
+				})
 				return err
-			}
-			defer c.Close()
-			// With --remote, host-path is a directory on the daemon's host.
-			absHostPath, err := c.HostPath(hostPath)
-			if err != nil {
-				return err
-			}
-			_, err = c.Mount(cmd.Context(), &anvilv1.MountRequest{
-				Name:      name,
-				HostPath:  absHostPath,
-				GuestPath: guestPath,
-				ReadOnly:  readOnly,
 			})
-			return err
 		},
 	}
 	cmd.Flags().BoolVar(&readOnly, "read-only", false, "mount read-only in the guest")
@@ -62,13 +60,10 @@ func newUmountCommand(flags *globalFlags) *cobra.Command {
 				return fmt.Errorf(`argument must be "<name>:<guest-path>"`)
 			}
 
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				_, err := c.Umount(cmd.Context(), &anvilv1.UmountRequest{Name: name, GuestPath: guestPath})
 				return err
-			}
-			defer c.Close()
-			_, err = c.Umount(cmd.Context(), &anvilv1.UmountRequest{Name: name, GuestPath: guestPath})
-			return err
+			})
 		},
 	}
 }

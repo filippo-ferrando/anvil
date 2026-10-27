@@ -237,7 +237,7 @@ func TestStreamHash(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	want, _ := fileSHA256(path)
+	want, _ := FileSHA256(path)
 
 	streamed := &streamHash{h: sha256.New()}
 	_, _ = streamed.Write(data)

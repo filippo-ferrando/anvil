@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 // newFindCommand lists the VM base images available to launch, optionally
@@ -26,39 +27,35 @@ func newFindCommand(flags *globalFlags) *cobra.Command {
 			if err := checkOutput(output); err != nil {
 				return err
 			}
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			reply, err := c.Image.Catalog(cmd.Context(), &anvilv1.CatalogRequest{})
-			if err != nil {
-				return err
-			}
-
-			var term string
-			if len(args) == 1 {
-				term = strings.ToLower(args[0])
-			}
-
-			var entries []*anvilv1.CatalogEntry
-			for _, e := range reply.GetEntries() {
-				if term == "" || matchesFindTerm(e, term) {
-					entries = append(entries, e)
+			return withClient(flags, func(c *client.Client) error {
+				reply, err := c.Image.Catalog(cmd.Context(), &anvilv1.CatalogRequest{})
+				if err != nil {
+					return err
 				}
-			}
-			if output == "json" {
-				return printJSON(cmd.OutOrStdout(), &anvilv1.CatalogReply{Entries: entries})
-			}
 
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "ID\tDISTRO\tVERSION\tARCH\tMIN DISK\tDEFAULT USER\tFIRECRACKER")
-			for _, e := range entries {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d GiB\t%s\t%s\n",
-					e.GetId(), e.GetDistro(), e.GetVersion(), e.GetArch(), e.GetMinDiskGib(), e.GetDefaultUser(), yesNo(e.GetFirecracker()))
-			}
-			return tw.Flush()
+				var term string
+				if len(args) == 1 {
+					term = strings.ToLower(args[0])
+				}
+
+				var entries []*anvilv1.CatalogEntry
+				for _, e := range reply.GetEntries() {
+					if term == "" || matchesFindTerm(e, term) {
+						entries = append(entries, e)
+					}
+				}
+				if output == "json" {
+					return printJSON(cmd.OutOrStdout(), &anvilv1.CatalogReply{Entries: entries})
+				}
+
+				tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "ID\tDISTRO\tVERSION\tARCH\tMIN DISK\tDEFAULT USER\tFIRECRACKER")
+				for _, e := range entries {
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d GiB\t%s\t%s\n",
+						e.GetId(), e.GetDistro(), e.GetVersion(), e.GetArch(), e.GetMinDiskGib(), e.GetDefaultUser(), yesNo(e.GetFirecracker()))
+				}
+				return tw.Flush()
+			})
 		},
 	}
 	addOutputFlag(cmd, &output)

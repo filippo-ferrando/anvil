@@ -26,7 +26,7 @@ func (s *Server) PrepareGUI(req *anvilv1.PrepareGUIRequest, stream anvilv1.Insta
 func (s *Server) GetGUIAppInfo(ctx context.Context, req *anvilv1.GUIAppInfoRequest) (*anvilv1.GUIAppInfoReply, error) {
 	app, found, err := s.Manager.GUIAppInfo(ctx, req.GetName(), req.GetCommand())
 	if err != nil {
-		return nil, wrapErr(err)
+		return nil, err
 	}
 	return &anvilv1.GUIAppInfoReply{
 		Found: found, AppName: app.Name, Icon: app.Icon, IconExt: app.IconExt, IconSize: int32(app.IconSize),

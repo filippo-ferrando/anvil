@@ -314,10 +314,11 @@ func (s *streamHash) final(path string) (string, error) {
 	if fi, err := os.Stat(path); err == nil && fi.Size() == s.n {
 		return hex.EncodeToString(s.h.Sum(nil)), nil
 	}
-	return fileSHA256(path)
+	return FileSHA256(path)
 }
 
-func fileSHA256(path string) (string, error) {
+// FileSHA256 returns the hex SHA256 of the file at path.
+func FileSHA256(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err

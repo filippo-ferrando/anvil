@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newMirrorCommand(flags *globalFlags) *cobra.Command {
@@ -53,24 +54,20 @@ func newMirrorAddCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				_, err = c.Mirror.Add(cmd.Context(), &anvilv1.MirrorAddRequest{
+					Mirror: &anvilv1.Mirror{
+						Name:        args[0],
+						Kind:        kind,
+						ManifestUrl: manifestURL,
+						Registry:    registry,
+						MirrorOf:    mirrorOf,
+						Insecure:    insecure,
+						Priority:    priority,
+					},
+				})
 				return err
-			}
-			defer c.Close()
-
-			_, err = c.Mirror.Add(cmd.Context(), &anvilv1.MirrorAddRequest{
-				Mirror: &anvilv1.Mirror{
-					Name:        args[0],
-					Kind:        kind,
-					ManifestUrl: manifestURL,
-					Registry:    registry,
-					MirrorOf:    mirrorOf,
-					Insecure:    insecure,
-					Priority:    priority,
-				},
 			})
-			return err
 		},
 	}
 	cmd.Flags().StringVar(&kindStr, "kind", "", `mirror kind: "vm" or "container" (required)`)
@@ -102,31 +99,27 @@ func newMirrorListCommand(flags *globalFlags) *cobra.Command {
 					return err
 				}
 			}
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			reply, err := c.Mirror.List(cmd.Context(), &anvilv1.MirrorListRequest{KindFilter: kindFilter})
-			if err != nil {
-				return err
-			}
-			if output == "json" {
-				return printJSON(cmd.OutOrStdout(), reply)
-			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tKIND\tSOURCE\tPRIORITY\tENABLED")
-			for _, m := range reply.GetMirrors() {
-				kind := "vm"
-				source := m.GetManifestUrl()
-				if m.GetKind() == anvilv1.MirrorKind_MIRROR_KIND_CONTAINER {
-					kind = "container"
-					source = m.GetRegistry()
+			return withClient(flags, func(c *client.Client) error {
+				reply, err := c.Mirror.List(cmd.Context(), &anvilv1.MirrorListRequest{KindFilter: kindFilter})
+				if err != nil {
+					return err
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%v\n", m.GetName(), kind, source, m.GetPriority(), m.GetEnabled())
-			}
-			return tw.Flush()
+				if output == "json" {
+					return printJSON(cmd.OutOrStdout(), reply)
+				}
+				tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "NAME\tKIND\tSOURCE\tPRIORITY\tENABLED")
+				for _, m := range reply.GetMirrors() {
+					kind := "vm"
+					source := m.GetManifestUrl()
+					if m.GetKind() == anvilv1.MirrorKind_MIRROR_KIND_CONTAINER {
+						kind = "container"
+						source = m.GetRegistry()
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%v\n", m.GetName(), kind, source, m.GetPriority(), m.GetEnabled())
+				}
+				return tw.Flush()
+			})
 		},
 	}
 	cmd.Flags().StringVar(&kindStr, "kind", "", `filter by kind: "vm" or "container" (default: both)`)
@@ -140,13 +133,10 @@ func newMirrorRemoveCommand(flags *globalFlags) *cobra.Command {
 		Short: "Remove a mirror",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				_, err := c.Mirror.Remove(cmd.Context(), &anvilv1.MirrorRemoveRequest{Name: args[0]})
 				return err
-			}
-			defer c.Close()
-			_, err = c.Mirror.Remove(cmd.Context(), &anvilv1.MirrorRemoveRequest{Name: args[0]})
-			return err
+			})
 		},
 	}
 }
@@ -161,13 +151,10 @@ func newMirrorEnableCommand(flags *globalFlags, enable bool) *cobra.Command {
 		Short: short,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				_, err := c.Mirror.SetEnabled(cmd.Context(), &anvilv1.MirrorSetEnabledRequest{Name: args[0], Enabled: enable})
 				return err
-			}
-			defer c.Close()
-			_, err = c.Mirror.SetEnabled(cmd.Context(), &anvilv1.MirrorSetEnabledRequest{Name: args[0], Enabled: enable})
-			return err
+			})
 		},
 	}
 }

@@ -104,10 +104,9 @@ func (s *Server) StreamStats(req *anvilv1.StreamStatsRequest, stream anvilv1.Ins
 		interval = defaultStatsInterval
 	}
 	interval = max(interval, minStatsInterval)
-	err := s.Manager.StreamStats(stream.Context(), req.GetName(), interval, func(st instance.Stats) error {
+	return s.Manager.StreamStats(stream.Context(), req.GetName(), interval, func(st instance.Stats) error {
 		return stream.Send(&anvilv1.StatsReply{Stats: statsToPB(st)})
 	})
-	return wrapErr(err)
 }
 
 func (s *Server) Events(req *anvilv1.EventsRequest, stream anvilv1.InstanceService_EventsServer) error {

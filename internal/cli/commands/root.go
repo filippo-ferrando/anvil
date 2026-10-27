@@ -86,3 +86,13 @@ func dial(flags *globalFlags) (*client.Client, error) {
 	}
 	return client.Dial(flags.socket)
 }
+
+// withClient dials the daemon, runs fn with the client and closes it afterwards.
+func withClient(flags *globalFlags, fn func(c *client.Client) error) error {
+	c, err := dial(flags)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	return fn(c)
+}

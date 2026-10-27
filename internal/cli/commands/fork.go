@@ -4,6 +4,7 @@ import (
 	"github.com/spf13/cobra"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newForkCommand(flags *globalFlags) *cobra.Command {
@@ -24,17 +25,13 @@ func newForkCommand(flags *globalFlags) *cobra.Command {
 			"VM instances only.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			stream, err := c.Fork(cmd.Context(), &anvilv1.ForkRequest{Name: args[0], NewName: args[1], Start: start})
-			if err != nil {
-				return err
-			}
-			return streamLaunchProgress(cmd.OutOrStdout(), stream)
+			return withClient(flags, func(c *client.Client) error {
+				stream, err := c.Fork(cmd.Context(), &anvilv1.ForkRequest{Name: args[0], NewName: args[1], Start: start})
+				if err != nil {
+					return err
+				}
+				return streamLaunchProgress(cmd.OutOrStdout(), stream)
+			})
 		},
 	}
 

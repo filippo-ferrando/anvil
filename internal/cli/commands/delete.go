@@ -4,6 +4,7 @@ import (
 	"github.com/spf13/cobra"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newDeleteCommand(flags *globalFlags) *cobra.Command {
@@ -16,13 +17,10 @@ The cached base image a VM was made from stays, so the next launch of that image
 --purge removes that base image too, when no other VM uses it.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				_, err := c.Delete(cmd.Context(), &anvilv1.DeleteRequest{Names: args, Purge: purge})
 				return err
-			}
-			defer c.Close()
-			_, err = c.Delete(cmd.Context(), &anvilv1.DeleteRequest{Names: args, Purge: purge})
-			return err
+			})
 		},
 	}
 	cmd.Flags().BoolVar(&purge, "purge", false, "also remove the VM's cached base image when no other VM uses it")

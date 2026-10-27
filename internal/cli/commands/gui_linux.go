@@ -14,6 +14,7 @@ import (
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/internal/gui"
 	"git.fferrando.cc/rdfilippo/anvil/internal/gui/relay"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 const (
@@ -44,7 +45,7 @@ func runContainerGUI(ctx context.Context, inst *anvilv1.Instance, session *anvil
 	if spec.GetContainerId() == "" {
 		return fmt.Errorf("%q has no known container ID yet", inst.GetName())
 	}
-	bin, err := containerBinFor(spec.GetEngine())
+	bin, err := client.ContainerBin(spec.GetEngine())
 	if err != nil {
 		return err
 	}

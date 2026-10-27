@@ -2,8 +2,8 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -202,8 +202,8 @@ func (m model) updateMigration(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case migrateStreamMsg:
-		if msg.line != "" {
-			m.migration.progressLines = appendProgressLine(m.migration.progressLines, msg.line)
+		if msg.status != "" {
+			m.migration.progressLines = appendProgressLine(m.migration.progressLines, msg.status)
 		}
 		if msg.err != nil {
 			m.migration.migrating = false
@@ -214,7 +214,7 @@ func (m model) updateMigration(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.migration.migrating = false
 			return m, nil
 		}
-		return m, receiveMigrateEvent(msg.stream)
+		return m, msg.next
 
 	case tea.KeyMsg:
 		return m.updateMigrationKey(msg)
@@ -436,51 +436,42 @@ func startMigrateStream(c *client.Client, req *anvilv1.MigrateRequest) tea.Cmd {
 		if !req.GetDryRun() {
 			warnings, err := c.InjectGuestKeys(context.Background(), req.GetName(), req.GetTo())
 			if err != nil {
-				return migrateStreamMsg{err: fmt.Errorf("preparing guest SSH access on the target: %w", err), done: true}
+				return migrateStreamMsg{failed[struct{}](fmt.Errorf("preparing guest SSH access on the target: %w", err))}
 			}
 			warning = strings.Join(warnings, "; ")
 		}
 		stream, err := c.Migrate.Migrate(context.Background(), req)
 		if err != nil {
-			return migrateStreamMsg{err: err, done: true}
+			return migrateStreamMsg{failed[struct{}](err)}
 		}
+		next := recvStream(stream.Recv, parseMigrateProgress, func(s lineStep) tea.Msg { return migrateStreamMsg{s} })
 		if warning != "" {
-			return migrateStreamMsg{stream: stream, line: styleWarn.Render("warning: " + warning)}
+			return migrateStreamMsg{lineStep{status: styleWarn.Render("warning: " + warning), next: next}}
 		}
-		return receiveMigrateEvent(stream)()
+		return next()
 	}
 }
 
-func receiveMigrateEvent(stream anvilv1.MigrateService_MigrateClient) tea.Cmd {
-	return func() tea.Msg {
-		ev, err := stream.Recv()
-		if err != nil {
-			if err == io.EOF {
-				return migrateStreamMsg{done: true}
-			}
-			return migrateStreamMsg{err: err, done: true}
+func parseMigrateProgress(ev *anvilv1.MigrateProgress) lineStep {
+	switch e := ev.GetEvent().(type) {
+	case *anvilv1.MigrateProgress_Status:
+		return lineStep{status: e.Status}
+	case *anvilv1.MigrateProgress_Error:
+		return failed[struct{}](errors.New(e.Error))
+	case *anvilv1.MigrateProgress_Done:
+		return lineStep{status: styleGood.Render("migrated: new instance " + e.Done)}
+	case *anvilv1.MigrateProgress_MemberDone:
+		mr := e.MemberDone
+		if mr.GetError() != "" {
+			return lineStep{status: styleError.Render("  " + mr.GetRole() + ": FAILED: " + mr.GetError())}
 		}
-		switch e := ev.GetEvent().(type) {
-		case *anvilv1.MigrateProgress_Status:
-			return migrateStreamMsg{stream: stream, line: e.Status}
-		case *anvilv1.MigrateProgress_Error:
-			return migrateStreamMsg{err: fmt.Errorf("%s", e.Error), done: true}
-		case *anvilv1.MigrateProgress_Done:
-			return migrateStreamMsg{stream: stream, line: styleGood.Render("migrated: new instance " + e.Done)}
-		case *anvilv1.MigrateProgress_MemberDone:
-			mr := e.MemberDone
-			if mr.GetError() != "" {
-				return migrateStreamMsg{stream: stream, line: styleError.Render("  " + mr.GetRole() + ": FAILED: " + mr.GetError())}
-			}
-			return migrateStreamMsg{stream: stream, line: styleGood.Render("  " + mr.GetRole() + ": migrated as " + mr.GetNewId())}
-		case *anvilv1.MigrateProgress_IntentDone:
-			done := e.IntentDone
-			if done.GetRolledBack() {
-				return migrateStreamMsg{stream: stream, line: styleError.Render("rolled back: " + done.GetIntentName() + " failed as a group")}
-			}
-			return migrateStreamMsg{stream: stream, line: styleGood.Render("migrated intent " + done.GetIntentName())}
-		default:
-			return migrateStreamMsg{stream: stream}
+		return lineStep{status: styleGood.Render("  " + mr.GetRole() + ": migrated as " + mr.GetNewId())}
+	case *anvilv1.MigrateProgress_IntentDone:
+		done := e.IntentDone
+		if done.GetRolledBack() {
+			return lineStep{status: styleError.Render("rolled back: " + done.GetIntentName() + " failed as a group")}
 		}
+		return lineStep{status: styleGood.Render("migrated intent " + done.GetIntentName())}
 	}
+	return lineStep{}
 }

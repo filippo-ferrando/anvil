@@ -1,14 +1,11 @@
 package commands
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/spf13/cobra"
 )
 
 func newExecCommand(flags *globalFlags) *cobra.Command {
-	var user, identity string
+	var f sshFlags
 	cmd := &cobra.Command{
 		Use:   "exec <name> -- <command> [args...]",
 		Short: "Run a command inside a VM (over SSH) or container (via docker/podman exec)",
@@ -17,38 +14,9 @@ func newExecCommand(flags *globalFlags) *cobra.Command {
 			"parse those flags as anvil's own.",
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
-			command := args[1:]
-
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			inst, err := resolveInstance(cmd.Context(), c, name)
-			c.Close()
-			if err != nil {
-				return err
-			}
-
-			if inst.GetContainer() != nil {
-				if cmd.Flags().Changed("user") || cmd.Flags().Changed("identity") {
-					fmt.Fprintln(os.Stderr, "anvil: --user/--identity have no effect on a container instance, ignoring")
-				}
-				return runContainerExec(c, inst, command)
-			}
-
-			key, err := resolveIdentity(identity)
-			if err != nil {
-				return err
-			}
-			target, err := c.SSHTarget(inst, user)
-			if err != nil {
-				return err
-			}
-			return runSSH(target, key, command)
+			return runInInstance(cmd, flags, f, args[0], args[1:])
 		},
 	}
-	cmd.Flags().StringVar(&user, "user", "", "SSH user (VM only, defaults to the image's default user)")
-	cmd.Flags().StringVarP(&identity, "identity", "i", "", "path to a private key to use, instead of anvil's own managed key (VM only)")
+	f.add(cmd)
 	return cmd
 }

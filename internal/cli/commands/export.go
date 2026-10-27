@@ -1,12 +1,13 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
-	"io"
 
 	"github.com/spf13/cobra"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newExportCommand(flags *globalFlags) *cobra.Command {
@@ -28,37 +29,28 @@ func newExportCommand(flags *globalFlags) *cobra.Command {
 			if output == "" {
 				return fmt.Errorf("-o/--output is required")
 			}
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-			absOutput, err := c.HostPath(output)
-			if err != nil {
-				return err
-			}
-
-			stream, err := c.Export.Export(cmd.Context(), &anvilv1.ExportRequest{Name: args[0], OutputPath: absOutput, IsIntent: isIntent})
-			if err != nil {
-				return err
-			}
-			for {
-				ev, err := stream.Recv()
-				if err == io.EOF {
-					return nil
-				}
+			return withClient(flags, func(c *client.Client) error {
+				absOutput, err := c.HostPath(output)
 				if err != nil {
 					return err
 				}
-				switch e := ev.GetEvent().(type) {
-				case *anvilv1.ExportProgress_Status:
-					fmt.Fprintln(cmd.OutOrStdout(), e.Status)
-				case *anvilv1.ExportProgress_Error:
-					return fmt.Errorf("%s", e.Error)
-				case *anvilv1.ExportProgress_Done:
-					fmt.Fprintf(cmd.OutOrStdout(), "Exported: %s\n", e.Done)
+
+				stream, err := c.Export.Export(cmd.Context(), &anvilv1.ExportRequest{Name: args[0], OutputPath: absOutput, IsIntent: isIntent})
+				if err != nil {
+					return err
 				}
-			}
+				return streamStatus(cmd.OutOrStdout(), stream.Recv, func(l *liveLine, ev *anvilv1.ExportProgress) (bool, error) {
+					switch e := ev.GetEvent().(type) {
+					case *anvilv1.ExportProgress_Status:
+						l.set(e.Status)
+					case *anvilv1.ExportProgress_Error:
+						return false, errors.New(e.Error)
+					case *anvilv1.ExportProgress_Done:
+						l.printf("Exported: %s\n", e.Done)
+					}
+					return false, nil
+				})
+			})
 		},
 	}
 	cmd.Flags().StringVarP(&output, "output", "o", "", "path to write the bundle to (required)")
@@ -77,45 +69,36 @@ func newImportCommand(flags *globalFlags) *cobra.Command {
 			"`--name` renames the imported intent, or the instance for a standalone bundle.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-			absBundle, err := c.HostPath(args[0])
-			if err != nil {
-				return err
-			}
-
-			stream, err := c.Export.Import(cmd.Context(), &anvilv1.ImportRequest{BundlePath: absBundle, Name: name})
-			if err != nil {
-				return err
-			}
-			for {
-				ev, err := stream.Recv()
-				if err == io.EOF {
-					return nil
-				}
+			return withClient(flags, func(c *client.Client) error {
+				absBundle, err := c.HostPath(args[0])
 				if err != nil {
 					return err
 				}
-				switch e := ev.GetEvent().(type) {
-				case *anvilv1.ImportProgress_Status:
-					fmt.Fprintln(cmd.OutOrStdout(), e.Status)
-				case *anvilv1.ImportProgress_Error:
-					return fmt.Errorf("%s", e.Error)
-				case *anvilv1.ImportProgress_Done:
-					done := e.Done
-					if done.GetIntentName() != "" {
-						fmt.Fprintf(cmd.OutOrStdout(), "Imported: intent %q\n", done.GetIntentName())
-						for _, mr := range done.GetMembers() {
-							fmt.Fprintf(cmd.OutOrStdout(), "  %s: %s\n", mr.GetRole(), mr.GetNewId())
-						}
-					} else if len(done.GetMembers()) > 0 {
-						fmt.Fprintf(cmd.OutOrStdout(), "Imported: %s\n", done.GetMembers()[0].GetNewId())
-					}
+
+				stream, err := c.Export.Import(cmd.Context(), &anvilv1.ImportRequest{BundlePath: absBundle, Name: name})
+				if err != nil {
+					return err
 				}
-			}
+				return streamStatus(cmd.OutOrStdout(), stream.Recv, func(l *liveLine, ev *anvilv1.ImportProgress) (bool, error) {
+					switch e := ev.GetEvent().(type) {
+					case *anvilv1.ImportProgress_Status:
+						l.set(e.Status)
+					case *anvilv1.ImportProgress_Error:
+						return false, errors.New(e.Error)
+					case *anvilv1.ImportProgress_Done:
+						done := e.Done
+						if done.GetIntentName() != "" {
+							l.printf("Imported: intent %q\n", done.GetIntentName())
+							for _, mr := range done.GetMembers() {
+								l.printf("  %s: %s\n", mr.GetRole(), mr.GetNewId())
+							}
+						} else if len(done.GetMembers()) > 0 {
+							l.printf("Imported: %s\n", done.GetMembers()[0].GetNewId())
+						}
+					}
+					return false, nil
+				})
+			})
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "rename the imported intent, or the instance for a standalone bundle")

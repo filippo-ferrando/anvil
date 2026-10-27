@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newLogsCommand(flags *globalFlags) *cobra.Command {
@@ -23,30 +24,26 @@ func newLogsCommand(flags *globalFlags) *cobra.Command {
 			"actual stdout/stderr instead.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			stream, err := c.Logs(cmd.Context(), &anvilv1.LogsRequest{
-				Name:      args[0],
-				Follow:    follow,
-				TailLines: tail,
-			})
-			if err != nil {
-				return err
-			}
-			for {
-				chunk, err := stream.Recv()
-				if err == io.EOF {
-					return nil
-				}
+			return withClient(flags, func(c *client.Client) error {
+				stream, err := c.Logs(cmd.Context(), &anvilv1.LogsRequest{
+					Name:      args[0],
+					Follow:    follow,
+					TailLines: tail,
+				})
 				if err != nil {
 					return err
 				}
-				os.Stdout.Write(chunk.GetData())
-			}
+				for {
+					chunk, err := stream.Recv()
+					if err == io.EOF {
+						return nil
+					}
+					if err != nil {
+						return err
+					}
+					os.Stdout.Write(chunk.GetData())
+				}
+			})
 		},
 	}
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "keep streaming new output as it arrives")

@@ -2,13 +2,14 @@ package tui
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/format"
+	"git.fferrando.cc/rdfilippo/anvil/internal/progress"
 )
 
 type cachedImageItem struct {
@@ -23,7 +24,7 @@ func (i cachedImageItem) Description() string {
 	if n := i.image.GetRefCount(); n > 0 {
 		inUse = fmt.Sprintf("in use by %d instance(s)", n)
 	}
-	desc := fmt.Sprintf("%s  •  %s  •  %s", i.image.GetArch(), humanBytesTUI(i.image.GetSizeBytes()), inUse)
+	desc := fmt.Sprintf("%s  •  %s  •  %s", i.image.GetArch(), progress.Bytes(i.image.GetSizeBytes()), inUse)
 	switch i.image.GetKind() {
 	case "firecracker-raw":
 		desc = "firecracker raw copy  •  " + desc
@@ -56,31 +57,14 @@ func (i containerImageItem) Title() string {
 	if tags := i.image.GetRepoTags(); len(tags) > 0 {
 		return tags[0]
 	}
-	return "<untagged> " + shortImageID(i.image.GetId())
+	return "<untagged> " + format.ShortImageID(i.image.GetId())
 }
 func (i containerImageItem) Description() string {
 	inUse := "not in use"
 	if n := i.image.GetRefCount(); n > 0 {
 		inUse = fmt.Sprintf("in use by %d container(s)", n)
 	}
-	return fmt.Sprintf("%s  •  %s  •  %s", engineLabelTUI(i.image.GetEngine()), humanBytesTUI(i.image.GetSizeBytes()), inUse)
-}
-
-// shortImageID trims a "sha256:" prefix and shortens to 12 hex characters,
-// matching `docker images`' own convention.
-func shortImageID(id string) string {
-	id = strings.TrimPrefix(id, "sha256:")
-	if len(id) > 12 {
-		id = id[:12]
-	}
-	return id
-}
-
-func engineLabelTUI(e anvilv1.ContainerEngine) string {
-	if e == anvilv1.ContainerEngine_CONTAINER_ENGINE_PODMAN {
-		return "podman"
-	}
-	return "docker" // unset defaults to docker
+	return fmt.Sprintf("%s  •  %s  •  %s", format.Engine(i.image.GetEngine()), progress.Bytes(i.image.GetSizeBytes()), inUse)
 }
 
 // imagesMode selects which of the Images screen's two separate windows is showing.

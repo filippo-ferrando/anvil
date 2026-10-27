@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	humanbytes "git.fferrando.cc/rdfilippo/anvil/internal/progress"
 )
 
 // preflight checks t can actually run spec before anything is stopped or
@@ -108,9 +109,9 @@ func preflightContainer(spec *instance.Spec, caps remoteCaps) (fatal, warn []str
 	if !caps.docker {
 		fatal = append(fatal, "docker is not installed there")
 	}
-	if caps.arch != "" && caps.arch != hostArch() {
+	if caps.arch != "" && caps.arch != instance.HostArch() {
 		warn = append(warn, fmt.Sprintf("the target is %s and this host is %s, so %s is re-pulled for a different arch",
-			caps.arch, hostArch(), spec.Container.ImageRef))
+			caps.arch, instance.HostArch(), spec.Container.ImageRef))
 	}
 	if n := dataDirs(spec); n > 0 {
 		warn = append(warn, fmt.Sprintf("%d bind-mounted directory(ies) travel with this container, and land under %s on the target, not their current host paths",
@@ -136,7 +137,7 @@ func (c remoteCaps) spaceShortfall(need int64) []string {
 	} {
 		if fs.freeKB > 0 && fs.freeKB*1024 < need {
 			out = append(out, fmt.Sprintf("%s on the target has %s free, the disk needs at least %s",
-				fs.dir, humanBytes(fs.freeKB*1024), humanBytes(need)))
+				fs.dir, humanbytes.Bytes(fs.freeKB*1024), humanbytes.Bytes(need)))
 		}
 	}
 	return out

@@ -10,6 +10,9 @@ import (
 	"google.golang.org/grpc/status"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/format"
+	"git.fferrando.cc/rdfilippo/anvil/internal/progress"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newStatsCommand(flags *globalFlags) *cobra.Command {
@@ -23,44 +26,40 @@ func newStatsCommand(flags *globalFlags) *cobra.Command {
 			"Each snapshot takes a short live sample (a couple hundred ms) to compute a real rate.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				out := cmd.OutOrStdout()
+				if !watch {
+					reply, err := c.Stats(cmd.Context(), &anvilv1.StatsRequest{Name: args[0]})
+					if err != nil {
+						return err
+					}
+					printStats(out, args[0], reply.GetStats())
+					return nil
+				}
+
+				clearScreen := isTerminalWriter(out)
+				show := func(st *anvilv1.InstanceStats) {
+					if clearScreen {
+						fmt.Fprint(out, "\033[H\033[2J")
+					}
+					printStats(out, args[0], st)
+				}
+				stream, err := c.StreamStats(cmd.Context(), &anvilv1.StreamStatsRequest{Name: args[0], IntervalMs: int32(interval.Milliseconds())})
+				for err == nil {
+					var reply *anvilv1.StatsReply
+					if reply, err = stream.Recv(); err == nil {
+						show(reply.GetStats())
+					}
+				}
+				if status.Code(err) == codes.Canceled {
+					return nil
+				}
+				if err == io.EOF {
+					fmt.Fprintf(out, "%s is not running\n", args[0])
+					return nil
+				}
 				return err
-			}
-			defer c.Close()
-
-			out := cmd.OutOrStdout()
-			if !watch {
-				reply, err := c.Stats(cmd.Context(), &anvilv1.StatsRequest{Name: args[0]})
-				if err != nil {
-					return err
-				}
-				printStats(out, args[0], reply.GetStats())
-				return nil
-			}
-
-			clearScreen := isTerminalWriter(out)
-			show := func(st *anvilv1.InstanceStats) {
-				if clearScreen {
-					fmt.Fprint(out, "\033[H\033[2J")
-				}
-				printStats(out, args[0], st)
-			}
-			stream, err := c.StreamStats(cmd.Context(), &anvilv1.StreamStatsRequest{Name: args[0], IntervalMs: int32(interval.Milliseconds())})
-			for err == nil {
-				var reply *anvilv1.StatsReply
-				if reply, err = stream.Recv(); err == nil {
-					show(reply.GetStats())
-				}
-			}
-			if status.Code(err) == codes.Canceled {
-				return nil
-			}
-			if err == io.EOF {
-				fmt.Fprintf(out, "%s is not running\n", args[0])
-				return nil
-			}
-			return err
+			})
 		},
 	}
 	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "keep refreshing until interrupted, like docker stats")
@@ -71,18 +70,18 @@ func newStatsCommand(flags *globalFlags) *cobra.Command {
 func printStats(w io.Writer, name string, s *anvilv1.InstanceStats) {
 	fmt.Fprintf(w, "Name:\t%s\n", name)
 	fmt.Fprintf(w, "Address:\t%s\n", orDash(s.GetAddress()))
-	fmt.Fprintf(w, "Uptime:\t%s\n", humanDuration(s.GetUptimeSeconds()))
+	fmt.Fprintf(w, "Uptime:\t%s\n", format.Uptime(s.GetUptimeSeconds(), ""))
 	fmt.Fprintf(w, "CPU:\t%.1f%%\n", s.GetCpuPercent())
-	fmt.Fprintf(w, "Memory:\t%s / %s\n", humanBytes(s.GetMemUsedBytes()), humanBytes(s.GetMemLimitBytes()))
+	fmt.Fprintf(w, "Memory:\t%s / %s\n", progress.Bytes(s.GetMemUsedBytes()), progress.Bytes(s.GetMemLimitBytes()))
 	if s.GetDiskTotalBytes() > 0 {
-		fmt.Fprintf(w, "Disk:\t%s / %s\n", humanBytes(s.GetDiskUsedBytes()), humanBytes(s.GetDiskTotalBytes()))
+		fmt.Fprintf(w, "Disk:\t%s / %s\n", progress.Bytes(s.GetDiskUsedBytes()), progress.Bytes(s.GetDiskTotalBytes()))
 	} else {
 		fmt.Fprintf(w, "Disk:\tread %s/s, write %s/s\n",
-			humanBytes(int64(s.GetDiskReadBytesPerSec())), humanBytes(int64(s.GetDiskWriteBytesPerSec())))
+			progress.Bytes(int64(s.GetDiskReadBytesPerSec())), progress.Bytes(int64(s.GetDiskWriteBytesPerSec())))
 	}
 	if s.GetNetAvailable() {
 		fmt.Fprintf(w, "Network:\t↓ %s/s  ↑ %s/s\n",
-			humanBytes(int64(s.GetNetRxBytesPerSec())), humanBytes(int64(s.GetNetTxBytesPerSec())))
+			progress.Bytes(int64(s.GetNetRxBytesPerSec())), progress.Bytes(int64(s.GetNetTxBytesPerSec())))
 	} else {
 		fmt.Fprintln(w, "Network:\tnot available")
 	}
@@ -93,26 +92,4 @@ func orDash(s string) string {
 		return "-"
 	}
 	return s
-}
-
-// humanDuration renders a second count as a compact "1d2h3m"-shaped uptime.
-func humanDuration(seconds int64) string {
-	if seconds <= 0 {
-		return "-"
-	}
-	d := time.Duration(seconds) * time.Second
-	days := int(d.Hours()) / 24
-	hours := int(d.Hours()) % 24
-	minutes := int(d.Minutes()) % 60
-	secs := int(d.Seconds()) % 60
-	switch {
-	case days > 0:
-		return fmt.Sprintf("%dd%dh%dm", days, hours, minutes)
-	case hours > 0:
-		return fmt.Sprintf("%dh%dm", hours, minutes)
-	case minutes > 0:
-		return fmt.Sprintf("%dm%ds", minutes, secs)
-	default:
-		return fmt.Sprintf("%ds", secs)
-	}
 }

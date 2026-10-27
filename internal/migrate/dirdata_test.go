@@ -111,7 +111,7 @@ func TestPreflightCountsBindMounts(t *testing.T) {
 		t.Errorf("bindMountPaths = %d, want 2", got)
 	}
 
-	caps := remoteCaps{anvil: "/usr/bin/anvil", anvild: "/usr/bin/anvild", arch: hostArch(), docker: true, tar: true}
+	caps := remoteCaps{anvil: "/usr/bin/anvil", anvild: "/usr/bin/anvild", arch: instance.HostArch(), docker: true, tar: true}
 	fatal, warn := preflightContainer(spec, caps)
 	if len(fatal) != 0 {
 		t.Fatalf("expected no failures, got %v", fatal)
@@ -130,7 +130,7 @@ func TestPreflightNeedsTarForBindMounts(t *testing.T) {
 			{HostPath: dir, ContainerPath: "/data"},
 		}},
 	}
-	cannedProbe(t, "arch="+hostArch()+"\nanvil=/usr/bin/anvil\nanvild=/usr/bin/anvild\ndocker\n")
+	cannedProbe(t, "arch="+instance.HostArch()+"\nanvil=/usr/bin/anvil\nanvild=/usr/bin/anvild\ndocker\n")
 	_, _, err := (&Manager{}).preflight(context.Background(), target{User: "u", Host: "h"}, spec, "api")
 	if err == nil || !strings.Contains(err.Error(), "tar is not installed") {
 		t.Errorf("expected a missing tar failure, got %v", err)

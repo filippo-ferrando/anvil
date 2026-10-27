@@ -1,8 +1,8 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"text/tabwriter"
@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newCloudInitCommand(flags *globalFlags) *cobra.Command {
@@ -42,26 +43,22 @@ func newCloudInitListCommand(flags *globalFlags) *cobra.Command {
 			if err := checkOutput(output); err != nil {
 				return err
 			}
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			reply, err := c.CloudInit.List(cmd.Context(), &anvilv1.CloudInitListRequest{})
-			if err != nil {
-				return err
-			}
-			if output == "json" {
-				return printJSON(cmd.OutOrStdout(), reply)
-			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tMODIFIED")
-			for _, cfg := range reply.GetConfigs() {
-				modified := time.Unix(cfg.GetModifiedAtUnix(), 0).Format(time.RFC3339)
-				fmt.Fprintf(tw, "%s\t%s\n", cfg.GetName(), modified)
-			}
-			return tw.Flush()
+			return withClient(flags, func(c *client.Client) error {
+				reply, err := c.CloudInit.List(cmd.Context(), &anvilv1.CloudInitListRequest{})
+				if err != nil {
+					return err
+				}
+				if output == "json" {
+					return printJSON(cmd.OutOrStdout(), reply)
+				}
+				tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "NAME\tMODIFIED")
+				for _, cfg := range reply.GetConfigs() {
+					modified := time.Unix(cfg.GetModifiedAtUnix(), 0).Format(time.RFC3339)
+					fmt.Fprintf(tw, "%s\t%s\n", cfg.GetName(), modified)
+				}
+				return tw.Flush()
+			})
 		},
 	}
 	addOutputFlag(cmd, &output)
@@ -85,13 +82,10 @@ func newCloudInitNewCommand(flags *globalFlags) *cobra.Command {
 				content = data
 			}
 
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				_, err := c.CloudInit.Save(cmd.Context(), &anvilv1.CloudInitSaveRequest{Name: name, Content: content})
 				return err
-			}
-			defer c.Close()
-			_, err = c.CloudInit.Save(cmd.Context(), &anvilv1.CloudInitSaveRequest{Name: name, Content: content})
-			return err
+			})
 		},
 	}
 	cmd.Flags().StringVar(&fromFile, "from", "", `import content from a file, or "-" for stdin (defaults to an empty cloud-config)`)
@@ -106,29 +100,25 @@ func newCloudInitEditCommand(flags *globalFlags) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				current := "#cloud-config\n"
+				existing, err := c.CloudInit.Get(cmd.Context(), &anvilv1.CloudInitGetRequest{Name: name})
+				switch {
+				case err == nil:
+					current = existing.GetContent()
+				case status.Code(err) == codes.NotFound:
+				default:
+					return fmt.Errorf("cloud-init: loading %q before edit: %w", name, err)
+				}
+
+				edited, err := editInEditor(current)
+				if err != nil {
+					return err
+				}
+
+				_, err = c.CloudInit.Save(cmd.Context(), &anvilv1.CloudInitSaveRequest{Name: name, Content: edited})
 				return err
-			}
-			defer c.Close()
-
-			current := "#cloud-config\n"
-			existing, err := c.CloudInit.Get(cmd.Context(), &anvilv1.CloudInitGetRequest{Name: name})
-			switch {
-			case err == nil:
-				current = existing.GetContent()
-			case status.Code(err) == codes.NotFound:
-			default:
-				return fmt.Errorf("cloud-init: loading %q before edit: %w", name, err)
-			}
-
-			edited, err := editInEditor(current)
-			if err != nil {
-				return err
-			}
-
-			_, err = c.CloudInit.Save(cmd.Context(), &anvilv1.CloudInitSaveRequest{Name: name, Content: edited})
-			return err
+			})
 		},
 	}
 }
@@ -139,17 +129,14 @@ func newCloudInitShowCommand(flags *globalFlags) *cobra.Command {
 		Short: "Print a saved cloud-init config's content",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-			reply, err := c.CloudInit.Get(cmd.Context(), &anvilv1.CloudInitGetRequest{Name: args[0]})
-			if err != nil {
-				return err
-			}
-			fmt.Fprint(cmd.OutOrStdout(), reply.GetContent())
-			return nil
+			return withClient(flags, func(c *client.Client) error {
+				reply, err := c.CloudInit.Get(cmd.Context(), &anvilv1.CloudInitGetRequest{Name: args[0]})
+				if err != nil {
+					return err
+				}
+				fmt.Fprint(cmd.OutOrStdout(), reply.GetContent())
+				return nil
+			})
 		},
 	}
 }
@@ -160,13 +147,10 @@ func newCloudInitRenameCommand(flags *globalFlags) *cobra.Command {
 		Short: "Rename a saved cloud-init config",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				_, err := c.CloudInit.Rename(cmd.Context(), &anvilv1.CloudInitRenameRequest{OldName: args[0], NewName: args[1]})
 				return err
-			}
-			defer c.Close()
-			_, err = c.CloudInit.Rename(cmd.Context(), &anvilv1.CloudInitRenameRequest{OldName: args[0], NewName: args[1]})
-			return err
+			})
 		},
 	}
 }
@@ -177,13 +161,10 @@ func newCloudInitDeleteCommand(flags *globalFlags) *cobra.Command {
 		Short: "Delete a saved cloud-init config",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				_, err := c.CloudInit.Delete(cmd.Context(), &anvilv1.CloudInitDeleteRequest{Name: args[0]})
 				return err
-			}
-			defer c.Close()
-			_, err = c.CloudInit.Delete(cmd.Context(), &anvilv1.CloudInitDeleteRequest{Name: args[0]})
-			return err
+			})
 		},
 	}
 }
@@ -202,45 +183,34 @@ func newCloudInitImportRepoCommand(flags *globalFlags) *cobra.Command {
 			"manifest shape and how to host a repo of your own.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			stream, err := c.CloudInit.ImportRepo(cmd.Context(), &anvilv1.CloudInitImportRepoRequest{
-				ManifestUrl: args[0],
-				Force:       force,
-			})
-			if err != nil {
-				return err
-			}
-			out := cmd.OutOrStdout()
-			for {
-				ev, err := stream.Recv()
-				if err == io.EOF {
-					return nil
-				}
+			return withClient(flags, func(c *client.Client) error {
+				stream, err := c.CloudInit.ImportRepo(cmd.Context(), &anvilv1.CloudInitImportRepoRequest{
+					ManifestUrl: args[0],
+					Force:       force,
+				})
 				if err != nil {
 					return err
 				}
-				switch e := ev.GetEvent().(type) {
-				case *anvilv1.CloudInitImportRepoProgress_Status:
-					fmt.Fprintln(out, e.Status)
-				case *anvilv1.CloudInitImportRepoProgress_Error:
-					return fmt.Errorf("%s", e.Error)
-				case *anvilv1.CloudInitImportRepoProgress_Imported:
-					r := e.Imported
-					switch {
-					case r.GetError() != "":
-						fmt.Fprintf(out, "%s: FAILED: %s\n", r.GetName(), r.GetError())
-					case r.GetSkipped():
-						fmt.Fprintf(out, "%s: skipped (already exists, use --force to overwrite)\n", r.GetName())
-					default:
-						fmt.Fprintf(out, "%s: imported\n", r.GetName())
+				return streamStatus(cmd.OutOrStdout(), stream.Recv, func(l *liveLine, ev *anvilv1.CloudInitImportRepoProgress) (bool, error) {
+					switch e := ev.GetEvent().(type) {
+					case *anvilv1.CloudInitImportRepoProgress_Status:
+						l.set(e.Status)
+					case *anvilv1.CloudInitImportRepoProgress_Error:
+						return false, errors.New(e.Error)
+					case *anvilv1.CloudInitImportRepoProgress_Imported:
+						r := e.Imported
+						switch {
+						case r.GetError() != "":
+							l.printf("%s: FAILED: %s\n", r.GetName(), r.GetError())
+						case r.GetSkipped():
+							l.printf("%s: skipped (already exists, use --force to overwrite)\n", r.GetName())
+						default:
+							l.printf("%s: imported\n", r.GetName())
+						}
 					}
-				}
-			}
+					return false, nil
+				})
+			})
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite a saved config that already has this name")

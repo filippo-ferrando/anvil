@@ -34,13 +34,10 @@ func newPortAddCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				_, err = c.AddPort(cmd.Context(), &anvilv1.AddPortRequest{Name: args[0], Port: port})
 				return err
-			}
-			defer c.Close()
-			_, err = c.AddPort(cmd.Context(), &anvilv1.AddPortRequest{Name: args[0], Port: port})
-			return err
+			})
 		},
 	}
 }
@@ -55,15 +52,12 @@ func newPortRemoveCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				_, err = c.RemovePort(cmd.Context(), &anvilv1.RemovePortRequest{
+					Name: args[0], HostPort: int32(hostPort), Protocol: protocol,
+				})
 				return err
-			}
-			defer c.Close()
-			_, err = c.RemovePort(cmd.Context(), &anvilv1.RemovePortRequest{
-				Name: args[0], HostPort: int32(hostPort), Protocol: protocol,
 			})
-			return err
 		},
 	}
 }
@@ -78,42 +72,38 @@ func newPortListCommand(flags *globalFlags) *cobra.Command {
 			if err := checkOutput(output); err != nil {
 				return err
 			}
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			reply, err := c.Info(cmd.Context(), &anvilv1.InfoRequest{Names: []string{args[0]}})
-			if err != nil {
-				return err
-			}
-			insts := reply.GetInstances()
-			if len(insts) == 0 {
-				return fmt.Errorf("no instance named %q", args[0])
-			}
-
-			inst := insts[0]
-			ports := inst.GetVm().GetPorts()
-			if inst.GetKind() == anvilv1.Kind_KIND_CONTAINER {
-				ports = inst.GetContainer().GetPorts()
-			}
-			if output == "json" {
-				// No list reply exists for ports, so print the instance's own reply.
-				return printJSON(cmd.OutOrStdout(), reply)
-			}
-			if len(ports) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "no port forwards")
-				return nil
-			}
-			for _, p := range ports {
-				proto := p.GetProtocol()
-				if proto == "" {
-					proto = "tcp"
+			return withClient(flags, func(c *client.Client) error {
+				reply, err := c.Info(cmd.Context(), &anvilv1.InfoRequest{Names: []string{args[0]}})
+				if err != nil {
+					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%d:%d/%s\n", p.GetHostPort(), p.GetGuestPort(), proto)
-			}
-			return nil
+				insts := reply.GetInstances()
+				if len(insts) == 0 {
+					return fmt.Errorf("no instance named %q", args[0])
+				}
+
+				inst := insts[0]
+				ports := inst.GetVm().GetPorts()
+				if inst.GetKind() == anvilv1.Kind_KIND_CONTAINER {
+					ports = inst.GetContainer().GetPorts()
+				}
+				if output == "json" {
+					// No list reply exists for ports, so print the instance's own reply.
+					return printJSON(cmd.OutOrStdout(), reply)
+				}
+				if len(ports) == 0 {
+					fmt.Fprintln(cmd.OutOrStdout(), "no port forwards")
+					return nil
+				}
+				for _, p := range ports {
+					proto := p.GetProtocol()
+					if proto == "" {
+						proto = "tcp"
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "%d:%d/%s\n", p.GetHostPort(), p.GetGuestPort(), proto)
+				}
+				return nil
+			})
 		},
 	}
 	addOutputFlag(cmd, &output)

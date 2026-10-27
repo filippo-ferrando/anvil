@@ -3,6 +3,7 @@ package instance
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -98,5 +99,20 @@ func TestReconcileAdoptsInstanceRecordedStopped(t *testing.T) {
 	}
 	if s, _ := reg.GetByName("web"); s.State != StateRunning {
 		t.Errorf("state = %s, want running: the process outlived a crash before its record was saved", s.State)
+	}
+}
+
+func TestCapabilityMissing(t *testing.T) {
+	reg := &memRegistry{}
+	_ = reg.PutInstance(&Spec{ID: "01", Name: "web", Kind: KindVM, VM: &VMSpec{}})
+	m := NewManager(reg, map[Kind]Backend{KindVM: plainBackend{}})
+	if _, err := m.ListSnapshots(context.Background(), "web"); err == nil || !strings.Contains(err.Error(), "don't support snapshots") {
+		t.Errorf("snapshots on a plain backend: %v", err)
+	}
+	if err := m.Mount(context.Background(), "web", "/a", "/b", false); err == nil || !strings.Contains(err.Error(), "don't support mounts") {
+		t.Errorf("mount on a plain backend: %v", err)
+	}
+	if _, err := m.Stats(context.Background(), "nope"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("missing instance: %v", err)
 	}
 }

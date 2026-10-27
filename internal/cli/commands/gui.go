@@ -86,23 +86,23 @@ func prepareGUI(ctx context.Context, c *client.Client, name string, x11 bool, pr
 	if err != nil {
 		return nil, err
 	}
-	for {
-		ev, err := stream.Recv()
-		if err == io.EOF {
-			return nil, fmt.Errorf("anvild ended the GUI setup of %q without a result", name)
-		}
-		if err != nil {
-			return nil, err
-		}
+	var session *anvilv1.GUISession
+	err = streamStatus(progress, stream.Recv, func(l *liveLine, ev *anvilv1.PrepareGUIProgress) (bool, error) {
 		switch e := ev.GetEvent().(type) {
 		case *anvilv1.PrepareGUIProgress_Status:
-			fmt.Fprintln(progress, e.Status)
+			l.set(e.Status)
 		case *anvilv1.PrepareGUIProgress_Error:
-			return nil, errors.New(e.Error)
+			return false, errors.New(e.Error)
 		case *anvilv1.PrepareGUIProgress_Session:
-			return e.Session, nil
+			session = e.Session
+			return true, nil
 		}
+		return false, nil
+	})
+	if err == nil && session == nil {
+		err = fmt.Errorf("anvild ended the GUI setup of %q without a result", name)
 	}
+	return session, err
 }
 
 // runVMGUI runs command in the VM under waypipe, over the same SSH path as `anvil exec`.

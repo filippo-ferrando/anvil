@@ -10,6 +10,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/format"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newWatchCommand(flags *globalFlags) *cobra.Command {
@@ -21,27 +23,23 @@ func newWatchCommand(flags *globalFlags) *cobra.Command {
 			"until interrupted. --existing first prints one line per current instance.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			stream, err := c.Watch(cmd.Context(), &anvilv1.WatchRequest{IncludeExisting: existing})
-			if err != nil {
-				return err
-			}
-			out := cmd.OutOrStdout()
-			for {
-				ev, err := stream.Recv()
-				if err == io.EOF || status.Code(err) == codes.Canceled {
-					return nil
-				}
+			return withClient(flags, func(c *client.Client) error {
+				stream, err := c.Watch(cmd.Context(), &anvilv1.WatchRequest{IncludeExisting: existing})
 				if err != nil {
 					return err
 				}
-				fmt.Fprintln(out, formatWatchEvent(time.Now(), ev))
-			}
+				out := cmd.OutOrStdout()
+				for {
+					ev, err := stream.Recv()
+					if err == io.EOF || status.Code(err) == codes.Canceled {
+						return nil
+					}
+					if err != nil {
+						return err
+					}
+					fmt.Fprintln(out, formatWatchEvent(time.Now(), ev))
+				}
+			})
 		},
 	}
 	cmd.Flags().BoolVar(&existing, "existing", false, "print every current instance first")
@@ -55,5 +53,5 @@ func formatWatchEvent(at time.Time, ev *anvilv1.WatchEvent) string {
 	if ev.GetType() == anvilv1.WatchEventType_WATCH_EVENT_TYPE_DELETED {
 		what = "Removed"
 	}
-	return fmt.Sprintf("%s  %-20s  %-9s  %s", at.Format(time.TimeOnly), inst.GetName(), kindLabel(inst.GetKind()), what)
+	return fmt.Sprintf("%s  %-20s  %-9s  %s", at.Format(time.TimeOnly), inst.GetName(), format.Kind(inst.GetKind()), what)
 }

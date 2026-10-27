@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/format"
 )
 
 type snapshotItem struct{ snap *anvilv1.SnapshotInfo }
@@ -319,7 +320,7 @@ func (m snapshotsModel) View() string {
 	}
 
 	if inst := m.selectedInstance(); inst != nil {
-		sched := scheduleText(inst.GetVm().GetSnapshotSchedule())
+		sched := format.Schedule(inst.GetVm().GetSnapshotSchedule(), "01-02 15:04")
 		if sched == "" {
 			sched = "no schedule (S to set one)"
 		}

@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"syscall"
+
+	"git.fferrando.cc/rdfilippo/anvil/internal/hostpath"
 )
 
 // zstdBin locates the zstd CLI, used to compress/decompress bundles. This is consistent with the
@@ -103,8 +105,8 @@ func extractTarZst(ctx context.Context, bundlePath, destDir string) error {
 	return waitErr
 }
 
-// extractAll writes every entry in tr under destDir, cleaning a leading "/" from entry names so a
-// maliciously crafted "../" path can't escape destDir.
+// extractAll writes every entry in tr under destDir; hostpath.Under keeps a crafted
+// "../" name from escaping it.
 func extractAll(tr *tar.Reader, destDir string) error {
 	for {
 		hdr, err := tr.Next()
@@ -115,7 +117,10 @@ func extractAll(tr *tar.Reader, destDir string) error {
 			return fmt.Errorf("export: reading bundle: %w", err)
 		}
 
-		target := filepath.Join(destDir, filepath.Clean("/"+hdr.Name))
+		target, err := hostpath.Under(destDir, hdr.Name)
+		if err != nil {
+			return err
+		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, 0o750); err != nil {

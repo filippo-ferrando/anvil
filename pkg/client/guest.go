@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -108,19 +107,11 @@ func SSHArgs(target SSHTarget, portFlag, identity string) ([]string, error) {
 // runSSHWithStdin runs command on target with stdin from an in-memory reader,
 // putting ssh's stderr into the returned error.
 func runSSHWithStdin(target SSHTarget, identity string, command []string, stdin io.Reader) error {
-	sshBin, err := exec.LookPath("ssh")
-	if err != nil {
-		return fmt.Errorf("ssh: not found on PATH")
-	}
-	args, err := SSHArgs(target, "-p", identity)
+	cmd, err := sshCmd(target, identity, command)
 	if err != nil {
 		return err
 	}
-	args = append(args, fmt.Sprintf("%s@%s", target.User, target.Host))
-	args = append(args, command...)
-
 	var stderr bytes.Buffer
-	cmd := exec.Command(sshBin, args...)
 	cmd.Stdin = stdin
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {

@@ -1,13 +1,14 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
-	"io"
 	"os"
 
 	"github.com/spf13/cobra"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newMigrateCommand(flags *globalFlags) *cobra.Command {
@@ -34,73 +35,64 @@ func newMigrateCommand(flags *globalFlags) *cobra.Command {
 			if to == "" {
 				return fmt.Errorf("--to is required")
 			}
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			// Authorize the target's guest-access key on the source VM before migrating,
-			// since a migrated disk skips cloud-init on relaunch.
-			if !dryRun {
-				warnings, err := c.InjectGuestKeys(cmd.Context(), args[0], to)
-				for _, w := range warnings {
-					fmt.Fprintln(os.Stderr, "anvil: "+w)
-				}
-				if err != nil {
-					return fmt.Errorf("preparing guest SSH access on the target: %w", err)
-				}
-			}
-
-			stream, err := c.Migrate.Migrate(cmd.Context(), &anvilv1.MigrateRequest{
-				Name:       args[0],
-				To:         to,
-				Copy:       copyMode,
-				DestName:   destName,
-				DryRun:     dryRun,
-				BestEffort: bestEffort,
-			})
-			if err != nil {
-				return err
-			}
-
-			failed := false
-			for {
-				ev, err := stream.Recv()
-				if err == io.EOF {
-					if failed {
-						return fmt.Errorf("migration finished with failures, see above")
+			return withClient(flags, func(c *client.Client) error {
+				// Authorize the target's guest-access key on the source VM before migrating,
+				// since a migrated disk skips cloud-init on relaunch.
+				if !dryRun {
+					warnings, err := c.InjectGuestKeys(cmd.Context(), args[0], to)
+					for _, w := range warnings {
+						fmt.Fprintln(os.Stderr, "anvil: "+w)
 					}
-					return nil
+					if err != nil {
+						return fmt.Errorf("preparing guest SSH access on the target: %w", err)
+					}
 				}
+
+				stream, err := c.Migrate.Migrate(cmd.Context(), &anvilv1.MigrateRequest{
+					Name:       args[0],
+					To:         to,
+					Copy:       copyMode,
+					DestName:   destName,
+					DryRun:     dryRun,
+					BestEffort: bestEffort,
+				})
 				if err != nil {
 					return err
 				}
-				switch e := ev.GetEvent().(type) {
-				case *anvilv1.MigrateProgress_Status:
-					fmt.Fprintln(cmd.OutOrStdout(), e.Status)
-				case *anvilv1.MigrateProgress_Error:
-					return fmt.Errorf("%s", e.Error)
-				case *anvilv1.MigrateProgress_Done:
-					fmt.Fprintf(cmd.OutOrStdout(), "Migrated: new instance %s on %s\n", e.Done, to)
-				case *anvilv1.MigrateProgress_MemberDone:
-					mr := e.MemberDone
-					if mr.GetError() != "" {
-						failed = true
-						fmt.Fprintf(cmd.OutOrStdout(), "  %s: FAILED: %s\n", mr.GetRole(), mr.GetError())
-					} else {
-						fmt.Fprintf(cmd.OutOrStdout(), "  %s: migrated as %s\n", mr.GetRole(), mr.GetNewId())
+
+				failed := false
+				err = streamStatus(cmd.OutOrStdout(), stream.Recv, func(l *liveLine, ev *anvilv1.MigrateProgress) (bool, error) {
+					switch e := ev.GetEvent().(type) {
+					case *anvilv1.MigrateProgress_Status:
+						l.set(e.Status)
+					case *anvilv1.MigrateProgress_Error:
+						return false, errors.New(e.Error)
+					case *anvilv1.MigrateProgress_Done:
+						l.printf("Migrated: new instance %s on %s\n", e.Done, to)
+					case *anvilv1.MigrateProgress_MemberDone:
+						mr := e.MemberDone
+						if mr.GetError() != "" {
+							failed = true
+							l.printf("  %s: FAILED: %s\n", mr.GetRole(), mr.GetError())
+						} else {
+							l.printf("  %s: migrated as %s\n", mr.GetRole(), mr.GetNewId())
+						}
+					case *anvilv1.MigrateProgress_IntentDone:
+						done := e.IntentDone
+						if done.GetRolledBack() {
+							failed = true
+							l.printf("Rolled back: %q failed to migrate as a group, target cleaned up, source untouched\n", done.GetIntentName())
+						} else {
+							l.printf("Migrated: intent %q to %s\n", done.GetIntentName(), to)
+						}
 					}
-				case *anvilv1.MigrateProgress_IntentDone:
-					done := e.IntentDone
-					if done.GetRolledBack() {
-						failed = true
-						fmt.Fprintf(cmd.OutOrStdout(), "Rolled back: %q failed to migrate as a group, target cleaned up, source untouched\n", done.GetIntentName())
-					} else {
-						fmt.Fprintf(cmd.OutOrStdout(), "Migrated: intent %q to %s\n", done.GetIntentName(), to)
-					}
+					return false, nil
+				})
+				if err == nil && failed {
+					return fmt.Errorf("migration finished with failures, see above")
 				}
-			}
+				return err
+			})
 		},
 	}
 	cmd.Flags().StringVar(&to, "to", "", "known host alias, or a literal user@host[:port] (required)")

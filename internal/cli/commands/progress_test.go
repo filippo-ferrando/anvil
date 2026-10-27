@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -74,5 +75,62 @@ func TestLiveLineFitsTheTerminal(t *testing.T) {
 	l := &liveLine{width: 10}
 	if got := l.fit("waiting for cloud-init: running"); len([]rune(got)) != 9 || !strings.HasSuffix(got, "…") {
 		t.Errorf("fit = %q", got)
+	}
+}
+
+func TestStreamStatusStopsAndFails(t *testing.T) {
+	var out bytes.Buffer
+	evs := []string{"a", "b", "stop", "c"}
+	recv := func() (string, error) {
+		if len(evs) == 0 {
+			return "", io.EOF
+		}
+		ev := evs[0]
+		evs = evs[1:]
+		return ev, nil
+	}
+	err := streamStatus(&out, recv, func(l *liveLine, ev string) (bool, error) {
+		if ev == "stop" {
+			return true, nil
+		}
+		l.set(ev)
+		return false, nil
+	})
+	if err != nil || out.String() != "a\nb\n" {
+		t.Fatalf("stop: err=%v out=%q", err, out.String())
+	}
+	one := func() (string, error) { return "x", nil }
+	err = streamStatus(&out, one, func(*liveLine, string) (bool, error) { return false, errors.New("boom") })
+	if err == nil || err.Error() != "boom" {
+		t.Fatalf("want the handler's error, got %v", err)
+	}
+}
+
+type fakeApplyStream struct {
+	events []*anvilv1.IntentApplyProgress
+}
+
+func (f *fakeApplyStream) Recv() (*anvilv1.IntentApplyProgress, error) {
+	if len(f.events) == 0 {
+		return nil, io.EOF
+	}
+	ev := f.events[0]
+	f.events = f.events[1:]
+	return ev, nil
+}
+
+func TestStreamApplyPlainOutput(t *testing.T) {
+	var out bytes.Buffer
+	stream := &fakeApplyStream{events: []*anvilv1.IntentApplyProgress{
+		{Event: &anvilv1.IntentApplyProgress_Plan{Plan: &anvilv1.IntentApplyPlan{IntentName: "web"}}},
+		{Event: &anvilv1.IntentApplyProgress_Status{Status: "db: launching"}},
+		{Event: &anvilv1.IntentApplyProgress_Intent{Intent: &anvilv1.Intent{Name: "web"}}},
+	}}
+	if err := streamApply(&out, stream); err != nil {
+		t.Fatal(err)
+	}
+	want := "Plan for intent \"web\":\ndb: launching\nApplied intent \"web\" (0 members)\n"
+	if out.String() != want {
+		t.Errorf("output = %q, want %q", out.String(), want)
 	}
 }

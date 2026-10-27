@@ -4,6 +4,7 @@ import (
 	"github.com/spf13/cobra"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newStartCommand(flags *globalFlags) *cobra.Command {
@@ -12,13 +13,10 @@ func newStartCommand(flags *globalFlags) *cobra.Command {
 		Short: "Start one or more stopped instances",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				_, err := c.Start(cmd.Context(), &anvilv1.StartRequest{Names: args})
 				return err
-			}
-			defer c.Close()
-			_, err = c.Start(cmd.Context(), &anvilv1.StartRequest{Names: args})
-			return err
+			})
 		},
 	}
 }
@@ -33,17 +31,14 @@ func newStopCommand(flags *globalFlags) *cobra.Command {
 		Short: "Stop one or more running instances",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				_, err := c.Stop(cmd.Context(), &anvilv1.StopRequest{
+					Names:          args,
+					Force:          force,
+					TimeoutSeconds: timeout,
+				})
 				return err
-			}
-			defer c.Close()
-			_, err = c.Stop(cmd.Context(), &anvilv1.StopRequest{
-				Names:          args,
-				Force:          force,
-				TimeoutSeconds: timeout,
 			})
-			return err
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "skip graceful shutdown")

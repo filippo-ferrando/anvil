@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -113,34 +114,14 @@ type hostTestedMsg struct {
 	err           error
 }
 
-// launchStreamMsg carries one event off the Launch streaming RPC, plus
-// the stream itself to chain the next receive. done marks the terminal event.
-type launchStreamMsg struct {
-	stream   anvilv1.InstanceService_LaunchClient
-	status   string
-	instance *anvilv1.Instance
-	err      error
-	done     bool
-}
+// launchStreamMsg carries one event off the Launch streaming RPC.
+type launchStreamMsg struct{ instanceStep }
 
-// forkStreamMsg carries one event off the Fork streaming RPC, plus the
-// stream itself to chain the next receive. done marks the terminal event.
-type forkStreamMsg struct {
-	stream   anvilv1.InstanceService_ForkClient
-	status   string
-	instance *anvilv1.Instance
-	err      error
-	done     bool
-}
+// forkStreamMsg carries one event off the Fork streaming RPC.
+type forkStreamMsg struct{ instanceStep }
 
-// waitStreamMsg carries one event off the WaitReady streaming RPC, like forkStreamMsg.
-type waitStreamMsg struct {
-	stream   anvilv1.InstanceService_WaitReadyClient
-	status   string
-	instance *anvilv1.Instance
-	err      error
-	done     bool
-}
+// waitStreamMsg carries one event off the WaitReady streaming RPC.
+type waitStreamMsg struct{ instanceStep }
 
 // imageChecksumMsg is the reply to a checksum request for one cached VM image.
 type imageChecksumMsg struct {
@@ -149,12 +130,8 @@ type imageChecksumMsg struct {
 	err      error
 }
 
-type migrateStreamMsg struct {
-	stream anvilv1.MigrateService_MigrateClient
-	line   string
-	err    error
-	done   bool
-}
+// migrateStreamMsg carries one event off a MigrateService.Migrate stream.
+type migrateStreamMsg struct{ lineStep }
 
 // snapshotsLoadedMsg carries one instance's snapshot list back from a
 // SnapshotService.List call. instanceName lets the handler ignore a stale reply after the user selects a different instance.
@@ -166,35 +143,17 @@ type snapshotsLoadedMsg struct {
 
 // exportStreamMsg carries one event off an ExportService.Export stream,
 // shared by the Instances and Intents screens, whichever started it.
-type exportStreamMsg struct {
-	stream anvilv1.ExportService_ExportClient
-	line   string
-	err    error
-	done   bool
-}
+type exportStreamMsg struct{ lineStep }
 
 // importStreamMsg carries one event off an ExportService.Import stream.
-type importStreamMsg struct {
-	stream anvilv1.ExportService_ImportClient
-	line   string
-	err    error
-	done   bool
-}
+type importStreamMsg struct{ lineStep }
 
-type logsStreamMsg struct {
-	stream anvilv1.InstanceService_LogsClient
-	data   []byte
-	err    error
-	done   bool
-}
+// logsStreamMsg carries one chunk off an InstanceService.Logs stream.
+type logsStreamMsg struct{ streamStep[[]byte] }
 
 // cloudInitImportStreamMsg carries one event off a CloudInitService.ImportRepo stream.
 type cloudInitImportStreamMsg struct {
-	stream anvilv1.CloudInitService_ImportRepoClient
-	status string
-	result *anvilv1.CloudInitImportResult
-	err    error
-	done   bool
+	streamStep[*anvilv1.CloudInitImportResult]
 }
 
 const (
@@ -391,35 +350,13 @@ func startExportStream(c *client.Client, name, outputPath string, isIntent bool)
 	return func() tea.Msg {
 		absOutput, err := c.HostPath(outputPath)
 		if err != nil {
-			return exportStreamMsg{err: err, done: true}
+			return exportStreamMsg{failed[struct{}](err)}
 		}
 		stream, err := c.Export.Export(context.Background(), &anvilv1.ExportRequest{Name: name, OutputPath: absOutput, IsIntent: isIntent})
 		if err != nil {
-			return exportStreamMsg{err: err, done: true}
+			return exportStreamMsg{failed[struct{}](err)}
 		}
-		return receiveExportEvent(stream)()
-	}
-}
-
-func receiveExportEvent(stream anvilv1.ExportService_ExportClient) tea.Cmd {
-	return func() tea.Msg {
-		ev, err := stream.Recv()
-		if err != nil {
-			if err == io.EOF {
-				return exportStreamMsg{done: true}
-			}
-			return exportStreamMsg{err: err, done: true}
-		}
-		switch e := ev.GetEvent().(type) {
-		case *anvilv1.ExportProgress_Status:
-			return exportStreamMsg{stream: stream, line: e.Status}
-		case *anvilv1.ExportProgress_Error:
-			return exportStreamMsg{err: fmt.Errorf("%s", e.Error), done: true}
-		case *anvilv1.ExportProgress_Done:
-			return exportStreamMsg{stream: stream, line: styleGood.Render("exported: " + e.Done)}
-		default:
-			return exportStreamMsg{stream: stream}
-		}
+		return recvExport(stream)()
 	}
 }
 
@@ -429,45 +366,13 @@ func startImportStream(c *client.Client, bundlePath, renameTo string) tea.Cmd {
 	return func() tea.Msg {
 		absBundle, err := c.HostPath(bundlePath)
 		if err != nil {
-			return importStreamMsg{err: err, done: true}
+			return importStreamMsg{failed[struct{}](err)}
 		}
 		stream, err := c.Export.Import(context.Background(), &anvilv1.ImportRequest{BundlePath: absBundle, Name: renameTo})
 		if err != nil {
-			return importStreamMsg{err: err, done: true}
+			return importStreamMsg{failed[struct{}](err)}
 		}
-		return receiveImportEvent(stream)()
-	}
-}
-
-func receiveImportEvent(stream anvilv1.ExportService_ImportClient) tea.Cmd {
-	return func() tea.Msg {
-		ev, err := stream.Recv()
-		if err != nil {
-			if err == io.EOF {
-				return importStreamMsg{done: true}
-			}
-			return importStreamMsg{err: err, done: true}
-		}
-		switch e := ev.GetEvent().(type) {
-		case *anvilv1.ImportProgress_Status:
-			return importStreamMsg{stream: stream, line: e.Status}
-		case *anvilv1.ImportProgress_Error:
-			return importStreamMsg{err: fmt.Errorf("%s", e.Error), done: true}
-		case *anvilv1.ImportProgress_Done:
-			done := e.Done
-			var b strings.Builder
-			if done.GetIntentName() != "" {
-				b.WriteString(styleGood.Render("imported intent " + done.GetIntentName()))
-				for _, mr := range done.GetMembers() {
-					b.WriteString("\n  " + mr.GetRole() + ": " + mr.GetNewId())
-				}
-			} else if len(done.GetMembers()) > 0 {
-				b.WriteString(styleGood.Render("imported: " + done.GetMembers()[0].GetNewId()))
-			}
-			return importStreamMsg{stream: stream, line: b.String()}
-		default:
-			return importStreamMsg{stream: stream}
-		}
+		return recvImport(stream)()
 	}
 }
 
@@ -476,31 +381,9 @@ func startWaitStream(ctx context.Context, c *client.Client, name string) tea.Cmd
 	return func() tea.Msg {
 		stream, err := c.WaitReady(ctx, &anvilv1.WaitReadyRequest{Name: name})
 		if err != nil {
-			return waitStreamMsg{err: err, done: true}
+			return waitStreamMsg{failed[*anvilv1.Instance](err)}
 		}
-		return receiveWaitEvent(stream)()
-	}
-}
-
-func receiveWaitEvent(stream anvilv1.InstanceService_WaitReadyClient) tea.Cmd {
-	return func() tea.Msg {
-		ev, err := stream.Recv()
-		if err != nil {
-			if err == io.EOF {
-				return waitStreamMsg{done: true}
-			}
-			return waitStreamMsg{err: err, done: true}
-		}
-		switch e := ev.GetEvent().(type) {
-		case *anvilv1.LaunchProgress_Status:
-			return waitStreamMsg{stream: stream, status: e.Status}
-		case *anvilv1.LaunchProgress_Error:
-			return waitStreamMsg{err: fmt.Errorf("%s", e.Error), done: true}
-		case *anvilv1.LaunchProgress_Instance:
-			return waitStreamMsg{stream: stream, instance: e.Instance, done: true}
-		default:
-			return waitStreamMsg{stream: stream}
-		}
+		return recvWait(stream)()
 	}
 }
 
@@ -520,31 +403,9 @@ func startForkStream(c *client.Client, sourceName, newName string, start bool) t
 	return func() tea.Msg {
 		stream, err := c.Fork(context.Background(), &anvilv1.ForkRequest{Name: sourceName, NewName: newName, Start: start})
 		if err != nil {
-			return forkStreamMsg{err: err, done: true}
+			return forkStreamMsg{failed[*anvilv1.Instance](err)}
 		}
-		return receiveForkEvent(stream)()
-	}
-}
-
-func receiveForkEvent(stream anvilv1.InstanceService_ForkClient) tea.Cmd {
-	return func() tea.Msg {
-		ev, err := stream.Recv()
-		if err != nil {
-			if err == io.EOF {
-				return forkStreamMsg{done: true}
-			}
-			return forkStreamMsg{err: err, done: true}
-		}
-		switch e := ev.GetEvent().(type) {
-		case *anvilv1.LaunchProgress_Status:
-			return forkStreamMsg{stream: stream, status: e.Status}
-		case *anvilv1.LaunchProgress_Error:
-			return forkStreamMsg{err: fmt.Errorf("%s", e.Error), done: true}
-		case *anvilv1.LaunchProgress_Instance:
-			return forkStreamMsg{stream: stream, instance: e.Instance, done: true}
-		default:
-			return forkStreamMsg{stream: stream}
-		}
+		return recvFork(stream)()
 	}
 }
 
@@ -645,31 +506,9 @@ func startCloudInitImportRepo(c *client.Client, manifestURL string, force bool) 
 			ManifestUrl: manifestURL, Force: force,
 		})
 		if err != nil {
-			return cloudInitImportStreamMsg{err: err, done: true}
+			return cloudInitImportStreamMsg{failed[*anvilv1.CloudInitImportResult](err)}
 		}
-		return receiveCloudInitImportEvent(stream)()
-	}
-}
-
-func receiveCloudInitImportEvent(stream anvilv1.CloudInitService_ImportRepoClient) tea.Cmd {
-	return func() tea.Msg {
-		ev, err := stream.Recv()
-		if err != nil {
-			if err == io.EOF {
-				return cloudInitImportStreamMsg{done: true}
-			}
-			return cloudInitImportStreamMsg{err: err, done: true}
-		}
-		switch e := ev.GetEvent().(type) {
-		case *anvilv1.CloudInitImportRepoProgress_Status:
-			return cloudInitImportStreamMsg{stream: stream, status: e.Status}
-		case *anvilv1.CloudInitImportRepoProgress_Error:
-			return cloudInitImportStreamMsg{err: fmt.Errorf("%s", e.Error), done: true}
-		case *anvilv1.CloudInitImportRepoProgress_Imported:
-			return cloudInitImportStreamMsg{stream: stream, result: e.Imported}
-		default:
-			return cloudInitImportStreamMsg{stream: stream}
-		}
+		return recvCloudInitImport(stream)()
 	}
 }
 
@@ -779,4 +618,65 @@ func removeIntentMember(c *client.Client, name, member string) tea.Cmd {
 		_, err := c.Intent.Remove(context.Background(), &anvilv1.IntentRemoveRequest{Name: name, Member: member})
 		return actionDoneMsg{screen: screenIntents, verb: "member removed", err: err}
 	}
+}
+
+func recvExport(stream anvilv1.ExportService_ExportClient) tea.Cmd {
+	return recvStream(stream.Recv, func(ev *anvilv1.ExportProgress) lineStep {
+		switch e := ev.GetEvent().(type) {
+		case *anvilv1.ExportProgress_Status:
+			return lineStep{status: e.Status}
+		case *anvilv1.ExportProgress_Error:
+			return failed[struct{}](errors.New(e.Error))
+		case *anvilv1.ExportProgress_Done:
+			return lineStep{status: styleGood.Render("exported: " + e.Done)}
+		}
+		return lineStep{}
+	}, func(s lineStep) tea.Msg { return exportStreamMsg{s} })
+}
+
+func recvImport(stream anvilv1.ExportService_ImportClient) tea.Cmd {
+	return recvStream(stream.Recv, func(ev *anvilv1.ImportProgress) lineStep {
+		switch e := ev.GetEvent().(type) {
+		case *anvilv1.ImportProgress_Status:
+			return lineStep{status: e.Status}
+		case *anvilv1.ImportProgress_Error:
+			return failed[struct{}](errors.New(e.Error))
+		case *anvilv1.ImportProgress_Done:
+			done := e.Done
+			var b strings.Builder
+			if done.GetIntentName() != "" {
+				b.WriteString(styleGood.Render("imported intent " + done.GetIntentName()))
+				for _, mr := range done.GetMembers() {
+					b.WriteString("\n  " + mr.GetRole() + ": " + mr.GetNewId())
+				}
+			} else if len(done.GetMembers()) > 0 {
+				b.WriteString(styleGood.Render("imported: " + done.GetMembers()[0].GetNewId()))
+			}
+			return lineStep{status: b.String()}
+		}
+		return lineStep{}
+	}, func(s lineStep) tea.Msg { return importStreamMsg{s} })
+}
+
+func recvWait(stream anvilv1.InstanceService_WaitReadyClient) tea.Cmd {
+	return recvStream(stream.Recv, parseLaunchProgress, func(s instanceStep) tea.Msg { return waitStreamMsg{s} })
+}
+
+func recvFork(stream anvilv1.InstanceService_ForkClient) tea.Cmd {
+	return recvStream(stream.Recv, parseLaunchProgress, func(s instanceStep) tea.Msg { return forkStreamMsg{s} })
+}
+
+func recvCloudInitImport(stream anvilv1.CloudInitService_ImportRepoClient) tea.Cmd {
+	type step = streamStep[*anvilv1.CloudInitImportResult]
+	return recvStream(stream.Recv, func(ev *anvilv1.CloudInitImportRepoProgress) step {
+		switch e := ev.GetEvent().(type) {
+		case *anvilv1.CloudInitImportRepoProgress_Status:
+			return step{status: e.Status}
+		case *anvilv1.CloudInitImportRepoProgress_Error:
+			return failed[*anvilv1.CloudInitImportResult](errors.New(e.Error))
+		case *anvilv1.CloudInitImportRepoProgress_Imported:
+			return step{result: e.Imported}
+		}
+		return step{}
+	}, func(s step) tea.Msg { return cloudInitImportStreamMsg{s} })
 }

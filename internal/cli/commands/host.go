@@ -44,15 +44,12 @@ func newHostAddCommand(flags *globalFlags) *cobra.Command {
 			"--strict-host-key is turned on for a host whose key anvil already recorded.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				_, err := c.Host.Add(cmd.Context(), &anvilv1.HostAddRequest{
+					Host: &anvilv1.Host{Alias: args[0], Target: args[1], Identity: identity, StrictHostKey: strictKey},
+				})
 				return err
-			}
-			defer c.Close()
-			_, err = c.Host.Add(cmd.Context(), &anvilv1.HostAddRequest{
-				Host: &anvilv1.Host{Alias: args[0], Target: args[1], Identity: identity, StrictHostKey: strictKey},
 			})
-			return err
 		},
 	}
 	cmd.Flags().StringVarP(&identity, "identity", "i", "", "path to a private key to use for this host, instead of ssh's own default identity resolution "+
@@ -73,33 +70,29 @@ func newHostListCommand(flags *globalFlags) *cobra.Command {
 			if err := checkOutput(output); err != nil {
 				return err
 			}
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			reply, err := c.Host.List(cmd.Context(), &anvilv1.HostListRequest{})
-			if err != nil {
-				return err
-			}
-			if output == "json" {
-				return printJSON(cmd.OutOrStdout(), reply)
-			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "ALIAS\tTARGET\tIDENTITY\tHOST KEY")
-			for _, h := range reply.GetHosts() {
-				identity := h.GetIdentity()
-				if identity == "" {
-					identity = "-"
+			return withClient(flags, func(c *client.Client) error {
+				reply, err := c.Host.List(cmd.Context(), &anvilv1.HostListRequest{})
+				if err != nil {
+					return err
 				}
-				hostKey := "trust on first use"
-				if h.GetStrictHostKey() {
-					hostKey = "strict"
+				if output == "json" {
+					return printJSON(cmd.OutOrStdout(), reply)
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", h.GetAlias(), h.GetTarget(), identity, hostKey)
-			}
-			return tw.Flush()
+				tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "ALIAS\tTARGET\tIDENTITY\tHOST KEY")
+				for _, h := range reply.GetHosts() {
+					identity := h.GetIdentity()
+					if identity == "" {
+						identity = "-"
+					}
+					hostKey := "trust on first use"
+					if h.GetStrictHostKey() {
+						hostKey = "strict"
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", h.GetAlias(), h.GetTarget(), identity, hostKey)
+				}
+				return tw.Flush()
+			})
 		},
 	}
 	addOutputFlag(cmd, &output)
@@ -112,13 +105,10 @@ func newHostRemoveCommand(flags *globalFlags) *cobra.Command {
 		Short: "Remove a known host",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				_, err := c.Host.Remove(cmd.Context(), &anvilv1.HostRemoveRequest{Alias: args[0]})
 				return err
-			}
-			defer c.Close()
-			_, err = c.Host.Remove(cmd.Context(), &anvilv1.HostRemoveRequest{Alias: args[0]})
-			return err
+			})
 		},
 	}
 }
@@ -129,21 +119,17 @@ func newHostTestCommand(flags *globalFlags) *cobra.Command {
 		Short: "Check that a known host is reachable and has anvil installed",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			reply, err := c.Host.Test(cmd.Context(), &anvilv1.HostTestRequest{Alias: args[0]})
-			if err != nil {
-				return err
-			}
-			if !reply.GetOk() {
-				return fmt.Errorf("%s", reply.GetMessage())
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), reply.GetMessage())
-			return nil
+			return withClient(flags, func(c *client.Client) error {
+				reply, err := c.Host.Test(cmd.Context(), &anvilv1.HostTestRequest{Alias: args[0]})
+				if err != nil {
+					return err
+				}
+				if !reply.GetOk() {
+					return fmt.Errorf("%s", reply.GetMessage())
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), reply.GetMessage())
+				return nil
+			})
 		},
 	}
 }
@@ -162,34 +148,30 @@ func newHostDiscoverCommand(flags *globalFlags) *cobra.Command {
 			if err := checkOutput(output); err != nil {
 				return err
 			}
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			// Rounds up: the field is whole seconds, and truncating a
-			// sub-second timeout to 0 would silently mean "use the default".
-			secs := int32((timeout + time.Second - 1) / time.Second)
-			reply, err := c.Host.Discover(cmd.Context(), &anvilv1.HostDiscoverRequest{
-				TimeoutSeconds: secs,
+			return withClient(flags, func(c *client.Client) error {
+				// Rounds up: the field is whole seconds, and truncating a
+				// sub-second timeout to 0 would silently mean "use the default".
+				secs := int32((timeout + time.Second - 1) / time.Second)
+				reply, err := c.Host.Discover(cmd.Context(), &anvilv1.HostDiscoverRequest{
+					TimeoutSeconds: secs,
+				})
+				if err != nil {
+					return err
+				}
+				if output == "json" {
+					return printJSON(cmd.OutOrStdout(), reply)
+				}
+				if len(reply.GetHosts()) == 0 {
+					fmt.Fprintln(cmd.OutOrStdout(), "no anvil hosts answered on this network")
+					return nil
+				}
+				tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "NAME\tADDRESS\tSSH PORT")
+				for _, h := range reply.GetHosts() {
+					fmt.Fprintf(tw, "%s\t%s\t%d\n", h.GetName(), h.GetAddress(), h.GetSshPort())
+				}
+				return tw.Flush()
 			})
-			if err != nil {
-				return err
-			}
-			if output == "json" {
-				return printJSON(cmd.OutOrStdout(), reply)
-			}
-			if len(reply.GetHosts()) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "no anvil hosts answered on this network")
-				return nil
-			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tADDRESS\tSSH PORT")
-			for _, h := range reply.GetHosts() {
-				fmt.Fprintf(tw, "%s\t%s\t%d\n", h.GetName(), h.GetAddress(), h.GetSshPort())
-			}
-			return tw.Flush()
 		},
 	}
 	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Second, "how long to wait for answers")
@@ -210,37 +192,33 @@ func newHostDevicesCommand(flags *globalFlags) *cobra.Command {
 			if err := checkOutput(output); err != nil {
 				return err
 			}
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			reply, err := c.Host.ListHostDevices(cmd.Context(), &anvilv1.ListHostDevicesRequest{})
-			if err != nil {
-				return err
-			}
-			if output == "json" {
-				return printJSON(cmd.OutOrStdout(), reply)
-			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "ID\tVENDOR:PRODUCT\tNAME\tDRIVER\tIOMMU\tSTATUS")
-			for _, d := range reply.GetDevices() {
-				driver := d.GetDriver()
-				if driver == "" {
-					driver = "-"
+			return withClient(flags, func(c *client.Client) error {
+				reply, err := c.Host.ListHostDevices(cmd.Context(), &anvilv1.ListHostDevicesRequest{})
+				if err != nil {
+					return err
 				}
-				status := client.DeviceStatus(d)
-				if len(d.GetGroupMembers()) > 0 {
-					status += " (with " + strings.Join(d.GetGroupMembers(), ", ") + ")"
+				if output == "json" {
+					return printJSON(cmd.OutOrStdout(), reply)
 				}
-				group := "-"
-				if d.GetIommuGroup() >= 0 {
-					group = strconv.Itoa(int(d.GetIommuGroup()))
+				tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "ID\tVENDOR:PRODUCT\tNAME\tDRIVER\tIOMMU\tSTATUS")
+				for _, d := range reply.GetDevices() {
+					driver := d.GetDriver()
+					if driver == "" {
+						driver = "-"
+					}
+					status := client.DeviceStatus(d)
+					if len(d.GetGroupMembers()) > 0 {
+						status += " (with " + strings.Join(d.GetGroupMembers(), ", ") + ")"
+					}
+					group := "-"
+					if d.GetIommuGroup() >= 0 {
+						group = strconv.Itoa(int(d.GetIommuGroup()))
+					}
+					fmt.Fprintf(tw, "%s\t%s:%s\t%s\t%s\t%s\t%s\n", d.GetId(), d.GetVendorId(), d.GetProductId(), d.GetName(), driver, group, status)
 				}
-				fmt.Fprintf(tw, "%s\t%s:%s\t%s\t%s\t%s\t%s\n", d.GetId(), d.GetVendorId(), d.GetProductId(), d.GetName(), driver, group, status)
-			}
-			return tw.Flush()
+				return tw.Flush()
+			})
 		},
 	}
 	addOutputFlag(cmd, &output)

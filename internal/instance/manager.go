@@ -95,6 +95,25 @@ func (m *Manager) backendFor(kind Kind) (Backend, error) {
 	return b, nil
 }
 
+// capability resolves name to its spec and its backend as T, the optional interface
+// for one operation. what names the operation in the error when the backend lacks it.
+func capability[T any](m *Manager, name, what string) (*Spec, T, error) {
+	var none T
+	spec, err := m.registry.GetByName(name)
+	if err != nil {
+		return nil, none, err
+	}
+	b, err := m.backendFor(spec.Kind)
+	if err != nil {
+		return nil, none, err
+	}
+	c, ok := b.(T)
+	if !ok {
+		return nil, none, fmt.Errorf("instance: %s instances don't support %s", spec.Kind, what)
+	}
+	return spec, c, nil
+}
+
 // LaunchParams is Manager.Launch's input.
 type LaunchParams struct {
 	Name      string
@@ -476,17 +495,9 @@ func (m *Manager) GetByID(id string) (*Spec, error) {
 
 // Stats returns name's current resource-usage snapshot.
 func (m *Manager) Stats(ctx context.Context, name string) (Stats, error) {
-	spec, err := m.registry.GetByName(name)
+	spec, sp, err := capability[StatsProvider](m, name, "stats")
 	if err != nil {
 		return Stats{}, err
-	}
-	b, err := m.backendFor(spec.Kind)
-	if err != nil {
-		return Stats{}, err
-	}
-	sp, ok := b.(StatsProvider)
-	if !ok {
-		return Stats{}, fmt.Errorf("instance: %s instances don't support stats", spec.Kind)
 	}
 	return sp.Stats(ctx, spec)
 }
@@ -533,17 +544,9 @@ func (m *Manager) Logs(ctx context.Context, name string, follow bool, tailLines 
 
 // Mount shares hostPath into name's guest at guestPath.
 func (m *Manager) Mount(ctx context.Context, name, hostPath, guestPath string, readOnly bool) error {
-	spec, err := m.registry.GetByName(name)
+	spec, mounter, err := capability[Mounter](m, name, "mounts")
 	if err != nil {
 		return err
-	}
-	b, err := m.backendFor(spec.Kind)
-	if err != nil {
-		return err
-	}
-	mounter, ok := b.(Mounter)
-	if !ok {
-		return fmt.Errorf("instance: %s instances don't support mounts", spec.Kind)
 	}
 	msg := hostPath + " -> " + guestPath
 	if readOnly {
@@ -561,17 +564,9 @@ func (m *Manager) Mount(ctx context.Context, name, hostPath, guestPath string, r
 
 // Umount removes a mount previously added with Mount.
 func (m *Manager) Umount(ctx context.Context, name, guestPath string) error {
-	spec, err := m.registry.GetByName(name)
+	spec, mounter, err := capability[Mounter](m, name, "mounts")
 	if err != nil {
 		return err
-	}
-	b, err := m.backendFor(spec.Kind)
-	if err != nil {
-		return err
-	}
-	mounter, ok := b.(Mounter)
-	if !ok {
-		return fmt.Errorf("instance: %s instances don't support mounts", spec.Kind)
 	}
 	err = m.withLock(ctx, spec, func(spec *Spec) error {
 		if err := mounter.Umount(ctx, spec, guestPath); err != nil {
@@ -585,28 +580,11 @@ func (m *Manager) Umount(ctx context.Context, name, guestPath string) error {
 
 // AddPort adds a host-to-guest port forward to name, live if it's running.
 func (m *Manager) AddPort(ctx context.Context, name string, port PortMapping) error {
-	spec, err := m.registry.GetByName(name)
+	spec, pf, err := capability[PortForwarder](m, name, "port forwarding changes")
 	if err != nil {
 		return err
 	}
-	b, err := m.backendFor(spec.Kind)
-	if err != nil {
-		return err
-	}
-	pf, ok := b.(PortForwarder)
-	if !ok {
-		return fmt.Errorf("instance: %s instances don't support port forwarding changes", spec.Kind)
-	}
-	err = m.withLock(ctx, spec, func(spec *Spec) error {
-		if err := pf.AddPort(ctx, spec, port); err != nil {
-			// A failed change can still replace the backend's resource (a recreated container).
-			if saveErr := m.save(spec, nil); saveErr != nil {
-				log.Printf("instance: saving %s after a failed port change: %v", spec.Name, saveErr)
-			}
-			return err
-		}
-		return m.save(spec, nil)
-	})
+	err = m.changePort(ctx, spec, func(spec *Spec) error { return pf.AddPort(ctx, spec, port) })
 	m.record(ctx, spec, "port-add", fmt.Sprintf("%d -> %d/%s", port.HostPort, port.GuestPort, Protocol(port.Protocol)), err)
 	return err
 }
@@ -614,48 +592,35 @@ func (m *Manager) AddPort(ctx context.Context, name string, port PortMapping) er
 // RemovePort removes a port forward previously added with AddPort,
 // identified by hostPort/protocol.
 func (m *Manager) RemovePort(ctx context.Context, name string, hostPort int, protocol string) error {
-	spec, err := m.registry.GetByName(name)
+	spec, pf, err := capability[PortForwarder](m, name, "port forwarding changes")
 	if err != nil {
 		return err
 	}
-	b, err := m.backendFor(spec.Kind)
-	if err != nil {
-		return err
-	}
-	pf, ok := b.(PortForwarder)
-	if !ok {
-		return fmt.Errorf("instance: %s instances don't support port forwarding changes", spec.Kind)
-	}
-	err = m.withLock(ctx, spec, func(spec *Spec) error {
-		if err := pf.RemovePort(ctx, spec, hostPort, protocol); err != nil {
-			// A failed change can still replace the backend's resource (a recreated container).
-			if saveErr := m.save(spec, nil); saveErr != nil {
-				log.Printf("instance: saving %s after a failed port change: %v", spec.Name, saveErr)
-			}
-			return err
-		}
-		return m.save(spec, nil)
-	})
+	err = m.changePort(ctx, spec, func(spec *Spec) error { return pf.RemovePort(ctx, spec, hostPort, protocol) })
 	m.record(ctx, spec, "port-remove", fmt.Sprintf("%d/%s", hostPort, Protocol(protocol)), err)
 	return err
+}
+
+// changePort runs change under spec's lock and saves spec, even after a failure: a
+// failed change can still replace the backend's resource (a recreated container).
+func (m *Manager) changePort(ctx context.Context, spec *Spec, change func(*Spec) error) error {
+	return m.withLock(ctx, spec, func(spec *Spec) error {
+		err := change(spec)
+		if saveErr := m.save(spec, nil); saveErr != nil {
+			if err != nil {
+				log.Printf("instance: saving %s after a failed port change: %v", spec.Name, saveErr)
+				return err
+			}
+			return saveErr
+		}
+		return err
+	})
 }
 
 // snapshotter resolves name to its spec and Snapshotter backend, for
 // CreateSnapshot/RestoreSnapshot/DeleteSnapshot/ListSnapshots.
 func (m *Manager) snapshotter(name string) (*Spec, Snapshotter, error) {
-	spec, err := m.registry.GetByName(name)
-	if err != nil {
-		return nil, nil, err
-	}
-	b, err := m.backendFor(spec.Kind)
-	if err != nil {
-		return nil, nil, err
-	}
-	sn, ok := b.(Snapshotter)
-	if !ok {
-		return nil, nil, fmt.Errorf("instance: %s instances don't support snapshots", spec.Kind)
-	}
-	return spec, sn, nil
+	return capability[Snapshotter](m, name, "snapshots")
 }
 
 // CreateSnapshot creates a new named snapshot of name's disk.

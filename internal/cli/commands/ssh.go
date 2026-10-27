@@ -3,8 +3,6 @@ package commands
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/internal/sshkey"
@@ -31,23 +29,4 @@ func resolveInstance(ctx context.Context, c *client.Client, name string) (*anvil
 		return nil, fmt.Errorf("no such instance %q", name)
 	}
 	return instances[0], nil
-}
-
-// runSSH execs the real `ssh` binary against target, inheriting the current
-// process's stdio. An empty command opens an interactive shell; a non-empty one runs it directly.
-func runSSH(target client.SSHTarget, identity string, command []string) error {
-	sshBin, err := exec.LookPath("ssh")
-	if err != nil {
-		return fmt.Errorf("ssh: not found on PATH (needed for `anvil shell`/`anvil exec`)")
-	}
-	args, err := client.SSHArgs(target, "-p", identity)
-	if err != nil {
-		return err
-	}
-	args = append(args, fmt.Sprintf("%s@%s", target.User, target.Host))
-	args = append(args, command...)
-
-	cmd := exec.Command(sshBin, args...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	return cmd.Run()
 }

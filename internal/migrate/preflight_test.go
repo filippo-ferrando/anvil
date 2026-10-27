@@ -86,7 +86,7 @@ func TestPreflightContainer(t *testing.T) {
 		Kind:      instance.KindContainer,
 		Container: &instance.ContainerSpec{ImageRef: "nginx", Engine: instance.ContainerEngineDocker},
 	}
-	caps := remoteCaps{anvil: "/usr/bin/anvil", anvild: "/usr/bin/anvild", arch: hostArch()}
+	caps := remoteCaps{anvil: "/usr/bin/anvil", anvild: "/usr/bin/anvild", arch: instance.HostArch()}
 
 	fatal, warn := preflightContainer(spec, caps)
 	if len(fatal) != 1 || !strings.Contains(fatal[0], "docker") {
@@ -115,8 +115,8 @@ func TestProbeRemoteLocally(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if caps.arch != hostArch() {
-		t.Errorf("probed arch %q, want %q", caps.arch, hostArch())
+	if caps.arch != instance.HostArch() {
+		t.Errorf("probed arch %q, want %q", caps.arch, instance.HostArch())
 	}
 	if caps.memTotalKB <= 0 {
 		t.Errorf("expected a total memory reading, got %d KB", caps.memTotalKB)

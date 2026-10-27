@@ -654,7 +654,7 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		SeedISOPath:   v.SeedISOPath,
 		QMPSocket:     filepath.Join(dir, "qmp.sock"),
 		SerialLogPath: filepath.Join(dir, "console.log"),
-		KVM:           kvmAvailable() && qemu.HostArch() == arch,
+		KVM:           kvmAvailable() && instance.HostArch() == arch,
 		Disk:          qemu.ProbeDiskTuning(ctx, v.DiskPath),
 
 		GuestAgentSocket: guestAgentSocket(spec.ID),

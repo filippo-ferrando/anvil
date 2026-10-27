@@ -28,23 +28,6 @@ func TestFormatWatchEvent(t *testing.T) {
 	}
 }
 
-func TestInstanceIP(t *testing.T) {
-	bridged := &anvilv1.Instance{
-		Vm:    &anvilv1.VMSpec{StaticIp: "10.55.1.4/24"},
-		Guest: &anvilv1.GuestInfo{IpAddresses: []string{"10.55.1.4/24", "172.17.0.1/16"}},
-	}
-	if got := instanceIP(bridged); got != "10.55.1.4" {
-		t.Errorf("bridged VM: got %q", got)
-	}
-	slirp := &anvilv1.Instance{Vm: &anvilv1.VMSpec{}, Guest: &anvilv1.GuestInfo{IpAddresses: []string{"10.0.2.15/24"}}}
-	if got := instanceIP(slirp); got != "10.0.2.15" {
-		t.Errorf("SLIRP VM with agent: got %q", got)
-	}
-	if got := instanceIP(&anvilv1.Instance{Container: &anvilv1.ContainerSpec{}}); got != "-" {
-		t.Errorf("no address: got %q", got)
-	}
-}
-
 func TestPrintGuestInfo(t *testing.T) {
 	var buf strings.Builder
 	printGuestInfo(&buf, &anvilv1.Instance{

@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newSnapshotCommand(flags *globalFlags) *cobra.Command {
@@ -35,13 +36,10 @@ func newSnapshotCreateCommand(flags *globalFlags) *cobra.Command {
 		Short: "Create a new snapshot",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				_, err := c.Snapshot.Create(cmd.Context(), &anvilv1.SnapshotCreateRequest{Name: args[0], SnapshotName: args[1]})
 				return err
-			}
-			defer c.Close()
-			_, err = c.Snapshot.Create(cmd.Context(), &anvilv1.SnapshotCreateRequest{Name: args[0], SnapshotName: args[1]})
-			return err
+			})
 		},
 	}
 }
@@ -56,13 +54,10 @@ func newSnapshotRestoreCommand(flags *globalFlags) *cobra.Command {
 			"state even if it has one (see `anvil snapshot list`'s VM-state column).",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				_, err := c.Snapshot.Restore(cmd.Context(), &anvilv1.SnapshotRestoreRequest{Name: args[0], SnapshotName: args[1]})
 				return err
-			}
-			defer c.Close()
-			_, err = c.Snapshot.Restore(cmd.Context(), &anvilv1.SnapshotRestoreRequest{Name: args[0], SnapshotName: args[1]})
-			return err
+			})
 		},
 	}
 }
@@ -73,13 +68,10 @@ func newSnapshotDeleteCommand(flags *globalFlags) *cobra.Command {
 		Short: "Delete a snapshot",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				_, err := c.Snapshot.Delete(cmd.Context(), &anvilv1.SnapshotDeleteRequest{Name: args[0], SnapshotName: args[1]})
 				return err
-			}
-			defer c.Close()
-			_, err = c.Snapshot.Delete(cmd.Context(), &anvilv1.SnapshotDeleteRequest{Name: args[0], SnapshotName: args[1]})
-			return err
+			})
 		},
 	}
 }
@@ -94,33 +86,29 @@ func newSnapshotListCommand(flags *globalFlags) *cobra.Command {
 			if err := checkOutput(output); err != nil {
 				return err
 			}
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			reply, err := c.Snapshot.List(cmd.Context(), &anvilv1.SnapshotListRequest{Name: args[0]})
-			if err != nil {
-				return err
-			}
-			if output == "json" {
-				return printJSON(cmd.OutOrStdout(), reply)
-			}
-			snaps := reply.GetSnapshots()
-			if len(snaps) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "no snapshots")
-				return nil
-			}
-			for _, s := range snaps {
-				state := "disk-only"
-				if s.GetHasVmState() {
-					state = "disk+VM state"
+			return withClient(flags, func(c *client.Client) error {
+				reply, err := c.Snapshot.List(cmd.Context(), &anvilv1.SnapshotListRequest{Name: args[0]})
+				if err != nil {
+					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-20s %s\n",
-					s.GetName(), time.Unix(s.GetCreatedAtUnix(), 0).Format(time.RFC3339), state)
-			}
-			return nil
+				if output == "json" {
+					return printJSON(cmd.OutOrStdout(), reply)
+				}
+				snaps := reply.GetSnapshots()
+				if len(snaps) == 0 {
+					fmt.Fprintln(cmd.OutOrStdout(), "no snapshots")
+					return nil
+				}
+				for _, s := range snaps {
+					state := "disk-only"
+					if s.GetHasVmState() {
+						state = "disk+VM state"
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-20s %s\n",
+						s.GetName(), time.Unix(s.GetCreatedAtUnix(), 0).Format(time.RFC3339), state)
+				}
+				return nil
+			})
 		},
 	}
 	addOutputFlag(cmd, &output)
@@ -153,13 +141,10 @@ func newSnapshotScheduleCommand(flags *globalFlags) *cobra.Command {
 				req.Keep = keep
 			}
 
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				_, err := c.Snapshot.SetSchedule(cmd.Context(), req)
 				return err
-			}
-			defer c.Close()
-			_, err = c.Snapshot.SetSchedule(cmd.Context(), req)
-			return err
+			})
 		},
 	}
 	cmd.Flags().DurationVar(&every, "every", 0, "interval between snapshots, e.g. 6h (at least 1m)")

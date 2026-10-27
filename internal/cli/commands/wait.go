@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newWaitCommand(flags *globalFlags) *cobra.Command {
@@ -17,20 +18,16 @@ func newWaitCommand(flags *globalFlags) *cobra.Command {
 			"nothing for a container. Fails if cloud-init reports errors or --timeout passes.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			stream, err := c.WaitReady(cmd.Context(), &anvilv1.WaitReadyRequest{
-				Name:           args[0],
-				TimeoutSeconds: int32(timeout.Seconds()),
+			return withClient(flags, func(c *client.Client) error {
+				stream, err := c.WaitReady(cmd.Context(), &anvilv1.WaitReadyRequest{
+					Name:           args[0],
+					TimeoutSeconds: int32(timeout.Seconds()),
+				})
+				if err != nil {
+					return err
+				}
+				return streamProgress(cmd.OutOrStdout(), stream, "Ready")
 			})
-			if err != nil {
-				return err
-			}
-			return streamProgress(cmd.OutOrStdout(), stream, "Ready")
 		},
 	}
 	cmd.Flags().DurationVar(&timeout, "timeout", 15*time.Minute, "give up after this long")

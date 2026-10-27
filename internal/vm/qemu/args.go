@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 )
@@ -118,19 +117,6 @@ func BinaryName(arch string) string {
 		arch = "x86_64"
 	}
 	return "qemu-system-" + arch
-}
-
-// HostArch returns the host's CPU arch in VM Arch's naming convention
-// ("x86_64", "aarch64"), for choosing KVM (same-arch) vs TCG (cross-arch).
-func HostArch() string {
-	switch runtime.GOARCH {
-	case "amd64":
-		return "x86_64"
-	case "arm64":
-		return "aarch64"
-	default:
-		return runtime.GOARCH
-	}
 }
 
 // MachineType returns this arch's default machine type.

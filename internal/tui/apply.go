@@ -2,8 +2,8 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 
@@ -15,13 +15,8 @@ import (
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
-// applyStreamMsg carries events off an IntentService.Apply stream.
-type applyStreamMsg struct {
-	stream anvilv1.IntentService_ApplyClient
-	lines  []string
-	err    error
-	done   bool
-}
+// applyStreamMsg carries events off an IntentService.Apply stream; result holds a plan's lines.
+type applyStreamMsg struct{ streamStep[[]string] }
 
 // newApplyRequest reads the manifest on the client side, since the daemon can't see the caller's files.
 func newApplyRequest(path string, prune, recreate bool) (*anvilv1.IntentApplyRequest, error) {
@@ -44,34 +39,27 @@ func startApplyStream(c *client.Client, req *anvilv1.IntentApplyRequest) tea.Cmd
 	return func() tea.Msg {
 		stream, err := c.Intent.Apply(context.Background(), req)
 		if err != nil {
-			return applyStreamMsg{err: err, done: true}
+			return applyStreamMsg{failed[[]string](err)}
 		}
-		return receiveApplyEvent(stream)()
+		return recvApply(stream)()
 	}
 }
 
-func receiveApplyEvent(stream anvilv1.IntentService_ApplyClient) tea.Cmd {
-	return func() tea.Msg {
-		ev, err := stream.Recv()
-		if err == io.EOF {
-			return applyStreamMsg{done: true}
-		}
-		if err != nil {
-			return applyStreamMsg{err: err, done: true}
-		}
+func recvApply(stream anvilv1.IntentService_ApplyClient) tea.Cmd {
+	type step = streamStep[[]string]
+	return recvStream(stream.Recv, func(ev *anvilv1.IntentApplyProgress) step {
 		switch e := ev.GetEvent().(type) {
 		case *anvilv1.IntentApplyProgress_Plan:
-			return applyStreamMsg{stream: stream, lines: applyPlanLines(e.Plan)}
+			return step{result: applyPlanLines(e.Plan)}
 		case *anvilv1.IntentApplyProgress_Status:
-			return applyStreamMsg{stream: stream, lines: []string{e.Status}}
+			return step{status: e.Status}
 		case *anvilv1.IntentApplyProgress_Error:
-			return applyStreamMsg{err: fmt.Errorf("%s", e.Error), done: true}
+			return failed[[]string](errors.New(e.Error))
 		case *anvilv1.IntentApplyProgress_Intent:
-			return applyStreamMsg{stream: stream, lines: []string{styleGood.Render("applied intent " + e.Intent.GetName())}}
-		default:
-			return applyStreamMsg{stream: stream}
+			return step{status: styleGood.Render("applied intent " + e.Intent.GetName())}
 		}
-	}
+		return step{}
+	}, func(s step) tea.Msg { return applyStreamMsg{s} })
 }
 
 func applyPlanLines(plan *anvilv1.IntentApplyPlan) []string {

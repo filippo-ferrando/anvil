@@ -354,7 +354,7 @@ func FileChecksum(path string) (string, error) {
 			}
 		}
 	}
-	sum, err := fileSHA256(path)
+	sum, err := FileSHA256(path)
 	if err != nil {
 		return "", err
 	}

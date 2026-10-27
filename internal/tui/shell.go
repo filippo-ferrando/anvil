@@ -1,8 +1,6 @@
 package tui
 
 import (
-	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 
@@ -22,7 +20,7 @@ func (m model) shellInto(inst *anvilv1.Instance, user string) (tea.Model, tea.Cm
 	var cmd *exec.Cmd
 	var err error
 	if inst.GetContainer() != nil {
-		cmd, err = buildContainerExecCommand(m.client, inst, []string{"/bin/sh"})
+		cmd, err = m.client.ContainerExecCommand(inst, nil, true)
 	} else {
 		cmd, err = buildShellCommand(m.client, inst, user, nil)
 	}
@@ -44,7 +42,7 @@ func (m model) execInto(inst *anvilv1.Instance, user, command string) (tea.Model
 	var cmd *exec.Cmd
 	var err error
 	if inst.GetContainer() != nil {
-		cmd, err = buildContainerExecCommand(m.client, inst, fields)
+		cmd, err = m.client.ContainerExecCommand(inst, fields, true)
 	} else {
 		cmd, err = buildShellCommand(m.client, inst, user, fields)
 	}
@@ -66,44 +64,5 @@ func buildShellCommand(c *client.Client, inst *anvilv1.Instance, user string, co
 	if err != nil {
 		return nil, err
 	}
-	sshBin, err := exec.LookPath("ssh")
-	if err != nil {
-		return nil, fmt.Errorf("ssh: not found on PATH")
-	}
-	args, err := client.SSHArgs(target, "-p", identity)
-	if err != nil {
-		return nil, err
-	}
-	args = append(args, fmt.Sprintf("%s@%s", target.User, target.Host))
-	args = append(args, command...)
-
-	cmd := exec.Command(sshBin, args...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	return cmd, nil
-}
-
-// buildContainerExecCommand builds a `docker exec`/`podman exec` invocation against inst's engine.
-func buildContainerExecCommand(c *client.Client, inst *anvilv1.Instance, command []string) (*exec.Cmd, error) {
-	spec := inst.GetContainer()
-	if inst.GetState() != anvilv1.State_STATE_RUNNING {
-		return nil, fmt.Errorf("%q isn't running", inst.GetName())
-	}
-	if spec.GetContainerId() == "" {
-		return nil, fmt.Errorf("%q has no known container ID yet", inst.GetName())
-	}
-
-	name := "docker"
-	if spec.GetEngine() == anvilv1.ContainerEngine_CONTAINER_ENGINE_PODMAN {
-		name = "podman"
-	}
-	bin, err := exec.LookPath(name)
-	if err != nil {
-		return nil, fmt.Errorf("%s: not found on PATH", name)
-	}
-
-	args := append([]string{"exec", "-it", spec.GetContainerId()}, command...)
-	cmd := exec.Command(bin, args...)
-	cmd.Env = c.DockerEnv()
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	return cmd, nil
+	return client.SSHCommand(target, identity, command)
 }

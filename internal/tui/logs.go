@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"io"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -42,23 +41,12 @@ func startLogsStream(c *client.Client, name string) (tea.Cmd, context.CancelFunc
 		// vm.Backend.Logs); maxLogLines below bounds memory instead. A fixed tail here previously lost history on reopening Logs.
 		stream, err := c.Logs(ctx, &anvilv1.LogsRequest{Name: name, Follow: true, TailLines: 0})
 		if err != nil {
-			return logsStreamMsg{err: err, done: true}
+			return logsStreamMsg{failed[[]byte](err)}
 		}
-		return receiveLogChunk(stream)()
+		return recvStream(stream.Recv, func(c *anvilv1.LogChunk) streamStep[[]byte] {
+			return streamStep[[]byte]{result: c.GetData()}
+		}, func(s streamStep[[]byte]) tea.Msg { return logsStreamMsg{s} })()
 	}, cancel
-}
-
-func receiveLogChunk(stream anvilv1.InstanceService_LogsClient) tea.Cmd {
-	return func() tea.Msg {
-		chunk, err := stream.Recv()
-		if err != nil {
-			if err == io.EOF {
-				return logsStreamMsg{done: true}
-			}
-			return logsStreamMsg{err: err, done: true}
-		}
-		return logsStreamMsg{stream: stream, data: chunk.GetData()}
-	}
 }
 
 func (m model) updateLogs(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -69,14 +57,14 @@ func (m model) updateLogs(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus("logs: "+msg.err.Error(), true)
 			return m, nil
 		}
-		if len(msg.data) > 0 {
-			m.logs.appendLines(string(msg.data))
+		if len(msg.result) > 0 {
+			m.logs.appendLines(string(msg.result))
 		}
 		if msg.done {
 			m.logs.streaming = false
 			return m, nil
 		}
-		return m, receiveLogChunk(msg.stream)
+		return m, msg.next
 
 	case tea.KeyMsg:
 		switch msg.String() {

@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/internal/intent/vars"
 	"git.fferrando.cc/rdfilippo/anvil/internal/sshkey"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newApplyCommand(flags *globalFlags) *cobra.Command {
@@ -54,25 +56,21 @@ func newApplyCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			stream, err := c.Intent.Apply(cmd.Context(), &anvilv1.IntentApplyRequest{
-				Manifest:           data,
-				DryRun:             dryRun,
-				Prune:              prune,
-				Recreate:           recreate,
-				SshPublicKeys:      []string{anvilPub},
-				WaitTimeoutSeconds: int32(waitTimeout.Seconds()),
-				Vars:               values,
+			return withClient(flags, func(c *client.Client) error {
+				stream, err := c.Intent.Apply(cmd.Context(), &anvilv1.IntentApplyRequest{
+					Manifest:           data,
+					DryRun:             dryRun,
+					Prune:              prune,
+					Recreate:           recreate,
+					SshPublicKeys:      []string{anvilPub},
+					WaitTimeoutSeconds: int32(waitTimeout.Seconds()),
+					Vars:               values,
+				})
+				if err != nil {
+					return err
+				}
+				return streamApply(cmd.OutOrStdout(), stream)
 			})
-			if err != nil {
-				return err
-			}
-			return streamApply(cmd.OutOrStdout(), stream)
 		},
 	}
 	cmd.Flags().StringVarP(&file, "file", "f", "anvil.yaml", `manifest to apply, or "-" for stdin`)
@@ -101,52 +99,20 @@ type applyStream interface {
 }
 
 func streamApply(out io.Writer, stream applyStream) error {
-	term := isTerminalWriter(out)
-	lastKey, haveLine := "", false
-	endLine := func() {
-		if haveLine {
-			fmt.Fprintln(out)
-			haveLine = false
-		}
-	}
-	for {
-		ev, err := stream.Recv()
-		if err == io.EOF {
-			endLine()
-			return nil
-		}
-		if err != nil {
-			endLine()
-			return err
-		}
+	return streamStatus(out, stream.Recv, func(l *liveLine, ev *anvilv1.IntentApplyProgress) (bool, error) {
 		switch e := ev.GetEvent().(type) {
 		case *anvilv1.IntentApplyProgress_Plan:
+			l.finish()
 			printApplyPlan(out, e.Plan)
 		case *anvilv1.IntentApplyProgress_Status:
-			if !term {
-				fmt.Fprintln(out, e.Status)
-				continue
-			}
-			// Updates with the same prefix (e.g. download percentages) redraw one line.
-			key := e.Status
-			if i := strings.LastIndex(key, ": "); i != -1 {
-				key = key[:i]
-			}
-			if haveLine && key == lastKey {
-				fmt.Fprint(out, "\r\033[K")
-			} else {
-				endLine()
-			}
-			fmt.Fprint(out, e.Status)
-			lastKey, haveLine = key, true
+			l.set(e.Status)
 		case *anvilv1.IntentApplyProgress_Error:
-			endLine()
-			return fmt.Errorf("%s", e.Error)
+			return false, errors.New(e.Error)
 		case *anvilv1.IntentApplyProgress_Intent:
-			endLine()
-			fmt.Fprintf(out, "Applied intent %q (%d members)\n", e.Intent.GetName(), len(e.Intent.GetMembers()))
+			l.printf("Applied intent %q (%d members)\n", e.Intent.GetName(), len(e.Intent.GetMembers()))
 		}
-	}
+		return false, nil
+	})
 }
 
 func printApplyPlan(out io.Writer, plan *anvilv1.IntentApplyPlan) {

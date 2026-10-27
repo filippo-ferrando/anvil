@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/format"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
@@ -36,13 +37,11 @@ type intentsModel struct {
 
 	exportTarget *anvilv1.Intent // non-nil while the export output-path form is up
 	exportForm   simpleForm
-	exporting    bool     // an export stream is in flight, blocking other keys
-	exportLines  []string // the finished (or in-flight) export's progress transcript
+	export       transcript // export progress; a running one blocks other keys
 
 	importPrompting bool // the import bundle-path form is up
 	importForm      simpleForm
-	importing       bool     // an import stream is in flight, blocking other keys
-	importLines     []string // the finished (or in-flight) import's progress transcript
+	imp             transcript // import progress; a running one blocks other keys
 
 	applyPrompting bool // the apply manifest form is up
 	applyForm      simpleForm
@@ -104,41 +103,16 @@ func (m model) updateIntents(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, loadIntents(m.client)
 
 	case exportStreamMsg:
-		if msg.line != "" {
-			m.intents.exportLines = appendProgressLine(m.intents.exportLines, msg.line)
-		}
-		if msg.err != nil {
-			m.intents.exporting = false
-			m.intents.exportLines = append(m.intents.exportLines, errLine(msg.err))
-			return m, nil
-		}
-		if msg.done {
-			m.intents.exporting = false
-			return m, nil
-		}
-		return m, receiveExportEvent(msg.stream)
+		return m, follow(&m.intents.export, msg.lineStep, nil)
 
 	case importStreamMsg:
-		if msg.line != "" {
-			m.intents.importLines = appendProgressLine(m.intents.importLines, msg.line)
-		}
-		if msg.err != nil {
-			m.intents.importing = false
-			m.intents.importLines = append(m.intents.importLines, errLine(msg.err))
-			return m, nil
-		}
-		if msg.done {
-			m.intents.importing = false
-			return m, loadIntents(m.client)
-		}
-		return m, receiveImportEvent(msg.stream)
+		return m, follow(&m.intents.imp, msg.lineStep, loadIntents(m.client))
 
 	case applyStreamMsg:
 		in := &m.intents
-		if len(msg.lines) > 1 {
-			in.applyLines = append(in.applyLines, msg.lines...)
-		} else if len(msg.lines) == 1 {
-			in.applyLines = appendProgressLine(in.applyLines, msg.lines[0])
+		in.applyLines = append(in.applyLines, msg.result...)
+		if msg.status != "" {
+			in.applyLines = appendProgressLine(in.applyLines, msg.status)
 		}
 		if msg.err != nil {
 			in.applyRunning = false
@@ -146,7 +120,7 @@ func (m model) updateIntents(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if !msg.done {
-			return m, receiveApplyEvent(msg.stream)
+			return m, msg.next
 		}
 		in.applyRunning = false
 		if in.applyReq.GetDryRun() {
@@ -164,22 +138,11 @@ func (m model) updateIntents(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	in := &m.intents
 
-	if in.exporting || in.importing || in.applyRunning {
+	if in.export.running || in.imp.running || in.applyRunning {
 		return m, nil // block input until the stream finishes
 	}
 	// A finished export/import's transcript stays on screen until dismissed here.
-	if len(in.exportLines) > 0 {
-		switch msg.String() {
-		case "esc", "enter", "q":
-			in.exportLines = nil
-		}
-		return m, nil
-	}
-	if len(in.importLines) > 0 {
-		switch msg.String() {
-		case "esc", "enter", "q":
-			in.importLines = nil
-		}
+	if in.export.dismiss(msg.String()) || in.imp.dismiss(msg.String()) {
 		return m, nil
 	}
 	if len(in.applyLines) > 0 {
@@ -229,8 +192,7 @@ func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if bundlePath == "" {
 			return m, nil
 		}
-		in.importing = true
-		in.importLines = nil
+		in.imp.start()
 		return m, startImportStream(m.client, bundlePath, renameTo)
 	}
 	if in.exportTarget != nil {
@@ -249,8 +211,7 @@ func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if outputPath == "" {
 			return m, nil
 		}
-		in.exporting = true
-		in.exportLines = nil
+		in.export.start()
 		return m, startExportStream(m.client, target.GetName(), outputPath, true)
 	}
 
@@ -349,28 +310,14 @@ func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m intentsModel) View() string {
-	if m.exporting || len(m.exportLines) > 0 {
-		s := styleTitle.Render(" Exporting… ") + "\n\n"
-		for _, line := range m.exportLines {
-			s += line + "\n"
-		}
-		if !m.exporting {
-			s += "\n" + helpBar("esc", "dismiss")
-		}
-		return s
+	if m.export.active() {
+		return m.export.view("Exporting…")
 	}
 	if m.exportTarget != nil {
 		return m.exportForm.View()
 	}
-	if m.importing || len(m.importLines) > 0 {
-		s := styleTitle.Render(" Importing… ") + "\n\n"
-		for _, line := range m.importLines {
-			s += line + "\n"
-		}
-		if !m.importing {
-			s += "\n" + helpBar("esc", "dismiss")
-		}
-		return s
+	if m.imp.active() {
+		return m.imp.view("Importing…")
 	}
 	if m.importPrompting {
 		return m.importForm.View()
@@ -416,7 +363,7 @@ func (m intentsModel) View() string {
 // memberLine renders one member as "role (kind)", plus its address and
 // DNS name when it has them.
 func memberLine(mem *anvilv1.IntentMember) string {
-	line := fmt.Sprintf("  %s  (%s)", mem.GetRole(), kindLabel(mem.GetKind()))
+	line := fmt.Sprintf("  %s  (%s)", mem.GetRole(), format.Kind(mem.GetKind()))
 	if mem.GetIp() != "" {
 		line += "  " + mem.GetIp()
 	}
@@ -424,11 +371,4 @@ func memberLine(mem *anvilv1.IntentMember) string {
 		line += "  " + mem.GetDnsName()
 	}
 	return line
-}
-
-func kindLabel(k anvilv1.Kind) string {
-	if k == anvilv1.Kind_KIND_CONTAINER {
-		return "container"
-	}
-	return "vm"
 }

@@ -2,12 +2,14 @@ package commands
 
 import (
 	"fmt"
-	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/format"
+	"git.fferrando.cc/rdfilippo/anvil/internal/progress"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newImageCommand(flags *globalFlags) *cobra.Command {
@@ -32,30 +34,26 @@ func newImageListCommand(flags *globalFlags) *cobra.Command {
 			if err := checkOutput(output); err != nil {
 				return err
 			}
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			reply, err := c.Image.List(cmd.Context(), &anvilv1.ImageListRequest{})
-			if err != nil {
-				return err
-			}
-			if output == "json" {
-				return printJSON(cmd.OutOrStdout(), reply)
-			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "ID\tARCH\tKIND\tSIZE\tIN USE\tPATH")
-			for _, img := range reply.GetImages() {
-				inUse := fmt.Sprintf("%d", img.GetRefCount())
-				if img.GetRefCount() == 0 {
-					inUse = "no"
+			return withClient(flags, func(c *client.Client) error {
+				reply, err := c.Image.List(cmd.Context(), &anvilv1.ImageListRequest{})
+				if err != nil {
+					return err
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-					img.GetId(), img.GetArch(), img.GetKind(), humanBytes(img.GetSizeBytes()), inUse, img.GetPath())
-			}
-			return tw.Flush()
+				if output == "json" {
+					return printJSON(cmd.OutOrStdout(), reply)
+				}
+				tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "ID\tARCH\tKIND\tSIZE\tIN USE\tPATH")
+				for _, img := range reply.GetImages() {
+					inUse := fmt.Sprintf("%d", img.GetRefCount())
+					if img.GetRefCount() == 0 {
+						inUse = "no"
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+						img.GetId(), img.GetArch(), img.GetKind(), progress.Bytes(img.GetSizeBytes()), inUse, img.GetPath())
+				}
+				return tw.Flush()
+			})
 		},
 	}
 	addOutputFlag(cmd, &output)
@@ -76,18 +74,15 @@ func newImageDeleteCommand(flags *globalFlags) *cobra.Command {
 			"A Firecracker raw copy or kernel can be deleted on its own; it comes back the next time it's needed.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				_, err := c.Image.Delete(cmd.Context(), &anvilv1.ImageDeleteRequest{
+					Id:    args[0],
+					Arch:  arch,
+					Force: force,
+					Kind:  kind,
+				})
 				return err
-			}
-			defer c.Close()
-			_, err = c.Image.Delete(cmd.Context(), &anvilv1.ImageDeleteRequest{
-				Id:    args[0],
-				Arch:  arch,
-				Force: force,
-				Kind:  kind,
 			})
-			return err
 		},
 	}
 	cmd.Flags().StringVar(&arch, "arch", "", "architecture, if the id is ambiguous across more than one")
@@ -105,20 +100,17 @@ func newImageChecksumCommand(flags *globalFlags) *cobra.Command {
 			"on this host; it is never downloaded by this command.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-			reply, err := c.Image.Checksum(cmd.Context(), &anvilv1.ImageChecksumRequest{Id: args[0], Arch: arch})
-			if err != nil {
-				return err
-			}
-			if !reply.GetCached() {
-				return fmt.Errorf("image %q is not cached on this host", args[0])
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), reply.GetSha256())
-			return nil
+			return withClient(flags, func(c *client.Client) error {
+				reply, err := c.Image.Checksum(cmd.Context(), &anvilv1.ImageChecksumRequest{Id: args[0], Arch: arch})
+				if err != nil {
+					return err
+				}
+				if !reply.GetCached() {
+					return fmt.Errorf("image %q is not cached on this host", args[0])
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), reply.GetSha256())
+				return nil
+			})
 		},
 	}
 	cmd.Flags().StringVar(&arch, "arch", "", "image architecture (default x86_64)")
@@ -144,34 +136,30 @@ func newImageContainersListCommand(flags *globalFlags) *cobra.Command {
 			if err := checkOutput(output); err != nil {
 				return err
 			}
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			reply, err := c.Image.ListContainerImages(cmd.Context(), &anvilv1.ContainerImageListRequest{})
-			if err != nil {
-				return err
-			}
-			if output == "json" {
-				return printJSON(cmd.OutOrStdout(), reply)
-			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "ID\tENGINE\tREPO:TAG\tSIZE\tIN USE")
-			for _, img := range reply.GetImages() {
-				inUse := fmt.Sprintf("%d", img.GetRefCount())
-				if img.GetRefCount() == 0 {
-					inUse = "no"
+			return withClient(flags, func(c *client.Client) error {
+				reply, err := c.Image.ListContainerImages(cmd.Context(), &anvilv1.ContainerImageListRequest{})
+				if err != nil {
+					return err
 				}
-				tag := "<none>"
-				if tags := img.GetRepoTags(); len(tags) > 0 {
-					tag = tags[0]
+				if output == "json" {
+					return printJSON(cmd.OutOrStdout(), reply)
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-					shortImageIDCLI(img.GetId()), engineLabel(img.GetEngine()), tag, humanBytes(img.GetSizeBytes()), inUse)
-			}
-			return tw.Flush()
+				tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "ID\tENGINE\tREPO:TAG\tSIZE\tIN USE")
+				for _, img := range reply.GetImages() {
+					inUse := fmt.Sprintf("%d", img.GetRefCount())
+					if img.GetRefCount() == 0 {
+						inUse = "no"
+					}
+					tag := "<none>"
+					if tags := img.GetRepoTags(); len(tags) > 0 {
+						tag = tags[0]
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+						format.ShortImageID(img.GetId()), format.Engine(img.GetEngine()), tag, progress.Bytes(img.GetSizeBytes()), inUse)
+				}
+				return tw.Flush()
+			})
 		},
 	}
 	addOutputFlag(cmd, &output)
@@ -190,35 +178,21 @@ func newImageContainersDeleteCommand(flags *globalFlags) *cobra.Command {
 			"one still referenced by any container (running or not) unless --force is given.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := dial(flags)
-			if err != nil {
+			return withClient(flags, func(c *client.Client) error {
+				var pbEngine anvilv1.ContainerEngine
+				if engine == "podman" {
+					pbEngine = anvilv1.ContainerEngine_CONTAINER_ENGINE_PODMAN
+				}
+				_, err := c.Image.DeleteContainerImage(cmd.Context(), &anvilv1.ContainerImageDeleteRequest{
+					Id:     args[0],
+					Engine: pbEngine,
+					Force:  force,
+				})
 				return err
-			}
-			defer c.Close()
-
-			var pbEngine anvilv1.ContainerEngine
-			if engine == "podman" {
-				pbEngine = anvilv1.ContainerEngine_CONTAINER_ENGINE_PODMAN
-			}
-			_, err = c.Image.DeleteContainerImage(cmd.Context(), &anvilv1.ContainerImageDeleteRequest{
-				Id:     args[0],
-				Engine: pbEngine,
-				Force:  force,
 			})
-			return err
 		},
 	}
 	cmd.Flags().StringVar(&engine, "engine", "docker", `container engine: "docker" or "podman"`)
 	cmd.Flags().BoolVar(&force, "force", false, "delete even if a container still depends on it")
 	return cmd
-}
-
-// shortImageIDCLI trims a "sha256:" prefix and shortens to 12 hex
-// characters, matching `docker images`' own convention.
-func shortImageIDCLI(id string) string {
-	id = strings.TrimPrefix(id, "sha256:")
-	if len(id) > 12 {
-		id = id[:12]
-	}
-	return id
 }

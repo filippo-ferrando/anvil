@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newEventsCommand(flags *globalFlags) *cobra.Command {
@@ -29,40 +30,36 @@ func newEventsCommand(flags *globalFlags) *cobra.Command {
 			if err := checkOutput(output); err != nil {
 				return err
 			}
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			defer c.Close()
-
-			req := &anvilv1.EventsRequest{Limit: limit, Follow: follow}
-			if len(args) == 1 {
-				req.Name = args[0]
-			}
-			stream, err := c.Events(cmd.Context(), req)
-			if err != nil {
-				return err
-			}
-			out := cmd.OutOrStdout()
-			if output == "table" {
-				fmt.Fprintln(out, formatEventHeader())
-			}
-			for {
-				ev, err := stream.Recv()
-				if err == io.EOF || status.Code(err) == codes.Canceled {
-					return nil
+			return withClient(flags, func(c *client.Client) error {
+				req := &anvilv1.EventsRequest{Limit: limit, Follow: follow}
+				if len(args) == 1 {
+					req.Name = args[0]
 				}
+				stream, err := c.Events(cmd.Context(), req)
 				if err != nil {
 					return err
 				}
-				if output == "json" {
-					if err := printJSON(out, ev); err != nil {
+				out := cmd.OutOrStdout()
+				if output == "table" {
+					fmt.Fprintln(out, formatEventHeader())
+				}
+				for {
+					ev, err := stream.Recv()
+					if err == io.EOF || status.Code(err) == codes.Canceled {
+						return nil
+					}
+					if err != nil {
 						return err
 					}
-					continue
+					if output == "json" {
+						if err := printJSON(out, ev); err != nil {
+							return err
+						}
+						continue
+					}
+					fmt.Fprintln(out, formatEvent(ev))
 				}
-				fmt.Fprintln(out, formatEvent(ev))
-			}
+			})
 		},
 	}
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "keep printing new events until interrupted")

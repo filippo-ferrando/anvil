@@ -224,27 +224,12 @@ func nextVMAddress(subnet string, members []store.IntentMember) (string, error) 
 	return ipam.VMAddress(subnet, idx)
 }
 
-// hostsFor builds a role -> IP map from every member with a recorded
-// address, for a new VM member's ExtraHosts.
-func hostsFor(members []store.IntentMember) map[string]string {
+// hostsFor builds a role -> IP map from every member with a recorded address, for a new
+// member's ExtraHosts. vmOnly keeps VM members only, for a new container member.
+func hostsFor(members []store.IntentMember, vmOnly bool) map[string]string {
 	hosts := make(map[string]string, len(members))
 	for _, mem := range members {
-		if mem.IP != "" {
-			hosts[mem.Role] = mem.IP
-		}
-	}
-	if len(hosts) == 0 {
-		return nil
-	}
-	return hosts
-}
-
-// vmHostsFor is hostsFor, restricted to VM members, for a new container
-// member's ExtraHosts.
-func vmHostsFor(members []store.IntentMember) map[string]string {
-	hosts := make(map[string]string, len(members))
-	for _, mem := range members {
-		if mem.Kind == instance.KindVM && mem.IP != "" {
+		if mem.IP != "" && (!vmOnly || mem.Kind == instance.KindVM) {
 			hosts[mem.Role] = mem.IP
 		}
 	}
@@ -318,7 +303,7 @@ func (m *Manager) Launch(ctx context.Context, params instance.LaunchParams, prog
 		case launchParams.Container != nil:
 			launchParams.Container.NetworkMode = it.Network.EngineNetworkName
 			launchParams.Container.NetworkAlias = role
-			launchParams.Container.ExtraHosts = vmHostsFor(it.Members)
+			launchParams.Container.ExtraHosts = hostsFor(it.Members, true)
 			if m.DNS != nil {
 				launchParams.Container.DNSServers = []string{it.Network.Gateway}
 				launchParams.Container.DNSSearch = []string{Domain(it.Name)}
@@ -339,7 +324,7 @@ func (m *Manager) Launch(ctx context.Context, params instance.LaunchParams, prog
 			launchParams.VM.BridgeInterface = it.Network.BridgeInterface
 			launchParams.VM.StaticIP = ip
 			launchParams.VM.Gateway = it.Network.Gateway
-			launchParams.VM.ExtraHosts = hostsFor(it.Members)
+			launchParams.VM.ExtraHosts = hostsFor(it.Members, false)
 			if m.DNS != nil {
 				launchParams.VM.DNSServers = []string{it.Network.Gateway}
 				launchParams.VM.DNSSearch = []string{Domain(it.Name)}

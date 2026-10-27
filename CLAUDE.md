@@ -104,6 +104,7 @@ internal/
   cloudinitrepo/ fetches a cloud-init template repo manifest and its templates
   hostpath/      ACL grants and path checks for host dirs the anvil user must reach (`anvil create-dir`)
   progress/      progress line formatting shared by the CLI and TUI
+  format/        plain-text labels (state, kind, engine, uptime...) shared by the CLI and TUI
   sshkey/        anvil's default guest-access SSH keypair
   version/       build version stamped from git
   cli/commands/  cobra commands (one file per command/command group)
