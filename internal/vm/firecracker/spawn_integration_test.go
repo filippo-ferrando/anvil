@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	vmproc "git.fferrando.cc/rdfilippo/anvil/internal/vm/proc"
 )
 
 // TestSpawnRealProcessLifecycle boots a real firecracker with the kernel in
@@ -103,7 +105,7 @@ func TestSpawnRealProcessLifecycle(t *testing.T) {
 	if err := proc.Stop(ctx, time.Second); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
-	if processAlive(proc.Pid()) {
+	if vmproc.Alive(proc.Pid()) {
 		t.Fatal("process still alive after Stop")
 	}
 	select {

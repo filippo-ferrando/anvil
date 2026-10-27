@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
-	"os/exec"
 	"path/filepath"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
@@ -20,8 +19,8 @@ import (
 // the base qcow2's checksum still identifies it.
 
 func qemuImg(ctx context.Context, what string, args ...string) error {
-	if out, err := exec.CommandContext(ctx, "qemu-img", args...).CombinedOutput(); err != nil {
-		return fmt.Errorf("vm: %s: %w: %s", what, err, out)
+	if err := image.QemuImg(ctx, args...); err != nil {
+		return fmt.Errorf("vm: %s: %w", what, err)
 	}
 	return nil
 }
@@ -95,34 +94,9 @@ func (b *FCBackend) ExportDiskFile(ctx context.Context, spec *instance.Spec, dir
 // PrepareImportedDisk points an imported delta at this host's raw copy of the same base,
 // after checking the base is identical. A flattened disk is left as is.
 func (b *FCBackend) PrepareImportedDisk(ctx context.Context, imageRef, arch, diskPath, baseSHA256 string) error {
-	backing, err := image.BackingFile(diskPath)
-	if err != nil {
-		return fmt.Errorf("vm: inspecting imported disk: %w", err)
-	}
-	if backing == "" {
-		return nil
-	}
-	catalog, err := b.QEMU.EffectiveCatalog()
-	if err != nil {
+	entry, base, err := b.QEMU.importBase(ctx, imageRef, arch, diskPath, baseSHA256)
+	if err != nil || base == "" {
 		return err
-	}
-	entry, err := catalog.Find(imageRef, arch)
-	if err != nil {
-		return err
-	}
-	base, err := b.QEMU.Vault.Ensure(ctx, entry, nil)
-	if err != nil {
-		return fmt.Errorf("vm: preparing imported disk's base image: %w", err)
-	}
-	if baseSHA256 != "" {
-		sum, err := image.FileChecksum(base)
-		if err != nil {
-			return fmt.Errorf("vm: hashing local base image %s: %w", entry.ID, err)
-		}
-		if sum != baseSHA256 {
-			return fmt.Errorf("vm: local base image %s differs from the one this bundle was made against "+
-				"(sha256 %s, want %s), importing it would corrupt the disk", entry.ID, sum, baseSHA256)
-		}
 	}
 	rawBase, err := b.Cache.RawBase(ctx, entry, nil)
 	if err != nil {

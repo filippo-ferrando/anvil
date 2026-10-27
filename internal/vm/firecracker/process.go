@@ -3,7 +3,6 @@
 package firecracker
 
 import (
-	"bytes"
 	"context"
 	"debug/elf"
 	"errors"
@@ -15,6 +14,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/proc"
 )
 
 // Binary is the firecracker executable, looked up on PATH.
@@ -100,16 +101,11 @@ func (p Paths) command() (string, []string, error) {
 
 // Process controls one running or reattached firecracker process.
 type Process struct {
+	*proc.Handle
 	paths Paths
-	pid   int
-	cmd   *exec.Cmd  // nil when Attach'd rather than Spawn'd
 	files []*os.File // console and log, nil when Attach'd
 
 	API *Client
-
-	// exited is closed exactly once the process is known to be gone.
-	exited  chan struct{}
-	waitErr error
 }
 
 // Spawn starts firecracker, which boots the VM described by paths.ConfigFile right away.
@@ -149,15 +145,10 @@ func Spawn(ctx context.Context, paths Paths) (*Process, error) {
 		return nil, fmt.Errorf("firecracker: starting %s: %w", bin, err)
 	}
 
-	p := &Process{
-		paths: paths, pid: cmd.Process.Pid, cmd: cmd, files: []*os.File{console, logF},
-		API: NewClient(paths.APISocket), exited: make(chan struct{}),
-	}
-	go func() {
-		p.waitErr = cmd.Wait()
-		close(p.exited)
-	}()
-	return p, nil
+	return &Process{
+		Handle: proc.Track(cmd), paths: paths, files: []*os.File{console, logF},
+		API: NewClient(paths.APISocket),
+	}, nil
 }
 
 // Attach takes control of a firecracker process an earlier anvild spawned, after
@@ -166,19 +157,13 @@ func Attach(paths Paths, pid int) (*Process, error) {
 	if !looksLikeOurs(pid, paths) {
 		return nil, fmt.Errorf("firecracker: pid %d is not firecracker for %s (stale or reused pid)", pid, paths.APISocket)
 	}
-	p := &Process{paths: paths, pid: pid, API: NewClient(paths.APISocket), exited: make(chan struct{})}
-	go p.pollLiveness()
-	return p, nil
+	return &Process{Handle: proc.Watch(pid), paths: paths, API: NewClient(paths.APISocket)}, nil
 }
 
 // looksLikeOurs checks pid is firecracker serving paths. Jailed ones all use the same
 // in-jail socket path, so their --id tells them apart.
 func looksLikeOurs(pid int, paths Paths) bool {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
-	if err != nil {
-		return false
-	}
-	args := strings.Split(string(bytes.TrimRight(data, "\x00")), "\x00")
+	args := proc.Args(pid)
 	if len(args) == 0 || !containsArg(args, paths.InVMM(paths.APISocket)) {
 		return false
 	}
@@ -207,32 +192,6 @@ func containsArg(args []string, want string) bool {
 	return false
 }
 
-func processAlive(pid int) bool {
-	return syscall.Kill(pid, 0) == nil && !isZombie(pid)
-}
-
-// isZombie reports whether pid has exited and only waits for its parent to reap it.
-func isZombie(pid int) bool {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if err != nil {
-		return false
-	}
-	// The state follows the command name, which is in parentheses and may hold spaces.
-	i := bytes.LastIndexByte(data, ')')
-	return i >= 0 && i+2 < len(data) && data[i+2] == 'Z'
-}
-
-func (p *Process) pollLiveness() {
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	for range ticker.C {
-		if !processAlive(p.pid) {
-			close(p.exited)
-			return
-		}
-	}
-}
-
 // WaitAPI waits until the API socket answers, which also means the config was accepted.
 func (p *Process) WaitAPI(ctx context.Context) error {
 	deadline := time.Now().Add(5 * time.Second)
@@ -246,7 +205,7 @@ func (p *Process) WaitAPI(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-p.exited:
+		case <-p.Exited():
 			// The log may be gone by the time anyone reads it, so its tail goes in the error.
 			return fmt.Errorf("firecracker: exited during startup (%s): %s", p.ExitStatus(), logTail(p.paths.LogFile))
 		case <-time.After(50 * time.Millisecond):
@@ -280,77 +239,19 @@ func IsDynamic(path string) bool {
 	return false
 }
 
-// ExitedCleanly reports whether the process ended with status 0, as firecracker does
-// after a guest reboot. A reattached process's status is unknown and counts as clean.
-func (p *Process) ExitedCleanly() bool {
-	if p.cmd == nil || p.cmd.ProcessState == nil {
-		return true
-	}
-	return p.cmd.ProcessState.Success()
-}
-
-// ExitStatus describes how the process ended, e.g. "exit status 1" or "signal: killed".
-func (p *Process) ExitStatus() string {
-	if p.cmd == nil || p.cmd.ProcessState == nil {
-		return "unknown"
-	}
-	return p.cmd.ProcessState.String()
-}
-
-// Exited is closed once the process is gone.
-func (p *Process) Exited() <-chan struct{} { return p.exited }
-
-func (p *Process) Pid() int { return p.pid }
-
 // Stop sends Ctrl+Alt+Del and waits up to timeout for the guest to go down, then kills
 // the process. Pass timeout=0 for an immediate hard stop.
 func (p *Process) Stop(ctx context.Context, timeout time.Duration) error {
 	if timeout > 0 {
 		waitCtx, cancel := context.WithTimeout(ctx, timeout)
 		err := p.API.SendCtrlAltDel(waitCtx)
-		exited := err == nil && p.waitExit(waitCtx)
+		exited := err == nil && p.WaitExit(waitCtx)
 		cancel()
 		if exited {
 			return nil
 		}
 	}
-	return p.kill()
-}
-
-func (p *Process) kill() error {
-	if p.pid == 0 {
-		return nil
-	}
-	select {
-	case <-p.exited:
-		// Already gone: its pid may belong to another process by now.
-	default:
-		// Negative pid targets the whole process group.
-		_ = syscall.Kill(-p.pid, syscall.SIGKILL)
-		select {
-		case <-p.exited:
-		case <-time.After(10 * time.Second):
-			// An Attach'd process that nothing reaps stays a zombie and never looks gone.
-			return fmt.Errorf("firecracker: pid %d still there 10s after SIGKILL", p.pid)
-		}
-	}
-	if p.cmd == nil {
-		return nil
-	}
-	// Dying of the SIGKILL sent above counts as a successful kill.
-	if ws, ok := p.cmd.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() && ws.Signal() == syscall.SIGKILL {
-		return nil
-	}
-	return p.waitErr
-}
-
-func (p *Process) waitExit(ctx context.Context) bool {
-	select {
-	case <-p.exited:
-		return true
-	case <-ctx.Done():
-		return false
-	}
+	return p.Kill("firecracker")
 }
 
 // Close releases the process's file handles without affecting whether firecracker

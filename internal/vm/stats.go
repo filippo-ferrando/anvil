@@ -33,9 +33,7 @@ func (b *Backend) Stats(ctx context.Context, spec *instance.Spec) (instance.Stat
 	}
 	v := spec.VM
 
-	b.mu.Lock()
-	proc, ok := b.running[spec.ID]
-	b.mu.Unlock()
+	proc, ok := b.lookup(spec.ID)
 	if !ok {
 		return instance.Stats{}, fmt.Errorf("vm: %s isn't running", spec.Name)
 	}

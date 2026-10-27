@@ -3,7 +3,6 @@
 package qemu
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -12,20 +11,17 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/proc"
 )
 
 // Process controls one running or reattached qemu-system-* instance.
 type Process struct {
+	*proc.Handle
 	cfg  Config
-	pid  int
-	cmd  *exec.Cmd // nil when Attach'd rather than Spawn'd
-	logF *os.File  // nil when Attach'd, we don't own its log file
+	logF *os.File // nil when Attach'd, we don't own its log file
 
 	QMP *QMPClient
-
-	// exited is closed exactly once the process is known to be gone.
-	exited  chan struct{}
-	waitErr error
 }
 
 // Spawn starts qemu-system-* for cfg, redirecting its stdout/stderr to
@@ -56,12 +52,7 @@ func Spawn(ctx context.Context, cfg Config, logPath string) (*Process, error) {
 		return nil, fmt.Errorf("qemu: starting %s: %w", bin, err)
 	}
 
-	p := &Process{cfg: cfg, pid: cmd.Process.Pid, cmd: cmd, logF: logF, exited: make(chan struct{})}
-	go func() {
-		p.waitErr = cmd.Wait()
-		close(p.exited)
-	}()
-	return p, nil
+	return &Process{Handle: proc.Track(cmd), cfg: cfg, logF: logF}, nil
 }
 
 // Attach re-establishes control over a previously-spawned qemu-system-*
@@ -70,76 +61,12 @@ func Attach(cfg Config, pid int, diskPath string) (*Process, error) {
 	if !looksLikeOurQEMU(pid, diskPath) {
 		return nil, fmt.Errorf("qemu: pid %d is not a qemu-system process for %s (stale or reused pid)", pid, diskPath)
 	}
-	p := &Process{cfg: cfg, pid: pid, exited: make(chan struct{})}
-	go p.pollLiveness()
-	return p, nil
+	return &Process{Handle: proc.Watch(pid), cfg: cfg}, nil
 }
 
 func looksLikeOurQEMU(pid int, diskPath string) bool {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
-	if err != nil {
-		return false
-	}
-	// /proc's cmdline is NUL-separated argv, not space-separated.
-	cmdline := string(bytes.ReplaceAll(data, []byte{0}, []byte{' '}))
+	cmdline := strings.Join(proc.Args(pid), " ")
 	return strings.Contains(cmdline, "qemu-system") && strings.Contains(cmdline, diskPath)
-}
-
-func processAlive(pid int) bool {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return proc.Signal(syscall.Signal(0)) == nil && !isZombie(pid)
-}
-
-// isZombie reports whether pid has exited and only waits for its parent to reap it.
-func isZombie(pid int) bool {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if err != nil {
-		return false
-	}
-	// The state follows the command name, which is in parentheses and may hold spaces.
-	i := bytes.LastIndexByte(data, ')')
-	return i >= 0 && i+2 < len(data) && data[i+2] == 'Z'
-}
-
-func (p *Process) pollLiveness() {
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	for range ticker.C {
-		if !processAlive(p.pid) {
-			close(p.exited)
-			return
-		}
-	}
-}
-
-// ExitedCleanly reports whether the exited process ended with status 0, as QEMU does after
-// a guest poweroff or a QMP quit. A reattached process's status is unknown and counts as clean.
-func (p *Process) ExitedCleanly() bool {
-	if p.cmd == nil || p.cmd.ProcessState == nil {
-		return true
-	}
-	return p.cmd.ProcessState.Success()
-}
-
-// ExitStatus describes how the process ended, e.g. "exit status 1" or "signal: killed".
-func (p *Process) ExitStatus() string {
-	if p.cmd == nil || p.cmd.ProcessState == nil {
-		return "unknown"
-	}
-	return p.cmd.ProcessState.String()
-}
-
-// Exited is closed once the process is gone.
-func (p *Process) Exited() <-chan struct{} {
-	return p.exited
-}
-
-// Pid returns the qemu-system-* process ID, or 0 if it isn't running.
-func (p *Process) Pid() int {
-	return p.pid
 }
 
 // AttachQMP dials the process's QMP socket, retrying briefly since the
@@ -157,7 +84,7 @@ func (p *Process) AttachQMP(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-p.exited:
+		case <-p.Exited():
 			return fmt.Errorf("qemu: exited (%s) before QMP was reachable at %s: %w", p.ExitStatus(), p.cfg.QMPSocket, lastErr)
 		case <-time.After(100 * time.Millisecond):
 		}
@@ -171,7 +98,7 @@ func (p *Process) Stop(ctx context.Context, timeout time.Duration) error {
 	if p.QMP != nil && timeout > 0 {
 		shutdownCtx, cancel := context.WithTimeout(ctx, timeout)
 		if err := p.QMP.GracefulShutdown(shutdownCtx); err == nil {
-			if p.waitExit(shutdownCtx) {
+			if p.WaitExit(shutdownCtx) {
 				cancel()
 				return nil
 			}
@@ -182,59 +109,14 @@ func (p *Process) Stop(ctx context.Context, timeout time.Duration) error {
 	if p.QMP != nil {
 		quitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		_ = p.QMP.Quit(quitCtx)
-		exited := p.waitExit(quitCtx)
+		exited := p.WaitExit(quitCtx)
 		cancel()
 		if exited {
 			return nil
 		}
 	}
 
-	return p.kill()
-}
-
-// killTimeout bounds the wait for a process to go after SIGKILL.
-var killTimeout = 10 * time.Second
-
-func (p *Process) kill() error {
-	if p.pid == 0 {
-		return nil
-	}
-	select {
-	case <-p.exited:
-		// Already gone: its pid may belong to another process by now.
-	default:
-		// Negative pid targets the whole process group; a process that isn't a
-		// group leader only gets the signal through its own pid.
-		if err := syscall.Kill(-p.pid, syscall.SIGKILL); err != nil {
-			_ = syscall.Kill(p.pid, syscall.SIGKILL)
-		}
-		select {
-		case <-p.exited:
-		case <-time.After(killTimeout):
-			// An Attach'd process that nothing reaps stays a zombie and never looks gone.
-			return fmt.Errorf("qemu: pid %d still there %s after SIGKILL", p.pid, killTimeout)
-		}
-	}
-	if p.cmd == nil {
-		return nil
-	}
-	// A signaled process reports as a non-nil *exec.ExitError; dying of
-	// the SIGKILL sent above counts as a successful kill.
-	if ws, ok := p.cmd.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() && ws.Signal() == syscall.SIGKILL {
-		return nil
-	}
-	return p.waitErr
-}
-
-// waitExit blocks until the process has exited or ctx is done, returning
-// whether it exited in time. Safe to call multiple times/concurrently.
-func (p *Process) waitExit(ctx context.Context) bool {
-	select {
-	case <-p.exited:
-		return true
-	case <-ctx.Done():
-		return false
-	}
+	return p.Kill("qemu")
 }
 
 // Close releases the process's file handles without affecting whether

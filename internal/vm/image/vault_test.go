@@ -342,3 +342,18 @@ func TestMoveChecksum(t *testing.T) {
 		t.Errorf("expected the moved sidecar value %s, got %s", fake, got)
 	}
 }
+
+func TestQemuImgErrorCarriesOutput(t *testing.T) {
+	if _, err := exec.LookPath("qemu-img"); err != nil {
+		t.Skip("qemu-img not installed, skipping")
+	}
+	disk := filepath.Join(t.TempDir(), "d.qcow2")
+	if err := QemuImg(t.Context(), "create", "-f", "qcow2", disk, "1M"); err != nil {
+		t.Fatalf("QemuImg create: %v", err)
+	}
+	missing := filepath.Join(t.TempDir(), "missing.qcow2")
+	err := QemuImg(t.Context(), "info", missing)
+	if err == nil || !strings.Contains(err.Error(), "missing.qcow2") {
+		t.Fatalf("QemuImg info on a missing file = %v, want an error naming the file", err)
+	}
+}

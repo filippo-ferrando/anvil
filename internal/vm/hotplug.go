@@ -69,9 +69,7 @@ func needsRestart(format string, args ...any) error {
 
 // liveTarget returns spec's QEMU process and what it was started with.
 func (b *Backend) liveTarget(spec *instance.Spec) (*qemu.Process, runtimeState, error) {
-	b.mu.Lock()
-	proc, running := b.running[spec.ID]
-	b.mu.Unlock()
+	proc, running := b.lookup(spec.ID)
 	if !running || proc.QMP == nil {
 		return nil, runtimeState{}, needsRestart("%s is not running", spec.Name)
 	}

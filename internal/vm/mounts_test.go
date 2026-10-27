@@ -98,22 +98,18 @@ func TestFstabLine(t *testing.T) {
 	}
 }
 
-func TestMergeMountsNothingToDo(t *testing.T) {
-	out, err := mergeMounts("#cloud-config\n{}\n", nil, 0, fstabLine)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestAddMountsNothingToDo(t *testing.T) {
+	out := applyTo(t, "#cloud-config\n{}\n", func(doc map[string]any) { addMounts(doc, nil, 0, fstabLine) })
 	if out != "#cloud-config\n{}\n" {
 		t.Errorf("expected no change with no mounts at generation 0, got %q", out)
 	}
 }
 
-func TestMergeMountsKeepsExistingBootcmd(t *testing.T) {
+func TestAddMountsKeepsExistingBootcmd(t *testing.T) {
 	existing := "#cloud-config\nbootcmd:\n  - echo existing\n"
-	out, err := mergeMounts(existing, []instance.Mount{{Tag: "mount0", GuestPath: "/mnt/a"}}, 1, fstabLine)
-	if err != nil {
-		t.Fatal(err)
-	}
+	out := applyTo(t, existing, func(doc map[string]any) {
+		addMounts(doc, []instance.Mount{{Tag: "mount0", GuestPath: "/mnt/a"}}, 1, fstabLine)
+	})
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(stripHeader(out)), &doc); err != nil {
 		t.Fatal(err)
@@ -136,10 +132,7 @@ func TestMountsBootScriptRewritesFstabOncePerGeneration(t *testing.T) {
 		{Tag: "mount0", GuestPath: "/mnt/old"},
 		{Tag: "mount1", GuestPath: "/mnt/ro", ReadOnly: true},
 	}
-	out, err := mergeMounts("", mounts, 3, fstabLine)
-	if err != nil {
-		t.Fatal(err)
-	}
+	out := applyTo(t, "", func(doc map[string]any) { addMounts(doc, mounts, 3, fstabLine) })
 	script := bootcmdScript(t, out)
 	g.run(script)
 
@@ -171,5 +164,11 @@ func TestMountLiveScriptReplacesItsOwnLine(t *testing.T) {
 	}
 	if !strings.Contains(g.calls(), "mount /data") {
 		t.Errorf("expected a mount call, got:\n%s", g.calls())
+	}
+}
+
+func TestFstabEscape(t *testing.T) {
+	if got := fstabEscape("/a b\tc"); got != `/a\040b\011c` {
+		t.Errorf("fstabEscape = %q", got)
 	}
 }

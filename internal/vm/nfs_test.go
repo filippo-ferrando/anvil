@@ -131,10 +131,7 @@ func TestNFSFstabLine(t *testing.T) {
 	if got := g.fstabContent(); strings.Contains(got, "mount3") || !strings.Contains(got, "UUID=abc") {
 		t.Fatalf("fstab after umount:\n%s", got)
 	}
-	out, err := mergeMounts("", nil, 1, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	out := applyTo(t, "", func(doc map[string]any) { addMounts(doc, nil, 1, nil) })
 	g = newGuestShell(t, "UUID=abc / ext4 defaults 0 1\n"+line+"\n")
 	g.run(bootcmdScript(t, out))
 	if got := g.fstabContent(); got != "UUID=abc / ext4 defaults 0 1\n" {

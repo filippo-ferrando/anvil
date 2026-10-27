@@ -217,3 +217,18 @@ func TestPrepareImportedDiskLeavesFlatDiskAlone(t *testing.T) {
 		t.Errorf("flat disk got backing file %q (%v)", backing, err)
 	}
 }
+
+func TestBaseOf(t *testing.T) {
+	requireQemuImg(t)
+	dir := t.TempDir()
+	base, disk, flat := filepath.Join(dir, "base.qcow2"), filepath.Join(dir, "disk.qcow2"), filepath.Join(dir, "flat.qcow2")
+	newBaseAndDisk(t, base, disk)
+	run(t, "qemu-img", "create", "-f", "qcow2", flat, "64M")
+
+	if got, err := baseOf(&instance.Spec{Name: "a", VM: &instance.VMSpec{DiskPath: disk}}); err != nil || got != base {
+		t.Fatalf("baseOf overlay = %q, %v; want %q", got, err, base)
+	}
+	if _, err := baseOf(&instance.Spec{Name: "b", VM: &instance.VMSpec{DiskPath: flat}}); err == nil || !strings.Contains(err.Error(), "no base image") {
+		t.Fatalf("baseOf flat disk = %v, want a no base image error", err)
+	}
+}

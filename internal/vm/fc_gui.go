@@ -70,9 +70,7 @@ func (b *FCBackend) PrepareGUI(ctx context.Context, spec *instance.Spec, x11 boo
 	if spec.VM == nil {
 		return instance.GUISession{}, fmt.Errorf("vm: PrepareGUI called with a nil VMSpec")
 	}
-	b.mu.Lock()
-	_, running := b.running[spec.ID]
-	b.mu.Unlock()
+	_, running := b.lookup(spec.ID)
 	if !running {
 		return instance.GUISession{}, fmt.Errorf("vm: %s isn't running", spec.Name)
 	}

@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
@@ -42,9 +41,7 @@ func (b *FCBackend) copyDisk(ctx context.Context, spec *instance.Spec, dest stri
 			progress(s)
 		}
 	}
-	b.mu.Lock()
-	proc, running := b.running[spec.ID]
-	b.mu.Unlock()
+	proc, running := b.lookup(spec.ID)
 	if !running {
 		say("copying disk")
 		return image.CloneDisk(ctx, spec.VM.DiskPath, dest, 0)
@@ -125,34 +122,16 @@ func (b *FCBackend) RestoreSnapshot(ctx context.Context, spec *instance.Spec, na
 		return fmt.Errorf("vm: %s has no snapshot named %q", spec.Name, name)
 	}
 
-	b.mu.Lock()
-	_, running := b.running[spec.ID]
-	b.mu.Unlock()
-	if running {
-		if err := b.Stop(ctx, spec, false, 30*time.Second); err != nil {
-			return fmt.Errorf("vm: stopping %s to restore snapshot %q: %w", spec.Name, name, err)
+	return restoreSnapshot(ctx, b, spec, name, func() error {
+		// Copied next to the disk and renamed over it, so a failed copy leaves the disk whole.
+		tmp := spec.VM.DiskPath + ".restore"
+		err := image.CloneDisk(ctx, path, tmp, 0)
+		if err == nil {
+			err = os.Rename(tmp, spec.VM.DiskPath)
 		}
-	}
-	// Copied next to the disk and renamed over it, so a failed copy leaves the disk whole.
-	tmp := spec.VM.DiskPath + ".restore"
-	applyErr := image.CloneDisk(ctx, path, tmp, 0)
-	if applyErr == nil {
-		applyErr = os.Rename(tmp, spec.VM.DiskPath)
-	}
-	_ = os.Remove(tmp)
-
-	if running {
-		if err := b.Start(ctx, spec); err != nil {
-			if applyErr != nil {
-				return fmt.Errorf("vm: restoring snapshot %q: %w (restarting %s afterward also failed: %v)", name, applyErr, spec.Name, err)
-			}
-			return fmt.Errorf("vm: restarting %s after restoring snapshot %q: %w", spec.Name, name, err)
-		}
-	}
-	if applyErr != nil {
-		return fmt.Errorf("vm: restoring snapshot %q: %w", name, applyErr)
-	}
-	return nil
+		_ = os.Remove(tmp)
+		return err
+	})
 }
 
 func (b *FCBackend) DeleteSnapshot(ctx context.Context, spec *instance.Spec, name string) error {
@@ -263,9 +242,7 @@ func (b *FCBackend) ResizeDisk(ctx context.Context, spec *instance.Spec, newGiB 
 		return "", fmt.Errorf("vm: resizing disk: %w", err)
 	}
 
-	b.mu.Lock()
-	proc, running := b.running[spec.ID]
-	b.mu.Unlock()
+	proc, running := b.lookup(spec.ID)
 	if !running {
 		return fmt.Sprintf("disk grown to %d GiB; the guest filesystem grows at the next boot", newGiB), nil
 	}
@@ -310,9 +287,7 @@ func fcHotplugMiB(arch string, cpus int, bootMiB int64) int64 {
 // SetMemoryLive plugs or unplugs virtio-mem memory of a running VM, between what it
 // booted with and the region it booted with on top.
 func (b *FCBackend) SetMemoryLive(ctx context.Context, spec *instance.Spec, memoryMiB int64) (string, error) {
-	b.mu.Lock()
-	proc, running := b.running[spec.ID]
-	b.mu.Unlock()
+	proc, running := b.lookup(spec.ID)
 	if !running {
 		return "", needsRestart("%s is not running", spec.Name)
 	}

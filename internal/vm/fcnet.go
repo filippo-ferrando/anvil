@@ -228,13 +228,13 @@ func (a *fcIPAM) taken(instanceID string) ([]string, error) {
 		}
 		for _, s := range specs {
 			if s.ID != instanceID && s.VM != nil && s.VM.StaticIP != "" && s.VM.NetworkMode != "bridge" {
-				taken = append(taken, stripCIDR(s.VM.StaticIP))
+				taken = append(taken, ipam.StripCIDR(s.VM.StaticIP))
 			}
 		}
 	}
 	for id, ip := range a.pending {
 		if id != instanceID {
-			taken = append(taken, stripCIDR(ip))
+			taken = append(taken, ipam.StripCIDR(ip))
 		}
 	}
 	return taken, nil
@@ -275,8 +275,8 @@ func (a *fcIPAM) reserve(instanceID, addr string) error {
 	if err != nil {
 		return err
 	}
-	if slices.Contains(taken, stripCIDR(addr)) {
-		return fmt.Errorf("vm: address %s is already used by another firecracker VM on this host", stripCIDR(addr))
+	if slices.Contains(taken, ipam.StripCIDR(addr)) {
+		return fmt.Errorf("vm: address %s is already used by another firecracker VM on this host", ipam.StripCIDR(addr))
 	}
 	if a.pending == nil {
 		a.pending = map[string]string{}
@@ -291,9 +291,4 @@ func (a *fcIPAM) release(instanceID string) {
 	a.mu.Lock()
 	delete(a.pending, instanceID)
 	a.mu.Unlock()
-}
-
-func stripCIDR(s string) string {
-	ip, _, _ := strings.Cut(s, "/")
-	return ip
 }

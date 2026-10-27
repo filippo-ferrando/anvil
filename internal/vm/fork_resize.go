@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os/exec"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
@@ -31,9 +30,8 @@ func (b *Backend) forkLive(ctx context.Context, source *instance.Spec, proc *qem
 	if err != nil {
 		return fmt.Errorf("vm: inspecting %s's disk: %w", source.Name, err)
 	}
-	create := exec.CommandContext(ctx, "qemu-img", "create", "-f", "qcow2", "-F", "qcow2", "-b", backing, diskPath, fmt.Sprint(virtualSize))
-	if out, err := create.CombinedOutput(); err != nil {
-		return fmt.Errorf("vm: creating fork disk: %w: %s", err, out)
+	if err := qemuImg(ctx, "creating fork disk", "create", "-f", "qcow2", "-F", "qcow2", "-b", backing, diskPath, fmt.Sprint(virtualSize)); err != nil {
+		return err
 	}
 
 	frozen := false
@@ -88,13 +86,10 @@ func (b *Backend) ResizeDisk(ctx context.Context, spec *instance.Spec, newGiB in
 		return "", fmt.Errorf("vm: disk can only grow: %s is already %.1f GiB", spec.Name, float64(current)/bytesPerGiB)
 	}
 
-	b.mu.Lock()
-	proc, running := b.running[spec.ID]
-	b.mu.Unlock()
+	proc, running := b.lookup(spec.ID)
 	if !running || proc.QMP == nil {
-		cmd := exec.CommandContext(ctx, "qemu-img", "resize", spec.VM.DiskPath, fmt.Sprint(newBytes))
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return "", fmt.Errorf("vm: resizing disk: %w: %s", err, out)
+		if err := qemuImg(ctx, "resizing disk", "resize", spec.VM.DiskPath, fmt.Sprint(newBytes)); err != nil {
+			return "", err
 		}
 		return fmt.Sprintf("disk grown to %d GiB; the guest filesystem grows at the next boot", newGiB), nil
 	}

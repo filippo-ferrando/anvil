@@ -80,3 +80,11 @@ func TestVMAddressRejectsInvalidSubnet(t *testing.T) {
 		t.Error("expected an error for an invalid subnet string")
 	}
 }
+
+func TestStripCIDR(t *testing.T) {
+	for in, want := range map[string]string{"10.55.201.4/24": "10.55.201.4", "10.0.0.1": "10.0.0.1", "": ""} {
+		if got := StripCIDR(in); got != want {
+			t.Errorf("StripCIDR(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

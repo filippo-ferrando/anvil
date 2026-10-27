@@ -71,13 +71,10 @@ func TestGuestAgentRealBoot(t *testing.T) {
 		DiskPath: disk, Mounts: []instance.Mount{bootMount}, NextMountIndex: 1,
 	}}
 
-	userData, err := mergeGuestAgent("#cloud-config\n{}\n")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if userData, err = mergeMounts(userData, spec.VM.Mounts, 0, fstabLine); err != nil {
-		t.Fatal(err)
-	}
+	userData := applyTo(t, "#cloud-config\n{}\n", func(doc map[string]any) {
+		addGuestAgent(doc)
+		addMounts(doc, spec.VM.Mounts, 0, fstabLine)
+	})
 	seedPath := filepath.Join(dir, "seed.iso")
 	seed := cloudinit.Seed{UserData: userData, MetaData: "instance-id: e2e\nlocal-hostname: e2e\n"}
 	if err := cloudinit.NewBuilder().Build(seed, seedPath); err != nil {

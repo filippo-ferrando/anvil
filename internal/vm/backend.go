@@ -12,7 +12,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -55,17 +54,12 @@ type Backend struct {
 	catalogFrom []image.MirrorManifest
 	catalogMem  *image.Catalog
 
-	mu       sync.Mutex
-	running  map[string]*qemu.Process // instance ID -> live process
-	starting map[string]struct{}      // instance ID -> in-progress Start call
-
+	vmTable[*qemu.Process]
 	guestTracker
 
 	// Guarded by mu, like running.
 	virtiofs map[string]map[string]*qemu.Virtiofsd // instance ID -> mount tag -> its virtiofsd
-	stopping map[string]struct{}                   // instance ID -> Stop in progress, so its exit isn't reported
 	held     map[string]string                     // passthrough device sysfs name -> instance ID
-	exitHook func(instanceID string, state instance.State, reason string)
 }
 
 var (
@@ -84,13 +78,11 @@ func NewBackend(catalog *image.Catalog, vault *image.Vault, source Source) *Back
 		Source:    source,
 		Networker: network.LinuxBridge{},
 		Devices:   hostdev.Client{Socket: config.DevHelperSocket()},
-		running:   make(map[string]*qemu.Process),
-		starting:  make(map[string]struct{}),
+		vmTable:   newVMTable[*qemu.Process](),
 		guestTracker: newGuestTracker(func(id string) *qemu.GuestAgent {
 			return qemu.NewGuestAgent(guestAgentSocket(id))
 		}, "powerdown"),
 		virtiofs: make(map[string]map[string]*qemu.Virtiofsd),
-		stopping: make(map[string]struct{}),
 		held:     make(map[string]string),
 	}
 }
@@ -224,9 +216,8 @@ func (b *Backend) adoptMigratedDisk(ctx context.Context, spec *instance.Spec, di
 		if progress != nil {
 			progress("rebasing migrated disk onto the local base image")
 		}
-		cmd := exec.CommandContext(ctx, "qemu-img", "rebase", "-u", "-F", "qcow2", "-b", basePath, diskPath)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("vm: rebasing migrated disk: %w: %s", err, out)
+		if err := qemuImg(ctx, "rebasing migrated disk", "rebase", "-u", "-F", "qcow2", "-b", basePath, diskPath); err != nil {
+			return err
 		}
 		v.SourceDiskBaseSHA256 = ""
 	}
@@ -331,11 +322,7 @@ func (b *Backend) ExportDisk(ctx context.Context, spec *instance.Spec, destPath 
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
 		return fmt.Errorf("vm: creating export destination dir: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, "qemu-img", "convert", "-O", "qcow2", spec.VM.DiskPath, destPath)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("vm: exporting disk: %w: %s", err, out)
-	}
-	return nil
+	return qemuImg(ctx, "exporting disk", "convert", "-O", "qcow2", spec.VM.DiskPath, destPath)
 }
 
 // BaseImageChecksum returns the SHA256 of the base image spec's disk is an overlay on.
@@ -343,12 +330,9 @@ func (b *Backend) BaseImageChecksum(spec *instance.Spec) (string, error) {
 	if spec.VM == nil {
 		return "", fmt.Errorf("vm: BaseImageChecksum called with a nil VMSpec")
 	}
-	backing, err := image.BackingFile(spec.VM.DiskPath)
+	backing, err := baseOf(spec)
 	if err != nil {
-		return "", fmt.Errorf("vm: inspecting %s's disk: %w", spec.Name, err)
-	}
-	if backing == "" {
-		return "", fmt.Errorf("vm: %s's disk has no base image", spec.Name)
+		return "", err
 	}
 	return image.FileChecksum(backing)
 }
@@ -358,6 +342,11 @@ func (b *Backend) BaseImagePath(spec *instance.Spec) (string, error) {
 	if spec.VM == nil {
 		return "", fmt.Errorf("vm: BaseImagePath called with a nil VMSpec")
 	}
+	return baseOf(spec)
+}
+
+// baseOf returns the base image spec's qcow2 disk is an overlay on, failing when it has none.
+func baseOf(spec *instance.Spec) (string, error) {
 	backing, err := image.BackingFile(spec.VM.DiskPath)
 	if err != nil {
 		return "", fmt.Errorf("vm: inspecting %s's disk: %w", spec.Name, err)
@@ -374,21 +363,14 @@ func (b *Backend) ExportDiskDelta(ctx context.Context, spec *instance.Spec, dest
 	if spec.VM == nil {
 		return fmt.Errorf("vm: ExportDiskDelta called with a nil VMSpec")
 	}
-	backing, err := image.BackingFile(spec.VM.DiskPath)
+	backing, err := baseOf(spec)
 	if err != nil {
-		return fmt.Errorf("vm: inspecting %s's disk: %w", spec.Name, err)
-	}
-	if backing == "" {
-		return fmt.Errorf("vm: %s's disk has no base image", spec.Name)
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
 		return fmt.Errorf("vm: creating export destination dir: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, "qemu-img", "convert", "-O", "qcow2", "-B", backing, "-F", "qcow2", spec.VM.DiskPath, destPath)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("vm: exporting disk delta: %w: %s", err, out)
-	}
-	return nil
+	return qemuImg(ctx, "exporting disk delta", "convert", "-O", "qcow2", "-B", backing, "-F", "qcow2", spec.VM.DiskPath, destPath)
 }
 
 // ExportDiskFile returns the file an export bundle carries for spec: its overlay as it is,
@@ -401,42 +383,48 @@ func (b *Backend) ExportDiskFile(ctx context.Context, spec *instance.Spec, dir s
 // base image, since it still points at its original export host. A disk with no base is left as is.
 // A non-empty baseSHA256 must match that base image, or the disk is rejected.
 func (b *Backend) PrepareImportedDisk(ctx context.Context, imageRef, arch, diskPath, baseSHA256 string) error {
+	_, basePath, err := b.importBase(ctx, imageRef, arch, diskPath, baseSHA256)
+	if err != nil || basePath == "" {
+		return err
+	}
+	return qemuImg(ctx, "rebasing imported disk", "rebase", "-u", "-F", "qcow2", "-b", basePath, diskPath)
+}
+
+// importBase returns the local base image an imported delta at diskPath sits on, after
+// checking it against baseSHA256 when set. A disk with no base gives an empty path.
+func (b *Backend) importBase(ctx context.Context, imageRef, arch, diskPath, baseSHA256 string) (image.DistroEntry, string, error) {
 	// A flattened disk (e.g. one adopted from a migration) holds every block itself.
 	// Giving it a base would make its unallocated blocks read the base's data instead of zeros.
 	backing, err := image.BackingFile(diskPath)
 	if err != nil {
-		return fmt.Errorf("vm: inspecting imported disk: %w", err)
+		return image.DistroEntry{}, "", fmt.Errorf("vm: inspecting imported disk: %w", err)
 	}
 	if backing == "" {
-		return nil
+		return image.DistroEntry{}, "", nil
 	}
 	catalog, err := b.EffectiveCatalog()
 	if err != nil {
-		return err
+		return image.DistroEntry{}, "", err
 	}
 	entry, err := catalog.Find(imageRef, arch)
 	if err != nil {
-		return err
+		return entry, "", err
 	}
 	basePath, err := b.Vault.Ensure(ctx, entry, nil)
 	if err != nil {
-		return fmt.Errorf("vm: preparing imported disk's base image: %w", err)
+		return entry, "", fmt.Errorf("vm: preparing imported disk's base image: %w", err)
 	}
 	if baseSHA256 != "" {
 		sum, err := image.FileChecksum(basePath)
 		if err != nil {
-			return fmt.Errorf("vm: hashing base image %s: %w", basePath, err)
+			return entry, "", fmt.Errorf("vm: hashing base image %s: %w", basePath, err)
 		}
 		if sum != baseSHA256 {
-			return fmt.Errorf("vm: local base image %s differs from the one this bundle was made against "+
+			return entry, "", fmt.Errorf("vm: local base image %s differs from the one this bundle was made against "+
 				"(sha256 %s, want %s), importing it would corrupt the disk", entry.ID, sum, baseSHA256)
 		}
 	}
-	cmd := exec.CommandContext(ctx, "qemu-img", "rebase", "-u", "-F", "qcow2", "-b", basePath, diskPath)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("vm: rebasing imported disk: %w: %s", err, out)
-	}
-	return nil
+	return entry, basePath, nil
 }
 
 // Fork copies source's disk into dest's dir, preserving the backing-file pointer. A running
@@ -460,9 +448,7 @@ func (b *Backend) Fork(ctx context.Context, source, dest *instance.Spec, progres
 	}
 	diskPath := filepath.Join(dir, "disk.qcow2")
 
-	b.mu.Lock()
-	proc, running := b.running[source.ID]
-	b.mu.Unlock()
+	proc, running := b.lookup(source.ID)
 	if running && proc.QMP != nil {
 		if err := b.forkLive(ctx, source, proc, backing, diskPath, progress); err != nil {
 			_ = os.Remove(diskPath)
@@ -473,14 +459,9 @@ func (b *Backend) Fork(ctx context.Context, source, dest *instance.Spec, progres
 			progress("copying disk")
 		}
 		// -U still opens a disk some untracked QEMU might hold locked.
-		cmd := exec.CommandContext(ctx, "qemu-img", "convert",
-			"-U",
-			"-O", "qcow2",
-			"-o", "backing_file="+backing+",backing_fmt=qcow2",
-			source.VM.DiskPath, diskPath,
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("vm: forking disk: %w: %s", err, out)
+		if err := qemuImg(ctx, "forking disk", "convert", "-U", "-O", "qcow2",
+			"-o", "backing_file="+backing+",backing_fmt=qcow2", source.VM.DiskPath, diskPath); err != nil {
+			return err
 		}
 	}
 	dest.VM.DiskPath = diskPath
@@ -522,9 +503,7 @@ func (b *Backend) CreateSnapshot(ctx context.Context, spec *instance.Spec, name 
 		}
 	}
 
-	b.mu.Lock()
-	proc, running := b.running[spec.ID]
-	b.mu.Unlock()
+	proc, running := b.lookup(spec.ID)
 
 	if running && proc.QMP != nil {
 		if _, err := proc.QMP.SaveVM(ctx, name); err != nil {
@@ -533,11 +512,7 @@ func (b *Backend) CreateSnapshot(ctx context.Context, spec *instance.Spec, name 
 		return b.verifySnapshotPresence(spec, name, true, "creating")
 	}
 
-	cmd := exec.CommandContext(ctx, "qemu-img", "snapshot", "-c", name, spec.VM.DiskPath)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("vm: creating snapshot %q: %w: %s", name, err, out)
-	}
-	return nil
+	return qemuImg(ctx, fmt.Sprintf("creating snapshot %q", name), "snapshot", "-c", name, spec.VM.DiskPath)
 }
 
 // RestoreSnapshot resets spec's disk only, never resuming a saved VM/RAM state.
@@ -550,32 +525,9 @@ func (b *Backend) RestoreSnapshot(ctx context.Context, spec *instance.Spec, name
 		return err
 	}
 
-	b.mu.Lock()
-	_, running := b.running[spec.ID]
-	b.mu.Unlock()
-
-	if running {
-		if err := b.Stop(ctx, spec, false, 30*time.Second); err != nil {
-			return fmt.Errorf("vm: stopping %s to restore snapshot %q: %w", spec.Name, name, err)
-		}
-	}
-
-	cmd := exec.CommandContext(ctx, "qemu-img", "snapshot", "-a", name, spec.VM.DiskPath)
-	out, applyErr := cmd.CombinedOutput()
-
-	if running {
-		if err := b.Start(ctx, spec); err != nil {
-			if applyErr != nil {
-				return fmt.Errorf("vm: restoring snapshot %q: %w: %s (restarting %s afterward also failed: %v)",
-					name, applyErr, out, spec.Name, err)
-			}
-			return fmt.Errorf("vm: restarting %s after restoring snapshot %q: %w", spec.Name, name, err)
-		}
-	}
-	if applyErr != nil {
-		return fmt.Errorf("vm: restoring snapshot %q: %w: %s", name, applyErr, out)
-	}
-	return nil
+	return restoreSnapshot(ctx, b, spec, name, func() error {
+		return image.QemuImg(ctx, "snapshot", "-a", name, spec.VM.DiskPath)
+	})
 }
 
 // DeleteSnapshot removes a previously created snapshot. Live if spec is
@@ -588,9 +540,7 @@ func (b *Backend) DeleteSnapshot(ctx context.Context, spec *instance.Spec, name 
 		return err
 	}
 
-	b.mu.Lock()
-	proc, running := b.running[spec.ID]
-	b.mu.Unlock()
+	proc, running := b.lookup(spec.ID)
 
 	if running && proc.QMP != nil {
 		if _, err := proc.QMP.DeleteVMSnapshot(ctx, name); err != nil {
@@ -599,11 +549,7 @@ func (b *Backend) DeleteSnapshot(ctx context.Context, spec *instance.Spec, name 
 		return b.verifySnapshotPresence(spec, name, false, "deleting")
 	}
 
-	cmd := exec.CommandContext(ctx, "qemu-img", "snapshot", "-d", name, spec.VM.DiskPath)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("vm: deleting snapshot %q: %w: %s", name, err, out)
-	}
-	return nil
+	return qemuImg(ctx, fmt.Sprintf("deleting snapshot %q", name), "snapshot", "-d", name, spec.VM.DiskPath)
 }
 
 // ListSnapshots returns every snapshot currently recorded on spec's disk.
@@ -656,33 +602,9 @@ func (b *Backend) buildSeed(spec *instance.Spec) error {
 		}
 		userData = cfg.Content
 	}
-	userData, err := mergeSSHKeys(userData, v.SSHPublicKeys)
+	userData, err := seedUserData(v, userData)
 	if err != nil {
 		return fmt.Errorf("vm: preparing cloud-init user-data: %w", err)
-	}
-	line := fstabLine
-	if v.HypervisorOf() == instance.VMHypervisorFirecracker {
-		line = func(m instance.Mount) string { return nfsFstabLine(v.Gateway, m) }
-	}
-	userData, err = mergeMounts(userData, v.Mounts, v.Generation, line)
-	if err != nil {
-		return fmt.Errorf("vm: preparing cloud-init user-data: %w", err)
-	}
-	userData, err = mergeExtraHosts(userData, v.ExtraHosts)
-	if err != nil {
-		return fmt.Errorf("vm: preparing cloud-init user-data: %w", err)
-	}
-	if !v.NoGuestAgent {
-		userData, err = mergeGuestAgent(userData)
-		if err != nil {
-			return fmt.Errorf("vm: preparing cloud-init user-data: %w", err)
-		}
-	}
-	if v.HypervisorOf() == instance.VMHypervisorFirecracker {
-		userData, err = mergeFirecrackerGuest(userData, !v.NoGuestAgent)
-		if err != nil {
-			return fmt.Errorf("vm: preparing cloud-init user-data: %w", err)
-		}
 	}
 
 	// Bumping Generation into instance-id forces cloud-init to treat a
@@ -706,22 +628,11 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 	}
 	v := spec.VM
 
-	b.mu.Lock()
-	if _, ok := b.running[spec.ID]; ok {
-		b.mu.Unlock()
-		return nil // already running, Start is idempotent
+	running, done, err := b.beginStart(spec.ID)
+	if running || err != nil {
+		return err // already running, Start is idempotent
 	}
-	if _, ok := b.starting[spec.ID]; ok {
-		b.mu.Unlock()
-		return fmt.Errorf("vm: %s is already being started by a concurrent call", spec.ID)
-	}
-	b.starting[spec.ID] = struct{}{}
-	b.mu.Unlock()
-	defer func() {
-		b.mu.Lock()
-		delete(b.starting, spec.ID)
-		b.mu.Unlock()
-	}()
+	defer done()
 
 	arch := v.Arch
 	if arch == "" {
@@ -793,7 +704,7 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		}
 	}
 
-	claims, err := b.claimDevices(ctx, spec, &cfg)
+	claims, err = b.claimDevices(ctx, spec, &cfg)
 	if err != nil {
 		unwind()
 		return err
@@ -837,55 +748,26 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		log.Printf("vm: failed to persist runtime state for %s: %v", spec.ID, err)
 	}
 
-	b.mu.Lock()
-	b.running[spec.ID] = proc
-	b.mu.Unlock()
+	b.track(spec.ID, proc)
 	b.watchGuest(spec, proc.Exited())
 	go b.watchExit(spec.ID, v.NetworkMode, proc)
 	return nil
 }
 
-// minACPITimeout is how long ACPI still gets after a guest agent shutdown request ran out of time.
-const minACPITimeout = 5 * time.Second
-
 func (b *Backend) Stop(ctx context.Context, spec *instance.Spec, force bool, timeout time.Duration) error {
 	dir := instanceDir(spec.ID)
 
-	b.mu.Lock()
-	proc, ok := b.running[spec.ID]
-	if ok {
-		b.stopping[spec.ID] = struct{}{}
-	}
-	b.mu.Unlock()
+	proc, ok, _ := b.beginStop(spec.ID)
 	if !ok {
 		// Not tracked as running in this daemon process.
 		removeRuntimeState(dir)
 		return nil
 	}
-	defer func() {
-		b.mu.Lock()
-		delete(b.stopping, spec.ID)
-		b.mu.Unlock()
-	}()
-
-	guest, _ := b.GuestInfo(spec)
-	b.unwatchGuest(spec.ID)
+	defer b.endStop(spec.ID)
 
 	// A connected guest agent is tried before ACPI: it doesn't depend on the guest
 	// handling the power button event. ACPI and then a hard stop remain as fallbacks.
-	var stopErr error
-	start := time.Now()
-	graceful := !force && timeout > 0
-	if !graceful || !guest.AgentConnected || !b.agentShutdown(ctx, spec.ID, proc.Exited(), timeout) {
-		stopTimeout := timeout - time.Since(start)
-		if stopTimeout < minACPITimeout && timeout >= minACPITimeout {
-			stopTimeout = minACPITimeout
-		}
-		if !graceful {
-			stopTimeout = 0
-		}
-		stopErr = proc.Stop(ctx, stopTimeout)
-	}
+	stopErr := b.gracefulStop(ctx, spec, proc, force, timeout)
 	// Clean up unconditionally: the process is gone by now either way.
 	networkMode := ""
 	if spec.VM != nil {
@@ -922,9 +804,7 @@ func (b *Backend) Reconcile(ctx context.Context, spec *instance.Spec) (instance.
 		return instance.StateStopped, nil
 	}
 
-	b.mu.Lock()
-	b.running[spec.ID] = proc
-	b.mu.Unlock()
+	b.track(spec.ID, proc)
 	b.holdClaims(spec.ID, rt.Devices)
 
 	if err := proc.AttachQMP(ctx); err != nil {
@@ -967,9 +847,7 @@ func (b *Backend) Delete(ctx context.Context, spec *instance.Spec) error {
 }
 
 func (b *Backend) Status(ctx context.Context, spec *instance.Spec) (instance.State, error) {
-	b.mu.Lock()
-	proc, ok := b.running[spec.ID]
-	b.mu.Unlock()
+	proc, ok := b.lookup(spec.ID)
 	if !ok {
 		// Not tracked in this process's memory: treated as stopped.
 		return instance.StateStopped, nil
@@ -1072,25 +950,44 @@ func (b *Backend) Logs(ctx context.Context, spec *instance.Spec, follow bool, ta
 	}
 }
 
+// checkNewPort rejects a port forward spec can't take: on a bridge, or one it already has.
+func checkNewPort(spec *instance.Spec, port instance.PortMapping) (string, error) {
+	if spec.VM.NetworkMode == "bridge" {
+		return "", fmt.Errorf("vm: %s uses bridge networking; it has its own address, so no host-forwarded ports apply", spec.Name)
+	}
+	proto := instance.Protocol(port.Protocol)
+	for _, p := range spec.VM.Ports {
+		if p.HostPort == port.HostPort && instance.Protocol(p.Protocol) == proto {
+			return "", fmt.Errorf("vm: %s already forwards host port %d/%s", spec.Name, port.HostPort, proto)
+		}
+	}
+	return proto, nil
+}
+
+// portIndex returns the index of spec's port forward for hostPort/proto.
+func portIndex(spec *instance.Spec, hostPort int, proto string) (int, error) {
+	idx := slices.IndexFunc(spec.VM.Ports, func(p instance.PortMapping) bool {
+		return p.HostPort == hostPort && instance.Protocol(p.Protocol) == proto
+	})
+	if idx == -1 {
+		return -1, fmt.Errorf("vm: %s has no port forward for host port %d/%s (currently exposed: %s)",
+			spec.Name, hostPort, proto, instance.FormatPorts(spec.VM.Ports))
+	}
+	return idx, nil
+}
+
 // AddPort adds a host-to-guest SLIRP port forward to spec, applied live
 // over QMP (no restart, unlike Mount) if running, else persisted for Start.
 func (b *Backend) AddPort(ctx context.Context, spec *instance.Spec, port instance.PortMapping) error {
 	if spec.VM == nil {
 		return fmt.Errorf("vm: AddPort called with a nil VMSpec")
 	}
-	if spec.VM.NetworkMode == "bridge" {
-		return fmt.Errorf("vm: %s uses bridge networking; it has its own address, so no host-forwarded ports apply", spec.Name)
-	}
-	proto := instance.Protocol(port.Protocol)
-	for _, p := range spec.VM.Ports {
-		if p.HostPort == port.HostPort && instance.Protocol(p.Protocol) == proto {
-			return fmt.Errorf("vm: %s already forwards host port %d/%s", spec.Name, port.HostPort, proto)
-		}
+	proto, err := checkNewPort(spec, port)
+	if err != nil {
+		return err
 	}
 
-	b.mu.Lock()
-	proc, running := b.running[spec.ID]
-	b.mu.Unlock()
+	proc, running := b.lookup(spec.ID)
 	if running && proc.QMP != nil {
 		if err := proc.QMP.AddHostForward(ctx, qemu.NetdevID, qemu.HostForward{
 			HostPort: port.HostPort, GuestPort: port.GuestPort, Protocol: proto,
@@ -1110,22 +1007,12 @@ func (b *Backend) RemovePort(ctx context.Context, spec *instance.Spec, hostPort 
 		return fmt.Errorf("vm: RemovePort called with a nil VMSpec")
 	}
 	proto := instance.Protocol(protocol)
-
-	idx := -1
-	for i, p := range spec.VM.Ports {
-		if p.HostPort == hostPort && instance.Protocol(p.Protocol) == proto {
-			idx = i
-			break
-		}
-	}
-	if idx == -1 {
-		return fmt.Errorf("vm: %s has no port forward for host port %d/%s (currently exposed: %s)",
-			spec.Name, hostPort, proto, instance.FormatPorts(spec.VM.Ports))
+	idx, err := portIndex(spec, hostPort, proto)
+	if err != nil {
+		return err
 	}
 
-	b.mu.Lock()
-	proc, running := b.running[spec.ID]
-	b.mu.Unlock()
+	proc, running := b.lookup(spec.ID)
 	if running && proc.QMP != nil {
 		if err := proc.QMP.RemoveHostForward(ctx, qemu.NetdevID, hostPort, proto); err != nil {
 			return fmt.Errorf("vm: removing live port forward: %w", err)
@@ -1133,30 +1020,6 @@ func (b *Backend) RemovePort(ctx context.Context, spec *instance.Spec, hostPort 
 	}
 
 	spec.VM.Ports = append(spec.VM.Ports[:idx], spec.VM.Ports[idx+1:]...)
-	return nil
-}
-
-// reconfigureAndRestartIfRunning rebuilds spec's cloud-init seed and, if
-// the instance is running, restarts QEMU to pick up the mount change.
-func (b *Backend) reconfigureAndRestartIfRunning(ctx context.Context, spec *instance.Spec) error {
-	spec.VM.Generation++
-	if err := b.buildSeed(spec); err != nil {
-		return err
-	}
-
-	b.mu.Lock()
-	_, running := b.running[spec.ID]
-	b.mu.Unlock()
-	if !running {
-		return nil
-	}
-
-	if err := b.Stop(ctx, spec, false, 30*time.Second); err != nil {
-		return fmt.Errorf("vm: stopping %s to apply mount change: %w", spec.Name, err)
-	}
-	if err := b.Start(ctx, spec); err != nil {
-		return fmt.Errorf("vm: restarting %s after mount change: %w", spec.Name, err)
-	}
 	return nil
 }
 
@@ -1176,38 +1039,46 @@ func tailLinesOf(data []byte, n int) []byte {
 	return out
 }
 
-// mergeSSHKeys adds keys to existing's top-level ssh_authorized_keys
-// list, returning a complete "#cloud-config\n..." document.
-func mergeSSHKeys(existing string, keys []string) (string, error) {
-	if len(keys) == 0 {
-		if existing == "" {
+// seedUserData adds anvil's own setup to userData: SSH keys, mounts, extra hosts, the guest
+// agent and Firecracker's needs. With nothing to add userData is kept as it is.
+func seedUserData(v *instance.VMSpec, userData string) (string, error) {
+	fc := v.HypervisorOf() == instance.VMHypervisorFirecracker
+	if len(v.SSHPublicKeys) == 0 && len(v.Mounts) == 0 && v.Generation == 0 && len(v.ExtraHosts) == 0 && v.NoGuestAgent && !fc {
+		if userData == "" {
 			return "#cloud-config\n{}\n", nil
 		}
-		return existing, nil
+		return userData, nil
 	}
-
-	body := strings.TrimPrefix(existing, "#cloud-config\n")
-	doc := map[string]any{}
-	if strings.TrimSpace(body) != "" {
-		if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
-			return "", fmt.Errorf("parsing existing cloud-init user-data: %w", err)
-		}
-	}
-	if doc == nil {
-		doc = map[string]any{}
-	}
-
-	existingKeys, _ := doc["ssh_authorized_keys"].([]any)
-	for _, k := range keys {
-		existingKeys = append(existingKeys, k)
-	}
-	doc["ssh_authorized_keys"] = existingKeys
-
-	out, err := yaml.Marshal(doc)
+	doc, err := parseCloudConfig(userData)
 	if err != nil {
-		return "", fmt.Errorf("re-encoding cloud-init user-data: %w", err)
+		return "", err
 	}
-	return "#cloud-config\n" + string(out), nil
+	addSSHKeys(doc, v.SSHPublicKeys)
+	line := fstabLine
+	if fc {
+		line = func(m instance.Mount) string { return nfsFstabLine(v.Gateway, m) }
+	}
+	addMounts(doc, v.Mounts, v.Generation, line)
+	addExtraHosts(doc, v.ExtraHosts)
+	if !v.NoGuestAgent {
+		addGuestAgent(doc)
+	}
+	if fc {
+		addFirecrackerGuest(doc, !v.NoGuestAgent)
+	}
+	return encodeCloudConfig(doc)
+}
+
+// addSSHKeys appends keys to doc's top-level ssh_authorized_keys list.
+func addSSHKeys(doc map[string]any, keys []string) {
+	if len(keys) == 0 {
+		return
+	}
+	existing, _ := doc["ssh_authorized_keys"].([]any)
+	for _, k := range keys {
+		existing = append(existing, k)
+	}
+	doc["ssh_authorized_keys"] = existing
 }
 
 // shQuote single-quotes s for safe interpolation into a POSIX shell command.
@@ -1215,42 +1086,23 @@ func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// mergeExtraHosts adds one /etc/hosts entry per host via idempotent
+// addExtraHosts adds one /etc/hosts entry per host via idempotent
 // bootcmd lines, sorted by name for deterministic output.
-func mergeExtraHosts(existing string, hosts map[string]string) (string, error) {
+func addExtraHosts(doc map[string]any, hosts map[string]string) {
 	if len(hosts) == 0 {
-		return existing, nil
+		return
 	}
-
-	body := strings.TrimPrefix(existing, "#cloud-config\n")
-	doc := map[string]any{}
-	if strings.TrimSpace(body) != "" {
-		if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
-			return "", fmt.Errorf("parsing existing cloud-init user-data: %w", err)
-		}
-	}
-	if doc == nil {
-		doc = map[string]any{}
-	}
-
-	existingBootcmd, _ := doc["bootcmd"].([]any)
+	bootcmd, _ := doc["bootcmd"].([]any)
 	names := make([]string, 0, len(hosts))
 	for name := range hosts {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		line := fmt.Sprintf("%s %s", hosts[name], name)
-		quoted := shQuote(line)
-		existingBootcmd = append(existingBootcmd, fmt.Sprintf(`grep -qxF %s /etc/hosts || echo %s >> /etc/hosts`, quoted, quoted))
+		quoted := shQuote(fmt.Sprintf("%s %s", hosts[name], name))
+		bootcmd = append(bootcmd, fmt.Sprintf(`grep -qxF %s /etc/hosts || echo %s >> /etc/hosts`, quoted, quoted))
 	}
-	doc["bootcmd"] = existingBootcmd
-
-	out, err := yaml.Marshal(doc)
-	if err != nil {
-		return "", fmt.Errorf("re-encoding cloud-init user-data: %w", err)
-	}
-	return "#cloud-config\n" + string(out), nil
+	doc["bootcmd"] = bootcmd
 }
 
 // parseCloudConfig decodes a "#cloud-config" user-data document; empty input gives an empty map.
@@ -1284,19 +1136,8 @@ const guestAgentPackage = "qemu-guest-agent"
 const guestAgentStartCmd = "(systemctl enable qemu-guest-agent 2>/dev/null; systemctl start qemu-guest-agent) || " +
 	"(rc-update add qemu-guest-agent default && rc-service qemu-guest-agent start) || true"
 
-// mergeGuestAgent adds qemu-guest-agent to existing's "packages" and a runcmd that starts it.
-func mergeGuestAgent(existing string) (string, error) {
-	body := strings.TrimPrefix(existing, "#cloud-config\n")
-	doc := map[string]any{}
-	if strings.TrimSpace(body) != "" {
-		if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
-			return "", fmt.Errorf("parsing existing cloud-init user-data: %w", err)
-		}
-	}
-	if doc == nil {
-		doc = map[string]any{}
-	}
-
+// addGuestAgent adds qemu-guest-agent to doc's "packages" and a runcmd that starts it.
+func addGuestAgent(doc map[string]any) {
 	packages, _ := doc["packages"].([]any)
 	if !slices.Contains(packages, any(guestAgentPackage)) {
 		packages = append(packages, guestAgentPackage)
@@ -1304,12 +1145,6 @@ func mergeGuestAgent(existing string) (string, error) {
 	doc["packages"] = packages
 	runcmd, _ := doc["runcmd"].([]any)
 	doc["runcmd"] = append(runcmd, guestAgentStartCmd)
-
-	out, err := yaml.Marshal(doc)
-	if err != nil {
-		return "", fmt.Errorf("re-encoding cloud-init user-data: %w", err)
-	}
-	return "#cloud-config\n" + string(out), nil
 }
 
 // fcAgentPort is the guest vsock port qemu-guest-agent listens on in a Firecracker VM.
@@ -1337,13 +1172,9 @@ const fcAgentStartCmd = "(systemctl daemon-reload && systemctl enable --now anvi
 // exits on a guest reboot, while a poweroff leaves its process running.
 const fcPoweroffCmd = "[ -d /run/systemd/system ] && ln -sf /usr/lib/systemd/system/reboot.target /etc/systemd/system/poweroff.target || true"
 
-// mergeFirecrackerGuest adds what a Firecracker guest needs on top of the common user-data:
+// addFirecrackerGuest adds what a Firecracker guest needs on top of the common user-data:
 // poweroff as reboot, and with agent the guest agent moved to vsock.
-func mergeFirecrackerGuest(existing string, agent bool) (string, error) {
-	doc, err := parseCloudConfig(existing)
-	if err != nil {
-		return "", err
-	}
+func addFirecrackerGuest(doc map[string]any, agent bool) {
 	bootcmd, _ := doc["bootcmd"].([]any)
 	doc["bootcmd"] = append(bootcmd, fcPoweroffCmd)
 	if agent {
@@ -1358,7 +1189,6 @@ func mergeFirecrackerGuest(existing string, agent bool) (string, error) {
 		runcmd = slices.DeleteFunc(runcmd, func(c any) bool { return c == guestAgentStartCmd })
 		doc["runcmd"] = append(runcmd, fcAgentStartCmd)
 	}
-	return encodeCloudConfig(doc)
 }
 
 // bridgeNetworkConfig returns a cloud-init network-config statically assigning

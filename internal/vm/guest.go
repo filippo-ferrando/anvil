@@ -327,9 +327,7 @@ func consoleSaysCloudInitFinished(path string) bool {
 
 // WaitReady blocks until spec's cloud-init finished, reporting progress while it waits.
 func (b *Backend) WaitReady(ctx context.Context, spec *instance.Spec, progress func(status string)) error {
-	b.mu.Lock()
-	proc, ok := b.running[spec.ID]
-	b.mu.Unlock()
+	proc, ok := b.lookup(spec.ID)
 	if !ok {
 		return fmt.Errorf("vm: %s is not running", spec.Name)
 	}

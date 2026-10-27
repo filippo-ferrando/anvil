@@ -105,12 +105,9 @@ func TestProbeGuestWithoutAgent(t *testing.T) {
 	}
 }
 
-func TestMergeGuestAgent(t *testing.T) {
+func TestAddGuestAgent(t *testing.T) {
 	existing := "#cloud-config\npackages:\n  - htop\nruncmd:\n  - echo hi\n"
-	out, err := mergeGuestAgent(existing)
-	if err != nil {
-		t.Fatal(err)
-	}
+	out := applyTo(t, existing, addGuestAgent)
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(stripHeader(out)), &doc); err != nil {
 		t.Fatalf("output isn't valid YAML: %v\n%s", err, out)
@@ -125,7 +122,7 @@ func TestMergeGuestAgent(t *testing.T) {
 	}
 
 	// Already listed: not added twice.
-	out, _ = mergeGuestAgent("#cloud-config\npackages: [qemu-guest-agent]\n")
+	out = applyTo(t, "#cloud-config\npackages: [qemu-guest-agent]\n", addGuestAgent)
 	if strings.Count(out, guestAgentPackage+"\n") != 1 {
 		t.Errorf("expected the package once, got:\n%s", out)
 	}

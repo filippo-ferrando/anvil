@@ -14,15 +14,11 @@ import (
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
 )
 
-func TestMergeFirecrackerGuest(t *testing.T) {
-	base, err := mergeGuestAgent("#cloud-config\n{}\n")
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, err := mergeFirecrackerGuest(base, true)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestAddFirecrackerGuest(t *testing.T) {
+	out := applyTo(t, "#cloud-config\n{}\n", func(doc map[string]any) {
+		addGuestAgent(doc)
+		addFirecrackerGuest(doc, true)
+	})
 	doc, err := parseCloudConfig(out)
 	if err != nil {
 		t.Fatal(err)
@@ -40,10 +36,7 @@ func TestMergeFirecrackerGuest(t *testing.T) {
 		t.Errorf("write_files lack the vsock agent setup: %v", files)
 	}
 
-	noAgent, err := mergeFirecrackerGuest("#cloud-config\n{}\n", false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	noAgent := applyTo(t, "#cloud-config\n{}\n", func(doc map[string]any) { addFirecrackerGuest(doc, false) })
 	if strings.Contains(noAgent, "anvil-guest-agent") || !strings.Contains(noAgent, "poweroff.target") {
 		t.Errorf("without the agent only the poweroff link belongs here:\n%s", noAgent)
 	}

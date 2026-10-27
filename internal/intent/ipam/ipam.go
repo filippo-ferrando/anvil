@@ -6,7 +6,14 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"net/netip"
+	"strings"
 )
+
+// StripCIDR returns the address part of "10.55.201.4/24"; a bare address is kept as is.
+func StripCIDR(s string) string {
+	ip, _, _ := strings.Cut(s, "/")
+	return ip
+}
 
 // AllocateSubnet deterministically derives a private /24 subnet, its
 // gateway, and the sub-range reserved for the container engine's IPAM.

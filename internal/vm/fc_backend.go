@@ -14,11 +14,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/config"
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/intent/ipam"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/firecracker"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/network"
@@ -38,11 +38,7 @@ type FCBackend struct {
 
 	guestTracker
 
-	mu       sync.Mutex
-	running  map[string]*firecracker.Process // instance ID -> live process
-	starting map[string]struct{}             // instance ID -> in-progress Start call
-	stopping map[string]struct{}             // instance ID -> Stop in progress, so its exit isn't reported
-	exitHook func(instanceID string, state instance.State, reason string)
+	vmTable[*firecracker.Process]
 
 	// Standalone VMs only: their address on FCBridge, and the proxies standing in for
 	// SLIRP's host forwards, keyed by proxyKey.
@@ -75,9 +71,7 @@ func NewFCBackend(qemuBackend *Backend, cacheDir string, instances Instances) *F
 		Networker:  network.LinuxBridge{},
 		Jailer:     jailerExe(),
 		ChrootBase: config.JailerDir(),
-		running:    make(map[string]*firecracker.Process),
-		starting:   make(map[string]struct{}),
-		stopping:   make(map[string]struct{}),
+		vmTable:    newVMTable[*firecracker.Process](),
 		ipam:       fcIPAM{instances: instances},
 		proxies:    make(map[string]map[string]*portProxy),
 		nfs:        newNFSHub(),
@@ -161,7 +155,7 @@ func (b *FCBackend) Create(ctx context.Context, spec *instance.Spec, progress fu
 		if keep {
 			if kerr := b.keepAddress(spec); kerr != nil {
 				if progress != nil {
-					progress(fmt.Sprintf("can't keep address %s (%v), assigning a new one", stripCIDR(v.StaticIP), kerr))
+					progress(fmt.Sprintf("can't keep address %s (%v), assigning a new one", ipam.StripCIDR(v.StaticIP), kerr))
 				}
 				keep = false
 			}
@@ -226,22 +220,11 @@ func (b *FCBackend) Start(ctx context.Context, spec *instance.Spec) error {
 	}
 	v := spec.VM
 
-	b.mu.Lock()
-	if _, ok := b.running[spec.ID]; ok {
-		b.mu.Unlock()
-		return nil
+	running, done, err := b.beginStart(spec.ID)
+	if running || err != nil {
+		return err
 	}
-	if _, ok := b.starting[spec.ID]; ok {
-		b.mu.Unlock()
-		return fmt.Errorf("vm: %s is already being started by a concurrent call", spec.ID)
-	}
-	b.starting[spec.ID] = struct{}{}
-	b.mu.Unlock()
-	defer func() {
-		b.mu.Lock()
-		delete(b.starting, spec.ID)
-		b.mu.Unlock()
-	}()
+	defer done()
 
 	_, distro, kernel, err := b.resolve(v)
 	if err != nil {
@@ -332,7 +315,7 @@ func (b *FCBackend) Start(ctx context.Context, spec *instance.Spec) error {
 		_ = b.Networker.Detach(spec.ID)
 	}
 	if standalone(v) {
-		if err := runNft(fcGuestFilter(spec.ID, tap, v.MACAddress, stripCIDR(v.StaticIP))); err != nil {
+		if err := runNft(fcGuestFilter(spec.ID, tap, v.MACAddress, ipam.StripCIDR(v.StaticIP))); err != nil {
 			unwind()
 			return err
 		}
@@ -387,13 +370,7 @@ func (b *FCBackend) Start(ctx context.Context, spec *instance.Spec) error {
 }
 
 func (b *FCBackend) Stop(ctx context.Context, spec *instance.Spec, force bool, timeout time.Duration) error {
-	b.mu.Lock()
-	proc, ok := b.running[spec.ID]
-	_, starting := b.starting[spec.ID]
-	if ok {
-		b.stopping[spec.ID] = struct{}{}
-	}
-	b.mu.Unlock()
+	proc, ok, starting := b.beginStop(spec.ID)
 	if !ok && starting {
 		return fmt.Errorf("vm: %s is being started, try again once it's up", spec.Name)
 	}
@@ -401,29 +378,10 @@ func (b *FCBackend) Stop(ctx context.Context, spec *instance.Spec, force bool, t
 		removeRuntimeState(instanceDir(spec.ID))
 		return nil
 	}
-	defer func() {
-		b.mu.Lock()
-		delete(b.stopping, spec.ID)
-		b.mu.Unlock()
-	}()
-
-	guest, _ := b.GuestInfo(spec)
-	b.unwatchGuest(spec.ID)
+	defer b.endStop(spec.ID)
 
 	// The guest agent first, then Ctrl+Alt+Del, then a kill, all within timeout.
-	var stopErr error
-	start := time.Now()
-	graceful := !force && timeout > 0
-	if !graceful || !guest.AgentConnected || !b.agentShutdown(ctx, spec.ID, proc.Exited(), timeout) {
-		stopTimeout := timeout - time.Since(start)
-		if stopTimeout < minACPITimeout && timeout >= minACPITimeout {
-			stopTimeout = minACPITimeout
-		}
-		if !graceful {
-			stopTimeout = 0
-		}
-		stopErr = proc.Stop(ctx, stopTimeout)
-	}
+	stopErr := b.gracefulStop(ctx, spec, proc, force, timeout)
 	if stopErr != nil && !hasExited(proc) {
 		// Its tap and jail stay while it may still run; watchExit releases them once it's gone.
 		return fmt.Errorf("vm: stopping instance %s: %w", spec.ID, stopErr)
@@ -436,22 +394,12 @@ func (b *FCBackend) Stop(ctx context.Context, spec *instance.Spec, force bool, t
 	return nil
 }
 
-func (b *FCBackend) SetExitHook(hook func(instanceID string, state instance.State, reason string)) {
-	b.mu.Lock()
-	b.exitHook = hook
-	b.mu.Unlock()
-}
-
 // watchExit reports an exit not caused by Stop (guest reboot or poweroff, crash, kill).
 func (b *FCBackend) watchExit(instanceID string, proc *firecracker.Process) {
 	<-proc.Exited()
 
-	b.mu.Lock()
-	_, stopping := b.stopping[instanceID]
-	current := b.running[instanceID] == proc
-	hook := b.exitHook
-	b.mu.Unlock()
-	if stopping || !current {
+	hook, own := b.ownExit(instanceID, proc)
+	if !own {
 		return
 	}
 
@@ -537,20 +485,10 @@ func (b *FCBackend) Reconcile(ctx context.Context, spec *instance.Spec) (instanc
 	if err := b.exportMounts(spec); err != nil {
 		log.Printf("vm: %s: restoring mounts: %v", spec.Name, err)
 	}
-	b.mu.Lock()
-	b.running[spec.ID] = proc
-	b.mu.Unlock()
+	b.track(spec.ID, proc)
 	b.watchGuest(spec, proc.Exited())
 	go b.watchExit(spec.ID, proc)
 	return instance.StateRunning, nil
-}
-
-// tracked reports whether instanceID has a firecracker this daemon still tracks.
-func (b *FCBackend) tracked(instanceID string) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	_, ok := b.running[instanceID]
-	return ok
 }
 
 func hasExited(proc *firecracker.Process) bool {
@@ -589,9 +527,7 @@ func (b *FCBackend) Delete(ctx context.Context, spec *instance.Spec) error {
 }
 
 func (b *FCBackend) Status(ctx context.Context, spec *instance.Spec) (instance.State, error) {
-	b.mu.Lock()
-	proc, ok := b.running[spec.ID]
-	b.mu.Unlock()
+	proc, ok := b.lookup(spec.ID)
 	if !ok {
 		return instance.StateStopped, nil
 	}
@@ -611,9 +547,7 @@ func (b *FCBackend) Logs(ctx context.Context, spec *instance.Spec, follow bool, 
 }
 
 func (b *FCBackend) WaitReady(ctx context.Context, spec *instance.Spec, progress func(status string)) error {
-	b.mu.Lock()
-	proc, ok := b.running[spec.ID]
-	b.mu.Unlock()
+	proc, ok := b.lookup(spec.ID)
 	if !ok {
 		return fmt.Errorf("vm: %s is not running", spec.Name)
 	}
@@ -624,9 +558,7 @@ func (b *FCBackend) Stats(ctx context.Context, spec *instance.Spec) (instance.St
 	if spec.VM == nil {
 		return instance.Stats{}, fmt.Errorf("vm: Stats called with a nil VMSpec")
 	}
-	b.mu.Lock()
-	proc, ok := b.running[spec.ID]
-	b.mu.Unlock()
+	proc, ok := b.lookup(spec.ID)
 	if !ok {
 		return instance.Stats{}, fmt.Errorf("vm: %s isn't running", spec.Name)
 	}
@@ -641,7 +573,7 @@ func proxyKey(hostPort int, protocol string) string {
 // published port to the guest's address.
 func (b *FCBackend) startProxies(spec *instance.Spec, sshPort int) error {
 	v := spec.VM
-	guest := stripCIDR(v.StaticIP)
+	guest := ipam.StripCIDR(v.StaticIP)
 	ssh, err := startPortProxy("tcp", sshPort, net.JoinHostPort(guest, "22"))
 	if err != nil && sshPort != 0 {
 		ssh, err = startPortProxy("tcp", 0, net.JoinHostPort(guest, "22"))
@@ -682,20 +614,15 @@ func (b *FCBackend) AddPort(ctx context.Context, spec *instance.Spec, port insta
 	if spec.VM == nil {
 		return fmt.Errorf("vm: AddPort called with a nil VMSpec")
 	}
-	if !standalone(spec.VM) {
-		return fmt.Errorf("vm: %s uses bridge networking; it has its own address, so no host-forwarded ports apply", spec.Name)
-	}
-	proto := instance.Protocol(port.Protocol)
-	for _, p := range spec.VM.Ports {
-		if p.HostPort == port.HostPort && instance.Protocol(p.Protocol) == proto {
-			return fmt.Errorf("vm: %s already forwards host port %d/%s", spec.Name, port.HostPort, proto)
-		}
+	proto, err := checkNewPort(spec, port)
+	if err != nil {
+		return err
 	}
 	// Under mu, so a stop can't drop the VM's proxy set between the check and the insert.
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if set, running := b.proxies[spec.ID]; running {
-		target := net.JoinHostPort(stripCIDR(spec.VM.StaticIP), strconv.Itoa(port.GuestPort))
+		target := net.JoinHostPort(ipam.StripCIDR(spec.VM.StaticIP), strconv.Itoa(port.GuestPort))
 		pp, err := startPortProxy(proto, port.HostPort, target)
 		if err != nil {
 			return fmt.Errorf("vm: adding live port forward: %w", err)
@@ -711,12 +638,9 @@ func (b *FCBackend) RemovePort(ctx context.Context, spec *instance.Spec, hostPor
 		return fmt.Errorf("vm: RemovePort called with a nil VMSpec")
 	}
 	proto := instance.Protocol(protocol)
-	idx := slices.IndexFunc(spec.VM.Ports, func(p instance.PortMapping) bool {
-		return p.HostPort == hostPort && instance.Protocol(p.Protocol) == proto
-	})
-	if idx == -1 {
-		return fmt.Errorf("vm: %s has no port forward for host port %d/%s (currently exposed: %s)",
-			spec.Name, hostPort, proto, instance.FormatPorts(spec.VM.Ports))
+	idx, err := portIndex(spec, hostPort, proto)
+	if err != nil {
+		return err
 	}
 	b.mu.Lock()
 	key := proxyKey(hostPort, proto)

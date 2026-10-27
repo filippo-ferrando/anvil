@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -122,27 +121,6 @@ func TestLooksLikeOursJailed(t *testing.T) {
 	stranger := startNamed(t, "sleep", "--id", "J3", "--api-sock", "/firecracker.sock")
 	if looksLikeOurs(stranger.Process.Pid, paths) {
 		t.Error("a process that isn't firecracker was taken as ours")
-	}
-}
-
-// Once the process is known gone its pid may be someone else's, so kill must not signal it.
-func TestKillAfterExitSendsNothing(t *testing.T) {
-	bystander := startNamed(t, "bystander")
-	exited := make(chan struct{})
-	close(exited)
-	p := &Process{pid: bystander.Process.Pid, exited: exited}
-	done := make(chan error, 1)
-	go func() { done <- p.kill() }()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("kill blocked on a process already gone")
-	}
-	if err := syscall.Kill(bystander.Process.Pid, 0); err != nil {
-		t.Fatalf("kill signalled the reused pid: %v", err)
 	}
 }
 

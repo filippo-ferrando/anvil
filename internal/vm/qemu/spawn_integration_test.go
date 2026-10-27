@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	vmproc "git.fferrando.cc/rdfilippo/anvil/internal/vm/proc"
 )
 
 // TestSpawnRealProcessLifecycle spawns a real qemu-system-x86_64 process
@@ -64,7 +66,7 @@ func TestSpawnRealProcessLifecycle(t *testing.T) {
 		t.Fatalf("QueryStatus: %v", err)
 	}
 	t.Logf("query-status: %+v", status)
-	if !status.Running && !processAlive(proc.Pid()) {
+	if !status.Running && !vmproc.Alive(proc.Pid()) {
 		t.Error("expected the process to be alive right after a successful QMP handshake")
 	}
 
@@ -73,7 +75,7 @@ func TestSpawnRealProcessLifecycle(t *testing.T) {
 	if err := proc.Stop(stopCtx, 2*time.Second); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
-	if processAlive(proc.Pid()) {
+	if vmproc.Alive(proc.Pid()) {
 		t.Error("expected the process to be gone after Stop returned")
 	}
 	t.Log("Stop escalated and the process is confirmed gone")
@@ -160,7 +162,7 @@ func TestSpawnWithMountRealProcess(t *testing.T) {
 			t.Errorf("expected device for %s to be attached", tag)
 		}
 	}
-	if !processAlive(proc.Pid()) {
+	if !vmproc.Alive(proc.Pid()) {
 		t.Error("expected qemu to still be alive with virtiofs mounts attached")
 	}
 }

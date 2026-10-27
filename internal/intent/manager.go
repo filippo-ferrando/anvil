@@ -254,15 +254,6 @@ func vmHostsFor(members []store.IntentMember) map[string]string {
 	return hosts
 }
 
-// stripCIDR returns just the address portion of a "10.55.201.4/24"-shaped
-// string.
-func stripCIDR(s string) string {
-	if idx := strings.Index(s, "/"); idx != -1 {
-		return s[:idx]
-	}
-	return s
-}
-
 // Launch provisions one intent member, creating the intent if it doesn't
 // exist, and wires it onto the shared network if one is configured.
 func (m *Manager) Launch(ctx context.Context, params instance.LaunchParams, progress func(instance.LaunchEvent)) error {
@@ -380,7 +371,7 @@ func (m *Manager) Launch(ctx context.Context, params instance.LaunchParams, prog
 	if it.Network != nil {
 		switch {
 		case launched.VM != nil:
-			memberIP = stripCIDR(launched.VM.StaticIP)
+			memberIP = ipam.StripCIDR(launched.VM.StaticIP)
 		case launched.Container != nil:
 			ip, err := m.Networker.ContainerAddress(ctx, it.Network.EngineNetworkName, launched.Container.ContainerID)
 			if err != nil {
@@ -640,7 +631,7 @@ func (m *Manager) zoneFor(ctx context.Context, it store.Intent) (dns.Zone, bool)
 				ip = addr
 			}
 		}
-		addr, err := netip.ParseAddr(stripCIDR(ip))
+		addr, err := netip.ParseAddr(ipam.StripCIDR(ip))
 		if err != nil {
 			continue
 		}

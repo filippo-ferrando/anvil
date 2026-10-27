@@ -132,9 +132,8 @@ func (c *FCCache) convertRaw(ctx context.Context, entry DistroEntry, base, dest 
 	tmp := tmpFile.Name()
 	tmpFile.Close()
 	defer os.Remove(tmp)
-	cmd := exec.CommandContext(ctx, "qemu-img", "convert", "-f", "qcow2", "-O", "raw", base, tmp)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("image: converting %s to raw: %w: %s", base, err, out)
+	if err := QemuImg(ctx, "convert", "-f", "qcow2", "-O", "raw", base, tmp); err != nil {
+		return fmt.Errorf("image: converting %s to raw: %w", base, err)
 	}
 	if err := os.Rename(tmp, dest); err != nil {
 		return fmt.Errorf("image: %w", err)

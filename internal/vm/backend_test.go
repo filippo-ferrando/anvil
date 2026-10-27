@@ -15,32 +15,45 @@ import (
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 )
 
-func TestMergeSSHKeysNoExistingDataNoKeys(t *testing.T) {
-	out, err := mergeSSHKeys("", nil)
+// applyTo runs add on existing's parsed cloud-config and returns it encoded again.
+func applyTo(t *testing.T, existing string, add func(doc map[string]any)) string {
+	t.Helper()
+	doc, err := parseCloudConfig(existing)
 	if err != nil {
-		t.Fatalf("mergeSSHKeys: %v", err)
+		t.Fatal(err)
+	}
+	add(doc)
+	out, err := encodeCloudConfig(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestSeedUserDataNothingToAdd(t *testing.T) {
+	out, err := seedUserData(&instance.VMSpec{NoGuestAgent: true}, "")
+	if err != nil {
+		t.Fatalf("seedUserData: %v", err)
 	}
 	if out != "#cloud-config\n{}\n" {
 		t.Errorf("expected the empty default, got %q", out)
+	}
+	kept := "#cloud-config\n# a comment\npackages: [curl]\n"
+	if out, _ := seedUserData(&instance.VMSpec{NoGuestAgent: true}, kept); out != kept {
+		t.Errorf("expected user-data to be kept as is, got %q", out)
 	}
 }
 
 func TestMergeSSHKeysNoExistingDataWithKeys(t *testing.T) {
 	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXAMPLE test@example"
-	out, err := mergeSSHKeys("", []string{key})
-	if err != nil {
-		t.Fatalf("mergeSSHKeys: %v", err)
-	}
+	out := applyTo(t, "", func(doc map[string]any) { addSSHKeys(doc, []string{key}) })
 	assertValidCloudConfigWithKey(t, out, key)
 }
 
 func TestMergeSSHKeysWithExistingCloudConfig(t *testing.T) {
 	existing := "#cloud-config\npackages:\n  - htop\n  - curl\n"
 	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXAMPLE test@example"
-	out, err := mergeSSHKeys(existing, []string{key})
-	if err != nil {
-		t.Fatalf("mergeSSHKeys: %v", err)
-	}
+	out := applyTo(t, existing, func(doc map[string]any) { addSSHKeys(doc, []string{key}) })
 
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(stripHeader(out)), &doc); err != nil {
@@ -56,10 +69,7 @@ func TestMergeSSHKeysWithExistingCloudConfig(t *testing.T) {
 func TestMergeSSHKeysAppendsToExistingKeyList(t *testing.T) {
 	existing := "#cloud-config\nssh_authorized_keys:\n  - ssh-rsa AAAAOLD old@example\n"
 	newKey := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXAMPLE test@example"
-	out, err := mergeSSHKeys(existing, []string{newKey})
-	if err != nil {
-		t.Fatalf("mergeSSHKeys: %v", err)
-	}
+	out := applyTo(t, existing, func(doc map[string]any) { addSSHKeys(doc, []string{newKey}) })
 
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(stripHeader(out)), &doc); err != nil {
@@ -72,21 +82,15 @@ func TestMergeSSHKeysAppendsToExistingKeyList(t *testing.T) {
 }
 
 func TestMergeExtraHostsNoHosts(t *testing.T) {
-	out, err := mergeExtraHosts("#cloud-config\n{}\n", nil)
-	if err != nil {
-		t.Fatalf("mergeExtraHosts: %v", err)
-	}
+	out := applyTo(t, "#cloud-config\n{}\n", func(doc map[string]any) { addExtraHosts(doc, nil) })
 	if out != "#cloud-config\n{}\n" {
-		t.Errorf("expected mergeExtraHosts to pass through unchanged with no hosts, got %q", out)
+		t.Errorf("expected addExtraHosts to pass through unchanged with no hosts, got %q", out)
 	}
 }
 
 func TestMergeExtraHostsAddsGuardedBootcmdLines(t *testing.T) {
 	hosts := map[string]string{"web": "10.55.201.2", "db": "10.55.201.3"}
-	out, err := mergeExtraHosts("#cloud-config\n{}\n", hosts)
-	if err != nil {
-		t.Fatalf("mergeExtraHosts: %v", err)
-	}
+	out := applyTo(t, "#cloud-config\n{}\n", func(doc map[string]any) { addExtraHosts(doc, hosts) })
 
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(stripHeader(out)), &doc); err != nil {
@@ -109,10 +113,7 @@ func TestMergeExtraHostsAddsGuardedBootcmdLines(t *testing.T) {
 
 func TestMergeExtraHostsIsSortedByName(t *testing.T) {
 	hosts := map[string]string{"web": "10.55.201.2", "db": "10.55.201.3", "cache": "10.55.201.4"}
-	out, err := mergeExtraHosts("#cloud-config\n{}\n", hosts)
-	if err != nil {
-		t.Fatalf("mergeExtraHosts: %v", err)
-	}
+	out := applyTo(t, "#cloud-config\n{}\n", func(doc map[string]any) { addExtraHosts(doc, hosts) })
 
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(stripHeader(out)), &doc); err != nil {
@@ -134,10 +135,7 @@ func TestMergeExtraHostsIsSortedByName(t *testing.T) {
 		}
 	}
 
-	again, err := mergeExtraHosts("#cloud-config\n{}\n", hosts)
-	if err != nil {
-		t.Fatalf("mergeExtraHosts: %v", err)
-	}
+	again := applyTo(t, "#cloud-config\n{}\n", func(doc map[string]any) { addExtraHosts(doc, hosts) })
 	if out != again {
 		t.Errorf("the same input produced different output:\n%s\nvs\n%s", out, again)
 	}
@@ -145,10 +143,7 @@ func TestMergeExtraHostsIsSortedByName(t *testing.T) {
 
 func TestMergeExtraHostsPreservesExistingBootcmd(t *testing.T) {
 	existing := "#cloud-config\nbootcmd:\n  - echo existing\n"
-	out, err := mergeExtraHosts(existing, map[string]string{"web": "10.55.201.2"})
-	if err != nil {
-		t.Fatalf("mergeExtraHosts: %v", err)
-	}
+	out := applyTo(t, existing, func(doc map[string]any) { addExtraHosts(doc, map[string]string{"web": "10.55.201.2"}) })
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(stripHeader(out)), &doc); err != nil {
 		t.Fatalf("output isn't valid YAML: %v\noutput was:\n%s", err, out)

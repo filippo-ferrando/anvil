@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -38,26 +39,25 @@ func virtiofsLog(instanceID, tag string) string {
 	return filepath.Join(instanceDir(instanceID), "virtiofsd-"+tag+".log")
 }
 
-// fstabLine is m's /etc/fstab entry; spaces in the guest path are escaped the fstab way.
+// fstabLine is m's /etc/fstab entry.
 func fstabLine(m instance.Mount) string {
 	opts := "defaults,nofail"
 	if m.ReadOnly {
 		opts += ",ro"
 	}
-	path := strings.NewReplacer(" ", `\040`, "\t", `\011`).Replace(m.GuestPath)
-	return fmt.Sprintf("%s %s virtiofs %s 0 0", m.Tag, path, opts)
+	return fmt.Sprintf("%s %s virtiofs %s 0 0", m.Tag, fstabEscape(m.GuestPath), opts)
 }
 
-// mergeMounts adds a bootcmd that keeps the guest's fstab in line with mounts, each written
-// by line. The fstab is only rewritten once per generation, so mounts changed live since
-// then survive reboots.
-func mergeMounts(existing string, mounts []instance.Mount, generation int, line func(instance.Mount) string) (string, error) {
+// fstabEscaper escapes the blanks that would split an fstab field.
+var fstabEscaper = strings.NewReplacer(" ", `\040`, "\t", `\011`)
+
+func fstabEscape(path string) string { return fstabEscaper.Replace(path) }
+
+// addMounts adds a bootcmd that keeps the guest's fstab in line with mounts, each written
+// by line. The fstab is only rewritten once per generation, so live changes survive reboots.
+func addMounts(doc map[string]any, mounts []instance.Mount, generation int, line func(instance.Mount) string) {
 	if len(mounts) == 0 && generation == 0 {
-		return existing, nil
-	}
-	doc, err := parseCloudConfig(existing)
-	if err != nil {
-		return "", err
+		return
 	}
 
 	gen := fmt.Sprint(generation)
@@ -76,7 +76,6 @@ func mergeMounts(existing string, mounts []instance.Mount, generation int, line 
 
 	bootcmd, _ := doc["bootcmd"].([]any)
 	doc["bootcmd"] = append([]any{strings.Join(lines, "\n")}, bootcmd...)
-	return encodeCloudConfig(doc)
 }
 
 // mountLiveScript adds m's fstab line and mounts it in a running guest, retrying while the
@@ -107,6 +106,38 @@ func umountLiveScript(m instance.Mount) string {
 	}, "\n")
 }
 
+// checkNewMount validates a mount request against spec's existing mounts, at most limit of
+// them when limit is above 0, and the host.
+func checkNewMount(spec *instance.Spec, hostPath, guestPath string, limit int) error {
+	for _, m := range spec.VM.Mounts {
+		if m.GuestPath == guestPath {
+			return fmt.Errorf("vm: %s already has a mount at %s", spec.Name, guestPath)
+		}
+	}
+	if limit > 0 && len(spec.VM.Mounts) >= limit {
+		return fmt.Errorf("vm: %s already has the maximum of %d mounts", spec.Name, limit)
+	}
+	info, err := os.Stat(hostPath)
+	switch {
+	case os.IsPermission(err):
+		return fmt.Errorf("vm: host path %s: %w%s", hostPath, err, hostpath.Hint(hostPath))
+	case err != nil:
+		return fmt.Errorf("vm: host path %s: %w", hostPath, err)
+	case !info.IsDir():
+		return fmt.Errorf("vm: host path %s is not a directory", hostPath)
+	}
+	return nil
+}
+
+// mountIndex returns the index of spec's mount at guestPath.
+func mountIndex(spec *instance.Spec, guestPath string) (int, error) {
+	idx := slices.IndexFunc(spec.VM.Mounts, func(m instance.Mount) bool { return m.GuestPath == guestPath })
+	if idx == -1 {
+		return -1, fmt.Errorf("vm: %s has no mount at %s", spec.Name, guestPath)
+	}
+	return idx, nil
+}
+
 // Mount shares hostPath into spec's guest at guestPath over virtiofs. A running VM with a
 // guest agent gets it live; otherwise the seed is rebuilt and a running VM restarts.
 func (b *Backend) Mount(ctx context.Context, spec *instance.Spec, hostPath, guestPath string, readOnly bool) error {
@@ -115,21 +146,8 @@ func (b *Backend) Mount(ctx context.Context, spec *instance.Spec, hostPath, gues
 	}
 	v := spec.VM
 
-	for _, m := range v.Mounts {
-		if m.GuestPath == guestPath {
-			return fmt.Errorf("vm: %s already has a mount at %s", spec.Name, guestPath)
-		}
-	}
-	if len(v.Mounts) >= qemu.HotplugPorts {
-		return fmt.Errorf("vm: %s already has the maximum of %d mounts", spec.Name, qemu.HotplugPorts)
-	}
-	if info, err := os.Stat(hostPath); err != nil {
-		if os.IsPermission(err) {
-			return fmt.Errorf("vm: host path %s: %w%s", hostPath, err, hostpath.Hint(hostPath))
-		}
-		return fmt.Errorf("vm: host path %s: %w", hostPath, err)
-	} else if !info.IsDir() {
-		return fmt.Errorf("vm: host path %s is not a directory", hostPath)
+	if err := checkNewMount(spec, hostPath, guestPath, qemu.HotplugPorts); err != nil {
+		return err
 	}
 
 	m := instance.Mount{
@@ -149,7 +167,7 @@ func (b *Backend) Mount(ctx context.Context, spec *instance.Spec, hostPath, gues
 
 	v.NextMountIndex++
 	v.Mounts = append(v.Mounts, m)
-	return b.reconfigureAndRestartIfRunning(ctx, spec)
+	return reseedAndRestart(ctx, b, b, spec)
 }
 
 // Umount removes a mount previously added with Mount, identified by its guest path.
@@ -159,15 +177,9 @@ func (b *Backend) Umount(ctx context.Context, spec *instance.Spec, guestPath str
 	}
 	v := spec.VM
 
-	idx := -1
-	for i, m := range v.Mounts {
-		if m.GuestPath == guestPath {
-			idx = i
-			break
-		}
-	}
-	if idx == -1 {
-		return fmt.Errorf("vm: %s has no mount at %s", spec.Name, guestPath)
+	idx, err := mountIndex(spec, guestPath)
+	if err != nil {
+		return err
 	}
 	m := v.Mounts[idx]
 
@@ -180,15 +192,13 @@ func (b *Backend) Umount(ctx context.Context, spec *instance.Spec, guestPath str
 	}
 
 	v.Mounts = append(v.Mounts[:idx], v.Mounts[idx+1:]...)
-	return b.reconfigureAndRestartIfRunning(ctx, spec)
+	return reseedAndRestart(ctx, b, b, spec)
 }
 
 // liveMountTarget returns spec's QEMU process when a mount change can be applied live:
 // the VM runs and the guest agent can run commands.
 func (b *Backend) liveMountTarget(ctx context.Context, spec *instance.Spec) (*qemu.Process, bool) {
-	b.mu.Lock()
-	proc, running := b.running[spec.ID]
-	b.mu.Unlock()
+	proc, running := b.lookup(spec.ID)
 	if !running || proc.QMP == nil {
 		return nil, false
 	}

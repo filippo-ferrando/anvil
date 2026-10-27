@@ -144,22 +144,23 @@ func (v *Vault) OverlayFor(ctx context.Context, entry DistroEntry, overlayPath s
 	if progress != nil {
 		progress("creating disk overlay")
 	}
-	createCmd := exec.CommandContext(ctx, "qemu-img", "create",
-		"-f", "qcow2",
-		"-F", "qcow2",
-		"-b", base,
-		overlayPath,
-	)
-	if out, err := createCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("image: qemu-img create failed: %w: %s", err, string(out))
+	if err := QemuImg(ctx, "create", "-f", "qcow2", "-F", "qcow2", "-b", base, overlayPath); err != nil {
+		return fmt.Errorf("image: qemu-img create failed: %w", err)
 	}
 
 	// Only resize when actually growing.
 	if requestedBytes > baseSizeBytes {
-		resizeCmd := exec.CommandContext(ctx, "qemu-img", "resize", overlayPath, fmt.Sprintf("%dG", diskGiB))
-		if out, err := resizeCmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("image: qemu-img resize failed: %w: %s", err, string(out))
+		if err := QemuImg(ctx, "resize", overlayPath, fmt.Sprintf("%dG", diskGiB)); err != nil {
+			return fmt.Errorf("image: qemu-img resize failed: %w", err)
 		}
+	}
+	return nil
+}
+
+// QemuImg runs qemu-img with args. A failure's error carries qemu-img's output.
+func QemuImg(ctx context.Context, args ...string) error {
+	if out, err := exec.CommandContext(ctx, "qemu-img", args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("%w: %s", err, out)
 	}
 	return nil
 }
