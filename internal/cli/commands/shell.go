@@ -67,3 +67,12 @@ func newShellCommand(flags *globalFlags) *cobra.Command {
 	f.add(cmd)
 	return cmd
 }
+
+// isStdinTerminal reports whether stdin is an interactive terminal.
+func isStdinTerminal() bool {
+	info, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}

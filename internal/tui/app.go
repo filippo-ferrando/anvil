@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,12 +41,13 @@ const (
 	screenMigration
 	screenEvents
 	screenDevices
+	screenGUIApps
 	screenLaunch // full-screen takeover reached via Instances' "n"
 	screenLogs   // full-screen takeover reached via Instances' "l"
 )
 
 // screenOrder is the sidebar's own list, top to bottom.
-var screenOrder = []screen{screenInstances, screenSnapshots, screenImages, screenIntents, screenCloudInit, screenMirrors, screenMigration, screenEvents, screenDevices}
+var screenOrder = []screen{screenInstances, screenSnapshots, screenImages, screenIntents, screenCloudInit, screenMirrors, screenMigration, screenEvents, screenDevices, screenGUIApps}
 
 var screenLabels = map[screen]string{
 	screenInstances: "Instances",
@@ -57,6 +59,7 @@ var screenLabels = map[screen]string{
 	screenMigration: "Migration",
 	screenEvents:    "Events",
 	screenDevices:   "Devices",
+	screenGUIApps:   "GUI Apps",
 }
 
 const (
@@ -95,6 +98,7 @@ type model struct {
 	migration migrationModel
 	events    eventsModel
 	devices   devicesModel
+	guiApps   guiAppsModel
 
 	watchReloadPending bool // a reload triggered by a Watch event is already scheduled
 	watchFullReload    bool // a pending Watch event couldn't be patched into the Instances list
@@ -140,6 +144,7 @@ func Run(dial func() (*client.Client, error), socketPath string) error {
 		migration:      newMigrationModel(),
 		events:         newEventsModel(),
 		devices:        newDevicesModel(),
+		guiApps:        newGUIAppsModel(),
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
@@ -228,6 +233,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mirrors.list.SetSize(contentWidth-2, h)
 		m.events.list.SetSize(contentWidth-2, h-1) // -1: the help bar under the list
 		m.devices.list.SetSize(contentWidth-2, h-1)
+		m.guiApps.list.SetSize(contentWidth-2, h-1)
 		m.migration.setSize(contentWidth, h)
 		m.migration.migrateForm.SetHeight(h - 2)
 		// launch/logs are full-width takeovers, not squeezed by the sidebar.
@@ -315,6 +321,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateEvents(msg)
 	case screenDevices:
 		return m.updateDevices(msg)
+	case screenGUIApps:
+		return m.updateGUIApps(msg)
 	}
 	return m, nil
 }
@@ -351,12 +359,30 @@ func (m model) updateSidebar(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// screenForDigit maps "1".."9" to the sidebar entry at that position.
+// screenForDigit maps "1".."9" to the sidebar entry at that position, and "0" to the tenth.
 func screenForDigit(k string) (screen, bool) {
-	if len(k) != 1 || k[0] < '1' || int(k[0]-'1') >= len(screenOrder) {
+	if len(k) != 1 || k[0] < '0' || k[0] > '9' {
 		return 0, false
 	}
-	return screenOrder[k[0]-'1'], true
+	i := int(k[0]-'0') - 1
+	if k[0] == '0' {
+		i = 9
+	}
+	if i >= len(screenOrder) {
+		return 0, false
+	}
+	return screenOrder[i], true
+}
+
+// screenDigit is the key that jumps to the sidebar entry at index i, blank past the tenth.
+func screenDigit(i int) string {
+	switch {
+	case i < 9:
+		return strconv.Itoa(i + 1)
+	case i == 9:
+		return "0"
+	}
+	return " "
 }
 
 // jumpTo opens s with focus on its content, reloading it.
@@ -396,6 +422,8 @@ func (m model) loadCmdForScreen(s screen) tea.Cmd {
 		return m.events.load(c)
 	case screenDevices:
 		return loadHostDevices(c)
+	case screenGUIApps:
+		return loadGUIApps()
 	}
 	return nil
 }
@@ -505,6 +533,8 @@ func (m model) screenView() string {
 		return m.events.View()
 	case screenDevices:
 		return m.devices.View()
+	case screenGUIApps:
+		return m.guiApps.View()
 	}
 	return ""
 }
@@ -513,7 +543,7 @@ func (m model) sidebarView() string {
 	var b strings.Builder
 	b.WriteString(styleSubtitle.Render(" MENU") + "\n\n")
 	for i, s := range screenOrder {
-		label := fmt.Sprintf("%d %s", i+1, screenLabels[s])
+		label := screenDigit(i) + " " + screenLabels[s]
 		switch {
 		case s == m.screen && m.sidebarFocused:
 			b.WriteString(styleMenuItemSelected.Render("▸ " + label))

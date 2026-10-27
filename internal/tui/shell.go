@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"os/exec"
 	"strings"
 
@@ -72,4 +73,59 @@ func buildShellCommand(c *client.Client, inst *anvilv1.Instance, user, identity 
 		return nil, err
 	}
 	return client.SSHCommand(target, key, command)
+}
+
+// transferDoneMsg reports how a suspended scp or docker cp run went.
+type transferDoneMsg struct {
+	err  error
+	what string // "src → dst", for the status line
+}
+
+const (
+	transferFromField  = "From instance"
+	transferLocalField = "Local path"
+	transferInstField  = "Instance path"
+	transferUserField  = "As user (optional)"
+)
+
+// transferFields builds the transfer form; user and identity only show for a VM.
+func transferFields(inst *anvilv1.Instance, last instancesModel) []formField {
+	fields := []formField{
+		toggleField(transferFromField, "on: copy out of the instance, off: copy into it", last.lastTransferFrom),
+		pathField(transferLocalField, "file or directory on this machine", ""),
+		textField(transferInstField, "path inside "+inst.GetName(), ""),
+	}
+	if inst.GetVm() != nil {
+		fields = append(fields, textField(transferUserField, "", last.lastShellUser), identityField(last.lastIdentity))
+	}
+	return fields
+}
+
+// transferFrom reads the transfer form into the copy it describes, the same as `anvil transfer`.
+func transferFrom(form simpleForm, name string) (client.Transfer, error) {
+	t := client.Transfer{
+		Instance:     name,
+		LocalPath:    form.Value(transferLocalField),
+		InstancePath: form.Value(transferInstField),
+		ToInstance:   !form.Bool(transferFromField),
+	}
+	if t.LocalPath == "" || t.InstancePath == "" {
+		return t, errors.New("transfer: a local path and an instance path are required")
+	}
+	return t, nil
+}
+
+// transferWith suspends the TUI and copies t with scp (VM) or docker/podman cp (container).
+func (m model) transferWith(inst *anvilv1.Instance, t client.Transfer, user, identity string) (tea.Model, tea.Cmd) {
+	cmd, err := m.client.TransferCommand(inst, t, user, identity)
+	if err != nil {
+		m.setStatus(err.Error(), true)
+		return m, nil
+	}
+	ref := inst.GetName() + ":" + t.InstancePath
+	what := t.LocalPath + " → " + ref
+	if !t.ToInstance {
+		what = ref + " → " + t.LocalPath
+	}
+	return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return transferDoneMsg{err: err, what: what} })
 }

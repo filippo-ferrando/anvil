@@ -94,6 +94,10 @@ On the Instances screen, `g` opens the GUI app form: command, an "X11 app" toggl
 keeps running after the TUI quits. The detail panel shows whether the instance supports
 GUI apps.
 
+The **GUI Apps** screen lists the exported entries of the machine running the TUI (like
+`anvil gui exports`): `enter` starts the app with the entry's own command line, `x`
+removes it after a confirmation (like `anvil gui unexport`).
+
 ## Limitations
 
 - Wayland hosts only, no plain X11 host session.

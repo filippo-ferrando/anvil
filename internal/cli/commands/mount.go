@@ -22,7 +22,7 @@ func newMountCommand(flags *globalFlags) *cobra.Command {
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			hostPath := args[0]
-			name, guestPath, ok := splitInstanceRef(args[1])
+			name, guestPath, ok := client.SplitInstanceRef(args[1])
 			if !ok {
 				return fmt.Errorf(`second argument must be "<name>:<guest-path>"`)
 			}
@@ -55,7 +55,7 @@ func newUmountCommand(flags *globalFlags) *cobra.Command {
 			"the guest), and restarts a running guest OS otherwise.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name, guestPath, ok := splitInstanceRef(args[0])
+			name, guestPath, ok := client.SplitInstanceRef(args[0])
 			if !ok {
 				return fmt.Errorf(`argument must be "<name>:<guest-path>"`)
 			}

@@ -21,7 +21,9 @@ run local programs follow the remote too: a VM shell or exec goes through `ssh -
 a container exec runs `docker exec` with `DOCKER_HOST=ssh://<host>`, and a path the
 daemon reads or writes (a mount's host path, an export's output, an import's bundle) must
 then be absolute on the remote host. Those fields then have no local Tab completion and
-the export output has no default.
+the export output has no default. A transfer's local path stays on the machine running
+the TUI, as with `anvil transfer`: `scp -J <host>` for a VM, `docker cp` with
+`DOCKER_HOST=ssh://<host>` for a container.
 
 ## Layout
 
@@ -40,7 +42,7 @@ the export output has no default.
 - **Header**: the TUI's own version, local `user@hostname`, the socket (or `host:socket` with `--remote`), the
   daemon state (`connecting…`, `daemon connected` with the daemon's version,
   `daemon unreachable`, taken from the last instance list request), the running/total instance count and a clock.
-- **Sidebar**: the nine screens of `screenOrder` in `internal/tui/app.go`. The entry with
+- **Sidebar**: the ten screens of `screenOrder` in `internal/tui/app.go`. The entry with
   the arrow is the active screen; it is highlighted when the sidebar itself has focus.
 - **Status line**: the result of the last action. A success stays 4 s, an error 10 s; known
   errors get a `hint:` line under them (`friendlyError`).
@@ -59,7 +61,7 @@ and **Logs** (`l` on Instances).
 | Key | Action |
 |-----|--------|
 | `ctrl+c` | Quit, from any screen, even during a launch. |
-| `alt+1` … `alt+9` | Jump to that sidebar entry, focused on its content. Not in the Launch and Logs takeovers. This is checked before any form, so it also leaves a half-filled form. |
+| `alt+1` … `alt+9`, `alt+0` | Jump to that sidebar entry (`0` is the tenth), focused on its content. Not in the Launch and Logs takeovers. This is checked before any form, so it also leaves a half-filled form. |
 
 ### Sidebar (when it has focus)
 
@@ -69,7 +71,7 @@ and **Logs** (`l` on Instances).
 | `↓` `j` `tab` | Next screen (wraps around). |
 | `home` `g` / `end` `G` | First / last screen. |
 | `enter` `→` `l` | Move focus into the screen's content. |
-| `1` … `9` | Jump to that screen, focused on its content. |
+| `1` … `9`, `0` | Jump to that screen (`0` is the tenth), focused on its content. |
 | `q` | Quit. |
 
 Inside a screen, `esc` or `q` gives focus back to the sidebar when no form, confirmation
@@ -136,6 +138,7 @@ who caused each one and any error (see `anvil events`).
 | `S` | Stop a running instance with options: Force (skip the graceful shutdown) and Timeout seconds (`anvil stop --force --timeout`). With marks: the same for every marked instance that runs. |
 | `x` | Open a shell in a VM: asks for a user (blank means the image's default user) and an optional private key (`--identity`, blank means anvil's own key), then suspends the TUI and runs `ssh` into the VM until the session ends. On a container it opens `/bin/sh` through `docker exec`, like `anvil shell`. |
 | `e` | Run one command: asks for the command (and a user and private key, for a VM), then runs it over `ssh` for a VM or `docker exec -it` for a container. |
+| `t` | Copy a file or directory to or from the instance (`anvil transfer`): a "From instance" toggle (off copies into the instance, the choice is remembered), the local path, the path inside the instance, and for a VM a user and a private key (pre-filled like `x`). The TUI is suspended while `scp -r` (VM) or `docker cp` (container) runs. |
 | `g` | Run a graphical app: command, X11 toggle, user, private key (VM), and whether to add it to this desktop's app launcher, with an optional launcher title and icon file (`anvil gui` and `anvil gui export`, see [gui.md](gui.md)). |
 | `l` | Open the Logs takeover. |
 | `L` | Open the Logs takeover from the last N lines only (`anvil logs --tail`). |
@@ -346,5 +349,19 @@ shows the other IOMMU group members it brings along. See [passthrough.md](passth
 
 | Key | Action |
 |-----|--------|
+| `r` | Reload. |
+| `esc` `q` | Back to the sidebar. |
+
+## 10. GUI Apps
+
+The desktop entries added with `anvil gui export` (or the "Add to desktop" toggle of `g`),
+like `anvil gui exports`: the app's launcher name and instance, then the app id, its
+command and the entry's file. These are files of the machine running the TUI, so the
+screen shows the same list with or without `--remote`. See [gui.md](gui.md).
+
+| Key | Action |
+|-----|--------|
+| `enter` | Start the app with the entry's own command line, as the app launcher does (`anvil gui --detach`). |
+| `x` | Remove the entry and its icon, after a confirmation (`anvil gui unexport`). |
 | `r` | Reload. |
 | `esc` `q` | Back to the sidebar. |

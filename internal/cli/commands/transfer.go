@@ -3,8 +3,6 @@ package commands
 import (
 	"fmt"
 	"os"
-	"os/exec"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -18,79 +16,32 @@ func newTransferCommand(flags *globalFlags) *cobra.Command {
 		Short: "Copy a file to or from a VM (scp) or container (exactly one side must be <name>:<path>)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			srcName, srcPath, srcIsRemote := splitInstanceRef(args[0])
-			dstName, dstPath, dstIsRemote := splitInstanceRef(args[1])
-			if srcIsRemote == dstIsRemote {
-				return fmt.Errorf("exactly one of <source>/<destination> must be an instance reference (<name>:<path>); " +
-					"transferring between two instances, or between two local paths, isn't supported")
-			}
-
-			remoteName := srcName
-			if dstIsRemote {
-				remoteName = dstName
+			t, err := client.ParseTransfer(args[0], args[1])
+			if err != nil {
+				return err
 			}
 
 			c, err := dial(flags)
 			if err != nil {
 				return err
 			}
-			inst, err := resolveInstance(cmd.Context(), c, remoteName)
+			inst, err := resolveInstance(cmd.Context(), c, t.Instance)
 			c.Close()
 			if err != nil {
 				return err
 			}
 
-			if inst.GetContainer() != nil {
-				if cmd.Flags().Changed("user") || cmd.Flags().Changed("identity") {
-					fmt.Fprintln(os.Stderr, "anvil: --user/--identity have no effect on a container instance, ignoring")
-				}
-				if srcIsRemote {
-					return runContainerCopy(c, inst, dstPath, srcPath, false)
-				}
-				return runContainerCopy(c, inst, srcPath, dstPath, true)
+			if inst.GetContainer() != nil && (cmd.Flags().Changed("user") || cmd.Flags().Changed("identity")) {
+				fmt.Fprintln(os.Stderr, "anvil: --user/--identity have no effect on a container instance, ignoring")
 			}
-
-			key, err := client.ResolveIdentity(identity)
+			copyCmd, err := c.TransferCommand(inst, t, user, identity)
 			if err != nil {
 				return err
 			}
-			target, err := c.SSHTarget(inst, user)
-			if err != nil {
-				return err
-			}
-
-			scpBin, err := exec.LookPath("scp")
-			if err != nil {
-				return fmt.Errorf("scp: not found on PATH (needed for `anvil transfer`)")
-			}
-			scpArgs, err := client.SSHArgs(target, "-P", key)
-			if err != nil {
-				return err
-			}
-			scpArgs = append(scpArgs, "-r") // harmless for a single file, required for a directory
-			remotePrefix := fmt.Sprintf("%s@%s:", target.User, target.Host)
-			if srcIsRemote {
-				scpArgs = append(scpArgs, remotePrefix+srcPath, dstPath)
-			} else {
-				scpArgs = append(scpArgs, srcPath, remotePrefix+dstPath)
-			}
-
-			scpCmd := exec.Command(scpBin, scpArgs...)
-			scpCmd.Stdin, scpCmd.Stdout, scpCmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-			return scpCmd.Run()
+			return copyCmd.Run()
 		},
 	}
 	cmd.Flags().StringVar(&user, "user", "", "SSH user for the remote side (VM only, defaults to the image's default user)")
 	cmd.Flags().StringVarP(&identity, "identity", "i", "", "path to a private key to use, instead of anvil's own managed key (VM only)")
 	return cmd
-}
-
-// splitInstanceRef splits "<name>:<path>" into its parts. A plain local
-// path (the common case) has no colon and isRemote comes back false.
-func splitInstanceRef(s string) (name, path string, isRemote bool) {
-	idx := strings.Index(s, ":")
-	if idx < 0 {
-		return "", s, false
-	}
-	return s[:idx], s[idx+1:], true
 }

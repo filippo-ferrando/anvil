@@ -17,6 +17,15 @@ type guiLaunchedMsg struct {
 	err    error
 }
 
+// showGUILaunched puts the outcome of starting a GUI app on the status line.
+func (m *model) showGUILaunched(msg guiLaunchedMsg) {
+	if msg.err != nil {
+		m.setStatus("gui: "+msg.err.Error(), true)
+	} else {
+		m.setStatus(msg.output, false)
+	}
+}
+
 // guiRequest is what the GUI app form asks for.
 type guiRequest struct {
 	command        string

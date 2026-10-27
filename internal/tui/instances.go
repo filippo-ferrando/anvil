@@ -82,6 +82,7 @@ const (
 	instancesPromptGUI
 	instancesPromptStop
 	instancesPromptLogs
+	instancesPromptTransfer
 )
 
 type instancesModel struct {
@@ -92,14 +93,15 @@ type instancesModel struct {
 	marked    map[string]bool // instance IDs picked with space
 	stopNames []string        // what the stop options prompt stops
 
-	prompt         instancesPrompt
-	promptTarget   *anvilv1.Instance
-	promptForm     simpleForm
-	lastShellUser  string // remembered across shell/exec calls, pre-filled into the user field
-	lastIdentity   string // remembered across shell/exec/gui calls, pre-filled into the identity field
-	lastGUICommand string // remembered across GUI launches
-	lastGUIX11     bool
-	lastLogsTail   string // remembered across logs calls
+	prompt           instancesPrompt
+	promptTarget     *anvilv1.Instance
+	promptForm       simpleForm
+	lastShellUser    string // remembered across shell/exec calls, pre-filled into the user field
+	lastIdentity     string // remembered across shell/exec/gui calls, pre-filled into the identity field
+	lastGUICommand   string // remembered across GUI launches
+	lastGUIX11       bool
+	lastLogsTail     string // remembered across logs calls
+	lastTransferFrom bool   // remembered transfer direction
 
 	// Export, import and fork progress; a running one blocks other keys.
 	export, imp, fork transcript
@@ -373,12 +375,16 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case guiLaunchedMsg:
+	case transferDoneMsg:
 		if msg.err != nil {
-			m.setStatus("gui: "+msg.err.Error(), true)
+			m.setStatus("transfer: "+msg.err.Error(), true)
 		} else {
-			m.setStatus(msg.output, false)
+			m.setStatus("copied "+msg.what, false)
 		}
+		return m, nil
+
+	case guiLaunchedMsg:
+		m.showGUILaunched(msg)
 		return m, nil
 
 	case exportStreamMsg:
@@ -562,6 +568,11 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.instances.startPrompt(instancesPromptExec, inst, newSimpleForm("Exec", fields))
 		}
 		return m, nil
+	case "t":
+		if inst := m.selectedInstance(); inst != nil {
+			m.instances.startPrompt(instancesPromptTransfer, inst, newSimpleForm("Transfer with "+inst.GetName(), transferFields(inst, m.instances)))
+		}
+		return m, nil
 	case "g":
 		if inst := m.selectedInstance(); inst != nil {
 			m.instances.startPrompt(instancesPromptGUI, inst, newSimpleForm("GUI app", guiFields(inst, m.instances)))
@@ -729,6 +740,19 @@ func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.setStatus("starting "+g.command+" in "+target.GetName()+"…", false)
 		return m, launchGUIApp(m.socketPath, m.client.Remote, target.GetName(), g)
 
+	case instancesPromptTransfer:
+		t, err := transferFrom(ins.promptForm, target.GetName())
+		if err != nil {
+			m.setStatus(err.Error(), true)
+			return m, nil
+		}
+		ins.lastTransferFrom = !t.ToInstance
+		user, identity := ins.promptForm.Value(transferUserField), ins.promptForm.Value(identityLabel)
+		if target.GetVm() != nil {
+			ins.lastShellUser, ins.lastIdentity = user, identity
+		}
+		return m.transferWith(target, t, user, identity)
+
 	case instancesPromptShellUser:
 		user, identity := ins.promptForm.Value("As user (optional, blank = default)"), ins.promptForm.Value(identityLabel)
 		ins.lastShellUser, ins.lastIdentity = user, identity
@@ -873,7 +897,7 @@ func namesSummary(names []string) string {
 
 // instancesHelp is the Instances legend, most used actions first.
 var instancesHelp = []string{
-	"n", "launch", "space", "mark", "s", "start/stop", "S", "stop options", "x", "shell", "e", "exec", "g", "gui app", "l/L", "logs/tail", "d", "delete",
+	"n", "launch", "space", "mark", "s", "start/stop", "S", "stop options", "x", "shell", "e", "exec", "t", "transfer", "g", "gui app", "l/L", "logs/tail", "d", "delete",
 	"f", "fork", "u", "settings", "w", "wait cloud-init", "m/M", "mount/umount", "p/P", "add/rm port",
 	"E/i", "export/import", "r", "refresh", "esc", "menu",
 }
