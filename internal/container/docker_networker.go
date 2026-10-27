@@ -49,3 +49,8 @@ func (n *DockerNetworker) ListNetworks(ctx context.Context) ([]string, error) {
 func (n *DockerNetworker) ContainerAddress(ctx context.Context, networkName, containerID string) (string, error) {
 	return n.Client.ContainerNetworkAddress(ctx, containerID, networkName)
 }
+
+// ContainerAddresses returns every container's address on networkName, keyed by container ID.
+func (n *DockerNetworker) ContainerAddresses(ctx context.Context, networkName string) (map[string]string, error) {
+	return n.Client.NetworkContainerAddresses(ctx, networkName)
+}

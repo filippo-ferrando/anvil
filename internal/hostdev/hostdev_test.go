@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeHost builds a small sysfs/proc/dev tree and points the package at it.
@@ -182,5 +183,34 @@ func TestClaimUSB(t *testing.T) {
 	}
 	if fi, err := os.Stat(node); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Errorf("node mode = %v, %v", fi.Mode(), err)
+	}
+}
+
+// loadIDs parses an ids file once and again only after it changes.
+func TestLoadIDsCaches(t *testing.T) {
+	dir := t.TempDir()
+	saved := idsDirs
+	idsDirs = []string{dir}
+	t.Cleanup(func() { idsDirs = saved })
+	path := filepath.Join(dir, "usb.ids")
+	if err := os.WriteFile(path, []byte("1d6b  Linux Foundation\n\t0002  2.0 root hub\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadIDs("usb.ids").name("1d6b", "0002"); got != "Linux Foundation 2.0 root hub" {
+		t.Fatalf("name = %q", got)
+	}
+	// Same size and mtime: the cached copy is served, even though the bytes differ.
+	fi, _ := os.Stat(path)
+	if err := os.WriteFile(path, []byte("1d6b  Linux Foundatio_\n\t0002  2.0 root hub\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Chtimes(path, fi.ModTime(), fi.ModTime())
+	if got := loadIDs("usb.ids").name("1d6b", "0002"); got != "Linux Foundation 2.0 root hub" {
+		t.Fatalf("cached name = %q", got)
+	}
+	later := fi.ModTime().Add(time.Second)
+	_ = os.Chtimes(path, later, later)
+	if got := loadIDs("usb.ids").name("1d6b", "0002"); got != "Linux Foundatio_ 2.0 root hub" {
+		t.Fatalf("reloaded name = %q", got)
 	}
 }

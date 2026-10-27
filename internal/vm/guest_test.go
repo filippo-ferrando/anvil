@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -127,5 +128,38 @@ func TestMergeGuestAgent(t *testing.T) {
 	out, _ = mergeGuestAgent("#cloud-config\npackages: [qemu-guest-agent]\n")
 	if strings.Count(out, guestAgentPackage+"\n") != 1 {
 		t.Errorf("expected the package once, got:\n%s", out)
+	}
+}
+
+// WaitReady follows the poller's reports instead of probing the guest itself.
+func TestWaitReadyFollowsPoller(t *testing.T) {
+	b := newGuestTracker(func(string) *qemu.GuestAgent { t.Error("waitReady probed the guest"); return nil }, "powerdown")
+	gs := &guestState{cancel: func() {}}
+	b.guests["vm1"] = gs
+	done := make(chan error, 1)
+	go func() {
+		done <- b.waitReady(t.Context(), &instance.Spec{ID: "vm1", Name: "vm1"}, nil, nil)
+	}()
+	// Wait until waitReady is parked on the next report, then publish it.
+	for {
+		b.guestMu.Lock()
+		waiting := gs.probed != nil
+		if waiting {
+			gs.info = instance.GuestInfo{AgentConnected: true, CloudInit: instance.CloudInitDone}
+			gs.notifyProbed()
+		}
+		b.guestMu.Unlock()
+		if waiting {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("waitReady didn't return after the poller's report")
 	}
 }

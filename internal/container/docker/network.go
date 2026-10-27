@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // NetworkCreateParams describes a bridge network to create.
@@ -77,6 +78,32 @@ func (c *Client) NetworkExists(ctx context.Context, name string) (bool, error) {
 	default:
 		return false, statusError(resp)
 	}
+}
+
+type networkInspect struct {
+	Containers map[string]struct {
+		IPv4Address string `json:"IPv4Address"`
+	} `json:"Containers"`
+}
+
+// NetworkContainerAddresses returns the IPv4 address of every container attached to
+// network name, keyed by container ID, in one call.
+func (c *Client) NetworkContainerAddresses(ctx context.Context, name string) (map[string]string, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/networks/"+url.PathEscape(name), nil)
+	if err != nil {
+		return nil, err
+	}
+	var out networkInspect
+	if err := decodeJSON(resp, &out, http.StatusOK); err != nil {
+		return nil, fmt.Errorf("docker: inspecting network %s: %w", name, err)
+	}
+	addrs := make(map[string]string, len(out.Containers))
+	for id, ep := range out.Containers {
+		if ip, _, _ := strings.Cut(ep.IPv4Address, "/"); ip != "" {
+			addrs[id] = ip
+		}
+	}
+	return addrs, nil
 }
 
 type networkSummary struct {

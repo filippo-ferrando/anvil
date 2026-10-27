@@ -48,6 +48,9 @@ type Networker interface {
 	// ContainerAddress returns containerID's assigned address on networkName.
 	ContainerAddress(ctx context.Context, networkName, containerID string) (string, error)
 
+	// ContainerAddresses returns every container's address on networkName, keyed by container ID.
+	ContainerAddresses(ctx context.Context, networkName string) (map[string]string, error)
+
 	// ListNetworks returns the names of every network the engine
 	// currently has, used by ReconcileNetworks to find orphans.
 	ListNetworks(ctx context.Context) ([]string, error)
@@ -571,7 +574,7 @@ func (m *Manager) refreshDNS(ctx context.Context) {
 	}
 }
 
-// containerLookupTimeout bounds each live address lookup in DNSZones.
+// containerLookupTimeout bounds each intent's live address lookup in DNSZones.
 const containerLookupTimeout = 2 * time.Second
 
 // DNSZones returns one zone per intent with a network, for dns.Server.
@@ -620,15 +623,22 @@ func (m *Manager) zoneFor(ctx context.Context, it store.Intent) (dns.Zone, bool)
 
 	// Roles are added first so an instance name never shadows a role.
 	var aliases []nameAddr
+	var live map[string]string
+	liveRead := false
 	for _, mem := range it.Members {
 		ip := mem.IP
 		spec, specErr := m.Instances.GetByID(mem.InstanceID)
 		if specErr == nil && mem.Kind == instance.KindContainer && spec.Container != nil && m.Networker != nil {
-			lookupCtx, cancel := context.WithTimeout(ctx, containerLookupTimeout)
-			if live, err := m.Networker.ContainerAddress(lookupCtx, it.Network.EngineNetworkName, spec.Container.ContainerID); err == nil && live != "" {
-				ip = live
+			// One network read covers every container member.
+			if !liveRead {
+				liveRead = true
+				lookupCtx, cancel := context.WithTimeout(ctx, containerLookupTimeout)
+				live, _ = m.Networker.ContainerAddresses(lookupCtx, it.Network.EngineNetworkName)
+				cancel()
 			}
-			cancel()
+			if addr := live[spec.Container.ContainerID]; addr != "" {
+				ip = addr
+			}
 		}
 		addr, err := netip.ParseAddr(stripCIDR(ip))
 		if err != nil {

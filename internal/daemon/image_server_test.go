@@ -96,15 +96,17 @@ func TestUsersOfFirecracker(t *testing.T) {
 			Hypervisor: instance.VMHypervisorFirecracker}}
 	}
 	specs := []*instance.Spec{fcVM("a", "debian-13"), fcVM("b", "ubuntu-24.04"), {Name: "c", VM: &instance.VMSpec{ImageRef: "debian-13", DiskPath: disk}}}
-	if got := usersOf(base, specs, vault); len(got) != 1 || got[0] != "a" {
+	bases := vmBases{}
+	bases.fill(specs, vault)
+	if got := usersOf(base, specs, bases); len(got) != 1 || got[0] != "a" {
 		t.Fatalf("usersOf = %v, want [a]", got)
 	}
 	// The raw copy a Firecracker disk was made from counts too.
-	if got := usersOf(filepath.Join(dir, "firecracker", "debian-13-x86_64.raw"), specs, vault); len(got) != 1 || got[0] != "a" {
+	if got := usersOf(filepath.Join(dir, "firecracker", "debian-13-x86_64.raw"), specs, bases); len(got) != 1 || got[0] != "a" {
 		t.Fatalf("usersOf raw = %v, want [a]", got)
 	}
 	// Every Firecracker VM of the kernel's arch boots from it.
-	if got := usersOf(filepath.Join(dir, "firecracker", "anvil-fc-kernel-6.18.57-x86_64"), specs, vault); len(got) != 2 {
+	if got := usersOf(filepath.Join(dir, "firecracker", "anvil-fc-kernel-6.18.57-x86_64"), specs, bases); len(got) != 2 {
 		t.Fatalf("usersOf kernel = %v, want [a b]", got)
 	}
 }
@@ -153,5 +155,30 @@ func TestImageDeleteForceIgnoresCreates(t *testing.T) {
 	}
 	if _, err := os.Stat(base); !os.IsNotExist(err) {
 		t.Error("the base is still there after a forced delete")
+	}
+}
+
+// Bases resolved before the vault lock are reused; only new VMs get looked up.
+func TestUsersOfLockedReusesBases(t *testing.T) {
+	dir := t.TempDir()
+	vault := image.NewVault(filepath.Join(dir, "prepared"))
+	base := filepath.Join(vault.PreparedDir, "debian-13-x86_64.qcow2")
+	touch(t, base)
+	fcVM := func(id string) *instance.Spec {
+		return &instance.Spec{ID: id, Name: id, VM: &instance.VMSpec{ImageRef: "debian-13", Arch: "x86_64", DiskPath: base,
+			Hypervisor: instance.VMHypervisorFirecracker}}
+	}
+	// "a" was resolved earlier to another base, so the cached answer must win.
+	bases := vmBases{"a": "/elsewhere.qcow2"}
+	list := func() ([]*instance.Spec, error) { return []*instance.Spec{fcVM("a"), fcVM("b")}, nil }
+	users, err := usersOfLocked(base, list, bases, vault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(users) != 1 || users[0] != "b" {
+		t.Fatalf("users = %v, want [b]", users)
+	}
+	if bases["b"] != base {
+		t.Fatalf("bases[b] = %q, want %q", bases["b"], base)
 	}
 }

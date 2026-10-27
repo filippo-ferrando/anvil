@@ -152,6 +152,7 @@ type zoneListener struct {
 
 	udp *net.UDPConn
 	tcp *net.TCPListener
+	sem chan struct{} // in-flight UDP queries and open TCP connections, shared
 }
 
 func (l *zoneListener) setZone(z Zone) {
@@ -182,7 +183,7 @@ func (s *Server) listen(z Zone) (*zoneListener, error) {
 		udp.Close()
 		return nil, err
 	}
-	l := &zoneListener{zone: z, udp: udp, tcp: tcp}
+	l := &zoneListener{zone: z, udp: udp, tcp: tcp, sem: make(chan struct{}, maxInFlightQueries)}
 	go s.serveUDP(l)
 	go s.serveTCP(l)
 	return l, nil
@@ -193,13 +194,13 @@ func allowed(z Zone, from netip.Addr) bool {
 	return from.IsLoopback() || (z.Subnet.IsValid() && z.Subnet.Contains(from))
 }
 
-// maxInFlightQueries bounds the goroutines and upstream sockets one zone can
-// hold at once. A member that floods the gateway is dropped, not served.
+// maxInFlightQueries bounds the goroutines, upstream sockets and TCP connections one
+// zone can hold at once. A member that floods the gateway is dropped, not served.
 const maxInFlightQueries = 64
 
 func (s *Server) serveUDP(l *zoneListener) {
 	buf := make([]byte, 65535)
-	sem := make(chan struct{}, maxInFlightQueries)
+	sem := l.sem
 	for {
 		n, from, err := l.udp.ReadFromUDPAddrPort(buf)
 		if err != nil {
@@ -235,7 +236,14 @@ func (s *Server) serveTCP(l *zoneListener) {
 			conn.Close()
 			continue
 		}
+		select {
+		case l.sem <- struct{}{}:
+		default:
+			conn.Close() // already at the limit
+			continue
+		}
 		go func() {
+			defer func() { <-l.sem }()
 			defer conn.Close()
 			for {
 				_ = conn.SetDeadline(time.Now().Add(10 * time.Second))

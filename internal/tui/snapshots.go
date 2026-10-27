@@ -125,6 +125,12 @@ func (m model) updateSnapshots(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.snapshots.snaps.SetItems(nil)
 		return m, nil
 
+	case snapshotsSettledMsg:
+		if inst := m.snapshots.selectedInstance(); inst == nil || inst.GetName() != msg.name {
+			return m, nil // the cursor moved on
+		}
+		return m, loadSnapshots(m.client, msg.name)
+
 	case snapshotsLoadedMsg:
 		m.snapshots.loading = false
 		if inst := m.snapshots.selectedInstance(); inst == nil || inst.GetName() != msg.instanceName {
@@ -273,7 +279,10 @@ func (m model) updateSnapshotsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if inst := sn.selectedInstance(); inst != nil && inst.GetName() != prevName {
 		sn.snaps.SetItems(nil)
 		sn.loading = true
-		return m, tea.Batch(cmd, loadSnapshots(m.client, inst.GetName()))
+		// Held arrow keys would otherwise list snapshots (one qemu-img run) per row.
+		name := inst.GetName()
+		settle := tea.Tick(selectSettleDelay, func(time.Time) tea.Msg { return snapshotsSettledMsg{name: name} })
+		return m, tea.Batch(cmd, settle)
 	}
 	return m, cmd
 }

@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Roots of the host trees read here, swapped for fake trees in tests.
@@ -341,31 +343,70 @@ func (n ids) name(vendor, product string) string {
 	return n[vendor]
 }
 
+// idsCache keeps each parsed ids file until its size or mtime changes.
+var idsCache struct {
+	sync.Mutex
+	m map[string]cachedIDs
+}
+
+type cachedIDs struct {
+	mod  time.Time
+	size int64
+	n    ids
+}
+
+// loadIDs returns file's names from the first ids dir that has it. The map is
+// shared through the cache, so callers must not change it.
 func loadIDs(file string) ids {
-	n := ids{}
 	for _, dir := range idsDirs {
-		f, err := os.Open(filepath.Join(dir, file))
+		path := filepath.Join(dir, file)
+		fi, err := os.Stat(path)
 		if err != nil {
 			continue
 		}
-		defer f.Close()
-		sc := bufio.NewScanner(f)
-		vendor := ""
-		for sc.Scan() {
-			line := sc.Text()
-			switch {
-			case len(line) > 6 && isHex4(line[:4]) && line[4:6] == "  ":
-				vendor = line[:4]
-				n[vendor] = line[6:]
-			case len(line) > 7 && line[0] == '\t' && isHex4(line[1:5]) && line[5:7] == "  " && vendor != "":
-				n[vendor+":"+line[1:5]] = line[7:]
-			case len(line) > 0 && line[0] != '\t' && line[0] != '#':
-				vendor = "" // classes and other sections after the vendor list
-			}
+		idsCache.Lock()
+		c, ok := idsCache.m[path]
+		idsCache.Unlock()
+		if ok && c.mod.Equal(fi.ModTime()) && c.size == fi.Size() {
+			return c.n
 		}
+		n, err := parseIDs(path)
+		if err != nil {
+			continue
+		}
+		idsCache.Lock()
+		if idsCache.m == nil {
+			idsCache.m = map[string]cachedIDs{}
+		}
+		idsCache.m[path] = cachedIDs{mod: fi.ModTime(), size: fi.Size(), n: n}
+		idsCache.Unlock()
 		return n
 	}
-	return n
+	return ids{}
+}
+
+func parseIDs(path string) (ids, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	n := ids{}
+	sc := bufio.NewScanner(f)
+	vendor := ""
+	for sc.Scan() {
+		line := sc.Text()
+		switch {
+		case len(line) > 6 && isHex4(line[:4]) && line[4:6] == "  ":
+			vendor = line[:4]
+			n[vendor] = line[6:]
+		case len(line) > 7 && line[0] == '\t' && isHex4(line[1:5]) && line[5:7] == "  " && vendor != "":
+			n[vendor+":"+line[1:5]] = line[7:]
+		case len(line) > 0 && line[0] != '\t' && line[0] != '#':
+			vendor = "" // classes and other sections after the vendor list
+		}
+	}
+	return n, nil
 }
 
 func isHex4(s string) bool {

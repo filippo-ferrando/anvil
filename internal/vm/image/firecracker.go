@@ -98,28 +98,48 @@ func (c *FCCache) RawBase(ctx context.Context, entry DistroEntry, progress func(
 	if fresh(dest, base) {
 		return dest, nil
 	}
+	convert := func(ctx context.Context, progress func(string)) error {
+		if fresh(dest, base) {
+			return nil // another launch converted it meanwhile
+		}
+		return c.convertRaw(ctx, entry, base, dest, progress)
+	}
+	// Launches of the same distro share one conversion instead of each running qemu-img.
+	if d := c.Vault.Downloader; d != nil && d.dedup != nil {
+		err = d.dedup.do(ctx, dest, progress, convert)
+	} else {
+		err = convert(ctx, progress)
+	}
+	if err != nil {
+		return "", err
+	}
+	return dest, nil
+}
+
+// convertRaw writes a raw copy of the qcow2 base to dest.
+func (c *FCCache) convertRaw(ctx context.Context, entry DistroEntry, base, dest string, progress func(status string)) error {
 	if err := os.MkdirAll(c.Dir, 0o750); err != nil {
-		return "", fmt.Errorf("image: creating %s: %w", c.Dir, err)
+		return fmt.Errorf("image: creating %s: %w", c.Dir, err)
 	}
 	if progress != nil {
 		progress("converting " + entry.ID + " to a raw disk for firecracker")
 	}
-	// A per-call temp name, so two launches converting the same base can't clobber each other.
+	// A per-call temp name, so a conversion left over from a canceled call can't clobber this one.
 	tmpFile, err := os.CreateTemp(c.Dir, filepath.Base(dest)+".part-*")
 	if err != nil {
-		return "", fmt.Errorf("image: creating a temp file in %s: %w", c.Dir, err)
+		return fmt.Errorf("image: creating a temp file in %s: %w", c.Dir, err)
 	}
 	tmp := tmpFile.Name()
 	tmpFile.Close()
 	defer os.Remove(tmp)
 	cmd := exec.CommandContext(ctx, "qemu-img", "convert", "-f", "qcow2", "-O", "raw", base, tmp)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("image: converting %s to raw: %w: %s", base, err, out)
+		return fmt.Errorf("image: converting %s to raw: %w: %s", base, err, out)
 	}
 	if err := os.Rename(tmp, dest); err != nil {
-		return "", fmt.Errorf("image: %w", err)
+		return fmt.Errorf("image: %w", err)
 	}
-	return dest, nil
+	return nil
 }
 
 // List returns the raw copies and kernels in the cache. A kernel's ID is its file name.

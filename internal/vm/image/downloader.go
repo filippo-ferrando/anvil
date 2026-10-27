@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
 	"os"
@@ -124,22 +125,21 @@ func (d *Downloader) Fetch(ctx context.Context, entry DistroEntry, destPath stri
 	})
 }
 
+// verifyExisting checks path against wantSHA256, reusing the checksum sidecar so a
+// file already verified (like the Firecracker kernel on every start) isn't rehashed.
 func verifyExisting(path, wantSHA256 string) (bool, error) {
-	f, err := os.Open(path)
-	if err != nil {
+	if _, err := os.Stat(path); err != nil {
 		return false, err
 	}
-	defer f.Close()
-
 	if wantSHA256 == "" {
 		// No checksum published: trust an existing file as-is.
 		return true, nil
 	}
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	sum, err := FileChecksum(path)
+	if err != nil {
 		return false, err
 	}
-	return hex.EncodeToString(h.Sum(nil)) == wantSHA256, nil
+	return sum == wantSHA256, nil
 }
 
 // downloadAttempts is how many times one Fetch resumes a transfer that broke midway.
@@ -157,10 +157,11 @@ func (d *Downloader) download(ctx context.Context, entry DistroEntry, destPath s
 	if progress != nil {
 		progress(fmt.Sprintf("downloading %s image from %s", entry.ID, entry.URL))
 	}
+	sum := &streamHash{h: sha256.New()}
 	var err error
 	for attempt := 1; attempt <= downloadAttempts; attempt++ {
 		var retry bool
-		retry, err = d.fetchPart(ctx, entry, tmpPath, metaPath, progress)
+		retry, err = d.fetchPart(ctx, entry, tmpPath, metaPath, sum, progress)
 		if err == nil || !retry || ctx.Err() != nil {
 			break
 		}
@@ -179,7 +180,7 @@ func (d *Downloader) download(ctx context.Context, entry DistroEntry, destPath s
 	if progress != nil {
 		progress(fmt.Sprintf("verifying checksum for %s", entry.ID))
 	}
-	got, err := fileSHA256(tmpPath)
+	got, err := sum.final(tmpPath)
 	if err != nil {
 		return fmt.Errorf("image: hashing %s: %w", tmpPath, err)
 	}
@@ -202,7 +203,7 @@ func (d *Downloader) download(ctx context.Context, entry DistroEntry, destPath s
 
 // fetchPart appends the rest of entry's image to tmpPath. retry reports whether
 // the error came from a broken transfer that a new Range request may finish.
-func (d *Downloader) fetchPart(ctx context.Context, entry DistroEntry, tmpPath, metaPath string, progress func(status string)) (retry bool, err error) {
+func (d *Downloader) fetchPart(ctx context.Context, entry DistroEntry, tmpPath, metaPath string, sum *streamHash, progress func(status string)) (retry bool, err error) {
 	var offset int64
 	if fi, err := os.Stat(tmpPath); err == nil {
 		offset = fi.Size()
@@ -255,6 +256,9 @@ func (d *Downloader) fetchPart(ctx context.Context, entry DistroEntry, tmpPath, 
 		return retry, fmt.Errorf("image: fetching %s: unexpected status %s", entry.URL, resp.Status)
 	}
 
+	if err := sum.resume(tmpPath, offset); err != nil {
+		return false, fmt.Errorf("image: hashing %s: %w", tmpPath, err)
+	}
 	out, err := os.OpenFile(tmpPath, flags, 0o640)
 	if err != nil {
 		return false, fmt.Errorf("image: opening temp file: %w", err)
@@ -263,7 +267,7 @@ func (d *Downloader) fetchPart(ctx context.Context, entry DistroEntry, tmpPath, 
 	if progress != nil {
 		body = &progressReader{r: resp.Body, total: total, read: offset, label: "downloading " + entry.ID, progress: progress}
 	}
-	_, copyErr := io.Copy(out, body)
+	_, copyErr := io.Copy(io.MultiWriter(out, sum), body)
 	if err := out.Close(); err != nil && copyErr == nil {
 		return false, fmt.Errorf("image: closing %s: %w", tmpPath, err)
 	}
@@ -271,6 +275,46 @@ func (d *Downloader) fetchPart(ctx context.Context, entry DistroEntry, tmpPath, 
 		return true, fmt.Errorf("image: downloading %s: %w", entry.URL, copyErr)
 	}
 	return false, nil
+}
+
+// streamHash hashes a download as it is written, so it isn't read back afterwards.
+// n counts the bytes hashed, to tell whether they still match the file.
+type streamHash struct {
+	h hash.Hash
+	n int64
+}
+
+func (s *streamHash) Write(p []byte) (int, error) {
+	s.h.Write(p)
+	s.n += int64(len(p))
+	return len(p), nil
+}
+
+// resume gets the hash in line with the first offset bytes of path before more are appended.
+func (s *streamHash) resume(path string, offset int64) error {
+	if s.n == offset {
+		return nil
+	}
+	s.h.Reset()
+	s.n = 0
+	if offset == 0 {
+		return nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.CopyN(s, f, offset)
+	return err
+}
+
+// final returns path's hex SHA256, rehashing it only if the stream fell out of step.
+func (s *streamHash) final(path string) (string, error) {
+	if fi, err := os.Stat(path); err == nil && fi.Size() == s.n {
+		return hex.EncodeToString(s.h.Sum(nil)), nil
+	}
+	return fileSHA256(path)
 }
 
 func fileSHA256(path string) (string, error) {

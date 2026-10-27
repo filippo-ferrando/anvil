@@ -201,3 +201,91 @@ func TestExitState(t *testing.T) {
 		}
 	}
 }
+
+// countingList counts registry reads.
+type countingList struct {
+	specList
+	mu    sync.Mutex
+	calls int
+}
+
+func (l *countingList) List(k instance.Kind) ([]*instance.Spec, error) {
+	l.mu.Lock()
+	l.calls++
+	l.mu.Unlock()
+	return l.specList.List(k)
+}
+
+// Events map to instances from memory: foreign containers don't cost a registry read each.
+func TestEventsUseOwnerMap(t *testing.T) {
+	fd, client := startFakeDocker(t)
+	reg := &countingList{specList: specList{containerSpec("web", "c-web", instance.StateRunning)}}
+	b := &DockerBackend{Client: client, Registry: reg}
+	got := make(chan stateRecord, 8)
+	b.SetExitHook(func(id string, state instance.State, _ string) { got <- stateRecord{id, state} })
+	t.Cleanup(b.Close)
+	<-fd.since
+
+	for range 5 {
+		fd.die("c-foreign", "1")
+	}
+	fd.die("c-web", "1")
+	if r := nextRecord(t, got); r.id != "web" {
+		t.Fatalf("got %+v, want web", r)
+	}
+	reg.mu.Lock()
+	calls := reg.calls
+	reg.mu.Unlock()
+	// One read builds the map and one goes to the reconcile on connect.
+	if calls > 2 {
+		t.Errorf("registry read %d times, want at most 2", calls)
+	}
+
+	// A container Create just made maps before its record is saved.
+	b.trackContainer("c-new", &instance.Spec{ID: "new", Name: "new"})
+	fd.die("c-new", "1")
+	if r := nextRecord(t, got); r.id != "new" {
+		t.Fatalf("got %+v, want new", r)
+	}
+}
+
+// A hook that blocks doesn't stall the event stream, and reports keep their order.
+func TestSlowHookKeepsOrder(t *testing.T) {
+	fd, client := startFakeDocker(t)
+	b := &DockerBackend{Client: client, Registry: specList{containerSpec("web", "c-web", instance.StateRunning)}}
+	release := make(chan struct{})
+	got := make(chan instance.State, 8)
+	b.SetExitHook(func(_ string, state instance.State, _ string) {
+		<-release
+		got <- state
+	})
+	t.Cleanup(b.Close)
+	<-fd.since
+
+	fd.die("c-web", "1")
+	fd.events <- map[string]any{"Type": "container", "Action": "start", "Actor": map[string]any{"ID": "c-web"}}
+	fd.die("c-web", "0")
+	// All three are read off the stream while the hook is still blocked.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		b.exits.mu.Lock()
+		n := len(b.exits.queue)
+		b.exits.mu.Unlock()
+		if n >= 2 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	close(release)
+	want := []instance.State{instance.StateError, instance.StateRunning, instance.StateStopped}
+	for _, w := range want {
+		select {
+		case s := <-got:
+			if s != w {
+				t.Fatalf("got %s, want %s", s, w)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for a report")
+		}
+	}
+}

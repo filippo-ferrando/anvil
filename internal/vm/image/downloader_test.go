@@ -208,3 +208,50 @@ func TestDedupSurvivesFirstCallerLeaving(t *testing.T) {
 		t.Errorf("expected nothing left in flight, got %d", len(d.inFlight))
 	}
 }
+
+// An existing file with a fresh checksum sidecar is trusted without rehashing.
+func TestVerifyExistingUsesSidecar(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kernel")
+	if err := os.WriteFile(path, []byte("kernel"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake := strings.Repeat("a", 64)
+	writeChecksumSidecar(path, fake)
+	if ok, err := verifyExisting(path, fake); err != nil || !ok {
+		t.Fatalf("verifyExisting = %v, %v, want true from the sidecar", ok, err)
+	}
+	// A file newer than its sidecar is hashed again.
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(path, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := verifyExisting(path, fake); ok {
+		t.Fatal("verifyExisting trusted a stale sidecar")
+	}
+}
+
+// streamHash matches a full rehash whether it streamed everything or caught up on a prefix.
+func TestStreamHash(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "img.part")
+	data := []byte(strings.Repeat("anvil", 1000))
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := fileSHA256(path)
+
+	streamed := &streamHash{h: sha256.New()}
+	_, _ = streamed.Write(data)
+	if got, _ := streamed.final(path); got != want {
+		t.Errorf("streamed = %s, want %s", got, want)
+	}
+
+	// A leftover part file: the first 1000 bytes are hashed from disk, the rest streamed.
+	resumed := &streamHash{h: sha256.New()}
+	if err := resumed.resume(path, 1000); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = resumed.Write(data[1000:])
+	if got, _ := resumed.final(path); got != want {
+		t.Errorf("resumed = %s, want %s", got, want)
+	}
+}

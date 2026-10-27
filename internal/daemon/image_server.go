@@ -76,9 +76,11 @@ func (s *ImageServer) List(ctx context.Context, req *anvilv1.ImageListRequest) (
 		return nil, err
 	}
 
+	bases := vmBases{}
+	bases.fill(specs, s.Vault)
 	reply := &anvilv1.ImageListReply{}
 	for _, img := range cached {
-		users := usersOf(img.Path, specs, s.Vault)
+		users := usersOf(img.Path, specs, bases)
 		reply.Images = append(reply.Images, &anvilv1.CachedImage{
 			Id:        img.ID,
 			Arch:      img.Arch,
@@ -129,12 +131,16 @@ func (s *ImageServer) Delete(ctx context.Context, req *anvilv1.ImageDeleteReques
 		}
 		return &anvilv1.ImageDeleteReply{}, nil
 	}
+	bases, err := preloadBases(func() ([]*instance.Spec, error) { return s.Store.List(instance.KindVM) }, s.Vault)
+	if err != nil {
+		return nil, err
+	}
 	err = s.Vault.DeleteUnused(target.Path, func() error {
-		specs, err := s.Store.List(instance.KindVM)
+		users, err := usersOfLocked(target.Path, func() ([]*instance.Spec, error) { return s.Store.List(instance.KindVM) }, bases, s.Vault)
 		if err != nil {
 			return err
 		}
-		if users := usersOf(target.Path, specs, s.Vault); len(users) > 0 {
+		if len(users) > 0 {
 			return fmt.Errorf("%w: %q is still used by instance(s) %s; pass --force to delete anyway (this will break their disks)",
 				image.ErrInUse, req.GetId(), strings.Join(users, ", "))
 		}
@@ -172,9 +178,29 @@ func (s *ImageServer) DeleteContainerImage(ctx context.Context, req *anvilv1.Con
 	return &anvilv1.ContainerImageDeleteReply{}, nil
 }
 
+// vmBases maps each VM to the base image its disk sits on, so the qemu-img lookup
+// behind baseImageOf runs once per VM per request instead of once per image.
+type vmBases map[string]string
+
+func basesKey(spec *instance.Spec) string {
+	if spec.ID != "" {
+		return spec.ID
+	}
+	return spec.Name
+}
+
+// fill resolves the base of every spec not resolved yet.
+func (b vmBases) fill(specs []*instance.Spec, vault *image.Vault) {
+	for _, spec := range specs {
+		if _, ok := b[basesKey(spec)]; !ok {
+			b[basesKey(spec)] = baseImageOf(spec, vault)
+		}
+	}
+}
+
 // usersOf returns the names of specs whose disk sits on the base image at imagePath. A
 // Firecracker VM also uses that base's raw copy ("<id>-<arch>.raw") and its arch's kernel.
-func usersOf(imagePath string, specs []*instance.Spec, vault *image.Vault) (names []string) {
+func usersOf(imagePath string, specs []*instance.Spec, bases vmBases) (names []string) {
 	name := filepath.Base(imagePath)
 	for _, spec := range specs {
 		fc := spec.VM != nil && spec.VM.HypervisorOf() == instance.VMHypervisorFirecracker
@@ -182,7 +208,7 @@ func usersOf(imagePath string, specs []*instance.Spec, vault *image.Vault) (name
 			names = append(names, spec.Name)
 			continue
 		}
-		base := baseImageOf(spec, vault)
+		base := bases[basesKey(spec)]
 		if base == "" {
 			continue
 		}
@@ -192,6 +218,28 @@ func usersOf(imagePath string, specs []*instance.Spec, vault *image.Vault) (name
 		}
 	}
 	return names
+}
+
+// preloadBases resolves the base of every VM list returns.
+func preloadBases(list func() ([]*instance.Spec, error), vault *image.Vault) (vmBases, error) {
+	specs, err := list()
+	if err != nil {
+		return nil, err
+	}
+	bases := vmBases{}
+	bases.fill(specs, vault)
+	return bases, nil
+}
+
+// usersOfLocked is the in-use check run under the vault lock. bases is filled outside the
+// lock first, so only VMs created since then need a qemu-img lookup here.
+func usersOfLocked(imagePath string, list func() ([]*instance.Spec, error), bases vmBases, vault *image.Vault) ([]string, error) {
+	specs, err := list()
+	if err != nil {
+		return nil, err
+	}
+	bases.fill(specs, vault)
+	return usersOf(imagePath, specs, bases), nil
 }
 
 // baseImageOf is the base image spec's disk was made from: a QEMU overlay's backing file, or

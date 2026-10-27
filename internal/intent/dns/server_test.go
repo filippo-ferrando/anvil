@@ -237,3 +237,34 @@ func TestRefreshClosesRemovedZones(t *testing.T) {
 		t.Error("expected the TCP listener to be closed")
 	}
 }
+
+// TCP connections count against the zone's in-flight limit, like UDP queries.
+func TestTCPConnectionsAreBounded(t *testing.T) {
+	zone := testZone()
+	s := NewServer(func(context.Context) ([]Zone, error) { return []Zone{zone}, nil })
+	s.Port = freePort(t)
+	s.ResolvConf = filepath.Join(t.TempDir(), "missing")
+	defer s.Close()
+	if err := s.Refresh(t.Context()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	l := s.listeners[zone.Listen]
+	for range maxInFlightQueries {
+		l.sem <- struct{}{}
+	}
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(s.Port)), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := conn.Read(make([]byte, 1)); err == nil || os.IsTimeout(err) {
+		t.Errorf("expected the connection over the limit to be closed, got %v", err)
+	}
+	for range maxInFlightQueries {
+		<-l.sem
+	}
+	if m := exchangeWith(t, "tcp", s.Port, "db.myapp.anvil."); len(m.Answers) != 1 {
+		t.Errorf("expected db to resolve once below the limit, got %+v", m)
+	}
+}

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -48,10 +49,22 @@ func (s *Store) AppendEvent(ev instance.HistoryEvent) (instance.HistoryEvent, er
 // ListEvents returns the newest limit events of instanceName (every instance when empty),
 // oldest first. limit 0 returns every stored match.
 func (s *Store) ListEvents(instanceName string, limit int) ([]instance.HistoryEvent, error) {
+	// Events of other instances are skipped without decoding: a match must hold this field.
+	var needle []byte
+	if instanceName != "" {
+		name, err := json.Marshal(instanceName)
+		if err != nil {
+			return nil, err
+		}
+		needle = append([]byte(`"InstanceName":`), name...)
+	}
 	var out []instance.HistoryEvent
 	err := s.db.View(func(tx *bbolt.Tx) error {
 		c := tx.Bucket(bucketEvents).Cursor()
 		for k, data := c.Last(); k != nil; k, data = c.Prev() {
+			if needle != nil && !bytes.Contains(data, needle) {
+				continue
+			}
 			var ev instance.HistoryEvent
 			if err := json.Unmarshal(data, &ev); err != nil {
 				return err

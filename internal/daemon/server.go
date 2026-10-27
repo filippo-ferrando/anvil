@@ -244,16 +244,21 @@ func (s *Server) pruneBaseImage(path string) error {
 	if err != nil {
 		return err
 	}
+	list := func() ([]*instance.Spec, error) { return s.Manager.List(instance.KindVM) }
 	for _, img := range cached {
 		if !samePath(img.Path, path) {
 			continue
 		}
-		err := s.Vault.DeleteUnused(img.Path, func() error {
-			specs, err := s.Manager.List(instance.KindVM)
+		bases, err := preloadBases(list, s.Vault)
+		if err != nil {
+			return err
+		}
+		err = s.Vault.DeleteUnused(img.Path, func() error {
+			users, err := usersOfLocked(img.Path, list, bases, s.Vault)
 			if err != nil {
 				return err
 			}
-			if users := usersOf(img.Path, specs, s.Vault); len(users) > 0 {
+			if len(users) > 0 {
 				return fmt.Errorf("%w: still used by %s", image.ErrInUse, strings.Join(users, ", "))
 			}
 			return nil

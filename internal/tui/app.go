@@ -95,6 +95,8 @@ type model struct {
 	devices   devicesModel
 
 	watchReloadPending bool // a reload triggered by a Watch event is already scheduled
+	watchFullReload    bool // a pending Watch event couldn't be patched into the Instances list
+	watchSelectedHit   bool // a pending Watch event touched the selected instance
 }
 
 // Run dials socketPath (on the ssh host remote, if set) and blocks running
@@ -183,6 +185,13 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Tick(watchRetryInterval, func(time.Time) tea.Msg { return watchRetryMsg{} })
 		}
 		cmds := []tea.Cmd{recvWatch(msg.stream)}
+		// The Instances list is patched from the event itself; other screens reload.
+		prev := m.instances.selectedName()
+		if m.screen != screenInstances || !m.instances.patch(msg.ev) {
+			m.watchFullReload = true
+		} else if msg.ev.GetInstance().GetName() == prev || m.instances.selectedName() != prev {
+			m.watchSelectedHit = true
+		}
 		if !m.watchReloadPending {
 			// Bursts of events (a launch changes state several times) collapse into one reload.
 			m.watchReloadPending = true
@@ -192,7 +201,15 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case watchRetryMsg:
 		return m, startWatch(m.client)
 	case watchReloadMsg:
-		m.watchReloadPending = false
+		full, selected := m.watchFullReload, m.watchSelectedHit
+		m.watchReloadPending, m.watchFullReload, m.watchSelectedHit = false, false, false
+		if m.screen == screenInstances && !full {
+			if !selected {
+				return m, nil
+			}
+			cmd := m.reloadSelected()
+			return m, cmd
+		}
 		switch m.screen {
 		case screenInstances, screenSnapshots, screenIntents, screenEvents:
 			return m, loadCmdForScreen(m.screen, m.client)
@@ -243,6 +260,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg.(type) {
 	case waitStreamMsg, statsStreamMsg, instanceEventsLoadedMsg, selectionSettledMsg:
 		return m.updateInstances(msg)
+	case snapshotsSettledMsg:
+		return m.updateSnapshots(msg)
 	case eventsLoadedMsg:
 		return m.updateEvents(msg)
 	case imageChecksumMsg:

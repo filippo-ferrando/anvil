@@ -90,3 +90,38 @@ func TestEventsKeepSelectionAcrossReload(t *testing.T) {
 		t.Errorf("selection moved to seq %d, want 2", it.ev.GetSeq())
 	}
 }
+
+// A Watch event for a known instance patches the list without a full List call.
+func TestWatchEventPatchesInstancesList(t *testing.T) {
+	m := instancesModelWith(
+		&anvilv1.Instance{Id: "1", Name: "a", State: anvilv1.State_STATE_STOPPED},
+		&anvilv1.Instance{Id: "2", Name: "b", State: anvilv1.State_STATE_STOPPED},
+	)
+	upd := &anvilv1.WatchEvent{Type: anvilv1.WatchEventType_WATCH_EVENT_TYPE_UPDATED,
+		Instance: &anvilv1.Instance{Id: "2", Name: "b", State: anvilv1.State_STATE_RUNNING}}
+	next, _ := m.Update(watchEventMsg{ev: upd})
+	m = next.(model)
+	if m.watchFullReload {
+		t.Fatal("an update to a listed instance must not need a full reload")
+	}
+	if got := m.instances.list.Items()[1].(instanceItem).inst.GetState(); got != anvilv1.State_STATE_RUNNING {
+		t.Fatalf("state = %v, want running", got)
+	}
+	// "b" isn't selected, so the reload tick has nothing to fetch.
+	if _, cmd := m.Update(watchReloadMsg{}); cmd != nil {
+		t.Error("expected no reload for a change to an unselected instance")
+	}
+
+	del := &anvilv1.WatchEvent{Type: anvilv1.WatchEventType_WATCH_EVENT_TYPE_DELETED, Instance: &anvilv1.Instance{Id: "1", Name: "a"}}
+	next, _ = m.Update(watchEventMsg{ev: del})
+	m = next.(model)
+	if len(m.instances.list.Items()) != 1 || !m.watchSelectedHit {
+		t.Fatalf("expected a gone and the selection refreshed, items=%d hit=%v", len(m.instances.list.Items()), m.watchSelectedHit)
+	}
+
+	add := &anvilv1.WatchEvent{Type: anvilv1.WatchEventType_WATCH_EVENT_TYPE_UPDATED, Instance: &anvilv1.Instance{Id: "3", Name: "c"}}
+	next, _ = m.Update(watchEventMsg{ev: add})
+	if !next.(model).watchFullReload {
+		t.Error("a new instance must trigger a full reload")
+	}
+}

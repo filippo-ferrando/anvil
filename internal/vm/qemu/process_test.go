@@ -183,3 +183,16 @@ func TestKillTimesOut(t *testing.T) {
 		t.Fatal("kill returned nil although the exit was never seen")
 	}
 }
+
+// AttachQMP gives up as soon as QEMU is gone instead of retrying for 5s.
+func TestAttachQMPStopsWhenProcessExits(t *testing.T) {
+	p := &Process{cfg: Config{QMPSocket: filepath.Join(t.TempDir(), "qmp.sock")}, exited: make(chan struct{})}
+	close(p.exited)
+	start := time.Now()
+	if err := p.AttachQMP(t.Context()); err == nil {
+		t.Fatal("AttachQMP succeeded without a socket")
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("AttachQMP took %v after the process exited", d)
+	}
+}

@@ -25,7 +25,8 @@ type DockerBackend struct {
 	Source   Source         // nil is fine, just means no mirrors ever get applied
 	Registry InstanceLister // nil disables exit detection
 
-	exits exitWatch
+	exits  exitWatch
+	listed guestFileCache
 }
 
 var (
@@ -124,6 +125,7 @@ func (b *DockerBackend) Create(ctx context.Context, spec *instance.Spec, progres
 		return fmt.Errorf("docker: creating %s: %w", spec.Name, err)
 	}
 	c.ContainerID = id
+	b.trackContainer(id, spec)
 	return nil
 }
 
@@ -327,8 +329,8 @@ const statsSampleWindow = 200 * time.Millisecond
 
 var _ instance.StatsProvider = (*DockerBackend)(nil)
 
-// Stats samples the container's live resource usage: CPU comes from Docker's
-// own cpu_stats/precpu_stats pairing on the second sample; network and disk-IO throughput are computed from the delta between two samples statsSampleWindow apart.
+// Stats samples the container's live resource usage. CPU, network and disk-IO
+// rates come from the delta between two one-shot samples statsSampleWindow apart.
 func (b *DockerBackend) Stats(ctx context.Context, spec *instance.Spec) (instance.Stats, error) {
 	if spec.Container == nil {
 		return instance.Stats{}, fmt.Errorf("docker: Stats called with a nil ContainerSpec")

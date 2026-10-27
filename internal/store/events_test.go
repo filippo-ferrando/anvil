@@ -53,3 +53,27 @@ func TestEventsTrimToMax(t *testing.T) {
 		t.Errorf("expected only the new event after the trim, got %+v", got)
 	}
 }
+
+// The byte pre-check must not drop names JSON escapes, nor match a name inside another field.
+func TestEventsFilterEscapedNames(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "anvil.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for _, ev := range []instance.HistoryEvent{
+		{InstanceName: `we"b<1>`, Action: "start"},
+		{InstanceName: "db", Message: `"InstanceName":"web"`},
+		{InstanceName: "web-2"},
+	} {
+		if _, err := s.AppendEvent(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, _ := s.ListEvents(`we"b<1>`, 0); len(got) != 1 {
+		t.Errorf("escaped name: got %+v", got)
+	}
+	if got, _ := s.ListEvents("web", 0); len(got) != 0 {
+		t.Errorf("web: got %+v, want none", got)
+	}
+}

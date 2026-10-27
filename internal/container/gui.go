@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -117,15 +118,65 @@ var _ instance.GuestFileReader = (*DockerBackend)(nil)
 // maxGuestFile skips container files bigger than this.
 const maxGuestFile = 4 << 20
 
-// ListGuestDir lists dir in the container through Docker's archive API.
+// listedFileMax is the biggest file a directory listing keeps the content of, so reading
+// the small files of a listed dir (like .desktop entries) needs no further Docker call.
+const listedFileMax = 256 << 10
+
+// listedTTL is how long a listing's file contents are served to ReadGuestFile.
+const listedTTL = 30 * time.Second
+
+// guestFileCache holds the files that recent ListGuestDir calls fetched.
+type guestFileCache struct {
+	mu    sync.Mutex
+	files map[string]listedFile // container ID + "\x00" + absolute path
+}
+
+type listedFile struct {
+	entry docker.ArchiveEntry
+	at    time.Time
+}
+
+func (c *guestFileCache) put(containerID, dir string, entries []docker.ArchiveEntry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.files == nil {
+		c.files = make(map[string]listedFile)
+	}
+	now := time.Now()
+	for k, f := range c.files {
+		if now.Sub(f.at) > listedTTL {
+			delete(c.files, k)
+		}
+	}
+	parent := path.Dir(dir)
+	for _, e := range entries {
+		if e.Typeflag == tar.TypeSymlink || (e.Typeflag == tar.TypeReg && e.Data != nil) {
+			c.files[containerID+"\x00"+path.Join(parent, e.Name)] = listedFile{e, now}
+		}
+	}
+}
+
+func (c *guestFileCache) get(containerID, p string) (docker.ArchiveEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	f, ok := c.files[containerID+"\x00"+path.Clean(p)]
+	if !ok || time.Since(f.at) > listedTTL {
+		return docker.ArchiveEntry{}, false
+	}
+	return f.entry, true
+}
+
+// ListGuestDir lists dir in the container through Docker's archive API. The same call
+// fetches its small files, which ReadGuestFile then serves for a short while.
 func (b *DockerBackend) ListGuestDir(ctx context.Context, spec *instance.Spec, dir string) ([]string, error) {
 	if spec.Container == nil || spec.Container.ContainerID == "" {
 		return nil, fmt.Errorf("docker: %s has no container yet", spec.Name)
 	}
-	entries, ok, err := b.Client.Archive(ctx, spec.Container.ContainerID, dir, 0)
+	entries, ok, err := b.Client.Archive(ctx, spec.Container.ContainerID, dir, listedFileMax)
 	if err != nil || !ok {
 		return nil, err
 	}
+	b.listed.put(spec.Container.ContainerID, dir, entries)
 	base := path.Base(dir) + "/"
 	var names []string
 	for _, e := range entries {
@@ -143,11 +194,14 @@ func (b *DockerBackend) ReadGuestFile(ctx context.Context, spec *instance.Spec, 
 		return nil, false, fmt.Errorf("docker: %s has no container yet", spec.Name)
 	}
 	for range 8 {
-		entries, ok, err := b.Client.Archive(ctx, spec.Container.ContainerID, p, maxGuestFile)
-		if err != nil || !ok || len(entries) == 0 {
-			return nil, false, err
+		e, cached := b.listed.get(spec.Container.ContainerID, p)
+		if !cached {
+			entries, ok, err := b.Client.Archive(ctx, spec.Container.ContainerID, p, maxGuestFile)
+			if err != nil || !ok || len(entries) == 0 {
+				return nil, false, err
+			}
+			e = entries[0]
 		}
-		e := entries[0]
 		switch e.Typeflag {
 		case tar.TypeReg:
 			return e.Data, e.Data != nil, nil

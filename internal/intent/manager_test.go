@@ -120,6 +120,9 @@ func (n *fakeNetworker) RemoveNetwork(ctx context.Context, name string) error {
 func (n *fakeNetworker) ContainerAddress(ctx context.Context, networkName, containerID string) (string, error) {
 	return "", errors.New("not implemented in fakeNetworker")
 }
+func (n *fakeNetworker) ContainerAddresses(ctx context.Context, networkName string) (map[string]string, error) {
+	return nil, errors.New("not implemented in fakeNetworker")
+}
 func (n *fakeNetworker) ListNetworks(ctx context.Context) ([]string, error) {
 	names := make([]string, 0, len(n.networks))
 	for name := range n.networks {

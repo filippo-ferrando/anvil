@@ -52,6 +52,15 @@ type guestState struct {
 	agent  *qemu.GuestAgent
 	info   instance.GuestInfo
 	cancel context.CancelFunc
+	probed chan struct{} // closed after the next stored report, made on demand by guestReport
+}
+
+// notifyProbed wakes everyone waiting for gs's next report. Called with guestMu held.
+func (gs *guestState) notifyProbed() {
+	if gs.probed != nil {
+		close(gs.probed)
+		gs.probed = nil
+	}
 }
 
 func guestAgentSocket(instanceID string) string {
@@ -143,6 +152,7 @@ func (b *guestTracker) forgetGuest(instanceID string, gs *guestState) {
 		return
 	}
 	delete(b.guests, instanceID)
+	gs.notifyProbed()
 	hook := b.guestHook
 	b.guestMu.Unlock()
 	gs.cancel()
@@ -172,6 +182,9 @@ func (b *guestTracker) refreshGuest(ctx context.Context, spec *instance.Spec) in
 	changed := ok && !guestInfoEqual(gs.info, info)
 	if changed {
 		gs.info = info
+	}
+	if ok {
+		gs.notifyProbed()
 	}
 	hook := b.guestHook
 	b.guestMu.Unlock()
@@ -323,11 +336,31 @@ func (b *Backend) WaitReady(ctx context.Context, spec *instance.Spec, progress f
 	return b.waitReady(ctx, spec, proc.Exited(), progress)
 }
 
-// waitReady polls the guest until cloud-init is final or exited closes.
+// guestReport returns the poller's last report and a channel closed after its next one,
+// or ok false when no poller runs for instanceID.
+func (b *guestTracker) guestReport(instanceID string) (info instance.GuestInfo, next <-chan struct{}, ok bool) {
+	b.guestMu.Lock()
+	defer b.guestMu.Unlock()
+	gs, ok := b.guests[instanceID]
+	if !ok {
+		return instance.GuestInfo{}, nil, false
+	}
+	if gs.probed == nil {
+		gs.probed = make(chan struct{})
+	}
+	return gs.info, gs.probed, true
+}
+
+// waitReady waits until cloud-init is final or exited closes. It follows the guest
+// poller's reports, and only probes the guest itself when no poller runs.
 func (b *guestTracker) waitReady(ctx context.Context, spec *instance.Spec, exited <-chan struct{}, progress func(status string)) error {
 	last := ""
+	quiet := false // the poller missed a round, so probe directly
 	for {
-		info := b.refreshGuest(ctx, spec)
+		info, next, polled := b.guestReport(spec.ID)
+		if !polled || quiet {
+			info = b.refreshGuest(ctx, spec)
+		}
 		switch info.CloudInit {
 		case instance.CloudInitDone, instance.CloudInitDisabled:
 			return nil
@@ -347,12 +380,19 @@ func (b *guestTracker) waitReady(ctx context.Context, spec *instance.Spec, exite
 			last = status
 		}
 
+		wait := 2 * time.Second
+		if polled {
+			wait = 2 * guestPollFast
+		}
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("vm: waiting for %s's cloud-init: %w", spec.Name, ctx.Err())
 		case <-exited:
 			return fmt.Errorf("vm: %s stopped while waiting for cloud-init", spec.Name)
-		case <-time.After(2 * time.Second):
+		case <-next:
+			quiet = false
+		case <-time.After(wait):
+			quiet = polled
 		}
 	}
 }

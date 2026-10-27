@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -252,5 +253,47 @@ func TestFCCacheListSkipsChecksums(t *testing.T) {
 	got, err := cache.List()
 	if err != nil || len(got) != 1 || got[0].ID != filepath.Base(kernel) || got[0].Arch != "x86_64" {
 		t.Fatalf("List = %+v, %v; want only the kernel", got, err)
+	}
+}
+
+// Concurrent launches of the same distro share one qemu-img conversion.
+func TestFCCacheRawBaseDedupes(t *testing.T) {
+	real, err := exec.LookPath("qemu-img")
+	if err != nil {
+		t.Skip("qemu-img not installed, skipping")
+	}
+	vault := NewVault(t.TempDir())
+	entry := DistroEntry{ID: "test-1", Arch: "x86_64", URL: "http://unused.invalid/"}
+	if out, err := exec.Command(real, "create", "-f", "qcow2", vault.preparedPath(entry), "16M").CombinedOutput(); err != nil {
+		t.Fatalf("qemu-img create: %v: %s", err, out)
+	}
+	// A qemu-img wrapper that logs each run, slowed down so the callers overlap.
+	bin := t.TempDir()
+	runs := filepath.Join(bin, "runs")
+	script := "#!/bin/sh\necho run >> " + runs + "\nsleep 0.3\nexec " + real + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "qemu-img"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	cache := &FCCache{Dir: t.TempDir(), Vault: vault}
+	var wg sync.WaitGroup
+	errs := make(chan error, 4)
+	for range 4 {
+		wg.Go(func() {
+			_, err := cache.RawBase(context.Background(), entry, nil)
+			errs <- err
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, _ := os.ReadFile(runs)
+	if n := strings.Count(string(data), "run"); n != 1 {
+		t.Fatalf("qemu-img ran %d times, want 1", n)
 	}
 }

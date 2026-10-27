@@ -50,6 +50,11 @@ type Backend struct {
 	Networker Networker
 	Devices   DeviceClaimer
 
+	// The last merged catalog and the mirror manifests it came from.
+	catalogMu   sync.Mutex
+	catalogFrom []image.MirrorManifest
+	catalogMem  *image.Catalog
+
 	mu       sync.Mutex
 	running  map[string]*qemu.Process // instance ID -> live process
 	starting map[string]struct{}      // instance ID -> in-progress Start call
@@ -107,7 +112,18 @@ func (b *Backend) EffectiveCatalog() (*image.Catalog, error) {
 	if len(manifests) == 0 {
 		return b.Catalog, nil
 	}
-	return b.Catalog.WithMirrors(manifests)
+	// Parsing every manifest again is the costly part, so reuse the last merge while the mirrors match.
+	b.catalogMu.Lock()
+	defer b.catalogMu.Unlock()
+	if b.catalogMem != nil && slices.Equal(b.catalogFrom, manifests) {
+		return b.catalogMem, nil
+	}
+	merged, err := b.Catalog.WithMirrors(manifests)
+	if err != nil {
+		return nil, err
+	}
+	b.catalogFrom, b.catalogMem = manifests, merged
+	return merged, nil
 }
 
 // ListCatalog returns every distro entry EffectiveCatalog resolves against.

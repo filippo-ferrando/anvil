@@ -83,7 +83,7 @@ func sampleStats(ctx context.Context, spec *instance.Spec, pid int, networker Ne
 
 	var diskUsed, diskTotal int64
 	if v.DiskPath != "" {
-		diskUsed, diskTotal, _ = image.DiskUsage(v.DiskPath)
+		diskUsed, diskTotal, _ = image.LiveDiskUsage(v.DiskPath)
 	}
 
 	stats := instance.Stats{

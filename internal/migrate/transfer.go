@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"hash"
 	"io"
 	"io/fs"
 	"os"
@@ -214,10 +215,19 @@ func uploadDisk(ctx context.Context, t target, localPath, remotePath string, cap
 	}
 	progress(fmt.Sprintf("uploading disk to target (%s)", note))
 
+	// An upload sent in one go is hashed on the way, so the disk isn't read twice.
+	h := sha256.New()
 	var offset int64
+	streamed := false
 	for attempt := 1; ; attempt++ {
-		err = sendDisk(ctx, t, localPath, remotePath, offset, size, compress, progress)
+		var ah hash.Hash
+		if offset == 0 && caps.sha256sum {
+			h.Reset()
+			ah = h
+		}
+		err = sendDisk(ctx, t, localPath, remotePath, offset, size, compress, ah, progress)
 		if err == nil {
+			streamed = ah != nil
 			break
 		}
 		if ctx.Err() != nil || attempt == uploadAttempts {
@@ -240,9 +250,11 @@ func uploadDisk(ctx context.Context, t target, localPath, remotePath string, cap
 		return nil
 	}
 	progress("verifying uploaded disk")
-	want, err := fileSHA256(localPath)
-	if err != nil {
-		return fmt.Errorf("migrate: hashing %s: %w", localPath, err)
+	want := hex.EncodeToString(h.Sum(nil))
+	if !streamed {
+		if want, err = fileSHA256(localPath); err != nil {
+			return fmt.Errorf("migrate: hashing %s: %w", localPath, err)
+		}
 	}
 	out, err := sshRun(ctx, t, remoteSh("sha256sum "+shQuote(remotePath)), nil)
 	if err != nil {
@@ -256,8 +268,8 @@ func uploadDisk(ctx context.Context, t target, localPath, remotePath string, cap
 }
 
 // sendDisk streams localPath from offset to remotePath. offset 0 truncates the
-// remote file, anything else appends to it.
-func sendDisk(ctx context.Context, t target, localPath, remotePath string, offset, size int64, compress bool, progress func(status string)) error {
+// remote file, anything else appends to it. A non-nil h gets every byte read.
+func sendDisk(ctx context.Context, t target, localPath, remotePath string, offset, size int64, compress bool, h hash.Hash, progress func(status string)) error {
 	f, err := os.Open(localPath)
 	if err != nil {
 		return fmt.Errorf("migrate: opening %s: %w", localPath, err)
@@ -285,7 +297,11 @@ func sendDisk(ctx context.Context, t target, localPath, remotePath string, offse
 	var stderr strings.Builder
 	ssh.Stderr = &stderr
 
-	counter := &countingReader{r: f}
+	var src io.Reader = f
+	if h != nil {
+		src = io.TeeReader(f, h)
+	}
+	counter := &countingReader{r: src}
 	counter.n.Store(offset)
 	stopProgress := reportUpload(counter, size, progress)
 	defer stopProgress()
@@ -396,20 +412,31 @@ func fileSHA256(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// uploadDir streams localDir's contents to remoteDir on t as a gzipped tar, so a
-// shared folder's data travels with the instance that mounts it.
-func uploadDir(ctx context.Context, t target, localDir, remoteDir string, progress func(status string)) error {
+// uploadDir streams localDir's contents to remoteDir on t as a tar, compressed with zstd
+// when both sides have it and gzip otherwise, so a shared folder's data travels with the instance.
+func uploadDir(ctx context.Context, t target, localDir, remoteDir string, caps remoteCaps, progress func(status string)) error {
 	tarBin, err := exec.LookPath("tar")
 	if err != nil {
 		return fmt.Errorf("migrate: tar not found on PATH (needed to send %s)", localDir)
 	}
-	progress(fmt.Sprintf("sending %s (%s)", localDir, humanBytes(dirSize(localDir))))
+	zstdBin := ""
+	if caps.zstd {
+		zstdBin = localZstd()
+	}
+	note := humanBytes(dirSize(localDir))
+	if zstdBin != "" {
+		note += ", zstd"
+	}
+	progress(fmt.Sprintf("sending %s (%s)", localDir, note))
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	remote := "rm -rf " + shQuote(remoteDir) + " && mkdir -p " + shQuote(remoteDir) +
-		" && tar -xzf - -C " + shQuote(remoteDir)
+	unpack, tarFlags := "tar -xzf - -C "+shQuote(remoteDir), "-czf"
+	if zstdBin != "" {
+		unpack, tarFlags = "zstd -q -d -c | tar -xf - -C "+shQuote(remoteDir), "-cf"
+	}
+	remote := "rm -rf " + shQuote(remoteDir) + " && mkdir -p " + shQuote(remoteDir) + " && " + unpack
 	ssh, err := sshCommand(ctx, t, remoteSh(remote))
 	if err != nil {
 		return err
@@ -417,28 +444,53 @@ func uploadDir(ctx context.Context, t target, localDir, remoteDir string, progre
 	var sshErrOut strings.Builder
 	ssh.Stderr = &sshErrOut
 
-	local := exec.CommandContext(ctx, tarBin, "-czf", "-", "-C", localDir, ".")
+	local := exec.CommandContext(ctx, tarBin, tarFlags, "-", "-C", localDir, ".")
 	var tarErrOut strings.Builder
 	local.Stderr = &tarErrOut
 	pipe, err := local.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("migrate: archiving %s: %w", localDir, err)
 	}
-	ssh.Stdin = pipe
+	var zstd *exec.Cmd
+	if zstdBin != "" {
+		zstd = exec.CommandContext(ctx, zstdBin, "-q", "-c", "-T0")
+		zstd.Stdin = pipe
+		zpipe, err := zstd.StdoutPipe()
+		if err != nil {
+			return fmt.Errorf("migrate: starting zstd: %w", err)
+		}
+		ssh.Stdin = zpipe
+	} else {
+		ssh.Stdin = pipe
+	}
 	if err := local.Start(); err != nil {
 		return fmt.Errorf("migrate: archiving %s: %w", localDir, err)
+	}
+	if zstd != nil {
+		if err := zstd.Start(); err != nil {
+			cancel()
+			_ = local.Wait()
+			return fmt.Errorf("migrate: starting zstd: %w", err)
+		}
 	}
 
 	sshErr := ssh.Run()
 	if sshErr != nil {
-		cancel() // stops tar if ssh died first
+		cancel() // stops tar and zstd if ssh died first
 	}
 	tarErr := local.Wait()
+	var zstdErr error
+	if zstd != nil {
+		zstdErr = zstd.Wait()
+	}
 	if sshErr != nil {
 		return fmt.Errorf("migrate: sending %s to %s@%s: %w: %s", localDir, t.User, t.Host, sshErr, strings.TrimSpace(sshErrOut.String()))
 	}
 	if tarErr != nil {
 		return fmt.Errorf("migrate: archiving %s: %w: %s", localDir, tarErr, strings.TrimSpace(tarErrOut.String()))
+	}
+	if zstdErr != nil {
+		return fmt.Errorf("migrate: compressing %s: %w", localDir, zstdErr)
 	}
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/user"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
@@ -44,11 +45,51 @@ func withCallerActor(ctx context.Context) context.Context {
 	if !ok {
 		return ctx // events fall back to instance.DaemonActor
 	}
-	actor := fmt.Sprintf("uid %d", uid)
-	if u, err := user.LookupId(fmt.Sprint(uid)); err == nil {
-		actor = u.Username
+	return instance.WithActor(ctx, actorNames.name(uid))
+}
+
+// actorNameTTL bounds how long a looked-up user name is reused, so a renamed user shows up.
+const actorNameTTL = 5 * time.Minute
+
+// actorNames caches uid to user name, since every RPC needs one and a lookup may read
+// /etc/passwd or ask NSS.
+var actorNames = &uidNames{lookup: func(uid string) (string, error) {
+	u, err := user.LookupId(uid)
+	if err != nil {
+		return "", err
 	}
-	return instance.WithActor(ctx, actor)
+	return u.Username, nil
+}}
+
+type uidNames struct {
+	lookup func(uid string) (string, error)
+	mu     sync.Mutex
+	names  map[uint32]cachedName
+}
+
+type cachedName struct {
+	name string
+	at   time.Time
+}
+
+func (c *uidNames) name(uid uint32) string {
+	c.mu.Lock()
+	n, ok := c.names[uid]
+	c.mu.Unlock()
+	if ok && time.Since(n.at) < actorNameTTL {
+		return n.name
+	}
+	name := fmt.Sprintf("uid %d", uid)
+	if u, err := c.lookup(fmt.Sprint(uid)); err == nil {
+		name = u
+	}
+	c.mu.Lock()
+	if c.names == nil {
+		c.names = make(map[uint32]cachedName)
+	}
+	c.names[uid] = cachedName{name, time.Now()}
+	c.mu.Unlock()
+	return name
 }
 
 // Default and minimum StreamStats intervals; one sample already takes ~200ms.

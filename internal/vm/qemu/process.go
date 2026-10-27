@@ -143,7 +143,7 @@ func (p *Process) Pid() int {
 }
 
 // AttachQMP dials the process's QMP socket, retrying briefly since the
-// socket may not be accepting connections yet.
+// socket may not be accepting connections yet. It gives up once QEMU exits.
 func (p *Process) AttachQMP(ctx context.Context) error {
 	deadline := time.Now().Add(5 * time.Second)
 	var lastErr error
@@ -157,6 +157,8 @@ func (p *Process) AttachQMP(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-p.exited:
+			return fmt.Errorf("qemu: exited (%s) before QMP was reachable at %s: %w", p.ExitStatus(), p.cfg.QMPSocket, lastErr)
 		case <-time.After(100 * time.Millisecond):
 		}
 	}

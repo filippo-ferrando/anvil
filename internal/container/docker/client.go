@@ -659,10 +659,10 @@ type dockerStatsResponse struct {
 	} `json:"blkio_stats"`
 }
 
-// Stats returns id's current resource-usage counters in a single HTTP round trip. Docker's "stream=false" mode gives a valid
-// cpu_stats snapshot but not the historical precpu_stats pairing, so callers take two of these apart to compute a rate.
+// Stats returns id's current resource-usage counters in one quick HTTP call. "one-shot" skips Docker's ~1s wait for a
+// second sample, so precpu_stats is empty and callers take two of these apart to compute a rate.
 func (c *Client) Stats(ctx context.Context, id string) (StatsSnapshot, error) {
-	resp, err := c.do(ctx, http.MethodGet, "/containers/"+id+"/stats?stream=false", nil)
+	resp, err := c.do(ctx, http.MethodGet, "/containers/"+id+"/stats?stream=false&one-shot=true", nil)
 	if err != nil {
 		return StatsSnapshot{}, err
 	}

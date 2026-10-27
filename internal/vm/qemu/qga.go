@@ -221,7 +221,7 @@ func (c *QGAConn) ThawFilesystems() error {
 }
 
 // OnlineAllCPUs brings every offline guest vCPU online (a hot-plugged one may start
-// offline) and returns how many it changed.
+// offline) and returns how many vCPUs are online afterwards.
 func (c *QGAConn) OnlineAllCPUs() (int, error) {
 	var vcpus []struct {
 		LogicalID int  `json:"logical-id"`
@@ -236,12 +236,13 @@ func (c *QGAConn) OnlineAllCPUs() (int, error) {
 			offline = append(offline, map[string]any{"logical-id": v.LogicalID, "online": true})
 		}
 	}
+	online := len(vcpus) - len(offline)
 	if len(offline) == 0 {
-		return 0, nil
+		return online, nil
 	}
 	var changed int
 	err := c.call("guest-set-vcpus", map[string]any{"vcpus": offline}, &changed)
-	return changed, err
+	return online + changed, err
 }
 
 // OnlineAllMemory brings every offline guest memory block online, for memory the

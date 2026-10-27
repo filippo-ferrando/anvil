@@ -113,3 +113,26 @@ func TestLiveChangesNeedARunningVM(t *testing.T) {
 		t.Errorf("expected ErrNeedsRestart for a stopped VM, got %v", err)
 	}
 }
+
+// onlineCPUsUntil stops as soon as the guest reports every wanted vCPU online.
+func TestOnlineCPUsUntilStopsEarly(t *testing.T) {
+	calls := 0
+	onlineCPUsUntil(t.Context(), 4, time.Millisecond, func() (int, error) {
+		calls++
+		if calls < 3 {
+			return 2, nil
+		}
+		return 4, nil
+	})
+	if calls != 3 {
+		t.Fatalf("calls = %d, want 3", calls)
+	}
+	calls = 0
+	onlineCPUsUntil(t.Context(), 4, time.Millisecond, func() (int, error) {
+		calls++
+		return 0, errors.New("agent gone")
+	})
+	if calls != 10 {
+		t.Fatalf("calls on error = %d, want 10", calls)
+	}
+}

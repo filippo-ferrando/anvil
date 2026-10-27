@@ -26,6 +26,10 @@ const (
 	eventRetryMax = 30 * time.Second
 )
 
+// ownersRefreshMin spaces out registry reads for events about unknown containers,
+// which on a busy host are mostly containers anvil doesn't own.
+const ownersRefreshMin = 5 * time.Second
+
 // exitWatch is the DockerBackend state behind container exit detection.
 type exitWatch struct {
 	mu       sync.Mutex
@@ -33,6 +37,24 @@ type exitWatch struct {
 	hook     func(instanceID string, state instance.State, reason string)
 	once     sync.Once
 	stop     context.CancelFunc
+
+	owners   map[string]containerOwner // container ID -> its instance
+	ownersAt time.Time                 // when owners was last rebuilt from the registry
+
+	queue []exitReport // reports waiting for the hook, in event order
+	wake  chan struct{}
+}
+
+type containerOwner struct {
+	instanceID string
+	name       string
+	tracked    time.Time // set when Create added it, zero when read from the registry
+}
+
+type exitReport struct {
+	instanceID string
+	state      instance.State
+	why        string
 }
 
 var _ instance.ExitNotifier = (*DockerBackend)(nil)
@@ -49,6 +71,8 @@ func (b *DockerBackend) SetExitHook(hook func(instanceID string, state instance.
 	b.exits.once.Do(func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		b.exits.stop = cancel
+		b.exits.wake = make(chan struct{}, 1)
+		go b.runHooks(ctx)
 		go b.watchEvents(ctx)
 	})
 }
@@ -99,6 +123,7 @@ func (b *DockerBackend) watchEvents(ctx context.Context) {
 	retry := eventRetryMin
 	for ctx.Err() == nil {
 		connected := time.Now()
+		_ = b.refreshOwners()
 		b.reconcileExits(ctx)
 		// since replays events from the reconcile onward, so an exit between the two is not lost.
 		err := b.Client.Events(ctx, connected, map[string][]string{"type": {"container"}, "event": {"die", "start"}}, func(ev docker.Event) {
@@ -164,27 +189,106 @@ func (b *DockerBackend) reconcileExits(ctx context.Context) {
 	}
 }
 
-// report maps containerID to its instance and passes state to the hook.
+// report maps containerID to its instance and queues state for the hook.
 func (b *DockerBackend) report(containerID string, state instance.State, why string) {
 	b.exits.mu.Lock()
-	hook := b.exits.hook
+	hooked := b.exits.hook != nil
 	b.exits.mu.Unlock()
-	if hook == nil {
+	if !hooked {
 		return
 	}
-	specs, err := b.Registry.List(instance.KindContainer)
-	if err != nil {
+	owner, ok := b.ownerOf(containerID)
+	if !ok {
 		return
 	}
-	for _, spec := range specs {
-		if spec.Container != nil && spec.Container.ContainerID == containerID {
-			if spec.State != state {
-				log.Printf("docker: %s %s, now %s", spec.Name, why, state)
+	if state != instance.StateRunning {
+		log.Printf("docker: %s %s, now %s", owner.name, why, state)
+	}
+	b.exits.mu.Lock()
+	b.exits.queue = append(b.exits.queue, exitReport{owner.instanceID, state, why})
+	b.exits.mu.Unlock()
+	select {
+	case b.exits.wake <- struct{}{}:
+	default:
+	}
+}
+
+// runHooks passes queued reports to the hook one at a time, in order. The hook waits
+// for the instance lock, so it runs here and not on the event stream's goroutine.
+func (b *DockerBackend) runHooks(ctx context.Context) {
+	for {
+		b.exits.mu.Lock()
+		batch, hook := b.exits.queue, b.exits.hook
+		b.exits.queue = nil
+		b.exits.mu.Unlock()
+		for _, r := range batch {
+			if hook != nil {
+				hook(r.instanceID, r.state, r.why)
 			}
-			hook(spec.ID, state, why)
+		}
+		if len(batch) > 0 {
+			continue
+		}
+		select {
+		case <-ctx.Done():
 			return
+		case <-b.exits.wake:
 		}
 	}
+}
+
+// trackContainer records a container anvil just created, so its events map to spec
+// before the registry has the new ID.
+func (b *DockerBackend) trackContainer(containerID string, spec *instance.Spec) {
+	b.exits.mu.Lock()
+	defer b.exits.mu.Unlock()
+	if b.exits.owners == nil {
+		b.exits.owners = make(map[string]containerOwner)
+	}
+	b.exits.owners[containerID] = containerOwner{instanceID: spec.ID, name: spec.Name, tracked: time.Now()}
+}
+
+// ownerOf finds containerID's instance in memory, rebuilding the map from the registry
+// on a miss at most once every ownersRefreshMin.
+func (b *DockerBackend) ownerOf(containerID string) (containerOwner, bool) {
+	b.exits.mu.Lock()
+	owner, ok := b.exits.owners[containerID]
+	stale := time.Since(b.exits.ownersAt) >= ownersRefreshMin
+	b.exits.mu.Unlock()
+	if ok || !stale {
+		return owner, ok
+	}
+	if err := b.refreshOwners(); err != nil {
+		return containerOwner{}, false
+	}
+	b.exits.mu.Lock()
+	defer b.exits.mu.Unlock()
+	owner, ok = b.exits.owners[containerID]
+	return owner, ok
+}
+
+// refreshOwners rebuilds the owner map from the registry, keeping containers Create
+// tracked recently in case their record isn't saved yet.
+func (b *DockerBackend) refreshOwners() error {
+	specs, err := b.Registry.List(instance.KindContainer)
+	if err != nil {
+		return err
+	}
+	owners := make(map[string]containerOwner, len(specs))
+	for _, spec := range specs {
+		if spec.Container != nil && spec.Container.ContainerID != "" {
+			owners[spec.Container.ContainerID] = containerOwner{instanceID: spec.ID, name: spec.Name}
+		}
+	}
+	b.exits.mu.Lock()
+	defer b.exits.mu.Unlock()
+	for id, o := range b.exits.owners {
+		if _, ok := owners[id]; !ok && !o.tracked.IsZero() && time.Since(o.tracked) < expectedExitWindow {
+			owners[id] = o
+		}
+	}
+	b.exits.owners, b.exits.ownersAt = owners, time.Now()
+	return nil
 }
 
 // exitState maps a container's exit status: 0, or death by SIGINT/SIGTERM (an outside

@@ -119,7 +119,7 @@ func (b *Backend) SetCPUsLive(ctx context.Context, spec *instance.Spec, cpus int
 		}
 		note := fmt.Sprintf("cpus set to %d live", cpus)
 		if info, _ := b.GuestInfo(spec); info.AgentConnected {
-			b.onlineGuestCPUs(ctx, spec.ID)
+			b.onlineGuestCPUs(ctx, spec.ID, cpus)
 		}
 		return note, nil
 
@@ -176,16 +176,31 @@ func (b *Backend) waitForCPUs(ctx context.Context, proc *qemu.Process, want int)
 
 // onlineGuestCPUs onlines new vCPUs through the agent, retrying while the guest kernel
 // is still registering them. Best effort: many distros online them by themselves.
-func (b *Backend) onlineGuestCPUs(ctx context.Context, instanceID string) {
-	for range 10 {
-		_ = b.agentFor(instanceID).Do(ctx, func(c *qemu.QGAConn) error {
-			_, err := c.OnlineAllCPUs()
+func (b *Backend) onlineGuestCPUs(ctx context.Context, instanceID string, want int) {
+	onlineCPUsUntil(ctx, want, cpuOnlineInterval, func() (int, error) {
+		var n int
+		err := b.agentFor(instanceID).Do(ctx, func(c *qemu.QGAConn) error {
+			var err error
+			n, err = c.OnlineAllCPUs()
 			return err
 		})
+		return n, err
+	})
+}
+
+const cpuOnlineInterval = 300 * time.Millisecond
+
+// onlineCPUsUntil calls online up to 10 times, every interval, stopping once it
+// reports want vCPUs online.
+func onlineCPUsUntil(ctx context.Context, want int, interval time.Duration, online func() (int, error)) {
+	for range 10 {
+		if n, err := online(); err == nil && n >= want {
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(300 * time.Millisecond):
+		case <-time.After(interval):
 		}
 	}
 }

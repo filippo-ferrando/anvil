@@ -106,10 +106,16 @@ func TestLaunchWithoutDNSLeavesResolverUnset(t *testing.T) {
 type addrNetworker struct {
 	fakeNetworker
 	addrs map[string]string
+	reads int
 }
 
 func (n *addrNetworker) ContainerAddress(ctx context.Context, networkName, containerID string) (string, error) {
 	return n.addrs[containerID], nil
+}
+
+func (n *addrNetworker) ContainerAddresses(ctx context.Context, networkName string) (map[string]string, error) {
+	n.reads++
+	return n.addrs, nil
 }
 
 func TestDNSZonesRecordsRolesAndNames(t *testing.T) {
@@ -120,6 +126,7 @@ func TestDNSZonesRecordsRolesAndNames(t *testing.T) {
 		Members: []store.IntentMember{
 			{InstanceID: "vm1", Role: "db", Kind: instance.KindVM, IP: "10.55.201.2"},
 			{InstanceID: "ct1", Role: "cache", Kind: instance.KindContainer, IP: "10.55.201.130"},
+			{InstanceID: "ct2", Role: "queue", Kind: instance.KindContainer, IP: "10.55.201.140"},
 		},
 		Network: &store.IntentNetwork{EngineNetworkName: "anvil-intent1", Subnet: "10.55.201.0/24", Gateway: "10.55.201.1"},
 	})
@@ -128,6 +135,7 @@ func TestDNSZonesRecordsRolesAndNames(t *testing.T) {
 	inst := &fakeInstances{specs: map[string]*instance.Spec{
 		"vm1": {ID: "vm1", Name: "myapp-db", Kind: instance.KindVM},
 		"ct1": {ID: "ct1", Name: "myapp-cache", Kind: instance.KindContainer, Container: &instance.ContainerSpec{ContainerID: "c0ffee"}},
+		"ct2": {ID: "ct2", Name: "myapp-queue", Kind: instance.KindContainer, Container: &instance.ContainerSpec{ContainerID: "stopped"}},
 	}}
 	net := &addrNetworker{fakeNetworker: *newFakeNetworker(), addrs: map[string]string{"c0ffee": "10.55.201.131"}}
 	m := NewManager(s, inst, net)
@@ -148,6 +156,11 @@ func TestDNSZonesRecordsRolesAndNames(t *testing.T) {
 		"myapp-db":    "10.55.201.2",
 		"cache":       "10.55.201.131", // the live address wins over the stored one
 		"myapp-cache": "10.55.201.131",
+		"queue":       "10.55.201.140", // not on the network: the stored address stays
+		"myapp-queue": "10.55.201.140",
+	}
+	if net.reads != 1 {
+		t.Errorf("expected one network read for the intent, got %d", net.reads)
 	}
 	if len(z.Records) != len(want) {
 		t.Errorf("expected %d records, got %v", len(want), z.Records)

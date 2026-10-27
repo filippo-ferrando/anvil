@@ -329,6 +329,9 @@ func TestStatsComputesCumulativeCounters(t *testing.T) {
 		if got, want := r.URL.Path, "/v1.41/containers/abc123/stats"; got != want {
 			t.Errorf("expected path %q, got %q", want, got)
 		}
+		if q := r.URL.Query(); q.Get("stream") != "false" || q.Get("one-shot") != "true" {
+			t.Errorf("expected stream=false&one-shot=true, got %q", r.URL.RawQuery)
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"cpu_stats": map[string]any{
 				"cpu_usage":        map[string]any{"total_usage": 500},
@@ -789,5 +792,26 @@ func TestCreateContainerRejectsColonInVolume(t *testing.T) {
 		if _, err := c.CreateContainer(t.Context(), CreateContainerParams{Name: "x", Image: "nginx", Volumes: []VolumeMount{v}}); err == nil {
 			t.Errorf("expected volume %+v to be refused", v)
 		}
+	}
+}
+
+func TestNetworkContainerAddresses(t *testing.T) {
+	c := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.URL.Path, "/v1.41/networks/anvil-x"; got != want {
+			t.Errorf("expected path %q, got %q", want, got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"Containers": map[string]any{
+				"abc": map[string]any{"IPv4Address": "10.55.201.4/24"},
+				"def": map[string]any{"IPv4Address": ""},
+			},
+		})
+	}))
+	addrs, err := c.NetworkContainerAddresses(t.Context(), "anvil-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(addrs) != 1 || addrs["abc"] != "10.55.201.4" {
+		t.Fatalf("addrs = %v, want abc=10.55.201.4", addrs)
 	}
 }

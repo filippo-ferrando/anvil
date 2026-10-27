@@ -32,6 +32,9 @@ type statsStreamMsg struct {
 // selectionSettledMsg fires once the Instances cursor has rested on name for selectSettleDelay.
 type selectionSettledMsg struct{ name string }
 
+// snapshotsSettledMsg fires once the Snapshots page's VM cursor has rested on name for selectSettleDelay.
+type snapshotsSettledMsg struct{ name string }
+
 // eventsLoadedMsg feeds the Events screen; instanceEventsLoadedMsg the Instances detail panel.
 type eventsLoadedMsg struct {
 	events []*anvilv1.InstanceEvent
@@ -203,6 +206,7 @@ const (
 // watchEventMsg is one event off InstanceService.Watch; err is set once the stream broke.
 type watchEventMsg struct {
 	stream anvilv1.InstanceService_WatchClient
+	ev     *anvilv1.WatchEvent
 	err    error
 }
 
@@ -223,8 +227,8 @@ func startWatch(c *client.Client) tea.Cmd {
 
 func recvWatch(stream anvilv1.InstanceService_WatchClient) tea.Cmd {
 	return func() tea.Msg {
-		_, err := stream.Recv()
-		return watchEventMsg{stream: stream, err: err}
+		ev, err := stream.Recv()
+		return watchEventMsg{stream: stream, ev: ev, err: err}
 	}
 }
 

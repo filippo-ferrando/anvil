@@ -480,7 +480,7 @@ func (m *Manager) migrateSpec(ctx context.Context, t target, spec *instance.Spec
 			return "", err
 		}
 	case instance.KindContainer:
-		if err := buildContainerPayload(ctx, spec, t, &pl, progress); err != nil {
+		if err := buildContainerPayload(ctx, spec, t, caps, &pl, progress); err != nil {
 			return "", err
 		}
 	default:
@@ -575,7 +575,7 @@ func (m *Manager) buildVMPayload(ctx context.Context, spec *instance.Spec, t tar
 	}
 	staged = append(staged, remotePath)
 
-	mounts, mountPaths, err := uploadMountData(ctx, t, spec, progress)
+	mounts, mountPaths, err := uploadMountData(ctx, t, spec, caps, progress)
 	if err != nil {
 		return err
 	}
@@ -602,7 +602,7 @@ func (m *Manager) buildVMPayload(ctx context.Context, spec *instance.Spec, t tar
 
 // uploadMountData sends every folder shared into spec's guest, and returns the
 // payload mounts plus the staging paths they landed in.
-func uploadMountData(ctx context.Context, t target, spec *instance.Spec, progress func(status string)) ([]payload.Mount, []string, error) {
+func uploadMountData(ctx context.Context, t target, spec *instance.Spec, caps remoteCaps, progress func(status string)) ([]payload.Mount, []string, error) {
 	var mounts []payload.Mount
 	var staged []string
 	for i, mnt := range spec.VM.Mounts {
@@ -612,7 +612,7 @@ func uploadMountData(ctx context.Context, t target, spec *instance.Spec, progres
 		}
 		pm := payload.Mount{GuestPath: mnt.GuestPath, Tag: mnt.Tag, ReadOnly: mnt.ReadOnly}
 		pm.RemoteDataPath = remoteDataPath(spec.ID, i)
-		if err := uploadDir(ctx, t, mnt.HostPath, pm.RemoteDataPath, progress); err != nil {
+		if err := uploadDir(ctx, t, mnt.HostPath, pm.RemoteDataPath, caps, progress); err != nil {
 			return nil, staged, err
 		}
 		staged = append(staged, pm.RemoteDataPath)
@@ -660,7 +660,7 @@ func (m *Manager) exportDiskDelta(ctx context.Context, spec *instance.Spec, t ta
 
 // buildContainerPayload fills in pl.Container from spec. The target re-pulls
 // ImageRef itself, so only the bind-mounted directories are transferred.
-func buildContainerPayload(ctx context.Context, spec *instance.Spec, t target, pl *payload.Payload, progress func(status string)) (err error) {
+func buildContainerPayload(ctx context.Context, spec *instance.Spec, t target, caps remoteCaps, pl *payload.Payload, progress func(status string)) (err error) {
 	c := spec.Container
 	pc := &payload.Container{
 		ImageRef:   c.ImageRef,
@@ -686,7 +686,7 @@ func buildContainerPayload(ctx context.Context, spec *instance.Spec, t target, p
 			continue
 		}
 		pv.RemoteDataPath = remoteDataPath(spec.ID, i)
-		if err := uploadDir(ctx, t, v.HostPath, pv.RemoteDataPath, progress); err != nil {
+		if err := uploadDir(ctx, t, v.HostPath, pv.RemoteDataPath, caps, progress); err != nil {
 			return err
 		}
 		staged = append(staged, pv.RemoteDataPath)

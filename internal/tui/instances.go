@@ -182,6 +182,32 @@ func (m *instancesModel) selected() *anvilv1.Instance {
 	return item.inst
 }
 
+func (m *instancesModel) selectedName() string {
+	return m.selected().GetName()
+}
+
+// patch applies a Watch event to the list in place. It returns false when the list
+// needs a full reload instead: a new instance, whose place in the order isn't known.
+func (m *instancesModel) patch(ev *anvilv1.WatchEvent) bool {
+	inst := ev.GetInstance()
+	if inst == nil || m.list.FilterState() != list.Unfiltered {
+		return false
+	}
+	for i, item := range m.list.Items() {
+		it, ok := item.(instanceItem)
+		if !ok || it.inst.GetId() != inst.GetId() {
+			continue
+		}
+		if ev.GetType() == anvilv1.WatchEventType_WATCH_EVENT_TYPE_DELETED {
+			m.list.RemoveItem(i)
+		} else {
+			m.list.SetItem(i, instanceItem{inst: inst})
+		}
+		return true
+	}
+	return ev.GetType() == anvilv1.WatchEventType_WATCH_EVENT_TYPE_DELETED
+}
+
 // syncStatsStream keeps one stats stream open for the selected instance while it runs,
 // closing the stream of a previous selection. Returns nil when nothing changes.
 func (m *instancesModel) syncStatsStream(c *client.Client) tea.Cmd {

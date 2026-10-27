@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -65,5 +66,28 @@ func TestEventsFollowSendsStoredThenLiveForOneInstance(t *testing.T) {
 	}
 	if len(stream.sent) != 0 {
 		t.Errorf("unexpected extra event %v", <-stream.sent)
+	}
+}
+
+// A uid's name is looked up once, then served from the cache.
+func TestUIDNamesCaches(t *testing.T) {
+	calls := 0
+	c := &uidNames{lookup: func(uid string) (string, error) {
+		calls++
+		if uid == "1000" {
+			return "alice", nil
+		}
+		return "", errors.New("unknown")
+	}}
+	for range 3 {
+		if got := c.name(1000); got != "alice" {
+			t.Fatalf("name = %q", got)
+		}
+	}
+	if got := c.name(42); got != "uid 42" {
+		t.Errorf("unknown uid = %q", got)
+	}
+	if calls != 2 {
+		t.Errorf("lookup ran %d times, want 2", calls)
 	}
 }

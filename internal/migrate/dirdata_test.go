@@ -13,6 +13,16 @@ import (
 // TestUploadDirRoundTrip runs the real tar pipeline with the "remote" side on
 // this machine, which is the only way to tell the two ends still agree.
 func TestUploadDirRoundTrip(t *testing.T) {
+	t.Run("gzip", func(t *testing.T) { testUploadDirRoundTrip(t, remoteCaps{}) })
+	t.Run("zstd", func(t *testing.T) {
+		if localZstd() == "" {
+			t.Skip("zstd not on PATH")
+		}
+		testUploadDirRoundTrip(t, remoteCaps{zstd: true})
+	})
+}
+
+func testUploadDirRoundTrip(t *testing.T, caps remoteCaps) {
 	localSSH(t, nil)
 	dir := t.TempDir()
 
@@ -28,7 +38,7 @@ func TestUploadDirRoundTrip(t *testing.T) {
 	}
 
 	dst := filepath.Join(dir, "dst")
-	if err := uploadDir(context.Background(), target{}, src, dst, func(string) {}); err != nil {
+	if err := uploadDir(context.Background(), target{}, src, dst, caps, func(string) {}); err != nil {
 		t.Fatalf("uploadDir: %v", err)
 	}
 	for path, want := range map[string]string{"a.txt": "hello", "nested/b.txt": "world"} {
@@ -48,7 +58,7 @@ func TestUploadDirRoundTrip(t *testing.T) {
 	if err := os.Remove(filepath.Join(src, "nested", "b.txt")); err != nil {
 		t.Fatal(err)
 	}
-	if err := uploadDir(context.Background(), target{}, src, dst, func(string) {}); err != nil {
+	if err := uploadDir(context.Background(), target{}, src, dst, caps, func(string) {}); err != nil {
 		t.Fatalf("second uploadDir: %v", err)
 	}
 	if got, _ := os.ReadFile(filepath.Join(dst, "a.txt")); string(got) != "changed" {
