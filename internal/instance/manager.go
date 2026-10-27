@@ -37,22 +37,14 @@ func NewManager(registry Registry, backends map[Kind]Backend) *Manager {
 	return m
 }
 
-// Reconcile re-derives every instance's live state from its backend, and removes records
-// left deleted by older versions. Call once at startup, before serving requests.
+// Reconcile re-derives every instance's live state from its backend.
+// Call once at startup, before serving requests.
 func (m *Manager) Reconcile(ctx context.Context) error {
 	specs, err := m.registry.List("")
 	if err != nil {
 		return fmt.Errorf("instance: listing instances to reconcile: %w", err)
 	}
 	for _, spec := range specs {
-		if spec.State == StateDeleted {
-			// Left by versions whose delete kept the record (and, briefly, the disk).
-			log.Printf("instance: removing %s, left deleted by an older version", spec.Name)
-			if err := m.Delete(ctx, []string{spec.Name}); err != nil {
-				log.Printf("instance: %v", err)
-			}
-			continue
-		}
 		// Stopped and errored records are checked too: a crash between a backend Start
 		// and the save that follows leaves a live instance recorded as stopped.
 		wasDown := spec.State == StateStopped || spec.State == StateError
@@ -367,14 +359,15 @@ func (m *Manager) Fork(ctx context.Context, params ForkParams, progress func(Lau
 		labels[k] = v
 	}
 
+	id := ulid.Make().String()
 	dest := &Spec{
-		ID:        ulid.Make().String(),
+		ID:        id,
 		Name:      params.NewName,
 		Kind:      source.Kind,
 		State:     StateStarting,
 		CreatedAt: time.Now(),
 		Labels:    labels,
-		VM:        cloneVMSpecForFork(source.VM),
+		VM:        cloneVMSpecForFork(source.VM, id),
 		GUI:       true,
 	}
 
@@ -417,7 +410,7 @@ func (m *Manager) Fork(ctx context.Context, params ForkParams, progress func(Lau
 
 // cloneVMSpecForFork deep-copies v's configuration for a new forked
 // instance, clearing fields the backend/network populate fresh (disk/seed paths, SSH port, bridge/intent addressing).
-func cloneVMSpecForFork(v *VMSpec) *VMSpec {
+func cloneVMSpecForFork(v *VMSpec, id string) *VMSpec {
 	clone := *v
 	clone.NetworkMode = "slirp"
 	clone.SSHPublicKeys = append([]string(nil), v.SSHPublicKeys...)
@@ -434,7 +427,7 @@ func cloneVMSpecForFork(v *VMSpec) *VMSpec {
 	clone.DNSSearch = nil
 	clone.SourceDiskPath = ""
 	clone.SourceDiskBaseSHA256 = ""
-	clone.MACAddress = "" // derived again from the fork's own ID
+	clone.MACAddress = DefaultMAC(id)
 	return &clone
 }
 

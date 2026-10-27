@@ -22,7 +22,7 @@ func TestCloneVMSpecForForkDeepCopiesSlices(t *testing.T) {
 		MACAddress:      "52:54:00:aa:bb:cc",
 	}
 
-	clone := cloneVMSpecForFork(source)
+	clone := cloneVMSpecForFork(source, "02")
 
 	// Mutating the clone's slices must not affect source's.
 	clone.SSHPublicKeys[0] = "mutated"
@@ -51,7 +51,7 @@ func TestCloneVMSpecForForkDeepCopiesSlices(t *testing.T) {
 	if clone.SourceDiskPath != "" {
 		t.Errorf("expected SourceDiskPath cleared, got %q", clone.SourceDiskPath)
 	}
-	if clone.MACAddress != "" {
+	if clone.MACAddress != DefaultMAC("02") {
 		t.Errorf("expected the fork to derive its own MAC, got %q", clone.MACAddress)
 	}
 }
@@ -65,17 +65,5 @@ func TestDeleteRemovesRecord(t *testing.T) {
 	}
 	if _, err := reg.GetByID("01"); err == nil {
 		t.Error("expected the record to be removed")
-	}
-}
-
-func TestReconcileRemovesLeftoverDeleted(t *testing.T) {
-	reg := &memRegistry{}
-	_ = reg.PutInstance(&Spec{ID: "01", Name: "old", Kind: KindVM, State: StateDeleted, VM: &VMSpec{}})
-	m := NewManager(reg, map[Kind]Backend{KindVM: plainBackend{}})
-	if err := m.Reconcile(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := reg.GetByID("01"); err == nil {
-		t.Error("expected the leftover deleted record to be removed")
 	}
 }

@@ -48,7 +48,7 @@ func TestRecordExitStartOutsideAnvil(t *testing.T) {
 	eb := &exitBackend{}
 	reg := &memRegistry{}
 	_ = reg.PutInstance(&Spec{ID: "01", Name: "web", Kind: KindContainer, State: StateError})
-	_ = reg.PutInstance(&Spec{ID: "02", Name: "gone", Kind: KindContainer, State: StateDeleted})
+	_ = reg.PutInstance(&Spec{ID: "02", Name: "gone", Kind: KindContainer, State: StateDeleting})
 	NewManager(reg, map[Kind]Backend{KindContainer: eb})
 
 	eb.hook("01", StateRunning, "test")
@@ -56,8 +56,8 @@ func TestRecordExitStartOutsideAnvil(t *testing.T) {
 		t.Errorf("expected an outside restart to mark web running, got %s", spec.State)
 	}
 	eb.hook("02", StateRunning, "test")
-	if spec, _ := reg.GetByID("02"); spec.State != StateDeleted {
-		t.Errorf("expected a deleted record to stay deleted, got %s", spec.State)
+	if spec, _ := reg.GetByID("02"); spec.State != StateDeleting {
+		t.Errorf("expected a record being deleted to stay deleting, got %s", spec.State)
 	}
 }
 

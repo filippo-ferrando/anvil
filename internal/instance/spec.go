@@ -26,7 +26,6 @@ const (
 	StateStarting State = "starting"
 	StateRunning  State = "running"
 	StateDeleting State = "deleting"
-	StateDeleted  State = "deleted"
 	StateError    State = "error"
 )
 
@@ -59,7 +58,7 @@ type Spec struct {
 	// the restart policy leave an instance someone stopped on purpose alone.
 	UserStopped bool
 
-	// GUI is set on every instance created since GUI app support; older ones lack the plumbing.
+	// GUI turns on the plumbing `anvil gui` needs; set on every new instance.
 	GUI bool
 }
 
@@ -152,10 +151,6 @@ type VMSpec struct {
 	NextMountIndex int
 	Generation     int
 
-	// MountFS is "virtiofs" once the guest's fstab was written for virtiofs; empty for
-	// VMs whose mounts date from 9p, which get their fstab rewritten on the next start.
-	MountFS string
-
 	// BridgeInterface/StaticIP/Gateway are populated by internal/intent.Manager
 	// when this VM joins an intent; meaningless otherwise.
 	BridgeInterface string
@@ -188,7 +183,7 @@ type VMSpec struct {
 	// SnapshotSchedule is nil when no scheduled snapshots are set up.
 	SnapshotSchedule *SnapshotSchedule
 
-	// MACAddress is the guest NIC's address, see MAC. It travels with the disk on migration
+	// MACAddress is the guest NIC's address, see DefaultMAC. It travels with the disk on migration
 	// and import, because the guest's network config matches on it.
 	MACAddress string
 
@@ -225,12 +220,9 @@ func (v *VMSpec) HypervisorOf() VMHypervisor {
 	return v.Hypervisor
 }
 
-// MAC returns MACAddress, or for a VM created before it was stored, the address
-// derived from the instance ID inside QEMU's locally administered 52:54:00 prefix.
-func (v *VMSpec) MAC(instanceID string) string {
-	if v.MACAddress != "" {
-		return v.MACAddress
-	}
+// DefaultMAC derives a VM's MAC address from its instance ID, inside QEMU's
+// locally administered 52:54:00 prefix.
+func DefaultMAC(instanceID string) string {
 	sum := sha256.Sum256([]byte(instanceID))
 	return fmt.Sprintf("52:54:00:%02x:%02x:%02x", sum[0], sum[1], sum[2])
 }

@@ -76,22 +76,3 @@ func TestLiveLineFitsTheTerminal(t *testing.T) {
 		t.Errorf("fit = %q", got)
 	}
 }
-
-// An older anvild drops the hypervisor field, so a Firecracker launch comes back as QEMU.
-func TestHypervisorCheck(t *testing.T) {
-	launched := func(h anvilv1.VmHypervisor) *fakeStream {
-		inst := &anvilv1.Instance{Name: "vm1", Vm: &anvilv1.VMSpec{Hypervisor: h}}
-		return &fakeStream{events: []*anvilv1.LaunchProgress{{Event: &anvilv1.LaunchProgress_Instance{Instance: inst}}}}
-	}
-	fc := anvilv1.VmHypervisor_VM_HYPERVISOR_FIRECRACKER
-	if err := streamLaunchProgress(io.Discard, hypervisorCheck{launched(anvilv1.VmHypervisor_VM_HYPERVISOR_UNSPECIFIED), fc}); err == nil ||
-		!strings.Contains(err.Error(), "with QEMU") {
-		t.Fatalf("old daemon: err = %v", err)
-	}
-	if err := streamLaunchProgress(io.Discard, hypervisorCheck{launched(fc), fc}); err != nil {
-		t.Fatal(err)
-	}
-	if err := streamLaunchProgress(io.Discard, hypervisorCheck{launched(anvilv1.VmHypervisor_VM_HYPERVISOR_UNSPECIFIED), 0}); err != nil {
-		t.Fatal(err)
-	}
-}

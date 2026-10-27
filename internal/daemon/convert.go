@@ -42,8 +42,6 @@ func stateToPB(s instance.State) anvilv1.State {
 		return anvilv1.State_STATE_RUNNING
 	case instance.StateDeleting:
 		return anvilv1.State_STATE_DELETING
-	case instance.StateDeleted:
-		return anvilv1.State_STATE_DELETED
 	case instance.StateError:
 		return anvilv1.State_STATE_ERROR
 	default:

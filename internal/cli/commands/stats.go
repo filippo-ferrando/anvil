@@ -53,26 +53,8 @@ func newStatsCommand(flags *globalFlags) *cobra.Command {
 					show(reply.GetStats())
 				}
 			}
-			switch status.Code(err) {
-			case codes.Canceled:
+			if status.Code(err) == codes.Canceled {
 				return nil
-			case codes.Unimplemented:
-				// An anvild older than StreamStats: poll the one-shot RPC instead.
-				for {
-					reply, err := c.Stats(cmd.Context(), &anvilv1.StatsRequest{Name: args[0]})
-					if status.Code(err) == codes.Canceled {
-						return nil
-					}
-					if err != nil {
-						return err
-					}
-					show(reply.GetStats())
-					select {
-					case <-cmd.Context().Done():
-						return nil
-					case <-time.After(interval):
-					}
-				}
 			}
 			if err == io.EOF {
 				fmt.Fprintf(out, "%s is not running\n", args[0])

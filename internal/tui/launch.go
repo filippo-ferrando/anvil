@@ -276,7 +276,7 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		return m, receiveLaunchEvent(msg.stream, msg.want)
+		return m, receiveLaunchEvent(msg.stream)
 
 	case cloudInitContentLoadedMsg:
 		if !m.launch.loadingCloudInit {
@@ -602,13 +602,12 @@ func startLaunchStream(c *client.Client, req *anvilv1.LaunchRequest) tea.Cmd {
 		if err != nil {
 			return launchStreamMsg{err: err, done: true}
 		}
-		return receiveLaunchEvent(stream, req.GetVm().GetHypervisor())()
+		return receiveLaunchEvent(stream)()
 	}
 }
 
-// receiveLaunchEvent reads the next event. want is the hypervisor asked for: an older anvild
-// drops the field and runs QEMU, which the final instance then shows.
-func receiveLaunchEvent(stream anvilv1.InstanceService_LaunchClient, want anvilv1.VmHypervisor) tea.Cmd {
+// receiveLaunchEvent reads the next event.
+func receiveLaunchEvent(stream anvilv1.InstanceService_LaunchClient) tea.Cmd {
 	return func() tea.Msg {
 		ev, err := stream.Recv()
 		if err != nil {
@@ -619,17 +618,13 @@ func receiveLaunchEvent(stream anvilv1.InstanceService_LaunchClient, want anvilv
 		}
 		switch e := ev.GetEvent().(type) {
 		case *anvilv1.LaunchProgress_Status:
-			return launchStreamMsg{stream: stream, status: e.Status, want: want}
+			return launchStreamMsg{stream: stream, status: e.Status}
 		case *anvilv1.LaunchProgress_Error:
 			return launchStreamMsg{err: fmt.Errorf("%s", e.Error), done: true}
 		case *anvilv1.LaunchProgress_Instance:
-			if want == anvilv1.VmHypervisor_VM_HYPERVISOR_FIRECRACKER && e.Instance.GetVm().GetHypervisor() != want {
-				return launchStreamMsg{err: fmt.Errorf("anvild launched %s with QEMU: it predates firecracker support; upgrade it, then delete %s and launch again",
-					e.Instance.GetName(), e.Instance.GetName()), done: true}
-			}
 			return launchStreamMsg{instance: e.Instance, done: true}
 		default:
-			return launchStreamMsg{stream: stream, want: want}
+			return launchStreamMsg{stream: stream}
 		}
 	}
 }

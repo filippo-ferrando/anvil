@@ -181,10 +181,6 @@ func allowThroughDocker(bridge string) {
 		return
 	}
 	rules := dockerUserRules(bridge)
-	// The ACCEPT added by an older anvild sits above where the RETURNs go; drop it to reorder.
-	if exec.Command("iptables", append([]string{"-C", "DOCKER-USER"}, rules[0]...)...).Run() != nil {
-		_ = exec.Command("iptables", append([]string{"-D", "DOCKER-USER"}, rules[2]...)...).Run()
-	}
 	// Inserted at the top in reverse, so they end up in order.
 	for i := len(rules) - 1; i >= 0; i-- {
 		if exec.Command("iptables", append([]string{"-C", "DOCKER-USER"}, rules[i]...)...).Run() == nil {

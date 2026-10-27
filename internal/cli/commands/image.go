@@ -52,12 +52,8 @@ func newImageListCommand(flags *globalFlags) *cobra.Command {
 				if img.GetRefCount() == 0 {
 					inUse = "no"
 				}
-				kind := img.GetKind()
-				if kind == "" {
-					kind = "base" // from an older anvild
-				}
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-					img.GetId(), img.GetArch(), kind, humanBytes(img.GetSizeBytes()), inUse, img.GetPath())
+					img.GetId(), img.GetArch(), img.GetKind(), humanBytes(img.GetSizeBytes()), inUse, img.GetPath())
 			}
 			return tw.Flush()
 		},

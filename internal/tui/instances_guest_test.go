@@ -115,7 +115,7 @@ func TestWaitFailureIsShown(t *testing.T) {
 
 func TestImageChecksumShownOnItem(t *testing.T) {
 	m := model{screen: screenImages, images: newImagesModel()}
-	m.images.cached.SetItems([]list.Item{cachedImageItem{image: &anvilv1.CachedImage{Id: "ubuntu-24.04", Arch: "x86_64"}}})
+	m.images.cached.SetItems([]list.Item{cachedImageItem{image: &anvilv1.CachedImage{Id: "ubuntu-24.04", Arch: "x86_64", Kind: "base"}}})
 	sum := strings.Repeat("ab", 32)
 	next, _ := m.updateImages(imageChecksumMsg{id: "ubuntu-24.04", arch: "x86_64", sum: sum})
 	m = next.(model)

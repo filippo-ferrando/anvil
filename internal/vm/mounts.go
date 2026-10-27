@@ -16,10 +16,6 @@ import (
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/qemu"
 )
 
-// mountFSVirtiofs marks a VMSpec whose guest fstab was written for virtiofs. Specs from
-// before virtiofs (9p) have it empty and get their fstab rewritten on their next start.
-const mountFSVirtiofs = "virtiofs"
-
 // mountsGenMarker records, inside the guest, which Generation last rewrote anvil's fstab lines.
 const mountsGenMarker = "/var/lib/anvil-mounts.gen"
 
@@ -148,7 +144,6 @@ func (b *Backend) Mount(ctx context.Context, spec *instance.Spec, hostPath, gues
 		}
 		v.NextMountIndex++
 		v.Mounts = append(v.Mounts, m)
-		v.MountFS = mountFSVirtiofs
 		return nil
 	}
 
@@ -189,16 +184,13 @@ func (b *Backend) Umount(ctx context.Context, spec *instance.Spec, guestPath str
 }
 
 // liveMountTarget returns spec's QEMU process when a mount change can be applied live:
-// the VM runs, its mounts already use virtiofs, and the guest agent can run commands.
+// the VM runs and the guest agent can run commands.
 func (b *Backend) liveMountTarget(ctx context.Context, spec *instance.Spec) (*qemu.Process, bool) {
 	b.mu.Lock()
 	proc, running := b.running[spec.ID]
 	b.mu.Unlock()
 	if !running || proc.QMP == nil {
 		return nil, false
-	}
-	if spec.VM.MountFS != mountFSVirtiofs && len(spec.VM.Mounts) > 0 {
-		return nil, false // 9p-era fstab: a restart rewrites it for virtiofs
 	}
 	if info, _ := b.GuestInfo(spec); !info.AgentConnected {
 		return nil, false
@@ -315,29 +307,10 @@ func (b *Backend) killVirtiofsds(instanceID string) {
 	}
 }
 
-// upgradeLegacyMounts moves a VM set up with 9p mounts to virtiofs: bumping Generation
-// makes cloud-init run the mounts bootcmd again, which rewrites the guest's fstab.
-func (b *Backend) upgradeLegacyMounts(spec *instance.Spec) error {
-	v := spec.VM
-	if len(v.Mounts) == 0 || v.MountFS == mountFSVirtiofs {
-		return nil
-	}
-	v.Generation++
-	v.MountFS = mountFSVirtiofs
-	if err := b.buildSeed(spec); err != nil {
-		return fmt.Errorf("vm: rewriting %s's mounts for virtiofs: %w", spec.Name, err)
-	}
-	return nil
-}
-
 // adoptMountBookkeeping settles the mount fields a migrated or imported disk
-// brings with it. The guest's fstab travelled inside the disk, already written
-// for virtiofs, so it must not be rewritten, and new tags must not reuse an old one.
+// brings with it. The guest's fstab travelled inside the disk, so new tags
+// must not reuse an old one.
 func adoptMountBookkeeping(v *instance.VMSpec) {
-	if len(v.Mounts) == 0 {
-		return
-	}
-	v.MountFS = mountFSVirtiofs
 	next := 0
 	for _, m := range v.Mounts {
 		var n int

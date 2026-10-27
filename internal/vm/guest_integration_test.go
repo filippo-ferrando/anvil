@@ -68,7 +68,7 @@ func TestGuestAgentRealBoot(t *testing.T) {
 
 	bootMount := instance.Mount{HostPath: share("boot", "from boot mount\n"), GuestPath: "/mnt/boot", Tag: "mount0"}
 	spec := &instance.Spec{ID: id, Name: "e2e", VM: &instance.VMSpec{
-		DiskPath: disk, Mounts: []instance.Mount{bootMount}, NextMountIndex: 1, MountFS: mountFSVirtiofs,
+		DiskPath: disk, Mounts: []instance.Mount{bootMount}, NextMountIndex: 1,
 	}}
 
 	userData, err := mergeGuestAgent("#cloud-config\n{}\n")

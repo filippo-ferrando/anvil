@@ -56,8 +56,8 @@ type Store struct {
 	db *bbolt.DB
 }
 
-// Open opens (creating if needed) the bbolt database at path and ensures
-// the buckets this package uses exist.
+// Open opens (creating if needed) the bbolt database at path, ensures the
+// buckets this package uses exist, and migrates records from older versions.
 func Open(path string) (*Store, error) {
 	db, err := bbolt.Open(path, 0o600, &bbolt.Options{Timeout: 5 * time.Second})
 	if err != nil {
@@ -69,11 +69,11 @@ func Open(path string) (*Store, error) {
 				return err
 			}
 		}
-		return nil
+		return migrate(tx)
 	})
 	if err != nil {
 		db.Close()
-		return nil, fmt.Errorf("store: initializing buckets: %w", err)
+		return nil, fmt.Errorf("store: initializing database: %w", err)
 	}
 	return &Store{db: db}, nil
 }

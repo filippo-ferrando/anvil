@@ -192,7 +192,7 @@ func TestAutostart(t *testing.T) {
 		&Spec{ID: "02", Name: "crashed", Kind: KindVM, State: StateError, Autostart: true},
 		&Spec{ID: "03", Name: "stopped-on-purpose", Kind: KindVM, State: StateStopped, Autostart: true, UserStopped: true},
 		&Spec{ID: "04", Name: "manual", Kind: KindVM, State: StateStopped},
-		&Spec{ID: "05", Name: "deleted", Kind: KindVM, State: StateDeleted, Autostart: true},
+		&Spec{ID: "05", Name: "deleting", Kind: KindVM, State: StateDeleting, Autostart: true},
 	)
 	m.Autostart(context.Background())
 	got := map[string]bool{}

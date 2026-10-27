@@ -150,7 +150,7 @@ func (a *Applier) plan(m *Manifest, opts Options) ([]Step, error) {
 	default:
 		for _, mem := range it.Members {
 			spec, err := a.Instances.GetByID(mem.InstanceID)
-			if err != nil || spec.State == instance.StateDeleted {
+			if err != nil {
 				stale[mem.Role] = mem.InstanceID
 				continue
 			}

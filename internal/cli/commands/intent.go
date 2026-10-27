@@ -182,7 +182,7 @@ func launchMember(cmd *cobra.Command, c *client.Client, intentName string, m mem
 	if err != nil {
 		return err
 	}
-	return streamLaunchProgress(cmd.OutOrStdout(), hypervisorCheck{stream, req.GetVm().GetHypervisor()})
+	return streamLaunchProgress(cmd.OutOrStdout(), stream)
 }
 
 func newIntentListCommand(flags *globalFlags) *cobra.Command {

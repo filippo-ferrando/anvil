@@ -169,7 +169,7 @@ func (m *Manager) Export(ctx context.Context, p ExportParams, progress func(stat
 				CloudInitContent: m.resolveCloudInit(v),
 				SSHPublicKeys:    v.SSHPublicKeys,
 				DiskFile:         "disks/" + spec.ID + ".qcow2",
-				MACAddress:       v.MAC(spec.ID),
+				MACAddress:       v.MACAddress,
 				Hypervisor:       string(v.HypervisorOf()),
 				Devices:          v.Devices,
 			}

@@ -136,12 +136,11 @@ func (b *FCBackend) Create(ctx context.Context, spec *instance.Spec, progress fu
 	if _, err := fcLookPath(firecracker.Binary); err != nil {
 		return fmt.Errorf("vm: firecracker isn't installed on this host: %w", err)
 	}
-	if v.MACAddress != "" {
-		if _, err := net.ParseMAC(v.MACAddress); err != nil {
-			return fmt.Errorf("vm: invalid MAC address %q: %w", v.MACAddress, err)
-		}
+	if v.MACAddress == "" {
+		v.MACAddress = instance.DefaultMAC(spec.ID)
+	} else if _, err := net.ParseMAC(v.MACAddress); err != nil {
+		return fmt.Errorf("vm: invalid MAC address %q: %w", v.MACAddress, err)
 	}
-	v.MACAddress = v.MAC(spec.ID)
 
 	entry, _, kernel, err := b.resolve(v)
 	if err != nil {
@@ -325,7 +324,7 @@ func (b *FCBackend) Start(ctx context.Context, spec *instance.Spec) error {
 	if err != nil {
 		return fmt.Errorf("vm: attaching to bridge %s: %w", bridge, err)
 	}
-	cfg.NetworkInterfaces = []firecracker.NetworkInterface{{IfaceID: "eth0", HostDevName: tap, GuestMAC: v.MAC(spec.ID)}}
+	cfg.NetworkInterfaces = []firecracker.NetworkInterface{{IfaceID: "eth0", HostDevName: tap, GuestMAC: v.MACAddress}}
 	unwind := func() {
 		b.closeProxies(spec.ID)
 		b.unexportMounts(spec.ID)
@@ -333,7 +332,7 @@ func (b *FCBackend) Start(ctx context.Context, spec *instance.Spec) error {
 		_ = b.Networker.Detach(spec.ID)
 	}
 	if standalone(v) {
-		if err := runNft(fcGuestFilter(spec.ID, tap, v.MAC(spec.ID), stripCIDR(v.StaticIP))); err != nil {
+		if err := runNft(fcGuestFilter(spec.ID, tap, v.MACAddress, stripCIDR(v.StaticIP))); err != nil {
 			unwind()
 			return err
 		}

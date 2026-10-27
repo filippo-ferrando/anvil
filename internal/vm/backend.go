@@ -125,12 +125,11 @@ func (b *Backend) Create(ctx context.Context, spec *instance.Spec, progress func
 	}
 	v := spec.VM
 
-	if v.MACAddress != "" {
-		if _, err := net.ParseMAC(v.MACAddress); err != nil {
-			return fmt.Errorf("vm: invalid MAC address %q: %w", v.MACAddress, err)
-		}
+	if v.MACAddress == "" {
+		v.MACAddress = instance.DefaultMAC(spec.ID)
+	} else if _, err := net.ParseMAC(v.MACAddress); err != nil {
+		return fmt.Errorf("vm: invalid MAC address %q: %w", v.MACAddress, err)
 	}
-	v.MACAddress = v.MAC(spec.ID)
 
 	dir := config.InstanceDir(spec.ID)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -674,7 +673,7 @@ func (b *Backend) buildSeed(spec *instance.Spec) error {
 	metaData := fmt.Sprintf("instance-id: %s-gen%d\nlocal-hostname: %s\n", spec.ID, v.Generation, spec.Name)
 
 	seedPath := filepath.Join(dir, "seed.iso")
-	seed := cloudinit.Seed{UserData: userData, MetaData: metaData, NetworkConfig: bridgeNetworkConfig(v, v.MAC(spec.ID))}
+	seed := cloudinit.Seed{UserData: userData, MetaData: metaData, NetworkConfig: bridgeNetworkConfig(v, v.MACAddress)}
 	if err := b.Seed.Build(seed, seedPath); err != nil {
 		return fmt.Errorf("vm: building cloud-init seed: %w", err)
 	}
@@ -711,8 +710,11 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 	if arch == "" {
 		arch = "x86_64"
 	}
-	if err := b.upgradeLegacyMounts(spec); err != nil {
-		return err
+	// An empty seed path (e.g. cleared by the store's record migration) gets a fresh seed.
+	if v.SeedISOPath == "" {
+		if err := b.buildSeed(spec); err != nil {
+			return err
+		}
 	}
 
 	dir := config.InstanceDir(spec.ID)
@@ -740,7 +742,7 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 			return fmt.Errorf("vm: attaching to bridge %s: %w", v.BridgeInterface, err)
 		}
 		cfg.BridgeTapDevice = deviceName
-		cfg.MACAddress = v.MAC(spec.ID)
+		cfg.MACAddress = v.MACAddress
 		v.SSHPort = 0
 	} else {
 		// Standalone instance: SLIRP with an SSH host-forward plus any
@@ -1121,7 +1123,6 @@ func (b *Backend) RemovePort(ctx context.Context, spec *instance.Spec, hostPort 
 // the instance is running, restarts QEMU to pick up the mount change.
 func (b *Backend) reconfigureAndRestartIfRunning(ctx context.Context, spec *instance.Spec) error {
 	spec.VM.Generation++
-	spec.VM.MountFS = mountFSVirtiofs // the rebuilt seed rewrites the guest's fstab for virtiofs
 	if err := b.buildSeed(spec); err != nil {
 		return err
 	}

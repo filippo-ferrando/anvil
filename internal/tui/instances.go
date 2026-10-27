@@ -260,8 +260,12 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, msg.next
 
 	case instanceEventsLoadedMsg:
-		if inst := m.instances.selected(); inst == nil || inst.GetName() != msg.name || msg.err != nil {
-			return m, nil // stale, or an older daemon without the event log
+		if inst := m.instances.selected(); inst == nil || inst.GetName() != msg.name {
+			return m, nil // stale
+		}
+		if msg.err != nil {
+			m.setStatus("events: "+msg.err.Error(), true)
+			return m, nil
 		}
 		m.instances.events, m.instances.eventsFor = msg.events, msg.name
 		return m, nil
@@ -491,10 +495,6 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "g":
 		if inst := m.selectedInstance(); inst != nil {
-			if !inst.GetGuiEnabled() {
-				m.setStatus(inst.GetName()+" was created before GUI app support, recreate it to use GUI apps", true)
-				return m, nil
-			}
 			m.instances.startPrompt(instancesPromptGUI, inst, newSimpleForm("GUI app", []formField{
 				textField("Command", "e.g. ghidraRun", m.instances.lastGUICommand),
 				toggleField("X11 app", "Java/Swing and other X11 apps need XWayland", m.instances.lastGUIX11),
@@ -864,11 +864,7 @@ func (m instancesModel) detailInfo() string {
 		policy = "autostart  •  " + policy
 	}
 	b = append(b, detailRow("Policy", policy))
-	if inst.GetGuiEnabled() {
-		b = append(b, detailRow("GUI", "yes (g to run an app)"))
-	} else {
-		b = append(b, detailRow("GUI", "no, created before GUI app support"))
-	}
+	b = append(b, detailRow("GUI", "g to run an app"))
 	if sched := scheduleText(inst.GetVm().GetSnapshotSchedule()); sched != "" {
 		b = append(b, detailRow("Snaps", sched))
 	}

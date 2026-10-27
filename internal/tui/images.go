@@ -352,5 +352,5 @@ func imagesModeTabs(mode imagesMode) string {
 
 // isBaseImage reports whether img is a downloaded qcow2 base, not a raw copy or kernel.
 func isBaseImage(img *anvilv1.CachedImage) bool {
-	return img.GetKind() == "" || img.GetKind() == "base"
+	return img.GetKind() == "base"
 }

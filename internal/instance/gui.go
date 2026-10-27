@@ -13,9 +13,6 @@ func (m *Manager) guiSpec(ctx context.Context, name string, progress func(status
 	if err != nil {
 		return nil, nil, err
 	}
-	if !spec.GUI {
-		return nil, nil, fmt.Errorf("instance: %s was created before GUI app support, recreate it to use `anvil gui`", name)
-	}
 	b, err := m.backendFor(spec.Kind)
 	if err != nil {
 		return nil, nil, err

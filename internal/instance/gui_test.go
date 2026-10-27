@@ -67,21 +67,6 @@ func TestPrepareGUI_StartsStoppedInstanceFirst(t *testing.T) {
 	}
 }
 
-func TestPrepareGUI_RejectsOlderInstance(t *testing.T) {
-	b := &guiBackend{}
-	reg := &memRegistry{}
-	_ = reg.PutInstance(&Spec{ID: "01", Name: "old", Kind: KindVM, State: StateRunning})
-	m := NewManager(reg, map[Kind]Backend{KindVM: b})
-
-	_, _, err := m.PrepareGUI(t.Context(), "old", false, func(string) {})
-	if err == nil || !strings.Contains(err.Error(), "created before GUI app support") {
-		t.Fatalf("got %v", err)
-	}
-	if len(b.prepared) != 0 {
-		t.Fatal("backend must not be called")
-	}
-}
-
 func TestPrepareGUI_BackendWithoutSupport(t *testing.T) {
 	reg := &memRegistry{}
 	_ = reg.PutInstance(&Spec{ID: "01", Name: "dev", Kind: KindVM, State: StateRunning, GUI: true})

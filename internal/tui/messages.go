@@ -8,8 +8,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
@@ -116,7 +114,6 @@ type hostTestedMsg struct {
 // the stream itself to chain the next receive. done marks the terminal event.
 type launchStreamMsg struct {
 	stream   anvilv1.InstanceService_LaunchClient
-	want     anvilv1.VmHypervisor // the hypervisor asked for, checked on the final event
 	status   string
 	instance *anvilv1.Instance
 	err      error
@@ -242,19 +239,13 @@ func loadInstances(c *client.Client) tea.Cmd {
 }
 
 // openStatsStream starts streaming name's live stats until ctx is cancelled or the instance stops.
-// An anvild older than StreamStats gets the one-shot Stats RPC polled instead.
 func openStatsStream(ctx context.Context, c *client.Client, gen int, name string) tea.Cmd {
 	return func() tea.Msg {
 		stream, err := c.StreamStats(ctx, &anvilv1.StreamStatsRequest{Name: name})
-		if err == nil {
-			msg := recvStats(gen, stream)().(statsStreamMsg)
-			if status.Code(msg.err) != codes.Unimplemented {
-				return msg
-			}
-		} else if status.Code(err) != codes.Unimplemented {
+		if err != nil {
 			return statsStreamMsg{gen: gen, err: err}
 		}
-		return pollStats(ctx, c, gen, name, 0)()
+		return recvStats(gen, stream)()
 	}
 }
 
@@ -262,21 +253,6 @@ func recvStats(gen int, stream anvilv1.InstanceService_StreamStatsClient) tea.Cm
 	return func() tea.Msg {
 		reply, err := stream.Recv()
 		return statsStreamMsg{gen: gen, next: recvStats(gen, stream), stats: reply.GetStats(), err: err}
-	}
-}
-
-// statsPollInterval matches StreamStats' default interval.
-const statsPollInterval = 2 * time.Second
-
-func pollStats(ctx context.Context, c *client.Client, gen int, name string, delay time.Duration) tea.Cmd {
-	return func() tea.Msg {
-		select {
-		case <-ctx.Done():
-			return statsStreamMsg{gen: gen, err: status.FromContextError(ctx.Err()).Err()}
-		case <-time.After(delay):
-		}
-		reply, err := c.Stats(ctx, &anvilv1.StatsRequest{Name: name})
-		return statsStreamMsg{gen: gen, next: pollStats(ctx, c, gen, name, statsPollInterval), stats: reply.GetStats(), err: err}
 	}
 }
 

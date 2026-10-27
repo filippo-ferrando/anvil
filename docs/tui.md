@@ -116,7 +116,7 @@ address (a bridged VM's static IP, otherwise the first IP the guest agent report
 The detail panel shows kind, state, image, creation time, size (vCPUs, memory, disk) for
 a VM, the autostart flag and restart policy, the snapshot schedule, the intent and role,
 port forwards and mounts. For a running instance it adds live data, streamed every 2 s
-for the selected row only (`StreamStats`, or a 2 s poll of `Stats` on an older anvild),
+for the selected row only (`StreamStats`),
 while the Instances screen is open: address, uptime, the guest agent state, cloud-init state and
 guest IPs (VM), and gauges for CPU, memory, disk usage (VM) or disk read/write rate
 (container), and network rate (shown as "not available" for a SLIRP VM).
