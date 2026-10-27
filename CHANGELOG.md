@@ -2,6 +2,27 @@
 
 Built from commit subjects by `scripts/changelog.sh`.
 
+## v1.2.9 (2026-10-27)
+
+### Features
+
+- cloud-init generator, host discover --add and apply confirmation (362a1d0)
+- file transfer and exported GUI apps (db6ac02)
+- multi-member intents over gRPC, TUI multi-select, find filter and create-dir (da59d09)
+- CLI parity for launch, stop, images, mirrors, migrate, apply and details (eb5f9ee)
+
+### Fixes
+
+- bugs found by the code audit (e688138)
+
+### Other changes
+
+- share client helpers and remove duplicated code (6ffe2b2)
+- share code between the QEMU and Firecracker backends (533bdf6)
+- fixes from the code audit (2d86311)
+- migrate old records once and drop compat shims (c1e0167)
+- remove dead and obsolete code (5d61271)
+
 ## v1.2.8 (2026-10-26)
 
 ### Features
