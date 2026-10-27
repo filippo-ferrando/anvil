@@ -950,6 +950,7 @@ const (
 	CloudInitService_Rename_FullMethodName     = "/anvil.v1.CloudInitService/Rename"
 	CloudInitService_Delete_FullMethodName     = "/anvil.v1.CloudInitService/Delete"
 	CloudInitService_ImportRepo_FullMethodName = "/anvil.v1.CloudInitService/ImportRepo"
+	CloudInitService_Generate_FullMethodName   = "/anvil.v1.CloudInitService/Generate"
 )
 
 // CloudInitServiceClient is the client API for CloudInitService service.
@@ -966,6 +967,8 @@ type CloudInitServiceClient interface {
 	// ImportRepo fetches a template-repo manifest and saves every listed
 	// template into the library. See docs/mirrors.md for the manifest shape.
 	ImportRepo(ctx context.Context, in *CloudInitImportRepoRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CloudInitImportRepoProgress], error)
+	// Generate renders a quick-start #cloud-config and saves it when save_as is set.
+	Generate(ctx context.Context, in *CloudInitGenerateRequest, opts ...grpc.CallOption) (*CloudInitGenerateReply, error)
 }
 
 type cloudInitServiceClient struct {
@@ -1045,6 +1048,16 @@ func (c *cloudInitServiceClient) ImportRepo(ctx context.Context, in *CloudInitIm
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type CloudInitService_ImportRepoClient = grpc.ServerStreamingClient[CloudInitImportRepoProgress]
 
+func (c *cloudInitServiceClient) Generate(ctx context.Context, in *CloudInitGenerateRequest, opts ...grpc.CallOption) (*CloudInitGenerateReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CloudInitGenerateReply)
+	err := c.cc.Invoke(ctx, CloudInitService_Generate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CloudInitServiceServer is the server API for CloudInitService service.
 // All implementations must embed UnimplementedCloudInitServiceServer
 // for forward compatibility.
@@ -1059,6 +1072,8 @@ type CloudInitServiceServer interface {
 	// ImportRepo fetches a template-repo manifest and saves every listed
 	// template into the library. See docs/mirrors.md for the manifest shape.
 	ImportRepo(*CloudInitImportRepoRequest, grpc.ServerStreamingServer[CloudInitImportRepoProgress]) error
+	// Generate renders a quick-start #cloud-config and saves it when save_as is set.
+	Generate(context.Context, *CloudInitGenerateRequest) (*CloudInitGenerateReply, error)
 	mustEmbedUnimplementedCloudInitServiceServer()
 }
 
@@ -1086,6 +1101,9 @@ func (UnimplementedCloudInitServiceServer) Delete(context.Context, *CloudInitDel
 }
 func (UnimplementedCloudInitServiceServer) ImportRepo(*CloudInitImportRepoRequest, grpc.ServerStreamingServer[CloudInitImportRepoProgress]) error {
 	return status.Error(codes.Unimplemented, "method ImportRepo not implemented")
+}
+func (UnimplementedCloudInitServiceServer) Generate(context.Context, *CloudInitGenerateRequest) (*CloudInitGenerateReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method Generate not implemented")
 }
 func (UnimplementedCloudInitServiceServer) mustEmbedUnimplementedCloudInitServiceServer() {}
 func (UnimplementedCloudInitServiceServer) testEmbeddedByValue()                          {}
@@ -1209,6 +1227,24 @@ func _CloudInitService_ImportRepo_Handler(srv interface{}, stream grpc.ServerStr
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type CloudInitService_ImportRepoServer = grpc.ServerStreamingServer[CloudInitImportRepoProgress]
 
+func _CloudInitService_Generate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CloudInitGenerateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CloudInitServiceServer).Generate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CloudInitService_Generate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CloudInitServiceServer).Generate(ctx, req.(*CloudInitGenerateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CloudInitService_ServiceDesc is the grpc.ServiceDesc for CloudInitService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1235,6 +1271,10 @@ var CloudInitService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Delete",
 			Handler:    _CloudInitService_Delete_Handler,
+		},
+		{
+			MethodName: "Generate",
+			Handler:    _CloudInitService_Generate_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

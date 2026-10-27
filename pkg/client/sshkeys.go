@@ -15,8 +15,17 @@ func ResolveSSHKeys(extra []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	keys := []string{anvilPub}
-	for _, k := range extra {
+	keys, err := ResolveSSHKeyArgs(extra)
+	if err != nil {
+		return nil, err
+	}
+	return append([]string{anvilPub}, keys...), nil
+}
+
+// ResolveSSHKeyArgs resolves each entry like ResolveSSHKeys, without adding anvil's own key.
+func ResolveSSHKeyArgs(args []string) ([]string, error) {
+	var keys []string
+	for _, k := range args {
 		resolved, err := resolveSSHKey(k)
 		if err != nil {
 			return nil, err

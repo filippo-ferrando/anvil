@@ -2,6 +2,11 @@ package daemon
 
 import (
 	"context"
+	"strings"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"gopkg.in/yaml.v3"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/internal/cloudinitrepo"
@@ -106,4 +111,62 @@ func (s *CloudInitServer) ImportRepo(req *anvilv1.CloudInitImportRepoRequest, st
 		}})
 	}
 	return nil
+}
+
+// Generate renders a quick-start #cloud-config and saves it under save_as when set.
+func (s *CloudInitServer) Generate(ctx context.Context, req *anvilv1.CloudInitGenerateRequest) (*anvilv1.CloudInitGenerateReply, error) {
+	content, err := renderCloudConfig(req)
+	if err != nil {
+		return nil, err
+	}
+	if name := req.GetSaveAs(); name != "" {
+		if err := s.Store.SaveCloudInit(name, content); err != nil {
+			return nil, err
+		}
+	}
+	return &anvilv1.CloudInitGenerateReply{Content: content}, nil
+}
+
+// renderCloudConfig uses yaml.Marshal, not string building, so a value can't corrupt the document.
+// Entries are trimmed and blank ones dropped.
+func renderCloudConfig(req *anvilv1.CloudInitGenerateRequest) (string, error) {
+	user := strings.TrimSpace(req.GetUser())
+	keys := trimNonEmpty(req.GetSshKeys())
+	if user == "" && len(keys) > 0 {
+		return "", status.Error(codes.InvalidArgument, "cloud-init: SSH keys need a user to attach to")
+	}
+
+	doc := map[string]any{}
+	if user != "" {
+		u := map[string]any{"name": user, "sudo": "ALL=(ALL) NOPASSWD:ALL"}
+		if len(keys) > 0 {
+			u["ssh-authorized-keys"] = keys
+		}
+		doc["users"] = []any{u}
+	}
+	if packages := trimNonEmpty(req.GetPackages()); len(packages) > 0 {
+		doc["packages"] = packages
+	}
+	if runCmds := trimNonEmpty(req.GetRunCommands()); len(runCmds) > 0 {
+		doc["runcmd"] = runCmds
+	}
+
+	if len(doc) == 0 {
+		return "#cloud-config\n", nil
+	}
+	data, err := yaml.Marshal(doc)
+	if err != nil {
+		return "", err
+	}
+	return "#cloud-config\n" + string(data), nil
+}
+
+func trimNonEmpty(in []string) []string {
+	var out []string
+	for _, v := range in {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }

@@ -4,11 +4,14 @@
 current state and applies the difference. Running it again with no changes does nothing.
 
 ```
-anvil apply -f anvil.yaml [--dry-run] [--prune] [--recreate] [--wait-timeout 15m]
+anvil apply -f anvil.yaml [--dry-run] [-y] [--prune] [--recreate] [--wait-timeout 15m]
             [--var KEY=VALUE]... [--env-file FILE]
 ```
 
-The plan is always printed first. `--dry-run` stops there. In the TUI, press `A` on the
+The plan is always printed first. `--dry-run` stops there. When stdin and stdout are both
+a terminal, `anvil apply` asks `Apply these changes? [y/N]` after the plan and only applies
+on `y`. A plan with nothing to change, `-y/--yes`, a manifest read from stdin (`-f -`) and
+a non-terminal stdin or stdout (scripts, CI) skip the question and apply right away. In the TUI, press `A` on the
 Intents screen: the plan is shown first and applied on `enter`.
 
 ## Manifest

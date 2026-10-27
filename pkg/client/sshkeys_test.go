@@ -24,6 +24,16 @@ func TestResolveSSHKeys(t *testing.T) {
 	}
 }
 
+func TestResolveSSHKeyArgsAddsNoDefaultKey(t *testing.T) {
+	keys, err := ResolveSSHKeyArgs([]string{"ssh-ed25519 AAAA lit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 || keys[0] != "ssh-ed25519 AAAA lit" {
+		t.Errorf("got %q", keys)
+	}
+}
+
 func TestResolveIdentity(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	if got, err := ResolveIdentity("/keys/id"); err != nil || got != "/keys/id" {

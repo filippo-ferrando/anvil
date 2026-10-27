@@ -66,30 +66,72 @@ func newCloudInitListCommand(flags *globalFlags) *cobra.Command {
 }
 
 func newCloudInitNewCommand(flags *globalFlags) *cobra.Command {
-	var fromFile string
+	var (
+		fromFile string
+		gen      cloudInitGenOptions
+	)
 	cmd := &cobra.Command{
 		Use:   "new <name>",
 		Short: "Create a new saved cloud-init config",
-		Args:  cobra.ExactArgs(1),
+		Long: "Create a new saved cloud-init config. With --from the content is copied from a file. " +
+			"Otherwise the daemon renders a #cloud-config from --user, --ssh-key, --package and --run, " +
+			"the same quick-start config as the TUI wizard; with none of them it is an empty cloud-config.",
+		Example: "  anvil cloud-init new web --user ubuntu --ssh-key ~/.ssh/id_ed25519.pub \\\n" +
+			"    --package nginx,curl --run 'systemctl enable --now nginx'",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			content := "#cloud-config\n"
 			if fromFile != "" {
-				data, err := readCloudInitFile(fromFile)
+				content, err := readCloudInitFile(fromFile)
 				if err != nil {
 					return err
 				}
-				content = data
+				return withClient(flags, func(c *client.Client) error {
+					_, err := c.CloudInit.Save(cmd.Context(), &anvilv1.CloudInitSaveRequest{Name: name, Content: content})
+					return err
+				})
 			}
 
+			req, err := gen.request(name)
+			if err != nil {
+				return err
+			}
 			return withClient(flags, func(c *client.Client) error {
-				_, err := c.CloudInit.Save(cmd.Context(), &anvilv1.CloudInitSaveRequest{Name: name, Content: content})
+				_, err := c.CloudInit.Generate(cmd.Context(), req)
 				return err
 			})
 		},
 	}
 	cmd.Flags().StringVar(&fromFile, "from", "", `import content from a file, or "-" for stdin (defaults to an empty cloud-config)`)
+	cmd.Flags().StringVar(&gen.user, "user", "", "default user to create, with passwordless sudo")
+	cmd.Flags().StringArrayVar(&gen.sshKeys, "ssh-key", nil, "public key for --user, literal or a .pub file path (repeatable)")
+	cmd.Flags().StringSliceVar(&gen.packages, "package", nil, "package to install (repeatable or comma-separated)")
+	cmd.Flags().StringArrayVar(&gen.runCmds, "run", nil, "shell command to run on first boot (repeatable)")
+	for _, f := range []string{"user", "ssh-key", "package", "run"} {
+		cmd.MarkFlagsMutuallyExclusive("from", f)
+	}
 	return cmd
+}
+
+// cloudInitGenOptions are the quick-start fields of `cloud-init new`.
+type cloudInitGenOptions struct {
+	user                       string
+	sshKeys, packages, runCmds []string
+}
+
+// request resolves --ssh-key paths here, since the files live on the client's host.
+func (o cloudInitGenOptions) request(name string) (*anvilv1.CloudInitGenerateRequest, error) {
+	keys, err := client.ResolveSSHKeyArgs(o.sshKeys)
+	if err != nil {
+		return nil, err
+	}
+	return &anvilv1.CloudInitGenerateRequest{
+		SaveAs:      name,
+		User:        o.user,
+		SshKeys:     keys,
+		Packages:    o.packages,
+		RunCommands: o.runCmds,
+	}, nil
 }
 
 func newCloudInitEditCommand(flags *globalFlags) *cobra.Command {

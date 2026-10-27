@@ -276,7 +276,9 @@ the host name, its address, SSH port 22 and a `anvil=1` TXT record
 (`internal/discovery/mdns.go`). This reveals that Anvil runs on the host. It grants no
 access. `anvil host discover` results are unauthenticated: any device on the network can
 answer with the same records, so a discovered host is only a suggestion, and section 3.6
-explains why its SSH host key matters on the first connection.
+explains why its SSH host key matters on the first connection. `anvil host discover --add`
+saves whatever answered under that name, so it carries the same risk as typing that
+address into `anvil host add`.
 
 ### 3.12 Images and templates
 

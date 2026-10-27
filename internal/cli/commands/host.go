@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -52,12 +53,17 @@ func newHostAddCommand(flags *globalFlags) *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVarP(&identity, "identity", "i", "", "path to a private key to use for this host, instead of ssh's own default identity resolution "+
+	addHostKeyFlags(cmd, &identity, &strictKey)
+	return cmd
+}
+
+// addHostKeyFlags registers the SSH options shared by `host add` and `host discover --add`.
+func addHostKeyFlags(cmd *cobra.Command, identity *string, strictKey *bool) {
+	cmd.Flags().StringVarP(identity, "identity", "i", "", "path to a private key to use for this host, instead of ssh's own default identity resolution "+
 		"(anvild runs as the unprivileged \"anvil\" user, so this needs to be a key that user can read; "+
 		"otherwise ssh falls back to that user's own ~/.ssh, not yours)")
-	cmd.Flags().BoolVar(&strictKey, "strict-host-key", false, "refuse to connect unless this host's SSH key is already in anvil's own known_hosts file; "+
+	cmd.Flags().BoolVar(strictKey, "strict-host-key", false, "refuse to connect unless this host's SSH key is already in anvil's own known_hosts file; "+
 		"without it the first key seen is accepted and recorded")
-	return cmd
 }
 
 func newHostListCommand(flags *globalFlags) *cobra.Command {
@@ -135,18 +141,29 @@ func newHostTestCommand(flags *globalFlags) *cobra.Command {
 }
 
 func newHostDiscoverCommand(flags *globalFlags) *cobra.Command {
-	var timeout time.Duration
-	var output string
+	var (
+		timeout time.Duration
+		output  string
+		add     discoverAddOptions
+	)
 	cmd := &cobra.Command{
 		Use:   "discover",
 		Short: "Find other anvil hosts on the local network over mDNS",
 		Long: "Find other anvil hosts announcing themselves on the local network. Nothing " +
-			"is saved and no trust is granted: pass what it prints to `anvil host add`, " +
-			"with the user to log in as.",
+			"is saved and no trust is granted unless --add is given: --add <name> saves the " +
+			"discovered host with that name (or address) as a known host, like `anvil host add`, " +
+			"logging in as --user.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := checkOutput(output); err != nil {
 				return err
+			}
+			if add.key == "" {
+				for _, name := range []string{"alias", "user", "identity", "strict-host-key"} {
+					if cmd.Flags().Changed(name) {
+						return fmt.Errorf("--%s needs --add", name)
+					}
+				}
 			}
 			return withClient(flags, func(c *client.Client) error {
 				reply, err := c.Host.Discover(cmd.Context(), &anvilv1.HostDiscoverRequest{
@@ -154,6 +171,17 @@ func newHostDiscoverCommand(flags *globalFlags) *cobra.Command {
 				})
 				if err != nil {
 					return err
+				}
+				if add.key != "" {
+					host, err := addDiscoveredHost(cmd.Context(), c.Host, reply.GetHosts(), add)
+					if err != nil {
+						return err
+					}
+					if output == "json" {
+						return printJSON(cmd.OutOrStdout(), host)
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "added host %s (%s)\n", host.GetAlias(), host.GetTarget())
+					return nil
 				}
 				if output == "json" {
 					return printJSON(cmd.OutOrStdout(), reply)
@@ -172,8 +200,43 @@ func newHostDiscoverCommand(flags *globalFlags) *cobra.Command {
 		},
 	}
 	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Second, "how long to wait for answers")
+	cmd.Flags().StringVar(&add.key, "add", "", "save the discovered host with this name or address as a known host")
+	cmd.Flags().StringVar(&add.alias, "alias", "", "alias to save the host as (default: its discovered name)")
+	cmd.Flags().StringVar(&add.user, "user", "root", "user to log in as on the added host")
+	addHostKeyFlags(cmd, &add.identity, &add.strictKey)
 	addOutputFlag(cmd, &output)
 	return cmd
+}
+
+// discoverAddOptions are the `host discover --add` fields, the same ones the TUI pre-fills.
+type discoverAddOptions struct {
+	key, alias, user, identity string
+	strictKey                  bool
+}
+
+// addDiscoveredHost saves the discovered host matching o.key through the same Add RPC as `host add`.
+func addDiscoveredHost(ctx context.Context, hc anvilv1.HostServiceClient, hosts []*anvilv1.DiscoveredHost, o discoverAddOptions) (*anvilv1.Host, error) {
+	h, err := client.FindDiscovered(hosts, o.key)
+	if err != nil {
+		return nil, err
+	}
+	if o.user == "" {
+		return nil, fmt.Errorf("--user can't be empty")
+	}
+	alias := o.alias
+	if alias == "" {
+		alias = h.GetName()
+	}
+	host := &anvilv1.Host{
+		Alias:         alias,
+		Target:        o.user + "@" + client.DiscoveredAddress(h),
+		Identity:      o.identity,
+		StrictHostKey: o.strictKey,
+	}
+	if _, err := hc.Add(ctx, &anvilv1.HostAddRequest{Host: host}); err != nil {
+		return nil, err
+	}
+	return host, nil
 }
 
 func newHostDevicesCommand(flags *globalFlags) *cobra.Command {

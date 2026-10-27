@@ -490,6 +490,9 @@ service CloudInitService {
   // ImportRepo fetches a template-repo manifest and saves every listed
   // template into the library. See docs/mirrors.md for the manifest shape.
   rpc ImportRepo(CloudInitImportRepoRequest) returns (stream CloudInitImportRepoProgress);
+
+  // Generate renders a quick-start #cloud-config and saves it when save_as is set.
+  rpc Generate(CloudInitGenerateRequest) returns (CloudInitGenerateReply);
 }
 
 message CloudInitConfigInfo {
@@ -544,6 +547,18 @@ message CloudInitImportRepoProgress {
     CloudInitImportResult imported = 2; // one template's own result, as it finishes
     string error = 3;                   // a manifest fetch/parse failure; ends the stream
   }
+}
+
+message CloudInitGenerateRequest {
+  string user = 1;                  // default user with passwordless sudo; empty adds no user
+  repeated string ssh_keys = 2;     // public key lines for that user, not file paths
+  repeated string packages = 3;
+  repeated string run_commands = 4; // runcmd entries, one shell command each
+  string save_as = 5;               // library name to save under; empty only renders
+}
+
+message CloudInitGenerateReply {
+  string content = 1;
 }
 
 // CloudInitImportResult is one template's own outcome within an ImportRepo call.

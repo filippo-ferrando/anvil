@@ -30,6 +30,7 @@ access by itself.
 | `anvil host list` | Prints alias, target, identity and host key mode (`trust on first use` or `strict`). |
 | `anvil host test <alias>` | Runs `command -v anvil && command -v anvild` on the target and reports both paths, or the error. |
 | `anvil host discover [--timeout 3s]` | Sends one mDNS query for `_anvil._tcp` and lists the hosts that answer: name, address, SSH port. Nothing is saved. |
+| `anvil host discover --add <name> [--user root] [--alias A]` | Discovers as above, then saves the host with that name (or address) like `host add`: alias defaults to its name, target to `<user>@<address>[:port]`. Also takes `-i/--identity` and `--strict-host-key`. |
 | `anvil host remove <alias>` | Deletes the saved entry. |
 
 Discovery (`internal/discovery/mdns.go`) is only a convenience for filling in `host add`.

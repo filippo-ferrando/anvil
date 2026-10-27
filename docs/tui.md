@@ -287,7 +287,7 @@ shows the loaded config, with `*` after unsaved changes.
 | `n` | New config with an empty `#cloud-config`. |
 | `m` | Import a local file under a name. The file is read on the machine running the TUI. |
 | `R` | Import a template repo from a manifest URL, with a Force toggle to overwrite existing names. Any key hides the progress; the import keeps running. |
-| `w` | Wizard: name, default user, SSH public key, packages (comma-separated), run commands (semicolon-separated). |
+| `w` | Wizard: name, default user, SSH public key, packages (comma-separated), run commands (semicolon-separated). Same as `anvil cloud-init new <name> --user --ssh-key --package --run`. |
 | `r` | Rename the loaded config. |
 | `d` | Delete the loaded config, after a confirmation. |
 | `esc` `q` | Back to the sidebar. |

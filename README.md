@@ -187,7 +187,7 @@ data into its bundle.
 `anvil host discover` lists the other anvil hosts on the same network: anvild announces
 itself over mDNS as `_anvil._tcp`, so `avahi-browse` sees it too. It only reports a name,
 an address and an SSH port, nothing is saved and no access is granted, so the output is
-just what `anvil host add` would otherwise have to be told. `ANVIL_MDNS=off` in anvild's
+just what `anvil host add` would otherwise have to be told (`--add <name>` saves one directly). `ANVIL_MDNS=off` in anvild's
 environment turns the announcement off.
 
 `anvil --remote <[user@]host>` (or `ANVIL_REMOTE`) drives the anvild on another host over
@@ -321,7 +321,10 @@ Less visible commands and flags, all listed in `anvil <command> --help` and the 
 | `anvil events -n/--limit N` | only the newest N stored events (default 100, 0 = all) |
 | `anvil intent list` / `anvil intent remove <intent> <member>` | list intents / ungroup a member without deleting it |
 | `anvil intent delete --purge-members <intent>` | delete the intent and every member instance |
+| `anvil cloud-init new <name> --user U --ssh-key K --package P --run CMD` | save a quick-start cloud-config (user with sudo and keys, packages, first-boot commands) |
 | `anvil cloud-init show\|edit\|rename\|delete` | print, edit in `$EDITOR`, rename or delete a saved cloud-init config |
+| `anvil host discover --add <name> [--user U]` | save a host found over mDNS as a known host in one step |
+| `anvil apply -y` | apply without the confirmation asked on a terminal |
 | `anvil image containers delete [--force] <id>` | delete a container engine image, refused while a container uses it unless `--force` |
 
 ## The TUI

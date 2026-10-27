@@ -34,12 +34,6 @@ func TestDiscoveredHostPrefillsAddForm(t *testing.T) {
 	}
 }
 
-func TestDiscoveredAddressOmitsDefaultSSHPort(t *testing.T) {
-	if got := discoveredAddress(&anvilv1.DiscoveredHost{Address: "10.0.0.2", SshPort: 22}); got != "10.0.0.2" {
-		t.Errorf("got %q, want %q", got, "10.0.0.2")
-	}
-}
-
 func TestMigrateFormSuggestions(t *testing.T) {
 	m := model{screen: screenMigration, migration: newMigrationModel()}
 	for _, msg := range []tea.Msg{

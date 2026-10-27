@@ -3,6 +3,7 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -23,7 +24,7 @@ func TestCompletePathMatches(t *testing.T) {
 			filepath.Join(dir, "bundle.tar.zst"),
 			filepath.Join(dir, "bundle2.tar.zst"),
 		}
-		if !equalStrings(got, want) {
+		if !slices.Equal(got, want) {
 			t.Fatalf("got %v, want %v", got, want)
 		}
 	})
@@ -31,7 +32,7 @@ func TestCompletePathMatches(t *testing.T) {
 	t.Run("directories get a trailing slash", func(t *testing.T) {
 		got := completePathMatches(filepath.Join(dir, "sub"))
 		want := []string{filepath.Join(dir, "subdir") + "/"}
-		if !equalStrings(got, want) {
+		if !slices.Equal(got, want) {
 			t.Fatalf("got %v, want %v", got, want)
 		}
 	})
@@ -39,7 +40,7 @@ func TestCompletePathMatches(t *testing.T) {
 	t.Run("an explicit dot prefix reveals dotfiles", func(t *testing.T) {
 		got := completePathMatches(filepath.Join(dir, ".hid"))
 		want := []string{filepath.Join(dir, ".hidden")}
-		if !equalStrings(got, want) {
+		if !slices.Equal(got, want) {
 			t.Fatalf("got %v, want %v", got, want)
 		}
 	})

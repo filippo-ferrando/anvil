@@ -30,16 +30,7 @@ type discoveredItem struct{ host *anvilv1.DiscoveredHost }
 
 func (i discoveredItem) FilterValue() string { return i.host.GetName() }
 func (i discoveredItem) Title() string       { return i.host.GetName() }
-func (i discoveredItem) Description() string { return discoveredAddress(i.host) }
-
-// discoveredAddress is the "host[:port]" half of a migration target; the
-// user still has to say which account to log in as.
-func discoveredAddress(h *anvilv1.DiscoveredHost) string {
-	if port := h.GetSshPort(); port != 0 && port != 22 {
-		return fmt.Sprintf("%s:%d", h.GetAddress(), port)
-	}
-	return h.GetAddress()
-}
+func (i discoveredItem) Description() string { return client.DiscoveredAddress(i.host) }
 
 type migrationModel struct {
 	hosts         list.Model
@@ -361,7 +352,7 @@ func (m model) updateMigrationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if h := m.selectedDiscovered(); h != nil {
 			mg.adding = true
 			// The user part is nobody's to guess, so the form opens on it.
-			mg.addForm = newAddHostForm(h.GetName(), "root@"+discoveredAddress(h))
+			mg.addForm = newAddHostForm(h.GetName(), "root@"+client.DiscoveredAddress(h))
 			mg.addForm.SetHeight(contentHeight(m.height) - 2)
 		}
 		return m, nil

@@ -331,12 +331,7 @@ func (m model) updateCloudInitPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if name == "" {
 			return m, nil
 		}
-		content, err := buildWizardCloudInit(user, key, pkgs, runCmds)
-		if err != nil {
-			m.setStatus("building wizard config: "+err.Error(), true)
-			return m, nil
-		}
-		return m, saveCloudInit(m.client, name, content)
+		return m, generateCloudInit(m.client, newWizardRequest(name, user, key, pkgs, runCmds))
 	}
 	return m, nil
 }

@@ -126,7 +126,7 @@ func TestStreamApplyPlainOutput(t *testing.T) {
 		{Event: &anvilv1.IntentApplyProgress_Status{Status: "db: launching"}},
 		{Event: &anvilv1.IntentApplyProgress_Intent{Intent: &anvilv1.Intent{Name: "web"}}},
 	}}
-	if err := streamApply(&out, stream); err != nil {
+	if _, err := streamApply(&out, stream, true); err != nil {
 		t.Fatal(err)
 	}
 	want := "Plan for intent \"web\":\ndb: launching\nApplied intent \"web\" (0 members)\n"

@@ -505,6 +505,13 @@ func saveCloudInit(c *client.Client, name, content string) tea.Cmd {
 	}
 }
 
+func generateCloudInit(c *client.Client, req *anvilv1.CloudInitGenerateRequest) tea.Cmd {
+	return func() tea.Msg {
+		_, err := c.CloudInit.Generate(context.Background(), req)
+		return cloudInitSavedMsg{name: req.GetSaveAs(), err: err}
+	}
+}
+
 func renameCloudInit(c *client.Client, oldName, newName string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.CloudInit.Rename(context.Background(), &anvilv1.CloudInitRenameRequest{OldName: oldName, NewName: newName})
