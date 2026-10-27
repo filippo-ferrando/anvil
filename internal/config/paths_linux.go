@@ -6,7 +6,6 @@ const (
 	RunDir   = "/run/anvil"
 	StateDir = "/var/lib/anvil"
 	CacheDir = "/var/cache/anvil"
-	ConfDir  = "/etc/anvil"
 
 	guiToolsDir = "/usr/lib/anvil/gui"
 )

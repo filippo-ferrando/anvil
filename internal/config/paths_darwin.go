@@ -2,13 +2,12 @@
 
 package config
 
-// /usr/local is used instead of a Homebrew-prefix guess (e.g. /opt/homebrew)
-// because packaging/macos installs a plain tarball, not a Homebrew formula. Provisional: revisit if that changes.
+// /usr/local is used instead of a Homebrew-prefix guess (e.g. /opt/homebrew).
+// Provisional: macOS packaging does not exist yet.
 const (
 	RunDir   = "/usr/local/var/run/anvil"
 	StateDir = "/usr/local/var/anvil"
 	CacheDir = "/usr/local/var/cache/anvil"
-	ConfDir  = "/usr/local/etc/anvil"
 
 	guiToolsDir = "/usr/local/lib/anvil/gui"
 )

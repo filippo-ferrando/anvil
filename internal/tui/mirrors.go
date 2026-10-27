@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -165,11 +166,11 @@ func (m model) selectedMirror() *anvilv1.Mirror {
 func buildMirror(kind string, form simpleForm) (*anvilv1.Mirror, error) {
 	name := form.Value("Name")
 	if name == "" {
-		return nil, fmt.Errorf("Name is required")
+		return nil, errors.New("name is required")
 	}
 	priority, err := strconv.Atoi(form.Value("Priority"))
 	if err != nil {
-		return nil, fmt.Errorf("Priority must be a number")
+		return nil, errors.New("priority must be a number")
 	}
 	mirror := &anvilv1.Mirror{Name: name, Priority: int32(priority), Enabled: true}
 	if kind == "container" {

@@ -52,6 +52,14 @@ func (t *restartTracker) cancel(id string) {
 	delete(t.attempts, id)
 }
 
+// forget cancels any pending restart and drops everything kept for a deleted instance.
+func (t *restartTracker) forget(id string) {
+	t.cancel(id)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.lastStart, id)
+}
+
 // restartDelay returns how long to wait before restart attempt number n (0-based).
 func restartDelay(n int) time.Duration {
 	d := restartBackoffMin

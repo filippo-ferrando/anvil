@@ -292,8 +292,8 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.launch.cloudInitEditor.Focus()
 		return m, nil
 
-	// The four loads fired when Launch was entered each fill in one
-	// slice of autocomplete candidates as its RPC comes back, independently.
+	// Each load fired when Launch was entered fills in one slice of
+	// autocomplete candidates as its RPC comes back, independently.
 	case intentsLoadedMsg:
 		if msg.err == nil {
 			names := make([]string, 0, len(msg.intents))
@@ -501,7 +501,7 @@ func buildLaunchRequest(m launchModel) (*anvilv1.LaunchRequest, error) {
 	form := m.form
 	image := form.Value("Image")
 	if image == "" {
-		return nil, fmt.Errorf("Image is required")
+		return nil, errors.New("image is required")
 	}
 	name := form.Value("Name")
 	if name == "" {

@@ -49,18 +49,6 @@ func (s *Store) PutMirror(m Mirror) error {
 	})
 }
 
-func (s *Store) GetMirror(name string) (Mirror, error) {
-	var m Mirror
-	err := s.db.View(func(tx *bbolt.Tx) error {
-		data := tx.Bucket(bucketMirrors).Get([]byte(name))
-		if data == nil {
-			return fmt.Errorf("store: no mirror named %q: %w", name, instance.ErrNotFound)
-		}
-		return json.Unmarshal(data, &m)
-	})
-	return m, err
-}
-
 // ListMirrors returns every mirror, optionally filtered by kind, sorted by
 // descending priority then name.
 func (s *Store) ListMirrors(kindFilter MirrorKind) ([]Mirror, error) {

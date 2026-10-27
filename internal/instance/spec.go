@@ -25,7 +25,6 @@ const (
 	StateStopped  State = "stopped"
 	StateStarting State = "starting"
 	StateRunning  State = "running"
-	StateStopping State = "stopping"
 	StateDeleting State = "deleting"
 	StateDeleted  State = "deleted"
 	StateError    State = "error"

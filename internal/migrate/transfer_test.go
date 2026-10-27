@@ -55,11 +55,11 @@ func TestParseRemoteCaps(t *testing.T) {
 
 func TestParseRemoteCapsFields(t *testing.T) {
 	caps := parseRemoteCaps("arch=aarch64\nanvil=/usr/bin/anvil\nanvild=/usr/bin/anvild\n" +
-		"kvm\nqemu\ndocker\npodman\nnametaken\nmem=16303532\nstaging=104857600\nstate=52428800\ncache=20971520\n")
+		"kvm\nqemu\ndocker\nnametaken\nmem=16303532\nstaging=104857600\nstate=52428800\ncache=20971520\n")
 	if caps.arch != "aarch64" || caps.anvil != "/usr/bin/anvil" || caps.anvild != "/usr/bin/anvild" {
 		t.Errorf("unexpected identity fields: %+v", caps)
 	}
-	if !caps.kvm || !caps.qemu || !caps.docker || !caps.podman || !caps.nameTaken {
+	if !caps.kvm || !caps.qemu || !caps.docker || !caps.nameTaken {
 		t.Errorf("unexpected flags: %+v", caps)
 	}
 	if caps.memTotalKB != 16303532 || caps.freeStagingKB != 104857600 || caps.freeStateKB != 52428800 || caps.freeCacheKB != 20971520 {

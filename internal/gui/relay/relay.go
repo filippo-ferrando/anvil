@@ -147,17 +147,6 @@ func WaitIdle(ctx context.Context, grace time.Duration, relays ...*Relay) {
 	}
 }
 
-// Serve runs a relay from listenPath to upstreamPath until ctx ends.
-func Serve(ctx context.Context, listenPath, upstreamPath string) error {
-	r, err := Listen(listenPath, upstreamPath)
-	if err != nil {
-		return err
-	}
-	stop := context.AfterFunc(ctx, r.Close)
-	defer stop()
-	return r.Serve()
-}
-
 // Pipe copies a and b into each other, fds included, until both sides are done, then closes both.
 func Pipe(a, b *net.UnixConn) {
 	var wg sync.WaitGroup

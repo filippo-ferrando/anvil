@@ -36,7 +36,7 @@ func TestCmdConn_SurfacesStderr(t *testing.T) {
 
 func TestClient_RemoteHelpers(t *testing.T) {
 	local := &Client{}
-	if local.JumpArgs() != nil || local.DockerEnv() != nil {
+	if local.jumpArgs() != nil || local.DockerEnv() != nil {
 		t.Fatal("a local client must not touch ssh flags or the docker env")
 	}
 	if p, err := local.HostPath("rel"); err != nil || !strings.HasSuffix(p, "/rel") {
@@ -44,8 +44,8 @@ func TestClient_RemoteHelpers(t *testing.T) {
 	}
 
 	remote := &Client{Remote: "me@box"}
-	if got := remote.JumpArgs(); len(got) != 2 || got[1] != "me@box" {
-		t.Fatalf("JumpArgs = %v", got)
+	if got := remote.jumpArgs(); len(got) != 2 || got[1] != "me@box" {
+		t.Fatalf("jumpArgs = %v", got)
 	}
 	env := remote.DockerEnv()
 	if env[len(env)-1] != "DOCKER_HOST=ssh://me@box" {

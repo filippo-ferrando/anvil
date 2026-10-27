@@ -15,13 +15,14 @@ import (
 )
 
 // Source is the subset of *store.Store's methods Backend needs to
-// resolve cloud-init configs and VM mirrors. Mirrors internal/vm.Source.
+// resolve cloud-init configs and VM mirrors, like internal/vm.Source.
 type Source interface {
 	ListMirrors(kindFilter store.MirrorKind) ([]store.Mirror, error)
 	GetCloudInit(name string) (store.CloudInitConfig, error)
 }
 
-// Backend implements instance.Backend for instance.KindVM on macOS.
+// Backend implements instance.Backend for instance.KindVM on macOS. It has no optional
+// capabilities (ports, snapshots, fork) yet, so the Manager reports them as unsupported.
 type Backend struct {
 	Catalog *image.Catalog
 	Vault   *image.Vault
@@ -30,6 +31,7 @@ type Backend struct {
 
 var _ instance.Backend = (*Backend)(nil)
 
+// NewBackend returns a Backend over catalog, vault and source.
 func NewBackend(catalog *image.Catalog, vault *image.Vault, source Source) *Backend {
 	return &Backend{Catalog: catalog, Vault: vault, Source: source}
 }
@@ -40,8 +42,7 @@ func (b *Backend) ListCatalog() ([]image.DistroEntry, error) {
 	return b.Catalog.List(), nil
 }
 
-// ExportDisk flattens spec's current disk into a standalone file at
-// destPath. Satisfies internal/migrate.Exporter, same as internal/vm.Backend.
+// ExportDisk satisfies internal/migrate.Exporter, same as internal/vm.Backend.
 func (b *Backend) ExportDisk(ctx context.Context, spec *instance.Spec, destPath string) error {
 	return errNotImplemented("ExportDisk")
 }
@@ -58,38 +59,6 @@ func (b *Backend) ExportDiskFile(ctx context.Context, spec *instance.Spec, dir s
 
 func (b *Backend) PrepareImportedDisk(ctx context.Context, hypervisor instance.VMHypervisor, imageRef, arch, diskPath, baseSHA256 string) error {
 	return errNotImplemented("PrepareImportedDisk")
-}
-
-// AddPort and RemovePort satisfy instance.PortForwarder, same as internal/vm.Backend.
-func (b *Backend) AddPort(ctx context.Context, spec *instance.Spec, port instance.PortMapping) error {
-	return errNotImplemented("AddPort")
-}
-
-func (b *Backend) RemovePort(ctx context.Context, spec *instance.Spec, hostPort int, protocol string) error {
-	return errNotImplemented("RemovePort")
-}
-
-// CreateSnapshot, RestoreSnapshot, DeleteSnapshot, and ListSnapshots
-// satisfy instance.Snapshotter, same as internal/vm.Backend.
-func (b *Backend) CreateSnapshot(ctx context.Context, spec *instance.Spec, name string) error {
-	return errNotImplemented("CreateSnapshot")
-}
-
-func (b *Backend) RestoreSnapshot(ctx context.Context, spec *instance.Spec, name string) error {
-	return errNotImplemented("RestoreSnapshot")
-}
-
-func (b *Backend) DeleteSnapshot(ctx context.Context, spec *instance.Spec, name string) error {
-	return errNotImplemented("DeleteSnapshot")
-}
-
-func (b *Backend) ListSnapshots(ctx context.Context, spec *instance.Spec) ([]instance.Snapshot, error) {
-	return nil, errNotImplemented("ListSnapshots")
-}
-
-// Fork satisfies instance.Forker, same as internal/vm.Backend.
-func (b *Backend) Fork(ctx context.Context, source, dest *instance.Spec, progress func(status string)) error {
-	return errNotImplemented("Fork")
 }
 
 func (b *Backend) Create(ctx context.Context, spec *instance.Spec, progress func(status string)) error {

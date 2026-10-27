@@ -84,7 +84,7 @@ func TestRecordsRoundTrip(t *testing.T) {
 			put: func(s *Store) error {
 				return s.PutMirror(Mirror{Name: "corp", Kind: MirrorKindVM, ManifestURL: "https://example.org/m.json", Enabled: true})
 			},
-			get:   func(s *Store) (any, error) { m, err := s.GetMirror("corp"); return m.ManifestURL, err },
+			get:   func(s *Store) (any, error) { m, err := getMirror(s, "corp"); return m.ManifestURL, err },
 			count: func(s *Store) (int, error) { l, err := s.ListMirrors(""); return len(l), err },
 			del:   func(s *Store) error { return s.DeleteMirror("corp") },
 			want:  "https://example.org/m.json",
@@ -253,7 +253,21 @@ func TestRenameAndToggleHelpers(t *testing.T) {
 	if err := s.SetMirrorEnabled("corp", false); err != nil {
 		t.Fatalf("SetMirrorEnabled: %v", err)
 	}
-	if m, err := s.GetMirror("corp"); err != nil || m.Enabled {
+	if m, err := getMirror(s, "corp"); err != nil || m.Enabled {
 		t.Errorf("mirror should be disabled: %+v, %v", m, err)
 	}
+}
+
+// getMirror finds one mirror by name through ListMirrors.
+func getMirror(s *Store, name string) (Mirror, error) {
+	ms, err := s.ListMirrors("")
+	if err != nil {
+		return Mirror{}, err
+	}
+	for _, m := range ms {
+		if m.Name == name {
+			return m, nil
+		}
+	}
+	return Mirror{}, instance.ErrNotFound
 }

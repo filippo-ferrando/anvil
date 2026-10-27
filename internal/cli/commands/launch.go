@@ -225,7 +225,7 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 	cmd.Flags().BoolVar(&noStart, "no-start", false, "create but don't start the instance")
 	cmd.Flags().StringVar(&intentName, "intent", "", "join this instance to an intent (created automatically if it doesn't exist yet), see anvil intent")
 	cmd.Flags().StringVar(&role, "role", "", "label this instance's role within --intent (defaults to its own name)")
-	cmd.Flags().StringVar(&fromDisk, "from-disk", "", "use this already-prepared qcow2 file as the VM's own disk directly, skipping the image catalog and cloud-init entirely (internal, used by anvil migrate)")
+	cmd.Flags().StringVar(&fromDisk, "from-disk", "", "use this already-prepared qcow2 file as the VM's own disk directly, skipping the image catalog and cloud-init entirely (kept for migrations from older anvil versions)")
 	cmd.Flags().BoolVar(&wait, "wait", false, "block until the instance finished its first-boot setup (cloud-init for a VM); fails if cloud-init reports errors")
 	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 15*time.Minute, "give up on --wait after this long")
 	cmd.Flags().BoolVar(&autostart, "autostart", false, "start the instance whenever anvild starts, unless it was stopped on purpose")
@@ -233,7 +233,10 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 	cmd.Flags().StringArrayVar(&devices, "device", nil, "pass a host device to the VM: usb:<vendor>:<product>, usb:<bus>-<port> or "+
 		"pci:<domain>:<bus>:<slot>.<fn>, see anvil host devices (repeatable; qemu VMs only, which then can't be migrated or forked)")
 	cmd.Flags().BoolVar(&noGuestAgent, "no-guest-agent", false, "don't install qemu-guest-agent through cloud-init (VM only); disables guest IP reporting and agent shutdown")
-	cmd.Flags().StringVar(&defaultUser, "default-user", "", "override the SSH login user normally read from the image catalog (VM only, mainly for internal use by anvil migrate)")
+	cmd.Flags().StringVar(&defaultUser, "default-user", "", "override the SSH login user normally read from the image catalog (VM only, kept for migrations from older anvil versions)")
+	// Older migrate sources still pass these, newer ones use migrate-import.
+	_ = cmd.Flags().MarkHidden("from-disk")
+	_ = cmd.Flags().MarkHidden("default-user")
 	return cmd
 }
 

@@ -53,18 +53,18 @@ func (c *Client) SSHTarget(inst *anvilv1.Instance, userOverride string) (SSHTarg
 		if ip == "" {
 			return SSHTarget{}, fmt.Errorf("%q has no known bridge address yet", name)
 		}
-		return SSHTarget{InstanceID: inst.GetId(), Host: ip, Port: 22, User: user, Jump: c.JumpArgs()}, nil
+		return SSHTarget{InstanceID: inst.GetId(), Host: ip, Port: 22, User: user, Jump: c.jumpArgs()}, nil
 	}
 
 	if vmSpec.GetSshPort() == 0 {
 		return SSHTarget{}, fmt.Errorf("%q has no known SSH port yet", name)
 	}
-	return SSHTarget{InstanceID: inst.GetId(), Host: "localhost", Port: int(vmSpec.GetSshPort()), User: user, Jump: c.JumpArgs()}, nil
+	return SSHTarget{InstanceID: inst.GetId(), Host: "localhost", Port: int(vmSpec.GetSshPort()), User: user, Jump: c.jumpArgs()}, nil
 }
 
-// SSHKnownHostsPath returns a per-instance known_hosts file, keyed by instance ID
+// sshKnownHostsPath returns a per-instance known_hosts file, keyed by instance ID
 // rather than host:port so a reused ephemeral port doesn't trigger false host-key warnings.
-func SSHKnownHostsPath(instanceID string) (string, error) {
+func sshKnownHostsPath(instanceID string) (string, error) {
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
 		return "", fmt.Errorf("ssh: finding a cache directory: %w", err)
@@ -87,7 +87,7 @@ var ttyCompatSSHArgs = []string{
 // SSHArgs returns the ssh/scp flags (before the destination) to reach target.
 // portFlag is "-p" for ssh and "-P" for scp.
 func SSHArgs(target SSHTarget, portFlag, identity string) ([]string, error) {
-	knownHosts, err := SSHKnownHostsPath(target.InstanceID)
+	knownHosts, err := sshKnownHostsPath(target.InstanceID)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +132,7 @@ func runSSHWithStdin(target SSHTarget, identity string, command []string, stdin 
 // InjectGuestKeys authorizes the target host's guest-access key in every running VM
 // about to be migrated. It returns one warning per stopped VM it had to skip.
 func (c *Client) InjectGuestKeys(ctx context.Context, name, to string) (warnings []string, err error) {
-	vms, err := c.MigratingVMs(ctx, name)
+	vms, err := c.migratingVMs(ctx, name)
 	if err != nil || len(vms) == 0 {
 		return nil, err
 	}
@@ -169,9 +169,9 @@ func (c *Client) InjectGuestKeys(ctx context.Context, name, to string) (warnings
 	return warnings, nil
 }
 
-// MigratingVMs looks up name as a single instance first, then as an intent,
+// migratingVMs looks up name as a single instance first, then as an intent,
 // and returns every VM involved. Container members are skipped.
-func (c *Client) MigratingVMs(ctx context.Context, name string) ([]*anvilv1.Instance, error) {
+func (c *Client) migratingVMs(ctx context.Context, name string) ([]*anvilv1.Instance, error) {
 	infoReply, err := c.Info(ctx, &anvilv1.InfoRequest{Names: []string{name}})
 	switch {
 	case err == nil && len(infoReply.GetInstances()) > 0:

@@ -28,8 +28,6 @@ var (
 
 	styleSubtitle = lipgloss.NewStyle().Foreground(colorMuted)
 
-	styleHelp = lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 1)
-
 	styleError = lipgloss.NewStyle().Foreground(colorBad).Bold(true)
 	styleGood  = lipgloss.NewStyle().Foreground(colorGood)
 	styleWarn  = lipgloss.NewStyle().Foreground(colorWarn)

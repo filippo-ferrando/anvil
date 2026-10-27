@@ -161,8 +161,8 @@ func (m *instancesModel) setSize(width, height int) {
 }
 
 // counts summarizes how many known instances are currently running, for the header.
-func (ins *instancesModel) counts() (running, total int) {
-	for _, it := range ins.list.Items() {
+func (m *instancesModel) counts() (running, total int) {
+	for _, it := range m.list.Items() {
 		if ii, ok := it.(instanceItem); ok {
 			total++
 			if ii.inst.GetState() == anvilv1.State_STATE_RUNNING {
@@ -174,8 +174,8 @@ func (ins *instancesModel) counts() (running, total int) {
 }
 
 // selected returns the currently highlighted instance, or nil if the list is empty.
-func (ins *instancesModel) selected() *anvilv1.Instance {
-	item, ok := ins.list.SelectedItem().(instanceItem)
+func (m *instancesModel) selected() *anvilv1.Instance {
+	item, ok := m.list.SelectedItem().(instanceItem)
 	if !ok {
 		return nil
 	}
@@ -184,30 +184,30 @@ func (ins *instancesModel) selected() *anvilv1.Instance {
 
 // syncStatsStream keeps one stats stream open for the selected instance while it runs,
 // closing the stream of a previous selection. Returns nil when nothing changes.
-func (ins *instancesModel) syncStatsStream(c *client.Client) tea.Cmd {
+func (m *instancesModel) syncStatsStream(c *client.Client) tea.Cmd {
 	want := ""
-	if inst := ins.selected(); inst != nil && inst.GetState() == anvilv1.State_STATE_RUNNING {
+	if inst := m.selected(); inst != nil && inst.GetState() == anvilv1.State_STATE_RUNNING {
 		want = inst.GetName()
 	}
-	if want == ins.statsStreaming {
+	if want == m.statsStreaming {
 		return nil
 	}
-	ins.closeStatsStream()
-	ins.stats, ins.statsErr, ins.statsFor = nil, "", ""
+	m.closeStatsStream()
+	m.stats, m.statsErr, m.statsFor = nil, "", ""
 	if want == "" {
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	ins.statsStreaming, ins.statsCancel = want, cancel
-	ins.statsGen++
-	return openStatsStream(ctx, c, ins.statsGen, want)
+	m.statsStreaming, m.statsCancel = want, cancel
+	m.statsGen++
+	return openStatsStream(ctx, c, m.statsGen, want)
 }
 
-func (ins *instancesModel) closeStatsStream() {
-	if ins.statsCancel != nil {
-		ins.statsCancel()
+func (m *instancesModel) closeStatsStream() {
+	if m.statsCancel != nil {
+		m.statsCancel()
 	}
-	ins.statsStreaming, ins.statsCancel = "", nil
+	m.statsStreaming, m.statsCancel = "", nil
 }
 
 // reloadSelected refreshes what the detail panel shows live for the selected instance.
@@ -584,8 +584,8 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (ins *instancesModel) startPrompt(p instancesPrompt, target *anvilv1.Instance, form simpleForm) {
-	ins.prompt, ins.promptTarget, ins.promptForm = p, target, form
+func (m *instancesModel) startPrompt(p instancesPrompt, target *anvilv1.Instance, form simpleForm) {
+	m.prompt, m.promptTarget, m.promptForm = p, target, form
 }
 
 func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

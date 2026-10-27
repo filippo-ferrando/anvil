@@ -288,11 +288,6 @@ func hostfwdRemoveLine(netdevID string, hostPort int, protocol string) string {
 	return fmt.Sprintf("hostfwd_remove %s %s::%d", netdevID, protocol, hostPort)
 }
 
-// SnapshotSave issues QMP's snapshot-save job. Not yet implemented.
-func (c *QMPClient) SnapshotSave(ctx context.Context, name string, timeout time.Duration) error {
-	return fmt.Errorf("qmp: SnapshotSave not yet implemented (needs stable -drive node names from args.go)")
-}
-
 func (c *QMPClient) Close() error { return c.conn.Close() }
 
 // AddVirtiofs hot-plugs a vhost-user-fs-pci device for tag, connected to the

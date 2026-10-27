@@ -41,8 +41,8 @@ func DialSSH(dest, socketPath string) (*Client, error) {
 	return c, nil
 }
 
-// JumpArgs returns ssh flags that reach a guest through the daemon's host, nil when local.
-func (c *Client) JumpArgs() []string {
+// jumpArgs returns ssh flags that reach a guest through the daemon's host, nil when local.
+func (c *Client) jumpArgs() []string {
 	if c.Remote == "" {
 		return nil
 	}

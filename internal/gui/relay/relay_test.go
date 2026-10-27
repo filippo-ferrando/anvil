@@ -20,7 +20,7 @@ func startRelay(t *testing.T, upstream string) (string, context.CancelFunc, <-ch
 	listen := filepath.Join(t.TempDir(), "relay.sock")
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- Serve(ctx, listen, upstream) }()
+	go func() { done <- serveUntil(ctx, listen, upstream) }()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		if _, err := os.Stat(listen); err == nil {
@@ -253,4 +253,15 @@ func TestWaitIdle_WaitsForOpenConnections(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("WaitIdle didn't return after the connection closed")
 	}
+}
+
+// serveUntil runs a relay from listenPath to upstreamPath until ctx ends.
+func serveUntil(ctx context.Context, listenPath, upstreamPath string) error {
+	r, err := Listen(listenPath, upstreamPath)
+	if err != nil {
+		return err
+	}
+	stop := context.AfterFunc(ctx, r.Close)
+	defer stop()
+	return r.Serve()
 }

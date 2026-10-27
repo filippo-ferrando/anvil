@@ -825,5 +825,6 @@ func (m *Manager) deleteOne(ctx context.Context, spec *Spec) error {
 	if err := b.Delete(ctx, spec); err != nil {
 		return fmt.Errorf("instance: deleting %s: %w", spec.Name, err)
 	}
+	m.restarts.forget(spec.ID)
 	return m.registry.DeleteByID(spec.ID)
 }

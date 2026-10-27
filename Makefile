@@ -4,8 +4,8 @@ GOBIN := $(shell go env GOPATH)/bin
 
 # Regenerates api/gen/anvil/v1 from api/proto/anvil/v1/anvil.proto.
 proto:
-	go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.34.2
-	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+	go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
+	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
 	protoc \
 		--plugin=protoc-gen-go=$(GOBIN)/protoc-gen-go \
 		--plugin=protoc-gen-go-grpc=$(GOBIN)/protoc-gen-go-grpc \

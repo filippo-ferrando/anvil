@@ -87,8 +87,7 @@ internal/
   vm/network/    tap devices on a Linux bridge (netlink)
   vm/vz/         Apple Virtualization.framework backend (darwin), a stub, not implemented yet
   container/docker/   Docker backend
-  container/      the Backend that picks an engine; Podman is rejected, not implemented (see PLAN.md);
-                 container/podman/ is an empty placeholder dir
+  container/      the Backend that picks an engine; Podman is rejected, not implemented (see PLAN.md)
   intent/        grouping VMs/containers together, shared per-intent bridge network + IPAM
   intent/dns/    per-intent DNS server on each intent's gateway ("<role>.<intent>.anvil")
   intent/ipam/   subnet and address allocation for intent networks

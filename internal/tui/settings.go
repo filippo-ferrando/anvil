@@ -151,7 +151,7 @@ func buildScheduleRequest(inst *anvilv1.Instance, form simpleForm) (*anvilv1.Sna
 	}
 	d, err := time.ParseDuration(every)
 	if err != nil {
-		return nil, fmt.Errorf("Every: %w", err)
+		return nil, fmt.Errorf("every: %w", err)
 	}
 	keep, err := parseInt32(form.Value("Keep"), "Keep")
 	if err != nil {

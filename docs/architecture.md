@@ -89,7 +89,7 @@ because the transport is a local socket.
 (`cmdConn`). On the remote host, the hidden `dial-stdio` command
 (`internal/cli/commands/dial_stdio.go`) copies stdio to and from the local unix socket.
 gRPC then runs unchanged over that pipe. The client also knows how to reach guests
-through the remote host: `JumpArgs` adds `ssh -J <remote>` and `DockerEnv` sets
+through the remote host: `jumpArgs` adds `ssh -J <remote>` and `DockerEnv` sets
 `DOCKER_HOST=ssh://<remote>`.
 
 ### 2.3 `anvild`

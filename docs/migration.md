@@ -267,7 +267,7 @@ matter for a Firecracker VM.
 
 `uploadDisk` in `transfer.go` copies the file to `/var/tmp` on the target:
 `/var/tmp/anvil-migrate-<instance-id>.qcow2` for the disk and
-`/var/tmp/anvil-migrate-base-<sha256>.qcow2` for a base image. `/var/tmp` is used rather
+`/var/tmp/anvil-migrate-base-<sha256>-<instance-id>.qcow2` for a base image. `/var/tmp` is used rather
 than `/tmp` because `/tmp` is often a small tmpfs, while `/var/tmp` is normally backed by
 disk.
 

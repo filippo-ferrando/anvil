@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -51,6 +52,9 @@ func (i deviceItem) Description() string {
 	driver := i.dev.GetDriver()
 	if driver == "" {
 		driver = "no driver"
+	}
+	if g := i.dev.GetIommuGroup(); g >= 0 {
+		driver += "  •  iommu group " + strconv.Itoa(int(g))
 	}
 	return i.dev.GetVendorId() + ":" + i.dev.GetProductId() + "  •  " + driver + "  •  " + deviceStatus(i.dev)
 }

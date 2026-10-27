@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -223,7 +224,7 @@ func newHostDevicesCommand(flags *globalFlags) *cobra.Command {
 				return printJSON(cmd.OutOrStdout(), reply)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "ID\tVENDOR:PRODUCT\tNAME\tDRIVER\tSTATUS")
+			fmt.Fprintln(tw, "ID\tVENDOR:PRODUCT\tNAME\tDRIVER\tIOMMU\tSTATUS")
 			for _, d := range reply.GetDevices() {
 				driver := d.GetDriver()
 				if driver == "" {
@@ -233,7 +234,11 @@ func newHostDevicesCommand(flags *globalFlags) *cobra.Command {
 				if len(d.GetGroupMembers()) > 0 {
 					status += " (with " + strings.Join(d.GetGroupMembers(), ", ") + ")"
 				}
-				fmt.Fprintf(tw, "%s\t%s:%s\t%s\t%s\t%s\n", d.GetId(), d.GetVendorId(), d.GetProductId(), d.GetName(), driver, status)
+				group := "-"
+				if d.GetIommuGroup() >= 0 {
+					group = strconv.Itoa(int(d.GetIommuGroup()))
+				}
+				fmt.Fprintf(tw, "%s\t%s:%s\t%s\t%s\t%s\t%s\n", d.GetId(), d.GetVendorId(), d.GetProductId(), d.GetName(), driver, group, status)
 			}
 			return tw.Flush()
 		},

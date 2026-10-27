@@ -47,7 +47,6 @@ type remoteCaps struct {
 	fc     bool   // firecracker is installed
 	fcCLI  bool   // the target's anvil knows about hypervisors (launch --hypervisor)
 	docker bool
-	podman bool
 	tar    bool
 
 	nameTaken     bool  // the destination name is already used on the target
@@ -88,7 +87,6 @@ func probeRemote(ctx context.Context, t target, spec *instance.Spec, destName st
 		"command -v zstd >/dev/null 2>&1 && echo zstd; " +
 		"command -v sha256sum >/dev/null 2>&1 && echo sha256sum; " +
 		"command -v docker >/dev/null 2>&1 && echo docker; " +
-		"command -v podman >/dev/null 2>&1 && echo podman; " +
 		"command -v tar >/dev/null 2>&1 && echo tar; " +
 		"[ -e /dev/kvm ] && echo kvm; " +
 		"echo mem=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null); " +
@@ -142,8 +140,6 @@ func parseRemoteCaps(out string) remoteCaps {
 			caps.fcCLI = true
 		case "docker":
 			caps.docker = true
-		case "podman":
-			caps.podman = true
 		case "tar":
 			caps.tar = true
 		case "nametaken":

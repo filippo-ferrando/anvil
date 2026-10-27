@@ -75,10 +75,8 @@ func sharedPaths(params instance.LaunchParams) []*string {
 	return paths
 }
 
+// adoptOne moves one staged upload to dest. Callers skip empty staged paths.
 func adoptOne(ctx context.Context, stagedPath, hostPath *string, dest string) error {
-	if *stagedPath == "" {
-		return nil
-	}
 	// Adopting deletes the source, so only ever accept a staged upload's own
 	// name, never an arbitrary path a caller put in the request.
 	if !migrate.IsStagedDataPath(*stagedPath) {

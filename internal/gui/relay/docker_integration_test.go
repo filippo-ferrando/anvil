@@ -42,7 +42,7 @@ func TestDockerContainerReachesHostCompositor(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { _ = Serve(ctx, filepath.Join(dir, "wayland-0"), wayland) }()
+	go func() { _ = serveUntil(ctx, filepath.Join(dir, "wayland-0"), wayland) }()
 
 	script := "apk add -q --no-cache wayland-utils >/dev/null && wayland-info | grep -m1 wl_compositor"
 	args := []string{"run", "--rm", "-v", dir + ":/run/anvil-gui", "-v", x11Dir + ":/tmp/.X11-unix",
@@ -51,7 +51,7 @@ func TestDockerContainerReachesHostCompositor(t *testing.T) {
 	hasX11 := false
 	if n, sock, err := X11Display(); err == nil {
 		hasX11 = true
-		go func() { _ = Serve(ctx, filepath.Join(x11Dir, "X0"), sock) }()
+		go func() { _ = serveUntil(ctx, filepath.Join(x11Dir, "X0"), sock) }()
 		if ok, _ := WriteGuestXAuthority(XAuthorityPath(), n, filepath.Join(dir, "Xauthority"), 0); ok {
 			args = append(args, "-e", "XAUTHORITY=/run/anvil-gui/Xauthority")
 		}

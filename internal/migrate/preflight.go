@@ -104,12 +104,9 @@ func preflightFC(caps remoteCaps, arch string) (fatal []string) {
 }
 
 func preflightContainer(spec *instance.Spec, caps remoteCaps) (fatal, warn []string) {
-	engine := string(spec.Container.Engine)
-	if engine == "" {
-		engine = "docker"
-	}
-	if (engine == "docker" && !caps.docker) || (engine == "podman" && !caps.podman) {
-		fatal = append(fatal, engine+" is not installed there")
+	// Docker is the only engine anvil runs.
+	if !caps.docker {
+		fatal = append(fatal, "docker is not installed there")
 	}
 	if caps.arch != "" && caps.arch != hostArch() {
 		warn = append(warn, fmt.Sprintf("the target is %s and this host is %s, so %s is re-pulled for a different arch",

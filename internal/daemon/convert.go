@@ -40,8 +40,6 @@ func stateToPB(s instance.State) anvilv1.State {
 		return anvilv1.State_STATE_STARTING
 	case instance.StateRunning:
 		return anvilv1.State_STATE_RUNNING
-	case instance.StateStopping:
-		return anvilv1.State_STATE_STOPPING
 	case instance.StateDeleting:
 		return anvilv1.State_STATE_DELETING
 	case instance.StateDeleted:
