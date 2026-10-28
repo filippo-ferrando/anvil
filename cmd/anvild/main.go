@@ -156,6 +156,7 @@ func run() error {
 	instanceServer := daemon.NewServer(mgr, intentMgr, vault)
 	anvilv1.RegisterInstanceServiceServer(grpcServer, instanceServer)
 	anvilv1.RegisterCloudInitServiceServer(grpcServer, daemon.NewCloudInitServer(db))
+	anvilv1.RegisterManifestServiceServer(grpcServer, daemon.NewManifestServer(db))
 	anvilv1.RegisterMirrorServiceServer(grpcServer, daemon.NewMirrorServer(db))
 	imageServer := daemon.NewImageServer(db, vault, vmBackend, containerBackend,
 		&image.FCCache{Dir: config.FirecrackerImageDir(), Vault: vault})

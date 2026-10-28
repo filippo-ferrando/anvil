@@ -288,3 +288,16 @@ func (m *Manifest) hasDependents(role string) bool {
 	}
 	return false
 }
+
+// Starter is the content of a new manifest for intentName: one container member to edit from.
+func Starter(intentName string) string {
+	return fmt.Sprintf(`intent: %s # field reference: docs/apply.md
+
+members:
+  web:
+    kind: container
+    image: nginx:latest
+    ports:
+      - "8080:80"
+`, intentName)
+}

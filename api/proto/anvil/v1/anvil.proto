@@ -568,6 +568,57 @@ message CloudInitImportResult {
   string error = 3; // set if fetching/saving this template failed
 }
 
+// ManifestService manages the saved library of intent manifests (anvil.yaml).
+// A saved manifest is applied by sending its content to IntentService.Apply.
+service ManifestService {
+  rpc List(ManifestListRequest) returns (ManifestListReply);
+  rpc Get(ManifestGetRequest) returns (ManifestGetReply);
+  rpc Save(ManifestSaveRequest) returns (ManifestSaveReply); // creates or updates
+  rpc Rename(ManifestRenameRequest) returns (ManifestRenameReply);
+  rpc Delete(ManifestDeleteRequest) returns (ManifestDeleteReply);
+}
+
+message ManifestInfo {
+  string name = 1;
+  int64 modified_at_unix = 2;
+  string intent = 3; // the manifest's intent: field, empty if it can't be read
+}
+
+message ManifestListRequest {}
+
+message ManifestListReply {
+  repeated ManifestInfo manifests = 1;
+}
+
+message ManifestGetRequest {
+  string name = 1;
+}
+
+message ManifestGetReply {
+  ManifestInfo info = 1;
+  string content = 2;
+}
+
+message ManifestSaveRequest {
+  string name = 1;
+  string content = 2;
+}
+
+message ManifestSaveReply {}
+
+message ManifestRenameRequest {
+  string old_name = 1;
+  string new_name = 2;
+}
+
+message ManifestRenameReply {}
+
+message ManifestDeleteRequest {
+  string name = 1;
+}
+
+message ManifestDeleteReply {}
+
 // MirrorService manages runtime-added VM image and container registry mirrors.
 service MirrorService {
   rpc Add(MirrorAddRequest) returns (MirrorAddReply);

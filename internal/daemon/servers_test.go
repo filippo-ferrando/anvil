@@ -110,6 +110,37 @@ func TestCloudInitServerRoundTrip(t *testing.T) {
 	}
 }
 
+// TestManifestServerRoundTrip checks save/list/get/rename/delete and that the
+// intent name is read even from a manifest that wouldn't validate.
+func TestManifestServerRoundTrip(t *testing.T) {
+	ms := NewManifestServer(testStore(t))
+	const body = "intent: shop\nmembers:\n  db:\n    kind: ???\n"
+
+	if _, err := ms.Save(t.Context(), &anvilv1.ManifestSaveRequest{Name: "shop-prod", Content: body}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	list, err := ms.List(t.Context(), &anvilv1.ManifestListRequest{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list.GetManifests()) != 1 || list.GetManifests()[0].GetIntent() != "shop" {
+		t.Fatalf("List returned %+v", list.GetManifests())
+	}
+	if _, err := ms.Rename(t.Context(), &anvilv1.ManifestRenameRequest{OldName: "shop-prod", NewName: "shop"}); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	got, err := ms.Get(t.Context(), &anvilv1.ManifestGetRequest{Name: "shop"})
+	if err != nil || got.GetContent() != body {
+		t.Fatalf("Get = %q, %v", got.GetContent(), err)
+	}
+	if _, err := ms.Delete(t.Context(), &anvilv1.ManifestDeleteRequest{Name: "shop"}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := ms.Get(t.Context(), &anvilv1.ManifestGetRequest{Name: "shop"}); status.Code(err) != codes.NotFound {
+		t.Errorf("Get after Delete: %v, want NotFound", err)
+	}
+}
+
 // TestMirrorServerRoundTrip covers add, list filtering, enable/disable and
 // remove without touching the network: a VM mirror with inline JSON never
 // fetches its manifest.

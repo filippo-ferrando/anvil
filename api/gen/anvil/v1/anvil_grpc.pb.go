@@ -1288,6 +1288,266 @@ var CloudInitService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	ManifestService_List_FullMethodName   = "/anvil.v1.ManifestService/List"
+	ManifestService_Get_FullMethodName    = "/anvil.v1.ManifestService/Get"
+	ManifestService_Save_FullMethodName   = "/anvil.v1.ManifestService/Save"
+	ManifestService_Rename_FullMethodName = "/anvil.v1.ManifestService/Rename"
+	ManifestService_Delete_FullMethodName = "/anvil.v1.ManifestService/Delete"
+)
+
+// ManifestServiceClient is the client API for ManifestService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// ManifestService manages the saved library of intent manifests (anvil.yaml).
+// A saved manifest is applied by sending its content to IntentService.Apply.
+type ManifestServiceClient interface {
+	List(ctx context.Context, in *ManifestListRequest, opts ...grpc.CallOption) (*ManifestListReply, error)
+	Get(ctx context.Context, in *ManifestGetRequest, opts ...grpc.CallOption) (*ManifestGetReply, error)
+	Save(ctx context.Context, in *ManifestSaveRequest, opts ...grpc.CallOption) (*ManifestSaveReply, error)
+	Rename(ctx context.Context, in *ManifestRenameRequest, opts ...grpc.CallOption) (*ManifestRenameReply, error)
+	Delete(ctx context.Context, in *ManifestDeleteRequest, opts ...grpc.CallOption) (*ManifestDeleteReply, error)
+}
+
+type manifestServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewManifestServiceClient(cc grpc.ClientConnInterface) ManifestServiceClient {
+	return &manifestServiceClient{cc}
+}
+
+func (c *manifestServiceClient) List(ctx context.Context, in *ManifestListRequest, opts ...grpc.CallOption) (*ManifestListReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ManifestListReply)
+	err := c.cc.Invoke(ctx, ManifestService_List_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *manifestServiceClient) Get(ctx context.Context, in *ManifestGetRequest, opts ...grpc.CallOption) (*ManifestGetReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ManifestGetReply)
+	err := c.cc.Invoke(ctx, ManifestService_Get_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *manifestServiceClient) Save(ctx context.Context, in *ManifestSaveRequest, opts ...grpc.CallOption) (*ManifestSaveReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ManifestSaveReply)
+	err := c.cc.Invoke(ctx, ManifestService_Save_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *manifestServiceClient) Rename(ctx context.Context, in *ManifestRenameRequest, opts ...grpc.CallOption) (*ManifestRenameReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ManifestRenameReply)
+	err := c.cc.Invoke(ctx, ManifestService_Rename_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *manifestServiceClient) Delete(ctx context.Context, in *ManifestDeleteRequest, opts ...grpc.CallOption) (*ManifestDeleteReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ManifestDeleteReply)
+	err := c.cc.Invoke(ctx, ManifestService_Delete_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ManifestServiceServer is the server API for ManifestService service.
+// All implementations must embed UnimplementedManifestServiceServer
+// for forward compatibility.
+//
+// ManifestService manages the saved library of intent manifests (anvil.yaml).
+// A saved manifest is applied by sending its content to IntentService.Apply.
+type ManifestServiceServer interface {
+	List(context.Context, *ManifestListRequest) (*ManifestListReply, error)
+	Get(context.Context, *ManifestGetRequest) (*ManifestGetReply, error)
+	Save(context.Context, *ManifestSaveRequest) (*ManifestSaveReply, error)
+	Rename(context.Context, *ManifestRenameRequest) (*ManifestRenameReply, error)
+	Delete(context.Context, *ManifestDeleteRequest) (*ManifestDeleteReply, error)
+	mustEmbedUnimplementedManifestServiceServer()
+}
+
+// UnimplementedManifestServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedManifestServiceServer struct{}
+
+func (UnimplementedManifestServiceServer) List(context.Context, *ManifestListRequest) (*ManifestListReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method List not implemented")
+}
+func (UnimplementedManifestServiceServer) Get(context.Context, *ManifestGetRequest) (*ManifestGetReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method Get not implemented")
+}
+func (UnimplementedManifestServiceServer) Save(context.Context, *ManifestSaveRequest) (*ManifestSaveReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method Save not implemented")
+}
+func (UnimplementedManifestServiceServer) Rename(context.Context, *ManifestRenameRequest) (*ManifestRenameReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method Rename not implemented")
+}
+func (UnimplementedManifestServiceServer) Delete(context.Context, *ManifestDeleteRequest) (*ManifestDeleteReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method Delete not implemented")
+}
+func (UnimplementedManifestServiceServer) mustEmbedUnimplementedManifestServiceServer() {}
+func (UnimplementedManifestServiceServer) testEmbeddedByValue()                         {}
+
+// UnsafeManifestServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to ManifestServiceServer will
+// result in compilation errors.
+type UnsafeManifestServiceServer interface {
+	mustEmbedUnimplementedManifestServiceServer()
+}
+
+func RegisterManifestServiceServer(s grpc.ServiceRegistrar, srv ManifestServiceServer) {
+	// If the following call panics, it indicates UnimplementedManifestServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&ManifestService_ServiceDesc, srv)
+}
+
+func _ManifestService_List_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ManifestListRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ManifestServiceServer).List(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ManifestService_List_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ManifestServiceServer).List(ctx, req.(*ManifestListRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ManifestService_Get_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ManifestGetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ManifestServiceServer).Get(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ManifestService_Get_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ManifestServiceServer).Get(ctx, req.(*ManifestGetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ManifestService_Save_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ManifestSaveRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ManifestServiceServer).Save(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ManifestService_Save_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ManifestServiceServer).Save(ctx, req.(*ManifestSaveRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ManifestService_Rename_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ManifestRenameRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ManifestServiceServer).Rename(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ManifestService_Rename_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ManifestServiceServer).Rename(ctx, req.(*ManifestRenameRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ManifestService_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ManifestDeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ManifestServiceServer).Delete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ManifestService_Delete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ManifestServiceServer).Delete(ctx, req.(*ManifestDeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// ManifestService_ServiceDesc is the grpc.ServiceDesc for ManifestService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var ManifestService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "anvil.v1.ManifestService",
+	HandlerType: (*ManifestServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "List",
+			Handler:    _ManifestService_List_Handler,
+		},
+		{
+			MethodName: "Get",
+			Handler:    _ManifestService_Get_Handler,
+		},
+		{
+			MethodName: "Save",
+			Handler:    _ManifestService_Save_Handler,
+		},
+		{
+			MethodName: "Rename",
+			Handler:    _ManifestService_Rename_Handler,
+		},
+		{
+			MethodName: "Delete",
+			Handler:    _ManifestService_Delete_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "anvil/v1/anvil.proto",
+}
+
+const (
 	MirrorService_Add_FullMethodName        = "/anvil.v1.MirrorService/Add"
 	MirrorService_List_FullMethodName       = "/anvil.v1.MirrorService/List"
 	MirrorService_Remove_FullMethodName     = "/anvil.v1.MirrorService/Remove"

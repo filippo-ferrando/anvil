@@ -36,6 +36,7 @@ const (
 	screenSnapshots
 	screenImages
 	screenIntents
+	screenManifests
 	screenCloudInit
 	screenMirrors
 	screenMigration
@@ -47,13 +48,14 @@ const (
 )
 
 // screenOrder is the sidebar's own list, top to bottom.
-var screenOrder = []screen{screenInstances, screenSnapshots, screenImages, screenIntents, screenCloudInit, screenMirrors, screenMigration, screenEvents, screenDevices, screenGUIApps}
+var screenOrder = []screen{screenInstances, screenSnapshots, screenImages, screenIntents, screenManifests, screenCloudInit, screenMirrors, screenMigration, screenEvents, screenDevices, screenGUIApps}
 
 var screenLabels = map[screen]string{
 	screenInstances: "Instances",
 	screenSnapshots: "Snapshots",
 	screenImages:    "Images",
 	screenIntents:   "Intents",
+	screenManifests: "Manifests",
 	screenCloudInit: "Cloud-Init",
 	screenMirrors:   "Mirrors",
 	screenMigration: "Migration",
@@ -94,6 +96,7 @@ type model struct {
 	launch    launchModel
 	logs      logsModel
 	cloudInit cloudInitModel
+	manifests manifestsModel
 	mirrors   mirrorsModel
 	migration migrationModel
 	events    eventsModel
@@ -140,6 +143,7 @@ func Run(dial func() (*client.Client, error), socketPath string) error {
 		intents:        newIntentsModel(),
 		launch:         newLaunchModel(),
 		cloudInit:      newCloudInitModel(),
+		manifests:      newManifestsModel(),
 		mirrors:        newMirrorsModel(),
 		migration:      newMigrationModel(),
 		events:         newEventsModel(),
@@ -230,6 +234,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.images.setSize(contentWidth, h)
 		m.intents.list.SetSize(contentWidth-2, h)
 		m.cloudInit.setSize(contentWidth, h)
+		m.manifests.setSize(contentWidth, h)
 		m.mirrors.list.SetSize(contentWidth-2, h)
 		m.events.list.SetSize(contentWidth-2, h-1) // -1: the help bar under the list
 		m.devices.list.SetSize(contentWidth-2, h-1)
@@ -252,7 +257,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
-		// alt+1..9 jumps to a screen from anywhere except the full-screen takeovers.
+		// alt+0..9 jumps to a screen from anywhere except the full-screen takeovers.
 		if k := msg.String(); m.screen != screenLaunch && m.screen != screenLogs && strings.HasPrefix(k, "alt+") {
 			if s, ok := screenForDigit(strings.TrimPrefix(k, "alt+")); ok {
 				return m.jumpTo(s)
@@ -273,8 +278,15 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateEvents(msg)
 	case imageChecksumMsg:
 		return m.updateImages(msg)
-	case applyStreamMsg, intentMembersStreamMsg:
+	case applyStreamMsg:
+		if msg.(applyStreamMsg).owner == screenManifests {
+			return m.updateManifests(msg)
+		}
 		return m.updateIntents(msg)
+	case intentMembersStreamMsg:
+		return m.updateIntents(msg)
+	case manifestSavedMsg, manifestContentLoadedMsg:
+		return m.updateManifests(msg)
 	}
 
 	// Dispatch actionDoneMsg to the screen that originated the action, not necessarily m.screen.
@@ -288,6 +300,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateImages(msg)
 		case screenIntents:
 			return m.updateIntents(msg)
+		case screenManifests:
+			return m.updateManifests(msg)
 		case screenCloudInit:
 			return m.updateCloudInit(msg)
 		case screenMirrors:
@@ -311,6 +325,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateLaunch(msg)
 	case screenLogs:
 		return m.updateLogs(msg)
+	case screenManifests:
+		return m.updateManifests(msg)
 	case screenCloudInit:
 		return m.updateCloudInit(msg)
 	case screenMirrors:
@@ -411,6 +427,8 @@ func (m model) loadCmdForScreen(s screen) tea.Cmd {
 		return tea.Batch(loadCachedImages(c), loadCatalog(c))
 	case screenIntents:
 		return loadIntents(c)
+	case screenManifests:
+		return loadManifestList(c)
 	case screenCloudInit:
 		return loadCloudInitList(c)
 	case screenMirrors:
@@ -523,6 +541,8 @@ func (m model) screenView() string {
 		return m.images.View()
 	case screenIntents:
 		return m.intents.View()
+	case screenManifests:
+		return m.manifests.View()
 	case screenCloudInit:
 		return m.cloudInit.View()
 	case screenMirrors:
@@ -557,9 +577,9 @@ func (m model) sidebarView() string {
 	b.WriteString("\n")
 	var keys []string
 	if m.sidebarFocused {
-		keys = helpItems("↑↓", "move", "1-9", "jump", "enter", "open", "q", "quit")
+		keys = helpItems("↑↓", "move", "0-9", "jump", "enter", "open", "q", "quit")
 	} else {
-		keys = helpItems("esc", "menu", "alt+1-9", "jump")
+		keys = helpItems("esc", "menu", "alt+0-9", "jump")
 	}
 	for _, k := range keys {
 		b.WriteString(" " + k + "\n")

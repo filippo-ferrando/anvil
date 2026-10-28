@@ -74,7 +74,7 @@ func TestRelaunchGUIAppRunsExec(t *testing.T) {
 }
 
 func TestScreenDigitTenth(t *testing.T) {
-	if s, ok := screenForDigit("0"); !ok || s != screenGUIApps {
+	if s, ok := screenForDigit("0"); !ok || s != screenOrder[9] {
 		t.Errorf("0 -> %v, %v", s, ok)
 	}
 	if screenDigit(9) != "0" || screenDigit(0) != "1" || screenDigit(10) != " " {

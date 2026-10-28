@@ -389,3 +389,10 @@ func TestParseVars(t *testing.T) {
 		t.Errorf("err = %v, want NAME is not set", err)
 	}
 }
+
+func TestStarterParses(t *testing.T) {
+	m := mustParse(t, Starter("demo"))
+	if m.Intent != "demo" || len(m.Members) != 1 {
+		t.Fatalf("Starter parsed to %+v", m)
+	}
+}

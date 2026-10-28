@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -28,9 +29,10 @@ func newApplyCommand(flags *globalFlags) *cobra.Command {
 		varFlags    []string
 		envFile     string
 		yes         bool
+		saved       string
 	)
 	cmd := &cobra.Command{
-		Use:   "apply -f <anvil.yaml>",
+		Use:   "apply [-f <anvil.yaml> | --saved <name>]",
 		Short: "Create or update an intent from a manifest file",
 		Long: "Compare an intent manifest with the intent's current state and apply the difference: " +
 			"missing members are created, changed ones updated or replaced, stopped ones started. " +
@@ -39,9 +41,12 @@ func newApplyCommand(flags *globalFlags) *cobra.Command {
 			"See docs/apply.md for the file format.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			data, err := readManifest(file)
+			data, err := loadManifest(cmd.Context(), flags, file, saved)
 			if err != nil {
 				return err
+			}
+			if saved != "" {
+				file = "" // no file: .env is read from the current dir
 			}
 			req, err := client.NewApplyRequest(file, data, client.ApplyOptions{
 				DryRun: dryRun, Prune: prune, Recreate: recreate,
@@ -66,6 +71,8 @@ func newApplyCommand(flags *globalFlags) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&file, "file", "f", "anvil.yaml", `manifest to apply, or "-" for stdin`)
+	cmd.Flags().StringVar(&saved, "saved", "", "apply a manifest saved with 'anvil manifest' instead of a file")
+	cmd.MarkFlagsMutuallyExclusive("file", "saved")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "only show what would change")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "apply without asking for confirmation on a terminal")
 	cmd.Flags().BoolVar(&prune, "prune", false, "delete members that are no longer in the manifest")
@@ -74,6 +81,20 @@ func newApplyCommand(flags *globalFlags) *cobra.Command {
 	cmd.Flags().StringVar(&envFile, "env-file", "", "file of KEY=VALUE manifest variables (default: .env beside the manifest, if present)")
 	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 15*time.Minute, "how long to wait for each member others depend on to be ready")
 	return cmd
+}
+
+// loadManifest reads the manifest from the saved library when saved is set, else from path.
+func loadManifest(ctx context.Context, flags *globalFlags, path, saved string) ([]byte, error) {
+	if saved == "" {
+		return readManifest(path)
+	}
+	var data []byte
+	err := withClient(flags, func(c *client.Client) error {
+		reply, err := c.Manifest.Get(ctx, &anvilv1.ManifestGetRequest{Name: saved})
+		data = []byte(reply.GetContent())
+		return err
+	})
+	return data, err
 }
 
 func readManifest(path string) ([]byte, error) {

@@ -273,7 +273,30 @@ members launched before it are kept, as with the CLI.
 While an export, import, apply or member launch runs, keys are ignored; the finished
 transcript stays until `esc`, `enter` or `q`.
 
-## 5. Cloud-Init
+## 5. Manifests
+
+The saved manifest library (`anvil manifest`): names on the left, each with its intent,
+an editor on the right. Manifests are stored by anvild, so they are the same over `--remote`.
+
+| Key | Action |
+|-----|--------|
+| `enter` `tab` | Load the selected manifest into the editor. |
+| `e` | Start editing the loaded manifest. |
+| `ctrl+s` | While editing: save to the library. |
+| `esc` | While editing: stop editing (the text stays in the editor, unsaved). |
+| `n` | New manifest from a starter template; the name is also used as the intent name. |
+| `m` | Import a local `anvil.yaml` (the name defaults to the file name). The file is read on the machine running the TUI. |
+| `E` | Export the loaded manifest to a local file. |
+| `a` | Apply the loaded manifest, with the Prune and Recreate VMs toggles. Unsaved edits must be saved first. The plan is shown first; `enter` or `y` applies it, `esc`, `q` or `n` cancels. |
+| `x` | Tear down the manifest's intent: `y`/`enter` deletes the intent and its members, `u` ungroups only, any other key cancels. |
+| `r` | Rename the loaded manifest. |
+| `d` | Delete the loaded manifest from the library, after a confirmation. A running intent is left alone. |
+| `esc` `q` | Back to the sidebar. |
+
+Variables are filled as for `anvil apply`, with `.env` read from the directory the TUI
+was started in. See [apply.md](apply.md).
+
+## 6. Cloud-Init
 
 The saved cloud-init library: names on the left, an editor on the right. The editor title
 shows the loaded config, with `*` after unsaved changes.
@@ -292,7 +315,7 @@ shows the loaded config, with `*` after unsaved changes.
 | `d` | Delete the loaded config, after a confirmation. |
 | `esc` `q` | Back to the sidebar. |
 
-## 6. Mirrors
+## 7. Mirrors
 
 The configured mirrors, each with kind, source (manifest URL, or registry and the registry
 it mirrors) and whether it is enabled. See [mirrors.md](mirrors.md).
@@ -305,7 +328,7 @@ it mirrors) and whether it is enabled. See [mirrors.md](mirrors.md).
 | `r` | Reload. |
 | `esc` `q` | Back to the sidebar. |
 
-## 7. Migration
+## 8. Migration
 
 Known hosts on the left, a migrate form on the right (Name of an instance or intent, To a
 host alias or `user@host[:port]`, an optional Dest name to rename a single instance on the
@@ -327,7 +350,7 @@ target, and the Copy, Best-effort and Dry run toggles).
 During a migration keys are ignored. When it ends, `tab` returns to the host list and
 `esc` or `q` returns to the sidebar.
 
-## 8. Events
+## 9. Events
 
 The event log (`anvil events`), newest first: time, instance, action, the user who caused
 it (or `anvild`) and the message or error. A failed operation is marked `✕`. The newest
@@ -341,7 +364,7 @@ cursor on the newest event it follows new ones; elsewhere it stays on the same e
 | `r` | Reload. |
 | `esc` `q` | Back to the sidebar. |
 
-## 9. Devices
+## 10. Devices
 
 The host's USB and PCI devices (`anvil host devices`): id and name, then vendor:product,
 driver and status (free, in use by an instance, or blocked and why). A PCI device also
@@ -352,7 +375,7 @@ shows the other IOMMU group members it brings along. See [passthrough.md](passth
 | `r` | Reload. |
 | `esc` `q` | Back to the sidebar. |
 
-## 10. GUI Apps
+## 11. GUI Apps
 
 The desktop entries added with `anvil gui export` (or the "Add to desktop" toggle of `g`),
 like `anvil gui exports`: the app's launcher name and instance, then the app id, its

@@ -97,6 +97,14 @@ func TestRecordsRoundTrip(t *testing.T) {
 			del:   func(s *Store) error { return s.DeleteCloudInit("base") },
 			want:  "#cloud-config\n{}\n",
 		},
+		{
+			name:  "manifest",
+			put:   func(s *Store) error { return s.SaveManifest("shop", "intent: shop\n") },
+			get:   func(s *Store) (any, error) { d, err := s.GetManifest("shop"); return d.Content, err },
+			count: func(s *Store) (int, error) { l, err := s.ListManifests(); return len(l), err },
+			del:   func(s *Store) error { return s.DeleteManifest("shop") },
+			want:  "intent: shop\n",
+		},
 	}
 
 	for _, tc := range tests {

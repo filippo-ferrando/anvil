@@ -28,28 +28,37 @@ const (
 	cloudInitPromptWizard
 )
 
-type cloudInitModel struct {
+// splitEditor is a list of named documents beside a YAML editor, shared by the Cloud-Init and Manifests pages.
+type splitEditor struct {
 	list        list.Model
 	editor      textarea.Model
 	current     string
 	dirty       bool
 	editing     bool // focus is in the editor, not the list
-	prompt      cloudInitPrompt
-	promptFm    simpleForm
-	panelHeight int // shared height for both side-by-side panels
+	panelHeight int  // shared height for both side-by-side panels
+}
+
+func newSplitEditor(title, placeholder string) splitEditor {
+	l := newList()
+	l.SetFilteringEnabled(false) // avoids single-letter shortcuts colliding with filter typing
+	l.Title = title
+	l.SetShowHelp(false)
+	ta := textarea.New()
+	ta.Placeholder = placeholder
+	return splitEditor{list: l, editor: ta}
+}
+
+type cloudInitModel struct {
+	splitEditor
+	prompt   cloudInitPrompt
+	promptFm simpleForm
 
 	importingRepo bool // showing the ImportRepo streaming progress instead of the list+editor split
 	importLines   []string
 }
 
 func newCloudInitModel() cloudInitModel {
-	l := newList()
-	l.SetFilteringEnabled(false) // avoids single-letter shortcuts colliding with filter typing
-	l.Title = "Configs"
-	l.SetShowHelp(false)
-	ta := textarea.New()
-	ta.Placeholder = "select or create a config to edit its cloud-init YAML…"
-	return cloudInitModel{list: l, editor: ta}
+	return cloudInitModel{splitEditor: newSplitEditor("Configs", "select or create a config to edit its cloud-init YAML…")}
 }
 
 // boxOverhead and boxHeightOverhead are the extra width/height styleBox's
@@ -59,7 +68,7 @@ const (
 	boxHeightOverhead = 2
 )
 
-func (m *cloudInitModel) setSize(width, height int) {
+func (m *splitEditor) setSize(width, height int) {
 	const gutter = 2 // spacer between the two boxes
 	inner := width - 2*boxOverhead - gutter
 	if inner < 20 {
@@ -352,6 +361,13 @@ func (m cloudInitModel) View() string {
 		return m.promptFm.View()
 	}
 
+	help := helpBar("n", "new", "m", "import", "R", "import repo", "w", "wizard", "r", "rename",
+		"d", "delete", "e", "edit", "ctrl+s", "save", "esc", "back")
+	return m.panels() + "\n" + help
+}
+
+// panels renders the list and editor side by side, with the focused one highlighted.
+func (m splitEditor) panels() string {
 	editorTitle := "Editor"
 	if m.current != "" {
 		editorTitle = "Editor: " + m.current
@@ -372,7 +388,5 @@ func (m cloudInitModel) View() string {
 	left := listBox.Render(lipgloss.NewStyle().Height(totalHeight).Render(m.list.View()))
 	right := editorBox.Render(styleFieldLabel.Render(editorTitle) + "\n" + m.editor.View())
 
-	help := helpBar("n", "new", "m", "import", "R", "import repo", "w", "wizard", "r", "rename",
-		"d", "delete", "e", "edit", "ctrl+s", "save", "esc", "back")
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right) + "\n" + help
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right)
 }

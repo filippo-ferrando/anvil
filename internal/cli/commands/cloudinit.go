@@ -262,16 +262,16 @@ func newCloudInitImportRepoCommand(flags *globalFlags) *cobra.Command {
 // editInEditor writes initial to a temp file, opens it in $EDITOR (falling back
 // to vi), and returns the edited content once the editor exits.
 func editInEditor(initial string) (string, error) {
-	tmp, err := os.CreateTemp("", "anvil-cloud-init-*.yaml")
+	tmp, err := os.CreateTemp("", "anvil-*.yaml")
 	if err != nil {
-		return "", fmt.Errorf("cloud-init: creating temp file: %w", err)
+		return "", fmt.Errorf("editor: creating temp file: %w", err)
 	}
 	path := tmp.Name()
 	defer os.Remove(path)
 
 	if _, err := tmp.WriteString(initial); err != nil {
 		tmp.Close()
-		return "", fmt.Errorf("cloud-init: writing temp file: %w", err)
+		return "", fmt.Errorf("editor: writing temp file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		return "", err
@@ -286,12 +286,12 @@ func editInEditor(initial string) (string, error) {
 	editCmd.Stdout = os.Stdout
 	editCmd.Stderr = os.Stderr
 	if err := editCmd.Run(); err != nil {
-		return "", fmt.Errorf("cloud-init: running %s: %w", editor, err)
+		return "", fmt.Errorf("editor: running %s: %w", editor, err)
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("cloud-init: reading edited file: %w", err)
+		return "", fmt.Errorf("editor: reading edited file: %w", err)
 	}
 	return string(data), nil
 }

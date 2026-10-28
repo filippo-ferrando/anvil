@@ -60,11 +60,11 @@ func TestScreenForDigit(t *testing.T) {
 	if s, ok := screenForDigit("1"); !ok || s != screenOrder[0] {
 		t.Errorf("1 -> %v, %v", s, ok)
 	}
-	if s, ok := screenForDigit("8"); !ok || s != screenEvents {
-		t.Errorf("8 -> %v, %v", s, ok)
+	if s, ok := screenForDigit("5"); !ok || s != screenManifests {
+		t.Errorf("5 -> %v, %v", s, ok)
 	}
-	if s, ok := screenForDigit("9"); !ok || s != screenDevices {
-		t.Errorf("9 -> %v, %v", s, ok)
+	if s, ok := screenForDigit("0"); !ok || s != screenDevices {
+		t.Errorf("0 -> %v, %v", s, ok)
 	}
 	for _, k := range []string{"a", "12", "-"} {
 		if _, ok := screenForDigit(k); ok {

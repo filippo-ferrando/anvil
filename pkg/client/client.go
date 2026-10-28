@@ -16,6 +16,7 @@ type Client struct {
 	conn *grpc.ClientConn
 	anvilv1.InstanceServiceClient
 	CloudInit anvilv1.CloudInitServiceClient
+	Manifest  anvilv1.ManifestServiceClient
 	Mirror    anvilv1.MirrorServiceClient
 	Image     anvilv1.ImageServiceClient
 	Intent    anvilv1.IntentServiceClient
@@ -45,6 +46,7 @@ func newClient(conn *grpc.ClientConn) *Client {
 		conn:                  conn,
 		InstanceServiceClient: anvilv1.NewInstanceServiceClient(conn),
 		CloudInit:             anvilv1.NewCloudInitServiceClient(conn),
+		Manifest:              anvilv1.NewManifestServiceClient(conn),
 		Mirror:                anvilv1.NewMirrorServiceClient(conn),
 		Image:                 anvilv1.NewImageServiceClient(conn),
 		Intent:                anvilv1.NewIntentServiceClient(conn),

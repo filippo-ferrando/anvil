@@ -14,6 +14,17 @@ on `y`. A plan with nothing to change, `-y/--yes`, a manifest read from stdin (`
 a non-terminal stdin or stdout (scripts, CI) skip the question and apply right away. In the TUI, press `A` on the
 Intents screen: the plan is shown first and applied on `enter`.
 
+Manifests can also be saved on the daemon and applied by name:
+
+```
+anvil manifest new shop --from anvil.yaml   # or without --from, for a starter template
+anvil manifest list|show|edit|rename|delete
+anvil apply --saved shop
+```
+
+A saved manifest's `.env` is read from the current directory. The TUI's Manifests
+screen edits, applies and tears down saved manifests.
+
 ## Manifest
 
 ```yaml
@@ -74,7 +85,8 @@ Values come from, first match wins:
 
 1. `--var KEY=VALUE` (CLI only, can be repeated)
 2. the environment of the shell running `anvil apply` or `anvil tui`
-3. a `.env` file beside the manifest (`KEY=VALUE` lines, `#` comments), or `--env-file`
+3. a `.env` file beside the manifest (`KEY=VALUE` lines, `#` comments), or `--env-file`;
+   for a saved manifest, `.env` in the current directory
 4. the manifest's own top-level `vars:` map
 
 ```yaml

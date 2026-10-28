@@ -45,10 +45,7 @@ type intentsModel struct {
 
 	applyPrompting bool // the apply manifest form is up
 	applyForm      simpleForm
-	applyReq       *anvilv1.IntentApplyRequest // the request whose plan is shown, sent again for real on confirm
-	applyRunning   bool
-	applyConfirm   bool // a dry run finished cleanly and waits for enter to apply
-	applyLines     []string
+	apply          applyRun
 
 	// The n (create) and a (add members) forms; membersCreate tells them apart.
 	membersPrompting bool
@@ -63,7 +60,7 @@ func newIntentsModel() intentsModel {
 	l.SetFilteringEnabled(false)
 	l.Title = "Intents"
 	l.SetShowHelp(false)
-	return intentsModel{list: l}
+	return intentsModel{list: l, apply: applyRun{owner: screenIntents}}
 }
 
 func loadIntents(c *client.Client) tea.Cmd {
@@ -124,25 +121,11 @@ func (m model) updateIntents(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case applyStreamMsg:
-		in := &m.intents
-		in.applyLines = append(in.applyLines, msg.result...)
-		if msg.status != "" {
-			in.applyLines = appendProgressLine(in.applyLines, msg.status)
+		cmd, applied := m.intents.apply.handle(msg)
+		if applied {
+			return m, loadIntents(m.client)
 		}
-		if msg.err != nil {
-			in.applyRunning = false
-			in.applyLines = append(in.applyLines, errLine(msg.err))
-			return m, nil
-		}
-		if !msg.done {
-			return m, msg.next
-		}
-		in.applyRunning = false
-		if in.applyReq.GetDryRun() {
-			in.applyConfirm = true
-			return m, nil
-		}
-		return m, loadIntents(m.client)
+		return m, cmd
 
 	case tea.KeyMsg:
 		return m.updateIntentsKey(msg)
@@ -153,7 +136,7 @@ func (m model) updateIntents(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	in := &m.intents
 
-	if in.export.running || in.imp.running || in.applyRunning || in.members.running {
+	if in.export.running || in.imp.running || in.members.running {
 		return m, nil // block input until the stream finishes
 	}
 	// A finished export/import/members transcript stays on screen until dismissed here.
@@ -176,19 +159,8 @@ func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		in.members.start()
 		return m, startIntentMembersStream(m.client, req)
 	}
-	if len(in.applyLines) > 0 {
-		switch msg.String() {
-		case "enter", "y":
-			if in.applyConfirm {
-				in.applyReq.DryRun = false
-				in.applyConfirm, in.applyRunning, in.applyLines = false, true, nil
-				return m, startApplyStream(m.client, in.applyReq)
-			}
-			in.applyLines = nil
-		case "esc", "q", "n":
-			in.applyLines, in.applyConfirm = nil, false
-		}
-		return m, nil
+	if in.apply.active() {
+		return m, in.apply.key(msg, m.client)
 	}
 	if in.applyPrompting {
 		var submitted, cancelled bool
@@ -203,8 +175,7 @@ func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setStatus(err.Error(), true)
 			return m, nil
 		}
-		in.applyReq, in.applyRunning = req, true
-		return m, startApplyStream(m.client, req)
+		return m, in.apply.start(m.client, req)
 	}
 	if in.importPrompting {
 		var submitted, cancelled bool
@@ -365,15 +336,8 @@ func (m intentsModel) View() string {
 	if m.importPrompting {
 		return m.importForm.View()
 	}
-	if m.applyRunning || len(m.applyLines) > 0 {
-		s := styleTitle.Render(" Apply ") + "\n\n" + strings.Join(m.applyLines, "\n") + "\n\n"
-		switch {
-		case m.applyConfirm:
-			s += helpBar("enter", "apply", "esc", "cancel")
-		case !m.applyRunning:
-			s += helpBar("esc", "dismiss")
-		}
-		return s
+	if m.apply.active() {
+		return m.apply.view()
 	}
 	if m.applyPrompting {
 		return m.applyForm.View()
