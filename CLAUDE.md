@@ -162,3 +162,4 @@ code path. Full mechanics and manifest schemas: `docs/mirrors.md`.
 - keep comments of max 2 lines, avoid long paragraphs, avoid repeating the code in the comment.
 - each new feature should have a corresponding (if it make sense) TUI and CLI command, and a gRPC API surface.
 - each new feature should have a corresponding test, either unit or integration.
+- before start to work always pull the current branch
