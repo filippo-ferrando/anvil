@@ -4,7 +4,6 @@ import (
 	"os"
 
 	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -31,21 +30,19 @@ const (
 // splitEditor is a list of named documents beside a YAML editor, shared by the Cloud-Init and Manifests pages.
 type splitEditor struct {
 	list        list.Model
-	editor      textarea.Model
+	editor      yamlEditor
 	current     string
 	dirty       bool
 	editing     bool // focus is in the editor, not the list
 	panelHeight int  // shared height for both side-by-side panels
 }
 
-func newSplitEditor(title, placeholder string) splitEditor {
+func newSplitEditor(title string, editor yamlEditor) splitEditor {
 	l := newList()
 	l.SetFilteringEnabled(false) // avoids single-letter shortcuts colliding with filter typing
 	l.Title = title
 	l.SetShowHelp(false)
-	ta := textarea.New()
-	ta.Placeholder = placeholder
-	return splitEditor{list: l, editor: ta}
+	return splitEditor{list: l, editor: editor}
 }
 
 type cloudInitModel struct {
@@ -58,7 +55,7 @@ type cloudInitModel struct {
 }
 
 func newCloudInitModel() cloudInitModel {
-	return cloudInitModel{splitEditor: newSplitEditor("Configs", "select or create a config to edit its cloud-init YAML…")}
+	return cloudInitModel{splitEditor: newSplitEditor("Configs", newYAMLEditor("select or create a config to edit its cloud-init YAML…", "valid cloud-config", checkCloudInit))}
 }
 
 // boxOverhead and boxHeightOverhead are the extra width/height styleBox's

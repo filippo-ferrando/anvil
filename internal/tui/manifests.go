@@ -49,7 +49,7 @@ type manifestsModel struct {
 
 func newManifestsModel() manifestsModel {
 	return manifestsModel{
-		splitEditor: newSplitEditor("Manifests", "select or create a manifest to edit its anvil.yaml…"),
+		splitEditor: newSplitEditor("Manifests", newYAMLEditor("select or create a manifest to edit its anvil.yaml…", "valid manifest", checkManifest)),
 		apply:       applyRun{owner: screenManifests},
 	}
 }

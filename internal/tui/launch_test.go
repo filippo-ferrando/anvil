@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 )
 
@@ -138,24 +140,57 @@ func TestLaunchImageSuggestionsFollowHypervisor(t *testing.T) {
 func TestLaunchDevicePicker(t *testing.T) {
 	m := model{screen: screenLaunch, launch: newLaunchModel()}
 	next, _ := m.Update(hostDevicesLoadedMsg{devices: []*anvilv1.HostDevice{
-		{Id: "usb:3-2.1", Name: "Keyboard"},
-		{Id: "pci:0000:01:00.0", InUseBy: "web"},
-		{Id: "pci:0000:00:02.0", BlockedReason: "drives the host display"},
+		{Id: "usb:3-2.1", Bus: "usb", Name: "Keyboard"},
+		{Id: "pci:0000:01:00.0", Bus: "pci", InUseBy: "web"},
+		{Id: "pci:0000:00:02.0", Bus: "pci", BlockedReason: "drives the host display"},
 	}})
 	l := next.(model).launch
-	var toggles []string
-	for i, f := range l.form.fields {
-		if id, ok := strings.CutPrefix(f.Label, devicePrefix); ok {
-			toggles = append(toggles, id)
-			l.form.fields[i].on = true
+	pickerAt := func(label string) int {
+		for i, f := range l.form.fields {
+			if f.Label == label && f.Kind == fieldPicker {
+				return i
+			}
 		}
+		return -1
 	}
-	if strings.Join(toggles, ",") != "usb:3-2.1" {
-		t.Fatalf("picker offers %v, want only the free device", toggles)
+	usb, pci := pickerAt(usbDevicesField), pickerAt(pciDevicesField)
+	if usb < 0 || pci < 0 {
+		t.Fatal("expected a USB and a PCI drop-down")
 	}
-	if un := l.unavailableDevices(); len(un) != 2 {
-		t.Errorf("unavailable = %v, want the in-use and blocked devices", un)
+	if n := len(l.form.fields[pci].options); n != 2 {
+		t.Fatalf("PCI drop-down lists %d devices, want both unavailable ones", n)
 	}
+
+	key := func(k string) {
+		var msg tea.KeyMsg
+		switch k {
+		case " ":
+			msg = tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")}
+		case "down":
+			msg = tea.KeyMsg{Type: tea.KeyDown}
+		case "enter":
+			msg = tea.KeyMsg{Type: tea.KeyEnter}
+		}
+		l.form, _, _ = l.form.update(msg)
+		l.syncDeviceFields()
+	}
+	// Open USB, check the keyboard, close.
+	l.form.focus = usb
+	key(" ")
+	key(" ")
+	key("enter")
+	// Open PCI and try to check a device that is in use: it must stay unchecked.
+	l.form.focus = pci
+	key(" ")
+	if !l.form.fields[pci].open {
+		t.Fatal("space should open the drop-down")
+	}
+	if v := l.form.View(); !strings.Contains(v, "in use by web") || !strings.Contains(v, "blocked: drives the host display") {
+		t.Errorf("open drop-down should show why devices are unavailable:\n%s", v)
+	}
+	key(" ")
+	key("down")
+	key(" ")
 
 	l.form.fields[1].input.SetValue("img")
 	req, err := buildLaunchRequest(l)
@@ -166,7 +201,7 @@ func TestLaunchDevicePicker(t *testing.T) {
 		t.Errorf("request devices = %v", got)
 	}
 
-	// Firecracker hides the picker, switching back restores the pick.
+	// Firecracker hides the drop-downs, switching back restores the pick.
 	setHypervisor := func(v string) {
 		for i := range l.form.fields {
 			if l.form.fields[i].Label == hypervisorField {
@@ -176,13 +211,11 @@ func TestLaunchDevicePicker(t *testing.T) {
 		l.syncDeviceFields()
 	}
 	setHypervisor("firecracker")
-	for _, f := range l.form.fields {
-		if strings.HasPrefix(f.Label, devicePrefix) {
-			t.Fatal("expected no device toggles for firecracker")
-		}
+	if pickerAt(usbDevicesField) >= 0 {
+		t.Fatal("expected no device drop-downs for firecracker")
 	}
 	setHypervisor("qemu")
-	if !l.form.Bool(devicePrefix + "usb:3-2.1") {
+	if got := l.form.Picked(usbDevicesField); len(got) != 1 {
 		t.Error("expected the pick to survive the hypervisor switch")
 	}
 }

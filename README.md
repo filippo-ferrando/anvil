@@ -322,8 +322,8 @@ Less visible commands and flags, all listed in `anvil <command> --help` and the 
 | `anvil intent list` / `anvil intent remove <intent> <member>` | list intents / ungroup a member without deleting it |
 | `anvil intent delete --purge-members <intent>` | delete the intent and every member instance |
 | `anvil cloud-init new <name> --user U --ssh-key K --package P --run CMD` | save a quick-start cloud-config (user with sudo and keys, packages, first-boot commands) |
-| `anvil manifest new\|list\|show\|edit\|rename\|delete` / `anvil apply --saved <name>` | the saved intent manifest library, and applying from it |
-| `anvil cloud-init show\|edit\|rename\|delete` | print, edit in `$EDITOR`, rename or delete a saved cloud-init config |
+| `anvil manifest new\|list\|show\|edit\|rename\|delete\|validate` / `anvil apply --saved <name>` | the saved intent manifest library, and applying from it |
+| `anvil cloud-init show\|edit\|rename\|delete\|validate` | print, edit in `$EDITOR`, rename, delete or check a saved cloud-init config (`validate -f` checks a file) |
 | `anvil host discover --add <name> [--user U]` | save a host found over mDNS as a known host in one step |
 | `anvil apply -y` | apply without the confirmation asked on a terminal |
 | `anvil image containers delete [--force] <id>` | delete a container engine image, refused while a container uses it unless `--force` |
@@ -331,7 +331,7 @@ Less visible commands and flags, all listed in `anvil <command> --help` and the 
 ## The TUI
 
 `anvil tui` is a sidebar-driven view over Instances, Snapshots, Images, Intents, Manifests,
-Cloud-Init, Mirrors, Migration, Events, and Devices, over the exact same gRPC API the CLI uses
+Cloud-Init, Mirrors, Migration, Events, Devices, and GUI Apps, over the exact same gRPC API the CLI uses
 (`anvil stats <name>` is the CLI's own window into the same data). Shell/exec sessions
 hand the real terminal off to `ssh`/`docker exec` and back, logs stream live, and launch progress redraws in place
 instead of scrolling the terminal into oblivion.

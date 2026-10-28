@@ -103,6 +103,22 @@ All prompts (launch, settings, mount, port, host, mirror, ...) use the same form
 | `ctrl+s` | Submit from any field. |
 | `esc` | Cancel. |
 
+### YAML editors
+
+The Cloud-Init, Manifests and Launch (`ctrl+e`) editors highlight YAML and check the text
+as it is typed. A line with an error is marked `✕` in the gutter, a line with a warning
+`!`. The row under the text shows the problem on the cursor's line, else the first one.
+
+- cloud-init: the first line must be `#cloud-config` (scripts, `#include` and the other
+  user-data formats are accepted unchecked), the YAML must parse, top-level keys must be
+  known cloud-init keys (a warning, as cloud-init still runs the rest), and common keys
+  must have the right shape (`runcmd` a list, `package_update` true or false, every
+  `write_files` entry a `path`, every `users` entry a `name`).
+- manifests: the same checks as `anvil apply`, with variables from the shell and `.env`
+  in the current directory.
+
+The same checks run from the CLI: `anvil cloud-init validate` and `anvil manifest validate`.
+
 ### Confirmations
 
 Destructive actions ask first. `y` or `enter` confirms; any other key cancels. The

@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"fmt"
 	"text/tabwriter"
 	"time"
@@ -11,6 +12,8 @@ import (
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/internal/intent/apply"
+	"git.fferrando.cc/rdfilippo/anvil/internal/intent/vars"
+	"git.fferrando.cc/rdfilippo/anvil/internal/yamlcheck"
 )
 
 func newManifestCommand(flags *globalFlags) *cobra.Command {
@@ -26,6 +29,21 @@ func newManifestCommand(flags *globalFlags) *cobra.Command {
 		newManifestShowCommand(flags),
 		newManifestRenameCommand(flags),
 		newManifestDeleteCommand(flags),
+		newValidateCommand(flags, "manifest", func(ctx context.Context, flags *globalFlags, name string) (string, error) {
+			c, err := dial(flags)
+			if err != nil {
+				return "", err
+			}
+			defer c.Close()
+			reply, err := c.Manifest.Get(ctx, &anvilv1.ManifestGetRequest{Name: name})
+			return reply.GetContent(), err
+		}, func(content string) []yamlcheck.Problem {
+			values, err := vars.Load("", "", []byte(content), nil)
+			if err != nil {
+				return []yamlcheck.Problem{{Message: err.Error()}}
+			}
+			return apply.Check([]byte(content), values)
+		}),
 	)
 	return cmd
 }

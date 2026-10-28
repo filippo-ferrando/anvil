@@ -396,3 +396,22 @@ func TestStarterParses(t *testing.T) {
 		t.Fatalf("Starter parsed to %+v", m)
 	}
 }
+
+func TestCheckLines(t *testing.T) {
+	cases := map[string]int{
+		"intent: x\nmembers:\n  a:\n    kind: vm\n    image: u\n    cpu: 2\n":                      6, // unknown field
+		"intent: x\nmembers:\n  a:\n    kind: pod\n    image: u\n":                                 3, // the member's role
+		"intent: x\nmembers:\n  a:\n    kind: vm\n    image: ${IMG}\n    cpu: 2\n":                 5, // unset var comes first
+		"intent: x\nvars: {IMG: u}\nmembers:\n  a:\n    kind: vm\n    image: ${IMG}\n    cpu: 2\n": 7, // re-encoded YAML, found by name
+		"intent: x\nmembers:\n  a: [\n":                                                            3,
+	}
+	for data, want := range cases {
+		ps := Check([]byte(data), nil)
+		if len(ps) != 1 || ps[0].Line != want {
+			t.Errorf("%q: got %+v, want line %d", data, ps, want)
+		}
+	}
+	if ps := Check([]byte(Starter("demo")), nil); ps != nil {
+		t.Errorf("Starter: %+v", ps)
+	}
+}

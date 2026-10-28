@@ -18,7 +18,7 @@ Manifests can also be saved on the daemon and applied by name:
 
 ```
 anvil manifest new shop --from anvil.yaml   # or without --from, for a starter template
-anvil manifest list|show|edit|rename|delete
+anvil manifest list|show|edit|rename|delete|validate
 anvil apply --saved shop
 ```
 

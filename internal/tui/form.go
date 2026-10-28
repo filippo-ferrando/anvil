@@ -33,7 +33,13 @@ type fieldKind int
 const (
 	fieldText fieldKind = iota
 	fieldToggle
+	fieldPicker // drop-down list of checkable options
 )
+
+// pickOption is one entry of a fieldPicker. A non-empty Note marks it as not pickable and says why.
+type pickOption struct {
+	ID, Label, Note string
+}
 
 type formField struct {
 	Label string
@@ -47,6 +53,11 @@ type formField struct {
 	// PathComplete makes Tab cycle through this field's own directory's
 	// entries instead of a fixed Suggestions list; see completePathMatches.
 	PathComplete bool
+
+	options []pickOption    // fieldPicker
+	picked  map[string]bool // fieldPicker, owned by the caller so picks survive a field rebuild
+	open    bool            // fieldPicker: list expanded
+	cursor  int             // fieldPicker: highlighted option while open
 }
 
 // textField and toggleField construct a formField of each kind.
@@ -95,6 +106,11 @@ func (m model) remote() string {
 
 func toggleField(label, hint string, on bool) formField {
 	return formField{Label: label, Hint: hint, Kind: fieldToggle, on: on}
+}
+
+// pickerField is a drop-down: space or enter opens it, up/down move, space checks, enter or esc closes.
+func pickerField(label, hint string, options []pickOption, picked map[string]bool) formField {
+	return formField{Label: label, Hint: hint, Kind: fieldPicker, options: options, picked: picked}
 }
 
 // completePathMatches lists dir's entries whose name starts with base (prefix's last path segment), shell-style:
@@ -158,6 +174,46 @@ func (f simpleForm) Bool(label string) bool {
 	return false
 }
 
+// Picked returns the checked, pickable option IDs of the picker with the given label, in list order.
+func (f simpleForm) Picked(label string) []string {
+	var out []string
+	for _, field := range f.fields {
+		if field.Label != label {
+			continue
+		}
+		for _, o := range field.options {
+			if o.Note == "" && field.picked[o.ID] {
+				out = append(out, o.ID)
+			}
+		}
+	}
+	return out
+}
+
+// updatePicker handles keys for an open picker. It returns false for keys the form itself should handle.
+func updatePicker(field *formField, key string) bool {
+	switch key {
+	case "up":
+		if field.cursor > 0 {
+			field.cursor--
+		}
+	case "down":
+		if field.cursor < len(field.options)-1 {
+			field.cursor++
+		}
+	case " ":
+		if o := field.options[field.cursor]; o.Note == "" {
+			field.picked[o.ID] = !field.picked[o.ID]
+		}
+	case "enter", "esc":
+		field.open = false
+	default:
+		field.open = false
+		return false
+	}
+	return true
+}
+
 // update handles the form's keys and returns (updated form, submitted, cancelled).
 func (f simpleForm) update(msg tea.Msg) (simpleForm, bool, bool) {
 	keyMsg, ok := msg.(tea.KeyMsg)
@@ -168,6 +224,16 @@ func (f simpleForm) update(msg tea.Msg) (simpleForm, bool, bool) {
 	// Any key other than Tab ends a completion cycle; the next Tab starts a fresh one from the field's current content.
 	if keyMsg.String() != "tab" {
 		f.tabField = -1
+	}
+
+	if field := &f.fields[f.focus]; field.Kind == fieldPicker {
+		if field.open && updatePicker(field, keyMsg.String()) {
+			return f, false, false
+		}
+		if k := keyMsg.String(); (k == " " || k == "enter") && len(field.options) > 0 {
+			field.open = true
+			return f, false, false
+		}
 	}
 
 	switch keyMsg.String() {
@@ -320,6 +386,29 @@ func (f simpleForm) View() string {
 				style = style.Foreground(colorAccent).Bold(true)
 			}
 			lines = append(lines, bar+style.Render(mark+" "+field.Hint))
+		case fieldPicker:
+			lines = append(lines, bar+pickerSummary(field, focused))
+			if !field.open {
+				break
+			}
+			for j, o := range field.options {
+				mark, style := "[ ] ", lipgloss.NewStyle()
+				if o.Note != "" {
+					mark, style = "[-] ", styleSubtitle
+				} else if field.picked[o.ID] {
+					mark = "[x] "
+				}
+				cur := "    "
+				if j == field.cursor {
+					cur = lipgloss.NewStyle().Foreground(colorAccent).Render("  ▸ ")
+					style = style.Foreground(colorAccent).Bold(true)
+					focusLine = len(lines)
+				}
+				lines = append(lines, cur+style.Render(mark+o.Label))
+				if o.Note != "" {
+					lines = append(lines, "        "+lipgloss.NewStyle().Foreground(colorBad).Render(o.Note))
+				}
+			}
 		default:
 			lines = append(lines, bar+field.input.View())
 			if focused && field.Hint != "" {
@@ -343,6 +432,36 @@ func (f simpleForm) View() string {
 	}
 
 	return strings.Join(content, "\n") + "\n\n" + helpBar("tab", "next field / complete", "enter", "submit", "esc", "cancel")
+}
+
+// pickerSummary is a picker's one-line collapsed view: what is checked, or how to open it.
+func pickerSummary(field formField, focused bool) string {
+	style := lipgloss.NewStyle()
+	if focused {
+		style = style.Foreground(colorAccent).Bold(true)
+	}
+	if len(field.options) == 0 {
+		return styleSubtitle.Render("none found")
+	}
+	arrow := "▸ "
+	if field.open {
+		arrow = "▾ "
+	}
+	var ids []string
+	free := 0
+	for _, o := range field.options {
+		if o.Note == "" {
+			free++
+			if field.picked[o.ID] {
+				ids = append(ids, o.ID)
+			}
+		}
+	}
+	text := fmt.Sprintf("none selected (%d of %d available, space to open)", free, len(field.options))
+	if len(ids) > 0 {
+		text = strings.Join(ids, ", ")
+	}
+	return style.Render(arrow + text)
 }
 
 // windowLines returns at most maxHeight consecutive lines centered on focusLine.

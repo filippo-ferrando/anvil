@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/intent"
 	"git.fferrando.cc/rdfilippo/anvil/internal/intent/vars"
+	"git.fferrando.cc/rdfilippo/anvil/internal/yamlcheck"
 )
 
 // Manifest is one parsed anvil.yaml: an intent and its members, keyed by role.
@@ -300,4 +302,55 @@ members:
     ports:
       - "8080:80"
 `, intentName)
+}
+
+var (
+	unsetVarRe = regexp.MustCompile(`(\w+) is not set`)
+	fieldRe    = regexp.MustCompile(`field (\S+) not found`)
+	quotedRe   = regexp.MustCompile(`"([^"]+)"`)
+	goTypeRe   = regexp.MustCompile(` in type \S+`)
+)
+
+// Check validates a manifest for an editor: Parse's error, on the line it's about when that can be found.
+func Check(data []byte, given map[string]string) []yamlcheck.Problem {
+	if p := yamlcheck.Syntax(string(data)); p != nil {
+		return []yamlcheck.Problem{*p}
+	}
+	_, err := Parse(data, given)
+	if err == nil {
+		return nil
+	}
+	line := 0
+	if !bytes.Contains(data, []byte("$")) { // with variables, Parse reads re-encoded YAML with other line numbers
+		line = yamlcheck.Line(err)
+	}
+	if line == 0 {
+		line = guessLine(string(data), err.Error())
+	}
+	return []yamlcheck.Problem{{Line: line, Message: goTypeRe.ReplaceAllString(strings.TrimPrefix(yamlcheck.Message(err), "apply: "), "")}}
+}
+
+// guessLine finds the line an error names: an unset ${VAR}, an unknown field or a quoted role.
+func guessLine(data, msg string) int {
+	var match func(string) bool
+	if m := unsetVarRe.FindStringSubmatch(msg); m != nil {
+		match = func(l string) bool { return strings.Contains(l, "${"+m[1]) }
+	} else if m := fieldRe.FindStringSubmatch(msg); m != nil {
+		match = func(l string) bool { return isKeyLine(l, m[1]) }
+	} else if m := quotedRe.FindStringSubmatch(msg); m != nil {
+		match = func(l string) bool { return isKeyLine(l, m[1]) }
+	} else {
+		return 0
+	}
+	for i, l := range strings.Split(data, "\n") {
+		if match(l) {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+func isKeyLine(line, key string) bool {
+	line = strings.TrimPrefix(strings.TrimSpace(line), "- ")
+	return strings.HasPrefix(line, key+":")
 }

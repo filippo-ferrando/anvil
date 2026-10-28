@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
@@ -41,7 +40,7 @@ type launchModel struct {
 	// opened the editor" from "opened it and saved empty content", since an empty override is still a deliberate choice.
 	editingCloudInit    bool
 	loadingCloudInit    bool
-	cloudInitEditor     textarea.Model
+	cloudInitEditor     yamlEditor
 	cloudInitOverride   string
 	cloudInitOverrideOK bool
 
@@ -49,37 +48,55 @@ type launchModel struct {
 	// screens' data, (re)fetched fresh each time Launch is entered.
 	suggest launchSuggestions
 
-	// devices are the host's passthrough candidates; picked keeps toggles across a field rebuild.
+	// devices are the host's passthrough candidates; picked keeps checked IDs across a field rebuild.
 	devices []*anvilv1.HostDevice
 	picked  map[string]bool
 }
 
-// devicePrefix labels the per-device toggles a qemu VM's launch form ends with.
-const devicePrefix = "Pass "
+// Labels of the two device drop-downs a qemu VM's launch form ends with.
+const (
+	usbDevicesField = "USB devices"
+	pciDevicesField = "PCI devices"
+)
 
 // wantsDevices is true when the form describes a VM that can take passthrough devices.
 func (m launchModel) wantsDevices() bool {
 	return m.kind == "vm" && strings.TrimSpace(m.form.Value(hypervisorField)) != "firecracker"
 }
 
-// syncDeviceFields keeps one toggle per free host device at the end of the form, only for a qemu VM.
+// syncDeviceFields keeps the USB and PCI drop-downs at the end of the form, only for a qemu VM.
+// It runs on every key, so an existing drop-down keeps its open state and cursor.
 func (m *launchModel) syncDeviceFields() {
 	if m.picked == nil {
 		m.picked = make(map[string]bool)
 	}
+	old := make(map[string]formField)
 	fields := m.form.fields[:0]
 	for _, f := range m.form.fields {
-		if id, ok := strings.CutPrefix(f.Label, devicePrefix); ok {
-			m.picked[id] = f.on
+		if f.Kind == fieldPicker {
+			old[f.Label] = f
 		} else {
 			fields = append(fields, f)
 		}
 	}
-	if m.wantsDevices() {
-		for _, d := range m.devices {
-			if client.DeviceStatus(d) == "free" {
-				fields = append(fields, toggleField(devicePrefix+d.GetId(), deviceName(d), m.picked[d.GetId()]))
+	if m.wantsDevices() && len(m.devices) > 0 {
+		for _, bus := range []struct{ name, label string }{{"usb", usbDevicesField}, {"pci", pciDevicesField}} {
+			var opts []pickOption
+			for _, d := range m.devices {
+				if d.GetBus() != bus.name {
+					continue
+				}
+				note := ""
+				if st := client.DeviceStatus(d); st != "free" {
+					note = st
+				}
+				opts = append(opts, pickOption{ID: d.GetId(), Label: d.GetId() + "  " + deviceName(d), Note: note})
 			}
+			f := pickerField(bus.label, "", opts, m.picked)
+			if o, ok := old[bus.label]; ok {
+				f.open, f.cursor = o.open, min(o.cursor, max(len(opts)-1, 0))
+			}
+			fields = append(fields, f)
 		}
 	}
 	m.form.fields = fields
@@ -87,17 +104,6 @@ func (m *launchModel) syncDeviceFields() {
 		m.form.focus = len(fields) - 1
 		m.form.focusCurrent()
 	}
-}
-
-// unavailableDevices lists the devices left out of the picker, with why.
-func (m launchModel) unavailableDevices() []string {
-	var out []string
-	for _, d := range m.devices {
-		if st := client.DeviceStatus(d); st != "free" {
-			out = append(out, d.GetId()+" ("+st+")")
-		}
-	}
-	return out
 }
 
 // launchSuggestions holds autocomplete candidates for the launch form.
@@ -123,12 +129,10 @@ func (s launchSuggestions) imagesFor(kind, hypervisor string) []string {
 }
 
 func newLaunchModel() launchModel {
-	ta := textarea.New()
-	ta.Placeholder = "#cloud-config\n..."
 	return launchModel{
 		kind:            "vm",
 		form:            newSimpleForm(launchTitle("vm"), launchFields("vm", nil)),
-		cloudInitEditor: ta,
+		cloudInitEditor: newYAMLEditor("#cloud-config\n...", "valid cloud-config", checkCloudInit),
 	}
 }
 
@@ -488,9 +492,6 @@ func (m launchModel) View() string {
 			body + "\n" + helpBar("ctrl+s", "use for this launch", "esc", "cancel")
 	}
 	head := styleSubtitle.Render("kind: " + m.kind + cloudInitStatusSuffix(m))
-	if un := m.unavailableDevices(); m.wantsDevices() && len(un) > 0 {
-		head += "\n" + styleSubtitle.Render("devices not available: "+strings.Join(un, ", "))
-	}
 	return head + "\n\n" + m.form.View()
 }
 
@@ -595,11 +596,7 @@ func buildLaunchRequest(m launchModel) (*anvilv1.LaunchRequest, error) {
 		NoGuestAgent:  !form.Bool(guestAgentField),
 		Hypervisor:    hypervisor,
 	}
-	for _, f := range form.fields {
-		if id, ok := strings.CutPrefix(f.Label, devicePrefix); ok && f.on {
-			req.Vm.Devices = append(req.Vm.Devices, id)
-		}
-	}
+	req.Vm.Devices = append(form.Picked(usbDevicesField), form.Picked(pciDevicesField)...)
 	// The ad hoc editor, when used, always wins over the saved-library name:
 	// editing is meant as "just for this launch" and shouldn't silently lose to whatever's still in the name field.
 	if m.cloudInitOverrideOK {

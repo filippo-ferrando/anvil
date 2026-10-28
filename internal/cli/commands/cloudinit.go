@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/cloudinit"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
@@ -29,6 +31,15 @@ func newCloudInitCommand(flags *globalFlags) *cobra.Command {
 		newCloudInitRenameCommand(flags),
 		newCloudInitDeleteCommand(flags),
 		newCloudInitImportRepoCommand(flags),
+		newValidateCommand(flags, "cloud-init config", func(ctx context.Context, flags *globalFlags, name string) (string, error) {
+			c, err := dial(flags)
+			if err != nil {
+				return "", err
+			}
+			defer c.Close()
+			reply, err := c.CloudInit.Get(ctx, &anvilv1.CloudInitGetRequest{Name: name})
+			return reply.GetContent(), err
+		}, cloudinit.Validate),
 	)
 	return cmd
 }
