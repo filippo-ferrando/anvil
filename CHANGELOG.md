@@ -2,6 +2,17 @@
 
 Built from commit subjects by `scripts/changelog.sh`.
 
+## v1.2.10 (2026-10-28)
+
+### Features
+
+- improved manifest and cloudinit editor (5a2c3f8)
+- anvil manifest management (2f465df)
+
+### Other changes
+
+- claude.md update (7c79b87)
+
 ## v1.2.9 (2026-10-27)
 
 ### Features
