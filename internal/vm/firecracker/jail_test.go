@@ -40,14 +40,35 @@ func TestJailedCommand(t *testing.T) {
 			t.Errorf("jailer args lack %q: %s", want, line)
 		}
 	}
-	if bin != JailerBinary || !strings.Contains(line, "--exec-file /") {
+	if filepath.Base(bin) != JailerBinary || !strings.Contains(line, "--exec-file /") {
 		t.Errorf("command = %s %s", bin, line)
 	}
 
 	direct := Paths{APISocket: "/i/fc.sock", ConfigFile: "/i/fc.json", LogFile: "/i/fc.log"}
 	bin, args, _ = direct.command()
-	if bin != Binary || !slices.Contains(args, "/i/fc.sock") || direct.InVMM("/x") != "/x" {
+	if filepath.Base(bin) != Binary || !slices.Contains(args, "/i/fc.sock") || direct.InVMM("/x") != "/x" {
 		t.Errorf("unjailed command = %s %v", bin, args)
+	}
+}
+
+func TestLookPathPrefersBundledDir(t *testing.T) {
+	bundled, onPath := t.TempDir(), t.TempDir()
+	for _, f := range []string{filepath.Join(bundled, Binary), filepath.Join(onPath, Binary), filepath.Join(onPath, JailerBinary)} {
+		if err := os.WriteFile(f, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("ANVIL_FIRECRACKER_DIR", bundled)
+	t.Setenv("PATH", onPath)
+
+	if got, err := LookPath(Binary); err != nil || got != filepath.Join(bundled, Binary) {
+		t.Errorf("LookPath(firecracker) = %q, %v; want the bundled one", got, err)
+	}
+	if got, err := LookPath(JailerBinary); err != nil || got != filepath.Join(onPath, JailerBinary) {
+		t.Errorf("LookPath(jailer) = %q, %v; want the PATH one", got, err)
+	}
+	if _, err := LookPath("missing"); err == nil {
+		t.Error("LookPath(missing) found something")
 	}
 }
 

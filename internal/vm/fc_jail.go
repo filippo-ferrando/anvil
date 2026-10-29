@@ -19,7 +19,7 @@ import (
 const fcJailerEnv = "ANVIL_FC_JAILER"
 
 // jailerExe picks the jailer: the private copy with file capabilities the service unit
-// prepares, or the one on PATH for an anvild running as root. Empty runs firecracker directly.
+// prepares, or firecracker.LookPath's one for an anvild running as root. Empty runs firecracker directly.
 func jailerExe() string {
 	if os.Getenv(fcJailerEnv) == "off" {
 		return ""
@@ -32,7 +32,7 @@ func jailerExe() string {
 	if _, err := os.Stat(config.JailerExe()); err == nil {
 		return config.JailerExe()
 	}
-	if path, err := exec.LookPath(firecracker.JailerBinary); err == nil {
+	if path, err := firecracker.LookPath(firecracker.JailerBinary); err == nil {
 		if os.Geteuid() == 0 {
 			return path
 		}

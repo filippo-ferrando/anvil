@@ -15,10 +15,11 @@ import (
 	"syscall"
 	"time"
 
+	"git.fferrando.cc/rdfilippo/anvil/internal/config"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/proc"
 )
 
-// Binary is the firecracker executable, looked up on PATH.
+// Binary is the firecracker executable, looked up by LookPath.
 const Binary = "firecracker"
 
 // Paths are the files one Firecracker process uses, as host paths.
@@ -33,7 +34,7 @@ type Paths struct {
 	Jail *Jail
 }
 
-// JailerBinary is the jailer executable, looked up on PATH.
+// JailerBinary is the jailer executable, looked up by LookPath.
 const JailerBinary = "jailer"
 
 // Jail is how the jailer confines one firecracker: a chroot under ChrootBase, a new mount
@@ -42,13 +43,22 @@ type Jail struct {
 	ID         string // also names the chroot
 	ChrootBase string
 	UID, GID   int
-	Jailer     string // jailer binary, JailerBinary on PATH when empty
+	Jailer     string // jailer binary, LookPath(JailerBinary) when empty
 	ExecFile   string // firecracker binary, symlinks resolved; its name is part of the chroot path
 }
 
-// ResolveBinary finds firecracker on PATH with symlinks resolved, the path a Jail's ExecFile wants.
+// LookPath finds name in config.FirecrackerDir, where the packages put a static build,
+// then on PATH.
+func LookPath(name string) (string, error) {
+	if path, err := exec.LookPath(filepath.Join(config.FirecrackerDir(), name)); err == nil {
+		return path, nil
+	}
+	return exec.LookPath(name)
+}
+
+// ResolveBinary finds firecracker with symlinks resolved, the path a Jail's ExecFile wants.
 func ResolveBinary() (string, error) {
-	path, err := exec.LookPath(Binary)
+	path, err := LookPath(Binary)
 	if err != nil {
 		return "", err
 	}
@@ -78,7 +88,9 @@ func (p Paths) InVMM(path string) string {
 func (p Paths) command() (string, []string, error) {
 	args := []string{"--api-sock", p.InVMM(p.APISocket), "--config-file", p.InVMM(p.ConfigFile), "--log-path", p.InVMM(p.LogFile)}
 	if p.Jail == nil {
-		return Binary, args, nil
+		// Not resolved: Attach recognizes the process by the name it was started with.
+		fc, err := LookPath(Binary)
+		return fc, args, err
 	}
 	fc := p.Jail.ExecFile
 	if fc == "" {
@@ -94,7 +106,10 @@ func (p Paths) command() (string, []string, error) {
 	}
 	jailer := p.Jail.Jailer
 	if jailer == "" {
-		jailer = JailerBinary
+		var err error
+		if jailer, err = LookPath(JailerBinary); err != nil {
+			return "", nil, err
+		}
 	}
 	return jailer, append(jail, args...), nil
 }

@@ -1,0 +1,9 @@
+# Third-party binaries bundled into the anvild packages, sourced by the build scripts.
+# scripts/update-tools.sh rewrites it with the latest stable releases.
+WAYPIPE_VERSION=v0.11.3
+SATELLITE_VERSION=v0.8.3
+LIBXAU_VERSION=1.0.12
+XCB_UTIL_VERSION=0.4.1
+FIRECRACKER_VERSION=v1.17.0
+FIRECRACKER_SHA256_X86_64=06094a1108ae9e82aa4c23a775aa92758f53f1175d422270d9d6162cb9ade558
+FIRECRACKER_SHA256_AARCH64=e351ebe4f7a16b5873bbd51005d2e6767103cff4d5ebc829df2d3f95a93e2256

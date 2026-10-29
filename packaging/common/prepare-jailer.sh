@@ -3,10 +3,12 @@
 # Firecracker's jailer that holds the jailer's capabilities as file capabilities, runnable
 # only by the anvil user. Without jailer or setcap there's no copy and anvild runs
 # firecracker unjailed. Redone every start, so a firecracker upgrade is picked up.
+# The static jailer the package ships comes first, one on PATH second.
 
 dir=/var/lib/anvil-jailer
 rm -rf "$dir"
-src=$(command -v jailer) || exit 0
+src=/usr/lib/anvil/firecracker/jailer
+[ -x "$src" ] || src=$(command -v jailer) || exit 0
 if ! command -v setcap >/dev/null 2>&1; then
   echo "anvild: setcap not found (libcap), firecracker VMs run without the jailer" >&2
   exit 0

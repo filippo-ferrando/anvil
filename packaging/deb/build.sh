@@ -86,6 +86,14 @@ if [ -x "$gui_tools/waypipe" ] && [ -x "$gui_tools/xwayland-satellite" ]; then
 else
   echo "==> warning: no GUI tools in $gui_tools (run make gui-tools), anvil gui won't work with VMs" >&2
 fi
+# Static firecracker and jailer, from scripts/fetch-firecracker.sh.
+fc="${FIRECRACKER_DIR:-$repo/build/firecracker}"
+if [ -x "$fc/firecracker" ] && [ -x "$fc/jailer" ]; then
+  install -Dm755 "$fc/firecracker" "$pkg_anvild/usr/lib/anvil/firecracker/firecracker"
+  install -Dm755 "$fc/jailer" "$pkg_anvild/usr/lib/anvil/firecracker/jailer"
+else
+  echo "==> warning: no firecracker in $fc (run make firecracker), --hypervisor firecracker needs one on PATH" >&2
+fi
 install -m755 "$common/post-install.sh" "$pkg_anvild/usr/lib/anvil/post-install.sh"
 # Hand-written, not generated: anvild has no cobra command tree, so
 # there's no command tree for `anvil man`'s equivalent to walk.

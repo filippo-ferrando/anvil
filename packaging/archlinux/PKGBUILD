@@ -44,8 +44,8 @@ package_anvild() {
   optdepends=(
     'docker: run containers via Docker'
     'podman: run containers via Podman (backend not implemented yet)'
-    'firecracker: run VMs with --hypervisor firecracker (jailer included)'
     'nftables: outbound NAT for standalone Firecracker VMs'
+    'libcap: setcap for the Firecracker jailer'
     'qemu-hw-usb-host: pass USB devices to VMs with --device'
     'hwdata: device names in anvil host devices'
   )
@@ -60,6 +60,14 @@ package_anvild() {
     install -Dm755 "$gui_tools/xwayland-satellite" "$pkgdir/usr/lib/anvil/gui/xwayland-satellite"
   else
     warning "no GUI tools in $gui_tools, anvil gui won't work with VMs"
+  fi
+  # Static firecracker and jailer, from scripts/fetch-firecracker.sh.
+  local fc="${FIRECRACKER_DIR:-$startdir/../firecracker}"
+  if [[ -x $fc/firecracker && -x $fc/jailer ]]; then
+    install -Dm755 "$fc/firecracker" "$pkgdir/usr/lib/anvil/firecracker/firecracker"
+    install -Dm755 "$fc/jailer" "$pkgdir/usr/lib/anvil/firecracker/jailer"
+  else
+    warning "no firecracker in $fc, --hypervisor firecracker needs one on PATH"
   fi
   # The systemd unit, sysusers/tmpfiles configs, and post-install script
   # are all shared verbatim across every packaging format (packaging/deb,

@@ -28,12 +28,12 @@ jobs:
 
       - uses: actions/checkout@v7
 
-      # The script pins every version, so its hash names the binaries it builds.
+      # scripts/tools.versions pins every version, so the two hashes name the binaries built.
       - id: gui-cache
         uses: actions/cache@v4
         with:
           path: build/gui-tools
-          key: gui-tools-${{ runner.arch }}-${{ hashFiles('scripts/build-gui-tools.sh') }}
+          key: gui-tools-${{ runner.arch }}-${{ hashFiles('scripts/build-gui-tools.sh', 'scripts/tools.versions') }}
 
       - name: Build static waypipe + xwayland-satellite
         if: steps.gui-cache.outputs.cache-hit != 'true'
@@ -61,6 +61,9 @@ jobs:
         with:
           name: gui-tools
           path: /tmp/pkgroot/gui-tools
+
+      - name: Fetch static firecracker + jailer
+        run: scripts/fetch-firecracker.sh /tmp/pkgroot/firecracker
 
       - name: Create a non-root build user
 
@@ -123,6 +126,9 @@ jobs:
 
       - run: chmod +x build/gui-tools/*
 
+      - name: Fetch static firecracker + jailer
+        run: scripts/fetch-firecracker.sh build/firecracker
+
       - name: Build anvil + anvild .deb packages
         env:
           VERSION: ${{ needs.version.outputs.version }}
@@ -156,6 +162,9 @@ jobs:
           path: build/gui-tools
 
       - run: chmod +x build/gui-tools/*
+
+      - name: Fetch static firecracker + jailer
+        run: scripts/fetch-firecracker.sh build/firecracker
 
       - name: Install rpmbuild
 

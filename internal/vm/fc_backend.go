@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -90,7 +89,7 @@ func NewFCBackend(qemuBackend *Backend, cacheDir string, instances Instances) *F
 func standalone(v *instance.VMSpec) bool { return v.NetworkMode != "bridge" }
 
 // fcLookPath finds the firecracker binary; tests swap it to run Create without one.
-var fcLookPath = exec.LookPath
+var fcLookPath = firecracker.LookPath
 
 type fcInstancePaths struct {
 	firecracker.Paths

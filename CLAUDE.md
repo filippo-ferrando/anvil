@@ -18,6 +18,8 @@ make vet     # go vet ./...
 make fmt     # gofmt -l -s . (lists files that need formatting; doesn't rewrite them)
 make man     # regenerate man/man1 from the live command tree, copy hand-written docs/man/anvild.8 to man/man8
 make gui-tools  # static waypipe/xwayland-satellite for `anvil gui` into build/gui-tools (needs docker)
+make firecracker  # static firecracker/jailer release into build/firecracker, bundled by the packages
+make update-tools # bump scripts/tools.versions (GUI tools + firecracker) to the latest stable releases
 make fc-kernel  # anvil's Firecracker guest kernel into build/fc-kernel (needs docker, ARCH=aarch64 for arm64)
 ```
 
@@ -115,6 +117,8 @@ catalog/         official extra catalogue (distro manifests + cloud-init templat
 scripts/         verify-catalog.sh (checksums), release-notes.sh (used by the release workflow),
                  changelog.sh (CHANGELOG.md from commit subjects),
                  build-gui-tools.sh (static GUI tools, used by `make gui-tools` and releases),
+                 fetch-firecracker.sh (static firecracker/jailer), tools.versions (their pinned
+                 versions) and update-tools.sh (bumps it to the latest stable releases),
                  build-fc-kernel.sh + fc-kernel.config (the Firecracker guest kernel, `make fc-kernel`)
 packaging/       PKGBUILD/deb/rpm build scripts, systemd unit, sysusers/tmpfiles rules
 ```

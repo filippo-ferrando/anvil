@@ -1,4 +1,4 @@
-.PHONY: proto tui-deps build gui-tools fc-kernel man test vet fmt clean
+.PHONY: proto tui-deps build gui-tools firecracker update-tools fc-kernel man test vet fmt clean
 
 GOBIN := $(shell go env GOPATH)/bin
 
@@ -28,6 +28,14 @@ build:
 # Builds static waypipe and xwayland-satellite for `anvil gui` into build/gui-tools (needs docker).
 gui-tools:
 	scripts/build-gui-tools.sh build/gui-tools
+
+# Downloads the static firecracker and jailer pinned in scripts/tools.versions into build/firecracker.
+firecracker:
+	scripts/fetch-firecracker.sh build/firecracker $(or $(ARCH),x86_64)
+
+# Bumps scripts/tools.versions to the latest stable GUI tools and firecracker.
+update-tools:
+	scripts/update-tools.sh
 
 # Builds anvil's Firecracker guest kernel into build/fc-kernel (needs docker).
 # ARCH=aarch64 cross-builds the arm64 one.

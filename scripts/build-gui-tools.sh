@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Builds static (musl) waypipe and xwayland-satellite in an Alpine container
 # (docker, or the current one when already in Alpine as root),
-# for `anvil gui`. Output goes to build/gui-tools/ (or $1).
+# for `anvil gui`, at the versions in scripts/tools.versions.
+# Output goes to build/gui-tools/ (or $1).
 #
 # Usage: scripts/build-gui-tools.sh [output-dir]
 set -euo pipefail
 
-waypipe_version="v0.11.2"
-satellite_version="v0.8.3"
+source "$(dirname "${BASH_SOURCE[0]}")/tools.versions"
 # Alpine's own rust links build scripts dynamically, which bindgen needs to load libclang.
 build_image="docker.io/library/alpine:3.22"
 
@@ -33,9 +33,9 @@ build='
 
     # Alpine ships no static libXau or libxcb-util, and its xcb-cursor.pc leaves out xcb-util.
     apk add --no-cache xorgproto util-macros make xcb-util-dev xz
-    wget -qO- https://xorg.freedesktop.org/releases/individual/lib/libXau-1.0.12.tar.xz | tar -xJ -C /src
-    wget -qO- https://xorg.freedesktop.org/releases/individual/lib/xcb-util-0.4.1.tar.xz | tar -xJ -C /src
-    for lib in libXau-1.0.12 xcb-util-0.4.1; do
+    wget -qO- "https://xorg.freedesktop.org/releases/individual/lib/libXau-$LIBXAU_VERSION.tar.xz" | tar -xJ -C /src
+    wget -qO- "https://xorg.freedesktop.org/releases/individual/lib/xcb-util-$XCB_UTIL_VERSION.tar.xz" | tar -xJ -C /src
+    for lib in "libXau-$LIBXAU_VERSION" "xcb-util-$XCB_UTIL_VERSION"; do
       cd "/src/$lib"
       ./configure --prefix=/usr --enable-static --disable-shared >/dev/null
       make -s install
@@ -50,13 +50,16 @@ build='
 
 if [ -f /etc/alpine-release ] && [ "$(id -u)" = 0 ]; then
   # Already in an Alpine container (CI): build here.
-  OUT="$out" WAYPIPE_VERSION="$waypipe_version" SATELLITE_VERSION="$satellite_version" sh -euxc "$build"
+  OUT="$out" WAYPIPE_VERSION="$WAYPIPE_VERSION" SATELLITE_VERSION="$SATELLITE_VERSION" \
+    LIBXAU_VERSION="$LIBXAU_VERSION" XCB_UTIL_VERSION="$XCB_UTIL_VERSION" sh -euxc "$build"
 elif command -v docker >/dev/null; then
   docker run --rm \
     -v "$out:/out" \
     -e OUT=/out \
-    -e WAYPIPE_VERSION="$waypipe_version" \
-    -e SATELLITE_VERSION="$satellite_version" \
+    -e WAYPIPE_VERSION="$WAYPIPE_VERSION" \
+    -e SATELLITE_VERSION="$SATELLITE_VERSION" \
+    -e LIBXAU_VERSION="$LIBXAU_VERSION" \
+    -e XCB_UTIL_VERSION="$XCB_UTIL_VERSION" \
     "$build_image" sh -euxc "$build
     chown $(id -u):$(id -g) /out/waypipe /out/xwayland-satellite"
 else

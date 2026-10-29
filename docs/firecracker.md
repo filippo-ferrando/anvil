@@ -15,7 +15,11 @@ that boot under Firecracker.
 
 ## Requirements
 
-- `firecracker` and `jailer` 1.17 or newer (Arch: `extra/firecracker`), and `/dev/kvm`.
+- `firecracker` and `jailer` 1.17 or newer, and `/dev/kvm`. The anvild packages ship static
+  builds in `/usr/lib/anvil/firecracker` (`ANVIL_FIRECRACKER_DIR` overrides it), used before
+  any on `PATH`. A dynamically linked firecracker (Arch's `extra/firecracker` is one) can't
+  run in the jailer's chroot, so anvild runs it unjailed. `make firecracker` downloads the
+  pinned static release into `build/firecracker` for development builds.
 - `nft`, for the outbound NAT of standalone VMs. anvild turns on `net.ipv4.ip_forward` the
   first time a standalone Firecracker VM starts.
 - `setcap` (libcap), for the jailer copy `anvild.service` prepares at

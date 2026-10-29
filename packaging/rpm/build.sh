@@ -52,9 +52,19 @@ if [ -x "$gui_tools/waypipe" ] && [ -x "$gui_tools/xwayland-satellite" ]; then
 else
   echo "==> warning: no GUI tools in $gui_tools (run make gui-tools), anvil gui won't work with VMs" >&2
 fi
+# Static firecracker and jailer (gitignored), from scripts/fetch-firecracker.sh, under firecracker/.
+fc="${FIRECRACKER_DIR:-$repo/build/firecracker}"
+fc_transform=()
+fc_files=()
+if [ -x "$fc/firecracker" ] && [ -x "$fc/jailer" ]; then
+  fc_transform=(--transform 's,^\(firecracker\|jailer\)$,firecracker/&,')
+  fc_files=(-C "$fc" firecracker jailer)
+else
+  echo "==> warning: no firecracker in $fc (run make firecracker), --hypervisor firecracker needs one on PATH" >&2
+fi
 tar --null -C "$repo" -T "$filelist" \
-  "${gui_transform[@]}" --transform "s,^,anvil-${version}/," \
-  "${gui_files[@]}" \
+  "${gui_transform[@]}" "${fc_transform[@]}" --transform "s,^,anvil-${version}/," \
+  "${gui_files[@]}" "${fc_files[@]}" \
   -czf "$topdir/SOURCES/anvil-${version}.tar.gz"
 
 echo "==> rendering spec"
