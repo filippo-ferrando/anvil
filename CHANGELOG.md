@@ -2,6 +2,16 @@
 
 Built from commit subjects by `scripts/changelog.sh`.
 
+## v1.2.11 (2026-10-30)
+
+### Features
+
+- test build (ee8f217)
+
+### Other changes
+
+- started working on new features (399cc47)
+
 ## v1.2.10 (2026-10-28)
 
 ### Features
