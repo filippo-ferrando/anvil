@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"git.fferrando.cc/rdfilippo/anvil/internal/guestexec"
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 )
@@ -33,6 +34,9 @@ type Manager struct {
 	mu       sync.Mutex
 	building map[string]*build // warm key -> the build in progress
 	clones   map[string]*cloneState
+
+	// guestRun runs a command in a clone; tests replace it.
+	guestRun func(ctx context.Context, clone Clone, r guestexec.Request) (int, error)
 }
 
 // build is one warm snapshot build that later callers for the same key wait on.
@@ -43,7 +47,8 @@ type build struct {
 }
 
 func NewManager(engine Engine, s WarmStore, dir func(string) string) *Manager {
-	return &Manager{Engine: engine, Store: s, Dir: dir, building: map[string]*build{}, clones: map[string]*cloneState{}}
+	return &Manager{Engine: engine, Store: s, Dir: dir, building: map[string]*build{}, clones: map[string]*cloneState{},
+		guestRun: runInClone}
 }
 
 func (m *Manager) engine() (Engine, error) {
@@ -64,6 +69,9 @@ func (m *Manager) Warm(ctx context.Context, p WarmParams, rebuild bool, progress
 		return store.WarmSnapshot{}, WarmSpec{}, err
 	}
 	s, err := e.WarmSpec(p)
+	if err == nil && p.App != "" {
+		s, err = withApp(s, p)
+	}
 	if err != nil {
 		return store.WarmSnapshot{}, WarmSpec{}, err
 	}
@@ -108,16 +116,22 @@ func (m *Manager) buildWarm(ctx context.Context, e Engine, s WarmSpec, progress 
 	if s.CPUs != 1 {
 		cpus = fmt.Sprintf("%d CPUs", s.CPUs)
 	}
-	progress(fmt.Sprintf("building the %s warm snapshot (%s, %d MiB), once", s.Distro, cpus, s.MemoryMiB))
+	what := s.Distro
+	var setup Setup
+	if s.App != "" {
+		what, setup = s.Distro+" + "+s.App, appSetup(s)
+	}
+	progress(fmt.Sprintf("building the %s warm snapshot (%s, %d MiB), once", what, cpus, s.MemoryMiB))
 	start := time.Now()
 	dir := m.Dir(s.Key)
-	if err := e.BuildWarm(ctx, s, dir, progress); err != nil {
+	if err := e.BuildWarm(ctx, s, dir, setup, progress); err != nil {
 		return store.WarmSnapshot{}, fmt.Errorf("building the %s warm snapshot: %w", s.Distro, err)
 	}
 	now := time.Now()
 	rec := store.WarmSnapshot{
 		Key: s.Key, Distro: s.Distro, Arch: s.Arch, CPUs: s.CPUs, MemoryMiB: s.MemoryMiB, DiskGiB: s.DiskGiB,
 		FirecrackerVersion: s.FirecrackerVersion, SizeBytes: diskUsage(dir), CreatedAt: now, LastUsedAt: now,
+		App: s.App, X11: s.X11,
 	}
 	if err := m.Store.PutWarm(rec); err != nil {
 		return store.WarmSnapshot{}, err

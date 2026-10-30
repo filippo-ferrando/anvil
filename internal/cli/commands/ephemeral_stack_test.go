@@ -30,7 +30,7 @@ func (stackEngine) WarmSpec(p ephemeral.WarmParams) (ephemeral.WarmSpec, error) 
 	return ephemeral.WarmSpec{Key: "key-" + p.Distro, Distro: p.Distro, CPUs: 2, MemoryMiB: 512}, nil
 }
 
-func (stackEngine) BuildWarm(_ context.Context, _ ephemeral.WarmSpec, dir string, progress func(string)) error {
+func (stackEngine) BuildWarm(_ context.Context, _ ephemeral.WarmSpec, dir string, _ ephemeral.Setup, progress func(string)) error {
 	progress("booting")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
@@ -57,6 +57,9 @@ type stackClone string
 
 func (c stackClone) ID() string           { return string(c) }
 func (c stackClone) StartedAt() time.Time { return time.Now() }
+func (c stackClone) Listen(uint32) (net.Listener, error) {
+	return nil, errors.New("stackClone: no vsock")
+}
 func (c stackClone) Dial(context.Context) (io.ReadWriteCloser, error) {
 	host, guest := net.Pipe()
 	go func() { _ = guestexec.Serve(guest) }()

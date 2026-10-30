@@ -19,16 +19,18 @@ import (
 
 // guiOptions are the `anvil gui` flags shared by the run and export paths.
 type guiOptions struct {
-	x11      bool
-	detach   bool
-	user     string
-	identity string
+	x11       bool
+	detach    bool
+	user      string
+	identity  string
+	ephemeral bool
+	app       appFlags // with ephemeral
 }
 
 func newGUICommand(flags *globalFlags) *cobra.Command {
 	var opts guiOptions
 	cmd := &cobra.Command{
-		Use:   "gui <name> [--] <command> [args...]",
+		Use:   "gui <name> [--] <command> [args...] | gui --ephemeral <distro> <package> [-- <command> [args...]]",
 		Short: "Run a graphical app from an instance in a window on this desktop",
 		Long: "Run a graphical app inside a VM or container and show its windows on this host's " +
 			"Wayland desktop. A stopped instance is started first. X11 apps (Java/Swing ones like " +
@@ -36,18 +38,38 @@ func newGUICommand(flags *globalFlags) *cobra.Command {
 			"Java windows don't stay blank. Only instances created by an anvil version with GUI " +
 			"support can do this.\n\n" +
 			"A container connects straight to the host's compositor (GPU included); a VM goes " +
-			"through waypipe over SSH. Put `--` before the app's command if it has its own flags.",
+			"through waypipe over SSH. Put `--` before the app's command if it has its own flags.\n\n" +
+			"With --ephemeral the app runs in a throwaway Firecracker clone of <distro> instead, deleted " +
+			"when the app exits. <package> is installed with the distro's own package manager when the " +
+			"image lacks it, once, into a warm snapshot that later runs start from. The command defaults " +
+			"to the one in the package's desktop entry. See docs/gui.md.",
 		Example: "  anvil gui dev -- gnome-text-editor\n" +
 			"  anvil gui --x11 re-lab -- ghidraRun\n" +
-			"  anvil gui --detach dev -- firefox",
+			"  anvil gui --detach dev -- firefox\n" +
+			"  anvil gui --ephemeral debian-13 firefox-esr\n" +
+			"  anvil gui --ephemeral fedora-42 libreoffice -- libreoffice --writer",
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if opts.ephemeral {
+				if opts.user != "" || opts.identity != "" {
+					return errors.New("--user and --identity don't apply to --ephemeral: the app runs as the image's default user")
+				}
+				if opts.detach {
+					return detachGUI(cmd.ErrOrStderr(), "ephemeral-"+args[0]+"-"+args[1])
+				}
+				return runEphemeralGUI(cmd.Context(), flags, opts.app, args[0], args[1], args[2:], opts.x11)
+			}
+			if cmd.Flags().Changed("cpus") || cmd.Flags().Changed("memory") || cmd.Flags().Changed("arch") || cmd.Flags().Changed("env") {
+				return errors.New("--cpus, --memory, --arch and --env are for --ephemeral")
+			}
 			if opts.detach {
 				return detachGUI(cmd.ErrOrStderr(), args[0])
 			}
 			return runGUI(cmd.Context(), flags, opts, args[0], args[1:], cmd.ErrOrStderr())
 		},
 	}
+	cmd.Flags().BoolVar(&opts.ephemeral, "ephemeral", false, "run <package>'s app in a throwaway clone of <distro>")
+	opts.app.addFlags(cmd)
 	cmd.Flags().BoolVar(&opts.x11, "x11", false, "also make X11 apps work, through XWayland")
 	cmd.Flags().BoolVar(&opts.detach, "detach", false, "return right away and log to $XDG_STATE_HOME/anvil/gui/<name>.log")
 	cmd.Flags().StringVar(&opts.user, "user", "", "user to run the app as (VM: SSH user, container: docker exec --user)")
@@ -186,4 +208,11 @@ func withoutDetach(args []string) []string {
 		out = append(out, a)
 	}
 	return out
+}
+
+func (f *appFlags) addFlags(cmd *cobra.Command) {
+	cmd.Flags().Int32Var(&f.cpus, "cpus", 0, "with --ephemeral: vCPUs of the clone (default 2)")
+	cmd.Flags().Int64Var(&f.memoryMiB, "memory", 0, "with --ephemeral: memory of the clone in MiB (default 2048)")
+	cmd.Flags().StringVar(&f.arch, "arch", "", "with --ephemeral: image architecture (default: this host's)")
+	cmd.Flags().StringArrayVarP(&f.env, "env", "e", nil, "with --ephemeral: environment variable KEY=VALUE for the app (repeatable)")
 }

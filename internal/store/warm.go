@@ -23,7 +23,9 @@ type WarmSnapshot struct {
 	MemoryMiB          int64
 	DiskGiB            int64
 	FirecrackerVersion string
-	SizeBytes          int64 // disk space its files take
+	SizeBytes          int64  // disk space its files take
+	App                string // the package installed for `anvil gui --ephemeral`, "" for none
+	X11                bool
 	CreatedAt          time.Time
 	LastUsedAt         time.Time
 }

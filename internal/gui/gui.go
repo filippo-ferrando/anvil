@@ -13,4 +13,7 @@ const (
 	GuestToolsDir = "/opt/anvil"
 	// ToolsTag is the virtiofs tag of that share.
 	ToolsTag = "anviltools"
+
+	// AppDisplaySocket is the client's `waypipe client` socket in an ephemeral app's display dir.
+	AppDisplaySocket = "waypipe.sock"
 )

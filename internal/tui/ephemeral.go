@@ -26,7 +26,13 @@ import (
 type warmItem struct{ snap *anvilv1.WarmSnapshot }
 
 func (i warmItem) FilterValue() string { return i.snap.GetDistro() }
-func (i warmItem) Title() string       { return i.snap.GetDistro() + "  " + i.snap.GetKey() }
+func (i warmItem) Title() string {
+	name := i.snap.GetDistro()
+	if i.snap.GetApp() != "" {
+		name += " + " + i.snap.GetApp()
+	}
+	return name + "  " + i.snap.GetKey()
+}
 func (i warmItem) Description() string {
 	return fmt.Sprintf("%s  •  %s  •  %d MiB  •  %s  •  last used %s", i.snap.GetArch(), format.CPUs(i.snap.GetCpus()),
 		i.snap.GetMemoryMib(), progress.Bytes(i.snap.GetSizeBytes()), time.Unix(i.snap.GetLastUsedAtUnix(), 0).Format("2006-01-02 15:04"))
@@ -53,7 +59,7 @@ type ephemeralModel struct {
 	clones     list.Model
 
 	form     *simpleForm // the open form, nil for none
-	formKind string      // "warm" | "run"
+	formKind string      // "warm" | "run" | "app"
 	confirm  string      // the warm key or clone id waiting for a yes
 	building transcript  // a warm snapshot build in progress
 	run      *runView
@@ -88,6 +94,7 @@ type runPane struct {
 	lines   []string
 	partial string
 	status  string
+	since   time.Time // when status's step began
 	exit    *anvilv1.RunExit
 }
 
@@ -96,7 +103,7 @@ const paneKeep = 200
 func newRunView(distros []string, cancel context.CancelFunc) *runView {
 	v := &runView{order: distros, panes: map[string]*runPane{}, cancel: cancel}
 	for _, d := range distros {
-		v.panes[d] = &runPane{status: "waiting"}
+		v.panes[d] = &runPane{status: "waiting", since: time.Now()}
 	}
 	return v
 }
@@ -111,11 +118,23 @@ func (p *runPane) write(data []byte) {
 	}
 }
 
+// setStatus starts a new step, or updates the current one. A step that took a while stays
+// in the pane, the same as in the CLI.
+func (p *runPane) setStatus(status string) {
+	if progress.Key(status) != progress.Key(p.status) {
+		if elapsed := time.Since(p.since); elapsed >= time.Second && p.status != "waiting" {
+			p.lines = append(p.lines, "· "+progress.Done(p.status, elapsed))
+		}
+		p.since = time.Now()
+	}
+	p.status = status
+}
+
 func (v *runView) event(ev *anvilv1.RunEvent) {
 	switch {
 	case ev.GetProgress() != nil:
 		if p := v.panes[ev.GetProgress().GetDistro()]; p != nil {
-			p.status = ev.GetProgress().GetMessage()
+			p.setStatus(ev.GetProgress().GetMessage())
 		}
 	case ev.GetOutput() != nil:
 		if p := v.panes[ev.GetOutput().GetDistro()]; p != nil {
@@ -144,7 +163,8 @@ func (v *runView) view(width, height int) string {
 	paneH := max(3, (height-3)/max(1, len(v.order)))
 	for _, d := range v.order {
 		p := v.panes[d]
-		head := styleSubtitle.Render(p.status)
+		// The app's one-second tick moves the spinner on.
+		head := styleSubtitle.Render(progress.Live(p.status, time.Since(p.since), int(time.Now().Unix())))
 		if x := p.exit; x != nil {
 			switch {
 			case x.GetError() != "":
@@ -315,6 +335,34 @@ func newRunForm() simpleForm {
 	})
 }
 
+func newAppForm() simpleForm {
+	return newSimpleForm("GUI app in a throwaway clone", []formField{
+		textField("Distro", "catalog id, e.g. debian-13", ""),
+		textField("Package", "installed with the distro's package manager, e.g. firefox-esr", ""),
+		textField("Command (optional)", "default: the package's desktop entry", ""),
+		toggleField("X11 app", "Java/Swing and other X11 apps need XWayland", false),
+		textField("CPUs", "default 2", ""),
+		textField("Memory (MiB)", "default 2048", ""),
+		toggleField("Add to desktop", "also add it to this desktop's app launcher", false),
+	})
+}
+
+func buildAppRequest(form simpleForm) (appRequest, error) {
+	a := appRequest{
+		distro: strings.TrimSpace(form.Value("Distro")), pkg: strings.TrimSpace(form.Value("Package")),
+		command: form.Value("Command (optional)"), x11: form.Bool("X11 app"), export: form.Bool("Add to desktop"),
+	}
+	if a.distro == "" || a.pkg == "" {
+		return a, errors.New("distro and package are required")
+	}
+	var err error
+	if a.cpus, err = optionalInt(form, "CPUs"); err != nil {
+		return a, err
+	}
+	a.memory, err = optionalInt(form, "Memory (MiB)")
+	return a, err
+}
+
 func optionalInt(form simpleForm, label string) (int64, error) {
 	s := strings.TrimSpace(form.Value(label))
 	if s == "" {
@@ -424,6 +472,9 @@ func (m model) updateEphemeral(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, loadEphemeral(m.client)
 		}
 		return m, msg.next
+	case guiLaunchedMsg:
+		m.showGUILaunched(msg)
+		return m, loadEphemeral(m.client)
 	case actionDoneMsg:
 		m.setStatus(msg.verb, msg.err != nil)
 		if msg.err != nil {
@@ -474,6 +525,21 @@ func (m model) updateEphemeralKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !submitted {
 			return m, nil
 		}
+		if e.formKind == "app" {
+			a, err := buildAppRequest(form)
+			if err == nil && m.client.Remote != "" {
+				err = errors.New("GUI apps in throwaway clones don't work with --remote yet")
+			}
+			if err != nil {
+				e.form.errMsg = err.Error()
+				return m, nil
+			}
+			e.form = nil
+			if a.export {
+				m.setStatus("building the warm snapshot for "+a.pkg+", then starting it", false)
+			}
+			return m, launchEphemeralApp(m.socketPath, a)
+		}
 		if e.formKind == "warm" {
 			req, err := buildWarmRequest(form)
 			if err != nil {
@@ -508,6 +574,11 @@ func (m model) updateEphemeralKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		f := newWarmForm()
 		f.SetHeight(contentHeight(m.height) - 2)
 		e.form, e.formKind = &f, "warm"
+		return m, nil
+	case "a":
+		f := newAppForm()
+		f.SetHeight(contentHeight(m.height) - 2)
+		e.form, e.formKind = &f, "app"
 		return m, nil
 	case "n":
 		f := newRunForm()
@@ -574,7 +645,7 @@ func (e ephemeralModel) View(width, height int) string {
 	if e.showClones {
 		l, other = e.clones, "warm snapshots"
 	}
-	keys := []string{"tab", other, "n", "run", "c", "build warm", "x", "remove", "r", "refresh", "esc", "back"}
+	keys := []string{"tab", other, "n", "run", "a", "gui app", "c", "build warm", "x", "remove", "r", "refresh", "esc", "back"}
 	if e.showClones {
 		keys = append([]string{"s", "shell"}, keys...)
 	}

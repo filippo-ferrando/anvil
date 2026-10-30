@@ -22,6 +22,7 @@ type Event struct {
 	Progress *Progress
 	Output   *Output
 	Exit     *Exit
+	App      *App // RunApp only, before the app starts
 }
 
 type Progress struct{ CloneID, Distro, Message string }
@@ -132,6 +133,7 @@ func (m *Manager) runOne(ctx context.Context, e Engine, r RunRequest, distro str
 	m.clones[id] = st
 	m.mu.Unlock()
 
+	progress("running: " + strings.Join(r.Argv, " "))
 	code, runErr := m.runCommand(ctx, clone, r, func(stderr bool, data []byte) {
 		emit(Event{Output: &Output{CloneID: id, Distro: distro, Stderr: stderr, Data: data}})
 	})
@@ -151,10 +153,6 @@ func (m *Manager) runOne(ctx context.Context, e Engine, r RunRequest, distro str
 }
 
 func (m *Manager) runCommand(ctx context.Context, clone Clone, r RunRequest, out func(stderr bool, data []byte)) (int, error) {
-	conn, err := clone.Dial(ctx)
-	if err != nil {
-		return -1, fmt.Errorf("reaching anvil-guest in the clone: %w", err)
-	}
 	req := guestexec.Request{
 		Header: guestexec.Header{Argv: r.Argv, Env: r.Env, Cwd: r.Cwd, TTY: r.TTY, Rows: r.Size.Rows, Cols: r.Size.Cols},
 		Stdin:  r.Stdin, Resize: r.Resize,
@@ -164,13 +162,21 @@ func (m *Manager) runCommand(ctx context.Context, clone Clone, r RunRequest, out
 	if r.Upload != "" {
 		f, err := os.Open(r.Upload)
 		if err != nil {
-			conn.Close()
 			return -1, err
 		}
 		defer f.Close()
 		req.Upload = f
 	}
-	return guestexec.Run(ctx, conn, req)
+	return m.guestRun(ctx, clone, req)
+}
+
+// runInClone runs r in clone through a new connection to its anvil-guest.
+func runInClone(ctx context.Context, clone Clone, r guestexec.Request) (int, error) {
+	conn, err := clone.Dial(ctx)
+	if err != nil {
+		return -1, fmt.Errorf("reaching anvil-guest in the clone: %w", err)
+	}
+	return guestexec.Run(ctx, conn, r)
 }
 
 // writerFunc hands every write to a func; the data is copied, since it outlives the call.

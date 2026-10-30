@@ -24,3 +24,19 @@ func TestGUIArgs(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestEphemeralAppArgs(t *testing.T) {
+	a := appRequest{distro: "debian-13", pkg: "libreoffice", command: "libreoffice --writer", x11: true, memory: 4096}
+	got := ephemeralAppArgs("/s", []string{"gui", "--detach"}, a)
+	want := []string{"--socket", "/s", "gui", "--detach", "--ephemeral", "--x11", "--memory", "4096", "debian-13", "libreoffice", "--", "libreoffice", "--writer"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %q", got)
+	}
+	got = ephemeralAppArgs("", []string{"gui", "export"}, appRequest{distro: "fedora-42", pkg: "gimp"})
+	if !slices.Equal(got, []string{"gui", "export", "--ephemeral", "fedora-42", "gimp"}) {
+		t.Fatalf("got %q", got)
+	}
+	if lastLine("building\nExported /x.desktop\n") != "Exported /x.desktop" {
+		t.Fatal("lastLine")
+	}
+}

@@ -11,6 +11,8 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"os/user"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -84,6 +86,12 @@ func Serve(conn io.ReadWriteCloser) error {
 	if err := r.setupIO(cmd, hdr); err != nil {
 		return fail(fw, hdr.TTY, 1, "anvil-guest: %v", err)
 	}
+	if hdr.User != "" {
+		if err := runAs(cmd, hdr.User, hdr.Cwd == ""); err != nil {
+			r.closeAll()
+			return fail(fw, hdr.TTY, 1, "anvil-guest: %v", err)
+		}
+	}
 	if err := cmd.Start(); err != nil {
 		r.closeAll()
 		code := 126
@@ -94,6 +102,36 @@ func Serve(conn io.ReadWriteCloser) error {
 	}
 	r.started(cmd.Process.Pid)
 	return r.finish(cmd)
+}
+
+// runAs makes cmd run as name with its groups and environment, in its home when home is set.
+func runAs(cmd *exec.Cmd, name string, home bool) error {
+	u, err := user.Lookup(name)
+	if err != nil {
+		return err
+	}
+	uid, err := strconv.ParseUint(u.Uid, 10, 32)
+	if err != nil {
+		return fmt.Errorf("user %s: uid %q: %w", name, u.Uid, err)
+	}
+	gid, err := strconv.ParseUint(u.Gid, 10, 32)
+	if err != nil {
+		return fmt.Errorf("user %s: gid %q: %w", name, u.Gid, err)
+	}
+	cred := &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}
+	ids, _ := u.GroupIds()
+	for _, id := range ids {
+		if g, err := strconv.ParseUint(id, 10, 32); err == nil {
+			cred.Groups = append(cred.Groups, uint32(g))
+		}
+	}
+	cmd.SysProcAttr.Credential = cred
+	if home {
+		cmd.Dir = u.HomeDir
+	}
+	// Later entries win, so these replace the defaults' HOME.
+	cmd.Env = append(cmd.Env, "HOME="+u.HomeDir, "USER="+u.Username, "LOGNAME="+u.Username)
+	return nil
 }
 
 // run is one started command and the files that connect it to the connection.

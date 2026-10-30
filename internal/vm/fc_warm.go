@@ -70,7 +70,7 @@ func (b *FCBackend) WarmSpec(p ephemeral.WarmParams) (ephemeral.WarmSpec, error)
 	}
 	s := ephemeral.WarmSpec{
 		Distro: entry.ID, Arch: entry.Arch, CPUs: p.CPUs, MemoryMiB: p.MemoryMiB,
-		DiskGiB: max(warmDiskGiB, entry.MinDiskGiB), FirecrackerVersion: fcVersion,
+		DiskGiB: max(warmDiskGiB, entry.MinDiskGiB), FirecrackerVersion: fcVersion, User: entry.DefaultUser,
 	}
 	if s.CPUs <= 0 {
 		s.CPUs = ephemeral.DefaultCPUs
@@ -133,8 +133,8 @@ func fileSHA256(path string) (string, error) {
 }
 
 // BuildWarm boots a build VM for s in a clone netns, waits for cloud-init and anvil-guest,
-// then pauses it and keeps its snapshot, disk and drives in dir.
-func (b *FCBackend) BuildWarm(ctx context.Context, s ephemeral.WarmSpec, dir string, progress func(string)) (err error) {
+// runs setup, then pauses it and keeps its snapshot, disk and drives in dir.
+func (b *FCBackend) BuildWarm(ctx context.Context, s ephemeral.WarmSpec, dir string, setup ephemeral.Setup, progress func(string)) (err error) {
 	if err := b.canClone(); err != nil {
 		return err
 	}
@@ -174,6 +174,17 @@ func (b *FCBackend) BuildWarm(ctx context.Context, s ephemeral.WarmSpec, dir str
 	// The page cache stays in the snapshot anyway; sync only keeps the disk copy current.
 	if err := guestCommand(ctx, paths.vsock, 60*time.Second, "sync"); err != nil {
 		return fmt.Errorf("vm: anvil-guest in the build VM: %w", err)
+	}
+	if setup != nil {
+		dial := func(ctx context.Context) (io.ReadWriteCloser, error) {
+			return firecracker.DialVsock(ctx, paths.vsock, guestexec.Port)
+		}
+		if err := setup(ctx, dial, progress); err != nil {
+			return err
+		}
+		if err := guestCommand(ctx, paths.vsock, 10*time.Second, "sync"); err != nil {
+			return fmt.Errorf("vm: anvil-guest in the build VM: %w", err)
+		}
 	}
 
 	progress("taking the snapshot")

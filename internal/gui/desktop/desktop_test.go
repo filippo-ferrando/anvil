@@ -100,3 +100,28 @@ func TestListEmpty(t *testing.T) {
 		t.Fatalf("%+v %v", exports, err)
 	}
 }
+
+func TestWriteEphemeral(t *testing.T) {
+	data := t.TempDir()
+	info := &anvilv1.GUIAppInfoReply{Found: true, AppName: "Firefox"}
+	path, err := Write(data, Spec{Bin: "/a", Instance: "debian-13", Package: "firefox-esr", Command: []string{"firefox-esr"}}, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != filepath.Join(data, "applications", "anvil-ephemeral-debian-13-firefox-esr.desktop") {
+		t.Fatalf("path %s", path)
+	}
+	content, _ := os.ReadFile(path)
+	for _, want := range []string{
+		"Name=Firefox (throwaway debian-13)\n",
+		"Exec=/a gui --detach --ephemeral debian-13 firefox-esr -- firefox-esr\n",
+		"X-Anvil-Instance=ephemeral:debian-13\n",
+	} {
+		if !strings.Contains(string(content), want) {
+			t.Errorf("missing %q in:\n%s", want, content)
+		}
+	}
+	if _, err := Remove(data, EphemeralPrefix+"debian-13", "firefox-esr"); err != nil {
+		t.Fatal(err)
+	}
+}

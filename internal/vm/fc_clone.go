@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -35,6 +36,14 @@ func (c *fcClone) ID() string           { return c.id }
 func (c *fcClone) StartedAt() time.Time { return c.started }
 func (c *fcClone) Dial(ctx context.Context) (io.ReadWriteCloser, error) {
 	return firecracker.DialVsock(ctx, c.vsock, guestexec.Port)
+}
+
+// Listen listens where firecracker forwards the guest's connections to host port port:
+// the vsock socket's path with "_<port>" appended.
+func (c *fcClone) Listen(port uint32) (net.Listener, error) {
+	path := c.vsock + "_" + strconv.FormatUint(uint64(port), 10)
+	_ = os.Remove(path)
+	return net.Listen("unix", path)
 }
 
 func (b *FCBackend) RestoreClone(ctx context.Context, id string, s ephemeral.WarmSpec, dir string) (_ ephemeral.Clone, err error) {

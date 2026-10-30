@@ -51,6 +51,8 @@ type Header struct {
 	// Hostname, when set, renames the guest (and its /etc/hosts entry) the same way: every
 	// clone of a snapshot starts with the build VM's name.
 	Hostname string
+	// User runs the command as this guest user instead of root, from its home directory.
+	User string
 }
 
 // Size is a terminal size.

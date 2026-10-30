@@ -313,3 +313,20 @@ func TestServeSetsHostname(t *testing.T) {
 		t.Errorf("hostname %q, hosts %q", got, hosts)
 	}
 }
+
+func TestServeUnknownUser(t *testing.T) {
+	r := runPipe(t, context.Background(), Request{Header: Header{Argv: []string{"true"}, User: "no-such-user-anvil"}})
+	if r.err != nil || r.code != 1 || !strings.Contains(r.stderr, "no-such-user-anvil") {
+		t.Fatalf("got %+v", r)
+	}
+}
+
+func TestServeAsUser(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("switching users needs root")
+	}
+	r := runPipe(t, context.Background(), Request{Header: Header{Argv: []string{"sh", "-c", `id -un; echo "$HOME"; pwd`}, User: "nobody"}})
+	if r.err != nil || r.code != 0 || !strings.HasPrefix(r.stdout, "nobody\n") {
+		t.Fatalf("got %+v", r)
+	}
+}

@@ -77,7 +77,7 @@ func Find(ctx context.Context, fs FS, command string) (App, bool, error) {
 				continue
 			}
 			if Program(e.Exec) == want || (e.TryExec != "" && path.Base(e.TryExec) == want) {
-				return load(ctx, fs, e)
+				return Load(ctx, fs, e)
 			}
 			if fallback == nil && strings.TrimSuffix(n, ".desktop") == want {
 				fallback = &e
@@ -85,12 +85,13 @@ func Find(ctx context.Context, fs FS, command string) (App, bool, error) {
 		}
 	}
 	if fallback != nil {
-		return load(ctx, fs, *fallback)
+		return Load(ctx, fs, *fallback)
 	}
 	return App{}, false, nil
 }
 
-func load(ctx context.Context, fs FS, e Entry) (App, bool, error) {
+// Load returns e's name and icon.
+func Load(ctx context.Context, fs FS, e Entry) (App, bool, error) {
 	app := App{Name: e.Name}
 	icon, ext, size, err := findIcon(ctx, fs, e.Icon)
 	if err != nil {

@@ -1211,6 +1211,11 @@ service EphemeralService {
   // CloneExec runs a command in a clone, a shell with tty for `anvil ephemeral shell`.
   rpc CloneExec(stream CloneExecInput) returns (stream CloneExecOutput);
   rpc CloneDelete(CloneDeleteRequest) returns (CloneDeleteReply);
+
+  // RunApp runs a GUI app in a throwaway clone of a warm snapshot that has its package
+  // installed, and shows its windows through the client's waypipe. The first input is the
+  // request; display_ready follows once the client's waypipe listens in the session's dir.
+  rpc RunApp(stream AppInput) returns (stream AppEvent);
 }
 
 message TerminalSize {
@@ -1290,6 +1295,8 @@ message WarmSnapshot {
   int64 size_bytes = 8;
   int64 created_at_unix = 9;
   int64 last_used_at_unix = 10;
+  string app = 11;   // the package installed for `anvil gui --ephemeral`, empty for none
+  bool x11 = 12;     // with app: Xwayland is installed too
 }
 
 message WarmCreateRequest {
@@ -1368,4 +1375,46 @@ message CloneDeleteRequest {
 
 message CloneDeleteReply {
   repeated string deleted = 1;
+}
+
+message AppRequest {
+  string distro = 1;
+  string package = 2;           // installed in the warm snapshot when the image lacks it
+  repeated string command = 3;  // empty: the Exec of the package's desktop entry
+  bool x11 = 4;                 // also X11 apps, through xwayland-satellite
+  int32 cpus = 5;
+  int64 memory_mib = 6;         // 0 for 2048
+  string arch = 7;
+  repeated string env = 8;      // KEY=value
+  bool info_only = 9;           // build the warm snapshot and report the app, without running it
+}
+
+message AppInput {
+  oneof input {
+    AppRequest request = 1;
+    bool display_ready = 2;
+  }
+}
+
+// AppSession is where the client runs `waypipe -s <display_dir>/waypipe.sock client`.
+message AppSession {
+  string display_dir = 1;
+}
+
+// AppStarted is the app a run starts, or the one an info_only run found.
+message AppStarted {
+  string clone_id = 1;
+  string distro = 2;
+  repeated string command = 3;
+  GUIAppInfoReply info = 4;
+}
+
+message AppEvent {
+  oneof event {
+    RunProgress progress = 1;
+    RunOutput output = 2;
+    RunExit exit = 3;      // the last event
+    AppSession session = 4;
+    AppStarted app = 5;
+  }
 }

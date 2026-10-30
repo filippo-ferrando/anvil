@@ -6,14 +6,18 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 
+	"github.com/oklog/ulid/v2"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/config"
 	"git.fferrando.cc/rdfilippo/anvil/internal/ephemeral"
 	"git.fferrando.cc/rdfilippo/anvil/internal/guestexec"
+	"git.fferrando.cc/rdfilippo/anvil/internal/gui"
 	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 )
 
@@ -40,7 +44,7 @@ func warmToPB(w store.WarmSnapshot) *anvilv1.WarmSnapshot {
 	return &anvilv1.WarmSnapshot{
 		Key: w.Key, Distro: w.Distro, Arch: w.Arch, Cpus: int32(w.CPUs), MemoryMib: w.MemoryMiB, DiskGib: w.DiskGiB,
 		FirecrackerVersion: w.FirecrackerVersion, SizeBytes: w.SizeBytes,
-		CreatedAtUnix: w.CreatedAt.Unix(), LastUsedAtUnix: w.LastUsedAt.Unix(),
+		CreatedAtUnix: w.CreatedAt.Unix(), LastUsedAtUnix: w.LastUsedAt.Unix(), App: w.App, X11: w.X11,
 	}
 }
 
@@ -281,4 +285,91 @@ func (s *EphemeralServer) CloneDelete(ctx context.Context, req *anvilv1.CloneDel
 	}
 	deleted, err := s.Manager.DeleteClones(ctx, req.GetIds(), req.GetAll())
 	return &anvilv1.CloneDeleteReply{Deleted: deleted}, ephemeralErr(err)
+}
+
+// appDisplayDir is where a RunApp client's waypipe listens; a var for tests.
+var appDisplayDir = func(id string) string { return config.GUIRelayDir(id) }
+
+func (s *EphemeralServer) RunApp(stream anvilv1.EphemeralService_RunAppServer) error {
+	ctx := stream.Context()
+	first, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	req := first.GetRequest()
+	if req == nil {
+		return status.Error(codes.InvalidArgument, "ephemeral: an app run starts with its request")
+	}
+	if req.GetDistro() == "" || req.GetPackage() == "" {
+		return status.Error(codes.InvalidArgument, "ephemeral: an app run needs a distro and a package")
+	}
+	if err := ephemeral.ValidPackage(req.GetPackage()); err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	r := ephemeral.AppRequest{
+		Distro: req.GetDistro(), Arch: req.GetArch(), Package: req.GetPackage(), Command: req.GetCommand(),
+		Env: req.GetEnv(), X11: req.GetX11(), CPUs: int(req.GetCpus()), MemoryMiB: req.GetMemoryMib(), InfoOnly: req.GetInfoOnly(),
+	}
+	var mu sync.Mutex // grpc streams take one Send at a time
+	var sendErr error
+	send := func(ev *anvilv1.AppEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		if sendErr == nil {
+			sendErr = stream.Send(ev)
+		}
+	}
+	if !r.InfoOnly {
+		// World-writable like a container's relay dir: the client's user varies, and the
+		// parent run dir keeps other host users out.
+		dir := appDisplayDir("app-" + ulid.Make().String())
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return wrapErr(err)
+		}
+		defer os.RemoveAll(dir)
+		if err := os.Chmod(dir, 0o777); err != nil {
+			return wrapErr(err)
+		}
+		ready := make(chan struct{})
+		r.Display, r.DisplayReady = filepath.Join(dir, gui.AppDisplaySocket), ready
+		go func() {
+			once := false
+			for {
+				in, err := stream.Recv()
+				if err != nil {
+					return
+				}
+				if in.GetDisplayReady() && !once {
+					once = true
+					close(ready)
+				}
+			}
+		}()
+		send(&anvilv1.AppEvent{Event: &anvilv1.AppEvent_Session{Session: &anvilv1.AppSession{DisplayDir: dir}}})
+	}
+	err = s.Manager.RunApp(ctx, r, func(ev ephemeral.Event) {
+		if ev.App == nil {
+			re := runEventToPB(ev)
+			switch e := re.GetEvent().(type) {
+			case *anvilv1.RunEvent_Progress:
+				send(&anvilv1.AppEvent{Event: &anvilv1.AppEvent_Progress{Progress: e.Progress}})
+			case *anvilv1.RunEvent_Output:
+				send(&anvilv1.AppEvent{Event: &anvilv1.AppEvent_Output{Output: e.Output}})
+			case *anvilv1.RunEvent_Exit:
+				send(&anvilv1.AppEvent{Event: &anvilv1.AppEvent_Exit{Exit: e.Exit}})
+			}
+			return
+		}
+		a := ev.App
+		send(&anvilv1.AppEvent{Event: &anvilv1.AppEvent_App{App: &anvilv1.AppStarted{
+			CloneId: a.CloneID, Distro: a.Distro, Command: a.Command,
+			Info: &anvilv1.GUIAppInfoReply{Found: a.FromEntry, AppName: a.Name, Icon: a.Icon, IconExt: a.IconExt, IconSize: int32(a.IconSize)},
+		}}})
+	})
+	if err != nil {
+		return ephemeralErr(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return sendErr
 }

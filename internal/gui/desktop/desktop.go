@@ -35,7 +35,13 @@ type Spec struct {
 	X11                   bool
 	User                  string
 	Title, Icon           string // launcher name and icon file, both optional
+	// Package, when set, makes it an `anvil gui --ephemeral` entry: Instance is then the distro.
+	Package string
+	Flags   []string // more `anvil gui` flags, e.g. --memory for an ephemeral entry
 }
+
+// EphemeralPrefix marks the instance of an `anvil gui --ephemeral` entry, followed by its distro.
+const EphemeralPrefix = "ephemeral:"
 
 // DataHome returns $XDG_DATA_HOME, or ~/.local/share when it is not set.
 func DataHome() (string, error) {
@@ -51,12 +57,20 @@ func DataHome() (string, error) {
 
 // Write writes the desktop entry (and icon) for s under dataDir, returning its path.
 func Write(dataDir string, s Spec, info *anvilv1.GUIAppInfoReply) (string, error) {
-	app := slug(filepath.Base(s.Command[0]))
-	base := baseName(s.Instance, app)
+	instance, app := s.Instance, ""
+	if s.Package != "" {
+		instance, app = EphemeralPrefix+s.Instance, slug(s.Package)
+	} else {
+		app = slug(filepath.Base(s.Command[0]))
+	}
+	base := baseName(instance, app)
 
 	title := s.Title
 	if title == "" {
 		title = info.GetAppName()
+	}
+	if title == "" && s.Package != "" {
+		title = s.Package
 	}
 	if title == "" {
 		title = filepath.Base(s.Command[0])
@@ -90,23 +104,37 @@ func Write(dataDir string, s Spec, info *anvilv1.GUIAppInfoReply) (string, error
 		args = append(args, "--remote", s.Remote)
 	}
 	args = append(args, "gui", "--detach")
+	if s.Package != "" {
+		args = append(args, "--ephemeral")
+	}
 	if s.X11 {
 		args = append(args, "--x11")
 	}
 	if s.User != "" {
 		args = append(args, "--user", s.User)
 	}
-	args = append(args, s.Instance, "--")
-	args = append(args, s.Command...)
+	args = append(args, s.Flags...)
+	args = append(args, s.Instance)
+	if s.Package != "" {
+		args = append(args, s.Package)
+	}
+	if len(s.Command) > 0 {
+		args = append(append(args, "--"), s.Command...)
+	}
 
+	name, comment := fmt.Sprintf("%s (%s)", title, s.Instance), "Runs in the anvil instance "+s.Instance
+	if s.Package != "" {
+		name = fmt.Sprintf("%s (throwaway %s)", title, s.Instance)
+		comment = "Runs in a throwaway anvil clone of " + s.Instance + ", deleted when the app exits"
+	}
 	var b strings.Builder
 	b.WriteString("[Desktop Entry]\nType=Application\n")
-	fmt.Fprintf(&b, "Name=%s (%s)\n", escapeValue(title), escapeValue(s.Instance))
-	fmt.Fprintf(&b, "Comment=Runs in the anvil instance %s\n", escapeValue(s.Instance))
+	fmt.Fprintf(&b, "Name=%s\n", escapeValue(name))
+	fmt.Fprintf(&b, "Comment=%s\n", escapeValue(comment))
 	fmt.Fprintf(&b, "Exec=%s\n", execValue(args))
 	fmt.Fprintf(&b, "Icon=%s\n", escapeValue(iconValue))
 	b.WriteString("Terminal=false\nCategories=Utility;\n")
-	fmt.Fprintf(&b, "X-Anvil-Instance=%s\n", escapeValue(s.Instance))
+	fmt.Fprintf(&b, "X-Anvil-Instance=%s\n", escapeValue(instance))
 	fmt.Fprintf(&b, "X-Anvil-App=%s\n", app)
 	fmt.Fprintf(&b, "X-Anvil-Title=%s\n", escapeValue(title))
 	fmt.Fprintf(&b, "X-Anvil-Command=%s\n", escapeValue(strings.Join(s.Command, " ")))

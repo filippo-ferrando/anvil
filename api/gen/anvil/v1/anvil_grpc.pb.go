@@ -3308,6 +3308,7 @@ const (
 	EphemeralService_CloneList_FullMethodName   = "/anvil.v1.EphemeralService/CloneList"
 	EphemeralService_CloneExec_FullMethodName   = "/anvil.v1.EphemeralService/CloneExec"
 	EphemeralService_CloneDelete_FullMethodName = "/anvil.v1.EphemeralService/CloneDelete"
+	EphemeralService_RunApp_FullMethodName      = "/anvil.v1.EphemeralService/RunApp"
 )
 
 // EphemeralServiceClient is the client API for EphemeralService service.
@@ -3329,6 +3330,10 @@ type EphemeralServiceClient interface {
 	// CloneExec runs a command in a clone, a shell with tty for `anvil ephemeral shell`.
 	CloneExec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[CloneExecInput, CloneExecOutput], error)
 	CloneDelete(ctx context.Context, in *CloneDeleteRequest, opts ...grpc.CallOption) (*CloneDeleteReply, error)
+	// RunApp runs a GUI app in a throwaway clone of a warm snapshot that has its package
+	// installed, and shows its windows through the client's waypipe. The first input is the
+	// request; display_ready follows once the client's waypipe listens in the session's dir.
+	RunApp(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[AppInput, AppEvent], error)
 }
 
 type ephemeralServiceClient struct {
@@ -3424,6 +3429,19 @@ func (c *ephemeralServiceClient) CloneDelete(ctx context.Context, in *CloneDelet
 	return out, nil
 }
 
+func (c *ephemeralServiceClient) RunApp(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[AppInput, AppEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &EphemeralService_ServiceDesc.Streams[3], EphemeralService_RunApp_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[AppInput, AppEvent]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EphemeralService_RunAppClient = grpc.BidiStreamingClient[AppInput, AppEvent]
+
 // EphemeralServiceServer is the server API for EphemeralService service.
 // All implementations must embed UnimplementedEphemeralServiceServer
 // for forward compatibility.
@@ -3443,6 +3461,10 @@ type EphemeralServiceServer interface {
 	// CloneExec runs a command in a clone, a shell with tty for `anvil ephemeral shell`.
 	CloneExec(grpc.BidiStreamingServer[CloneExecInput, CloneExecOutput]) error
 	CloneDelete(context.Context, *CloneDeleteRequest) (*CloneDeleteReply, error)
+	// RunApp runs a GUI app in a throwaway clone of a warm snapshot that has its package
+	// installed, and shows its windows through the client's waypipe. The first input is the
+	// request; display_ready follows once the client's waypipe listens in the session's dir.
+	RunApp(grpc.BidiStreamingServer[AppInput, AppEvent]) error
 	mustEmbedUnimplementedEphemeralServiceServer()
 }
 
@@ -3473,6 +3495,9 @@ func (UnimplementedEphemeralServiceServer) CloneExec(grpc.BidiStreamingServer[Cl
 }
 func (UnimplementedEphemeralServiceServer) CloneDelete(context.Context, *CloneDeleteRequest) (*CloneDeleteReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method CloneDelete not implemented")
+}
+func (UnimplementedEphemeralServiceServer) RunApp(grpc.BidiStreamingServer[AppInput, AppEvent]) error {
+	return status.Error(codes.Unimplemented, "method RunApp not implemented")
 }
 func (UnimplementedEphemeralServiceServer) mustEmbedUnimplementedEphemeralServiceServer() {}
 func (UnimplementedEphemeralServiceServer) testEmbeddedByValue()                          {}
@@ -3592,6 +3617,13 @@ func _EphemeralService_CloneDelete_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EphemeralService_RunApp_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(EphemeralServiceServer).RunApp(&grpc.GenericServerStream[AppInput, AppEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EphemeralService_RunAppServer = grpc.BidiStreamingServer[AppInput, AppEvent]
+
 // EphemeralService_ServiceDesc is the grpc.ServiceDesc for EphemeralService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -3631,6 +3663,12 @@ var EphemeralService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "CloneExec",
 			Handler:       _EphemeralService_CloneExec_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "RunApp",
+			Handler:       _EphemeralService_RunApp_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
 		},

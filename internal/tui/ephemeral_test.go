@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 )
@@ -102,5 +103,20 @@ func TestEphemeralScreenKeys(t *testing.T) {
 	}
 	if !slices.Contains(screenOrder, screenEphemeral) || screenLabels[screenEphemeral] == "" {
 		t.Error("the Ephemeral screen is missing from the sidebar")
+	}
+}
+
+func TestRunPaneSteps(t *testing.T) {
+	p := &runPane{status: "waiting", since: time.Now()}
+	p.setStatus("building the warm snapshot")
+	p.since = p.since.Add(-5 * time.Second)
+	p.setStatus("building the warm snapshot") // same step: no line yet
+	p.setStatus("running: make")
+	if len(p.lines) != 1 || p.lines[0] != "· building the warm snapshot  (5s)" {
+		t.Fatalf("lines %q", p.lines)
+	}
+	p.setStatus("done") // quick step: nothing kept
+	if len(p.lines) != 1 {
+		t.Fatalf("lines %q", p.lines)
 	}
 }

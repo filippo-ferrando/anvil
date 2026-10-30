@@ -95,9 +95,9 @@ func newWarmListCommand(flags *globalFlags) *cobra.Command {
 					return printJSON(os.Stdout, reply)
 				}
 				tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-				fmt.Fprintln(tw, "KEY\tDISTRO\tARCH\tCPUS\tMEMORY\tSIZE\tLAST USED")
+				fmt.Fprintln(tw, "KEY\tDISTRO\tAPP\tARCH\tCPUS\tMEMORY\tSIZE\tLAST USED")
 				for _, w := range reply.GetSnapshots() {
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%d MiB\t%s\t%s\n", w.GetKey(), w.GetDistro(), w.GetArch(), w.GetCpus(),
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%d MiB\t%s\t%s\n", w.GetKey(), w.GetDistro(), warmApp(w), w.GetArch(), w.GetCpus(),
 						w.GetMemoryMib(), progress.Bytes(w.GetSizeBytes()), time.Unix(w.GetLastUsedAtUnix(), 0).Format("2006-01-02 15:04"))
 				}
 				return tw.Flush()
@@ -129,4 +129,15 @@ func newWarmRmCommand(flags *globalFlags) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "remove every warm snapshot")
 	return cmd
+}
+
+// warmApp is the APP column: the package an `anvil gui --ephemeral` snapshot has, "-" for none.
+func warmApp(w *anvilv1.WarmSnapshot) string {
+	switch {
+	case w.GetApp() == "":
+		return "-"
+	case w.GetX11():
+		return w.GetApp() + " (x11)"
+	}
+	return w.GetApp()
 }

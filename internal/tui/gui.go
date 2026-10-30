@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -104,22 +105,68 @@ func guiCLIArgs(socketPath, remote string, sub []string, name string, g guiReque
 	return append(args, strings.Fields(g.command)...)
 }
 
+// appRequest is what the Ephemeral screen's GUI app form asks for.
+type appRequest struct {
+	distro, pkg, command string
+	x11, export          bool
+	cpus, memory         int64
+}
+
+// ephemeralAppArgs builds `anvil gui --detach --ephemeral` (sub "gui --detach") or
+// `anvil gui export --ephemeral` (sub "gui export") for a.
+func ephemeralAppArgs(socketPath string, sub []string, a appRequest) []string {
+	var args []string
+	if socketPath != "" {
+		args = append(args, "--socket", socketPath)
+	}
+	args = append(append(args, sub...), "--ephemeral")
+	if a.x11 {
+		args = append(args, "--x11")
+	}
+	if a.cpus > 0 {
+		args = append(args, "--cpus", strconv.FormatInt(a.cpus, 10))
+	}
+	if a.memory > 0 {
+		args = append(args, "--memory", strconv.FormatInt(a.memory, 10))
+	}
+	args = append(args, a.distro, a.pkg)
+	if cmd := strings.Fields(a.command); len(cmd) > 0 {
+		args = append(append(args, "--"), cmd...)
+	}
+	return args
+}
+
+// launchEphemeralApp starts a's app in a throwaway clone through the anvil CLI, after
+// `anvil gui export --ephemeral` with export.
+func launchEphemeralApp(socketPath string, a appRequest) tea.Cmd {
+	calls := [][]string{ephemeralAppArgs(socketPath, []string{"gui", "--detach"}, a)}
+	if a.export {
+		calls = append([][]string{ephemeralAppArgs(socketPath, []string{"gui", "export"}, a)}, calls...)
+	}
+	return runGUICalls(calls)
+}
+
 // launchGUIApp starts the app through the anvil CLI, which keeps running after the TUI quits.
 // With export it first adds the app to the desktop's launcher, the same as `anvil gui export`.
 func launchGUIApp(socketPath, remote, name string, g guiRequest) tea.Cmd {
+	calls := [][]string{guiArgs(socketPath, remote, name, g)}
+	if g.export {
+		calls = append([][]string{guiExportArgs(socketPath, remote, name, g)}, calls...)
+	}
+	return runGUICalls(calls)
+}
+
+// runGUICalls runs the anvil CLI once per call, in order, stopping at the first failure.
+func runGUICalls(calls [][]string) tea.Cmd {
 	return func() tea.Msg {
 		exe, err := os.Executable()
 		if err != nil {
 			return guiLaunchedMsg{err: err}
 		}
 		var lines []string
-		calls := [][]string{guiArgs(socketPath, remote, name, g)}
-		if g.export {
-			calls = append([][]string{guiExportArgs(socketPath, remote, name, g)}, calls...)
-		}
 		for _, args := range calls {
 			out, err := exec.Command(exe, args...).CombinedOutput()
-			text := strings.TrimSpace(string(out))
+			text := lastLine(string(out)) // an export's progress lines come first
 			if err != nil {
 				if text != "" {
 					err = errors.New(strings.TrimPrefix(text, "anvil: "))
@@ -132,4 +179,9 @@ func launchGUIApp(socketPath, remote, name string, g guiRequest) tea.Cmd {
 		}
 		return guiLaunchedMsg{output: strings.Join(lines, "; ")}
 	}
+}
+
+func lastLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
 }

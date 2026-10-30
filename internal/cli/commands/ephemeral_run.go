@@ -104,6 +104,8 @@ func runEphemeral(cmd *cobra.Command, flags *globalFlags, distros []string, path
 	defer restore()
 
 	out := newRunPrinter(os.Stdout, os.Stderr, distros, f.tty)
+	stopLive := out.live()
+	defer stopLive()
 	if f.logs != "" {
 		if err := out.openLogs(f.logs); err != nil {
 			return err
@@ -117,6 +119,7 @@ func runEphemeral(cmd *cobra.Command, flags *globalFlags, distros []string, path
 		}
 		if err != nil {
 			restore()
+			out.stopBoard()
 			if status.Code(err) == codes.Canceled || ctx.Err() != nil {
 				fmt.Fprintln(os.Stderr, "anvil: cancelled, the clones are deleted")
 				return ExitError{Code: 130}
@@ -216,6 +219,7 @@ type runPrinter struct {
 	logs           map[string]*os.File
 	exits          map[string]*anvilv1.RunExit
 	order          []string
+	board          *statusBoard // live steps at the bottom of a terminal, nil elsewhere
 }
 
 var prefixColors = []string{"36", "33", "35", "32", "34", "91", "96", "93"}
@@ -229,7 +233,35 @@ func newRunPrinter(stdout, stderr io.Writer, distros []string, raw bool) *runPri
 		p.colors[d] = prefixColors[i%len(prefixColors)]
 		p.width = max(p.width, len(d))
 	}
+	// A -t run's terminal is in raw mode, where the board's line moves don't hold.
+	if !raw && isTerminalWriter(stderr) && os.Getenv("TERM") != "dumb" {
+		p.board = newStatusBoard(stderr, distros)
+	}
 	return p
+}
+
+// live starts the board's spinner, when there is a board; the returned func stops it.
+func (p *runPrinter) live() func() {
+	if p.board == nil {
+		return func() {}
+	}
+	return p.board.start()
+}
+
+// stopBoard takes the board off screen for good.
+func (p *runPrinter) stopBoard() {
+	if p.board != nil {
+		p.board.stop()
+	}
+}
+
+// print runs write above the board, or straight away without one.
+func (p *runPrinter) print(write func()) {
+	if p.board == nil {
+		write()
+		return
+	}
+	p.board.print(write)
 }
 
 func (p *runPrinter) openLogs(dir string) error {
@@ -265,7 +297,17 @@ func (p *runPrinter) event(ev *anvilv1.RunEvent) {
 	switch {
 	case ev.GetProgress() != nil:
 		pr := ev.GetProgress()
-		fmt.Fprintf(p.stderr, "%s%s\n", p.prefix(pr.GetDistro()), dim(p.color, pr.GetMessage()))
+		if p.board != nil {
+			p.board.set(pr.GetDistro(), pr.GetMessage(), func(d, line string) {
+				fmt.Fprintf(p.stderr, "%s%s\n", p.prefix(d), dim(p.color, line))
+			})
+			return
+		}
+		eol := "\n"
+		if p.raw {
+			eol = "\r\n" // the terminal is in raw mode
+		}
+		fmt.Fprintf(p.stderr, "%s%s%s", p.prefix(pr.GetDistro()), dim(p.color, pr.GetMessage()), eol)
 	case ev.GetOutput() != nil:
 		o := ev.GetOutput()
 		if f := p.logs[o.GetDistro()]; f != nil {
@@ -279,10 +321,13 @@ func (p *runPrinter) event(ev *anvilv1.RunEvent) {
 			_, _ = w.Write(o.GetData())
 			return
 		}
-		p.writeLines(o.GetDistro(), o.GetStream(), w, o.GetData())
+		p.print(func() { p.writeLines(o.GetDistro(), o.GetStream(), w, o.GetData()) })
 	case ev.GetExit() != nil:
 		x := ev.GetExit()
-		p.flush(x.GetDistro())
+		p.print(func() { p.flush(x.GetDistro()) })
+		if p.board != nil {
+			p.board.done(x.GetDistro())
+		}
 		p.exits[x.GetDistro()] = x
 	}
 }
@@ -323,6 +368,7 @@ func (p *runPrinter) flush(distro string) {
 
 // finish prints the summary table: one row per distro, in the order asked.
 func (p *runPrinter) finish() {
+	p.stopBoard()
 	for _, d := range p.order {
 		p.flush(d)
 	}

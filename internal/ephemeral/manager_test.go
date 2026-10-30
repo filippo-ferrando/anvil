@@ -26,6 +26,7 @@ import (
 // with the real guestexec server, here on the host.
 type fakeEngine struct {
 	builds   atomic.Int32
+	setups   atomic.Int32 // builds with a setup
 	buildErr error
 	mu       sync.Mutex
 	deleted  []string
@@ -39,8 +40,11 @@ func (f *fakeEngine) WarmSpec(p WarmParams) (WarmSpec, error) {
 	return WarmSpec{Key: "k" + p.Distro + fmt.Sprint(p.CPUs), Distro: p.Distro, CPUs: p.CPUs, MemoryMiB: 512}, nil
 }
 
-func (f *fakeEngine) BuildWarm(_ context.Context, s WarmSpec, dir string, progress func(string)) error {
+func (f *fakeEngine) BuildWarm(_ context.Context, s WarmSpec, dir string, setup Setup, progress func(string)) error {
 	f.builds.Add(1)
+	if setup != nil {
+		f.setups.Add(1)
+	}
 	time.Sleep(50 * time.Millisecond) // long enough for concurrent callers to pile up
 	if f.buildErr != nil {
 		return f.buildErr
@@ -75,10 +79,20 @@ func (f *fakeEngine) SweepClones(context.Context) error { f.swept = true; return
 type fakeClone struct {
 	id      string
 	started time.Time
+	vsock   string // where Listen listens, set by Listen
 }
 
 func (c *fakeClone) ID() string           { return c.id }
 func (c *fakeClone) StartedAt() time.Time { return c.started }
+func (c *fakeClone) Listen(port uint32) (net.Listener, error) {
+	dir, err := os.MkdirTemp("", "fakeclone")
+	if err != nil {
+		return nil, err
+	}
+	c.vsock = filepath.Join(dir, fmt.Sprintf("vsock_%d", port))
+	return net.Listen("unix", c.vsock)
+}
+
 func (c *fakeClone) Dial(context.Context) (io.ReadWriteCloser, error) {
 	host, guest := net.Pipe()
 	go func() { _ = guestexec.Serve(guest) }()

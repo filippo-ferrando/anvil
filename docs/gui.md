@@ -67,6 +67,48 @@ A Firecracker VM has no virtiofs: the tools dir is packed once into a read-only 
 (`/var/cache/anvil/images/firecracker/gui-tools.iso`, rebuilt when the tools change),
 attached as a drive at start and mounted by its label (`anviltools`).
 
+## Throwaway apps
+
+`anvil gui --ephemeral <distro> <package>` runs an app in a throwaway clone instead of an
+instance, for apps that shouldn't touch anything else: an unknown download, a browser
+for a dubious link, a document from a stranger. The clone is deleted when the app exits,
+along with everything the app wrote.
+
+```
+anvil gui --ephemeral debian-13 firefox-esr
+anvil gui --ephemeral fedora-42 libreoffice -- libreoffice --writer
+anvil gui --ephemeral --memory 4096 debian-13 gimp
+```
+
+- `<package>` is installed with the distro's own package manager (apt, dnf, zypper,
+  pacman or apk) when the image doesn't have it yet. This happens once: the install goes
+  into a warm snapshot of that distro with that package, the GUI tools and, with `--x11`,
+  Xwayland. Later runs restore a clone of it in under a second. `anvil warm list` shows
+  these snapshots in its APP column, and `anvil warm rm` removes them.
+- The command defaults to the `Exec` line of the package's own desktop entry (the one
+  named like the package, or the first one), else to a command named like the package.
+  Put another one after `--`.
+- The app runs as the image's default user, with a D-Bus session when the guest has
+  `dbus-run-session`.
+- `--memory` (default 2048 MiB), `--cpus` (default 2), `--arch` and `-e KEY=value` size and
+  set up the clone. Size is part of the warm snapshot's key, like for `launch --ephemeral`.
+- `--detach` works the same as for instances.
+
+Same requirements as [ephemeral runs](ephemeral.md#requirements) (Firecracker with its
+jailer), plus the GUI tools. The clone has outbound network only and no GPU, and gets no
+mounts from the host. Ubuntu's `firefox` package is a snap, which doesn't work in a
+clone: use Debian's `firefox-esr`, or Fedora's `firefox`.
+
+`anvil gui export --ephemeral <distro> <package>` adds such an app to the launcher. The
+export builds the warm snapshot right away, so the first click is fast, and takes the
+app's name and icon from a clone. `anvil gui exports` lists it with the instance
+`ephemeral:<distro>`, which is also what `anvil gui unexport` takes.
+
+How it works: the clone's waypipe connects to the host over vsock (Firecracker passes a
+guest connection to host port 7100 to a unix socket next to the clone's vsock socket).
+anvild joins each connection to the `waypipe client` the CLI starts in a per-run directory
+under `/run/anvil/gui`, so the waypipe that talks to the desktop runs as the desktop user.
+
 ## Desktop entries
 
 `anvil gui export` adds an instance's app to the host's app launcher. The entry runs
@@ -94,6 +136,9 @@ On the Instances screen, `g` opens the GUI app form: command, an "X11 app" toggl
 keeps running after the TUI quits. The detail panel shows whether the instance supports
 GUI apps.
 
+On the Ephemeral screen, `a` opens the same form for a throwaway app: distro, package,
+optional command, X11, clone size and "Add to desktop".
+
 The **GUI Apps** screen lists the exported entries of the machine running the TUI (like
 `anvil gui exports`): `enter` starts the app with the entry's own command line, `x`
 removes it after a confirmation (like `anvil gui unexport`).
@@ -101,7 +146,7 @@ removes it after a confirmation (like `anvil gui unexport`).
 ## Limitations
 
 - Wayland hosts only, no plain X11 host session.
-- `--remote` works for VMs, not yet for containers.
+- `--remote` works for VMs, not yet for containers or `--ephemeral`.
 - The host GPU is passed through to containers only, VM apps get no GPU access.
 
 ## Building the tools

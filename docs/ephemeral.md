@@ -29,7 +29,11 @@ snapshot first, which takes as long as a first boot (seconds to a minute).
 ## Output
 
 Each line of output carries its distro, in its own color on a terminal, and lines of
-different clones never mix. A summary follows on stderr:
+different clones never mix. On a terminal, the bottom lines show each clone's current
+step (building its warm snapshot, waiting for cloud-init, restoring, running) with a
+spinner and the time spent on it, redrawn in place while the output scrolls above. A step
+that took more than a second stays above once it is done, with its time. Off a terminal
+every step is printed on its own line instead. A summary follows on stderr:
 
 ```
 [ubuntu-24.04] ok
@@ -90,8 +94,9 @@ same layout inside; [networking.md](networking.md#ephemeral-clones) has the deta
 ## TUI
 
 The Ephemeral screen lists warm snapshots and clones (`tab` switches between them). `c`
-builds a warm snapshot, `n` starts a run with one pane per clone, `s` opens a shell in a
-clone and `x` removes the selected one.
+builds a warm snapshot, `n` starts a run with one pane per clone, `a` starts a GUI app in
+a throwaway clone ([gui.md](gui.md#throwaway-apps)), `s` opens a shell in a clone and `x`
+removes the selected one. Each pane shows the clone's current step with a spinner.
 
 ## How it works
 
@@ -107,6 +112,8 @@ clone and `x` removes the selected one.
   `clock_realtime` doesn't fix on the `tsc` clocksource.
 - **Commands.** `anvil-guest` runs one command per vsock connection, as root, with the
   upload, stdio, an optional terminal and the exit code (`internal/guestexec`).
+
+GUI apps in clones (`anvil gui --ephemeral`) are covered in [gui.md](gui.md#throwaway-apps).
 
 Not done yet: ephemeral runs under QEMU, inbound networking to clones, a limit on how many
 clones start at once (a large matrix starts them all), user cloud-init for ephemeral runs.
