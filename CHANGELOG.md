@@ -8,6 +8,10 @@ Built from commit subjects by `scripts/changelog.sh`.
 
 - test build (ee8f217)
 
+### Fixes
+
+- first fixes batch (e7fab49)
+
 ### Other changes
 
 - started working on new features (399cc47)
