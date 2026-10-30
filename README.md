@@ -114,8 +114,6 @@ The longer write-up is in [docs/comparison.md](docs/comparison.md).
 - Firecracker microVMs with `--hypervisor firecracker`, the same commands and features,
   see [docs/firecracker.md](docs/firecracker.md)
 - USB and PCI passthrough to QEMU VMs with `--device`, see [docs/passthrough.md](docs/passthrough.md)
-- throwaway runs on warm Firecracker clones, one distro (`anvil launch --ephemeral ubuntu-24.04
-  . -- make test`) or several at once (`anvil matrix`), see [docs/ephemeral.md](docs/ephemeral.md)
 - real cloud-init under the hood, plus a saved cloud-init config library to write,
   edit, and reuse (`anvil cloud-init`)
 - `anvil shell` / `anvil exec` / `anvil transfer` over real SSH, using a keypair Anvil
@@ -133,6 +131,31 @@ The longer write-up is in [docs/comparison.md](docs/comparison.md).
   mirrored alike
 - `anvil set` grows the disk and changes CPUs/memory, all live on a running VM; `--autostart` and
   `--restart no|on-failure[:N]|always` keep long-running VMs and containers up
+
+**Ephemeral and matrix runs**: run one command on a throwaway VM, or on several distros
+at once, and get the exit code back:
+
+```
+anvil launch --ephemeral ubuntu-24.04 . -- make test
+anvil matrix ubuntu-24.04,debian-13,alpine-3.22 . -- ./ci/check.sh
+```
+
+Each clone is restored from a warm Firecracker snapshot (a VM booted once, cloud-init
+done, paused and saved), so a run starts in a few hundred milliseconds, about as fast as
+`docker run`. The path before `--` is uploaded into `/work` (only what git doesn't ignore,
+in a git repo). Output lines are prefixed with their distro and never mix, followed by a
+summary table; `--logs <dir>` keeps one log per distro.
+
+- `anvil warm create|list|rm` builds warm snapshots ahead of time (a run builds a missing
+  one on demand); `--cpus`/`--memory` size the clones, each size has its own snapshot
+- `launch --ephemeral -t` gives an interactive terminal, a piped stdin is passed on
+- `--keep-failed` keeps a failed clone running, for `anvil ephemeral list|shell|rm`
+- clones get outbound NAT only, each in its own network namespace: they can't reach each
+  other, the host or other instances
+- commands run through `anvil-guest`, a small static runner over vsock, no SSH or network
+  needed inside the clone
+
+Needs Firecracker with its jailer, see [docs/ephemeral.md](docs/ephemeral.md).
 
 **Containers**, talking to Docker's real HTTP API directly (Podman backend is on the
 way, tracked separately, see [limitations](#status--limitations)):
@@ -270,6 +293,10 @@ the daemon as a proper systemd service running under its own unprivileged `anvil
 formats) sets up the user, generates a migration keypair, and adds `anvil` to the
 `docker` group if it's already installed.
 
+The `anvild` package also ships static `firecracker`/`jailer` builds in
+`/usr/lib/anvil/firecracker` and `anvil-guest` in `/usr/lib/anvil/guest`, so Firecracker
+VMs and ephemeral runs work without extra installs.
+
 ### Debian/Ubuntu and Fedora/RHEL
 
 The same two packages build from `packaging/deb/build.sh` and `packaging/rpm/build.sh`.
@@ -284,13 +311,18 @@ usually installed outside `PATH`, e.g. `/usr/lib/virtiofsd`).
 
 ```
 make proto          # regenerate api/gen/anvil/v1 from the .proto file
-make build          # builds ./anvil and ./anvild
+make build          # builds ./anvil, ./anvild and ./anvil-guest
 make man            # optional: man pages into man/man1 and man/man8
 make gui-tools      # optional: static waypipe/xwayland-satellite for `anvil gui` with VMs (needs docker)
+make firecracker    # optional: static firecracker/jailer release into build/firecracker
+make fc-kernel      # optional: anvil's Firecracker guest kernel (needs docker, ARCH=aarch64 for arm64)
+make update-tools   # bump the pinned GUI tools and firecracker versions in scripts/tools.versions
 ```
 
-The packages install the GUI tools in `/usr/lib/anvil/gui`. For a source build, copy
-`build/gui-tools/*` there or point `ANVIL_GUI_TOOLS` at that directory.
+The packages install the GUI tools in `/usr/lib/anvil/gui`, firecracker/jailer in
+`/usr/lib/anvil/firecracker` and `anvil-guest` in `/usr/lib/anvil/guest`. For a source
+build, copy the built files there or point `ANVIL_GUI_TOOLS`, `ANVIL_FIRECRACKER_DIR` and
+`ANVIL_GUEST_TOOLS` at their directories.
 
 ## Quick start
 
@@ -329,11 +361,14 @@ Less visible commands and flags, all listed in `anvil <command> --help` and the 
 | `anvil host discover --add <name> [--user U]` | save a host found over mDNS as a known host in one step |
 | `anvil apply -y` | apply without the confirmation asked on a terminal |
 | `anvil image containers delete [--force] <id>` | delete a container engine image, refused while a container uses it unless `--force` |
+| `anvil launch --ephemeral -e KEY=VALUE --logs <dir> --keep-failed` | env vars for the command, one log file per distro, keep failed clones (same flags on `anvil matrix`) |
+| `anvil warm list` / `anvil warm rm <key>\|--all` | list or delete warm snapshots (a key or a unique start of one) |
+| `anvil ephemeral shell <clone> [-- <cmd>]` | root shell, or one command, in a clone kept by `--keep-failed` |
 
 ## The TUI
 
 `anvil tui` is a sidebar-driven view over Instances, Snapshots, Images, Intents, Manifests,
-Cloud-Init, Mirrors, Migration, Events, Devices, and GUI Apps, over the exact same gRPC API the CLI uses
+Cloud-Init, Mirrors, Migration, Events, Devices, GUI Apps, and Ephemeral, over the exact same gRPC API the CLI uses
 (`anvil stats <name>` is the CLI's own window into the same data). Shell/exec sessions
 hand the real terminal off to `ssh`/`docker exec` and back, logs stream live, and launch progress redraws in place
 instead of scrolling the terminal into oblivion.
@@ -349,6 +384,10 @@ The Migration screen lists the known hosts beside a migrate form: `a` adds a hos
 scans the local network over mDNS (`enter` on a result opens the add form prefilled),
 `t` tests one, `x` removes one, and `tab` moves over to the migrate form, which
 suggests instance and intent names for Name and known host aliases for To.
+
+The Ephemeral screen lists warm snapshots and kept clones (`tab` switches between them):
+`c` builds a warm snapshot, `n` starts a run with one live pane per clone, `s` opens a
+shell in a clone and `x` removes the selected one.
 
 ## How it's built
 
@@ -374,12 +413,15 @@ speaks gRPC through that pipe to the local socket there.
 ```
 cmd/anvild/      daemon entrypoint
 cmd/anvil/       CLI entrypoint
+cmd/anvil-guest/ static command runner inside ephemeral clones, over vsock
 pkg/client/      thin gRPC client (unix socket or SSH), shared by the CLI and TUI
 internal/
   daemon/        gRPC service implementation
   instance/      domain model + the Manager
   vm/            VM backends (QEMU and Firecracker), cloud-init, image catalog
-  vm/firecracker/  Firecracker process, REST API client, vsock, jailer
+  vm/firecracker/  Firecracker process, REST API client, snapshots, vsock, jailer
+  ephemeral/     warm snapshots and throwaway clones behind `--ephemeral`, `matrix`, `warm`
+  guestexec/     anvil-guest's protocol, its server and the host's client
   vm/vz/         Apple Virtualization.framework backend (stub, not implemented)
   container/     Docker backend (Podman lands here too, eventually)
   intent/        grouping, shared bridge networking per intent
@@ -388,7 +430,7 @@ internal/
   migrate/       SSH-driven migration
   discovery/     mDNS announce and browse behind `anvil host discover`
   export/        bundles behind `anvil export` and `anvil import`
-  hostdev/       host USB/PCI listing and the root helper behind `--device`
+  hostdev/       host USB/PCI listing and the root helper behind `--device` and clone netns
   gui/           `anvil gui`: socket relay for containers, app name/icon lookup
   config/        fixed on-disk paths (run, state, cache, GUI tools)
   store/         bbolt-backed registry
@@ -398,7 +440,8 @@ api/proto/       the gRPC API definition
 data/distros/    the built-in VM image catalog
 catalog/         the official extra catalogue (git submodule)
 packaging/       PKGBUILD, deb/rpm build scripts, systemd unit, sysusers/tmpfiles rules
-scripts/         catalog checksum check, release notes and changelog from commit subjects, static GUI tools build
+scripts/         catalog checksum check, release notes and changelog, static GUI tools and
+                 firecracker builds, pinned tool versions, Firecracker guest kernel build
 ```
 
 ## Documentation
@@ -433,6 +476,9 @@ aren't there yet:
   The daemon compiles for darwin, but the VM backend is still a stub; Linux is the only
   host that runs VMs today.
 - **`anvil gui`** needs a Wayland host session, and with `--remote` it only works for VMs.
+- **Ephemeral runs** are Firecracker-only and need the jailer. There is no inbound
+  networking to clones and no limit on how many start at once, so a large matrix starts
+  every clone together.
 - **Podman** isn't wired up. `--engine podman` fails cleanly instead of pretending to
   work; Docker is the only engine right now.
 - The built-in image catalog's checksums are a work in progress: run
