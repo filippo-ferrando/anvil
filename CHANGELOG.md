@@ -2,6 +2,17 @@
 
 Built from commit subjects by `scripts/changelog.sh`.
 
+## v1.3.0 (2026-10-30)
+
+### Features
+
+- ephemeral release (12edcf2)
+- update readme (b0454f6)
+
+### Other changes
+
+- update docs (969ae32)
+
 ## v1.2.11 (2026-10-30)
 
 ### Features
