@@ -114,6 +114,8 @@ The longer write-up is in [docs/comparison.md](docs/comparison.md).
 - Firecracker microVMs with `--hypervisor firecracker`, the same commands and features,
   see [docs/firecracker.md](docs/firecracker.md)
 - USB and PCI passthrough to QEMU VMs with `--device`, see [docs/passthrough.md](docs/passthrough.md)
+- throwaway runs on warm Firecracker clones, one distro (`anvil launch --ephemeral ubuntu-24.04
+  . -- make test`) or several at once (`anvil matrix`), see [docs/ephemeral.md](docs/ephemeral.md)
 - real cloud-init under the hood, plus a saved cloud-init config library to write,
   edit, and reuse (`anvil cloud-init`)
 - `anvil shell` / `anvil exec` / `anvil transfer` over real SSH, using a keypair Anvil
@@ -417,6 +419,7 @@ scripts/         catalog checksum check, release notes and changelog from commit
 | GUI apps from instances (`anvil gui`) | [docs/gui.md](docs/gui.md) |
 | Firecracker microVMs (`--hypervisor firecracker`) | [docs/firecracker.md](docs/firecracker.md) |
 | USB and PCI passthrough (`--device`) | [docs/passthrough.md](docs/passthrough.md) |
+| Ephemeral and matrix runs (`--ephemeral`, `anvil matrix`, `anvil warm`) | [docs/ephemeral.md](docs/ephemeral.md) |
 | Security model | [docs/security.md](docs/security.md) |
 | Comparison with similar tools | [docs/comparison.md](docs/comparison.md) |
 

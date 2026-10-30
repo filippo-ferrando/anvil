@@ -44,6 +44,29 @@ func TestJailedCommand(t *testing.T) {
 		t.Errorf("command = %s %s", bin, line)
 	}
 
+	// A snapshot restore starts with no config file, in the clone's network namespace.
+	p.ConfigFile = ""
+	p.Jail.NetNS = "/run/netns/anvil-01JX"
+	_, args, _ = p.command()
+	line = strings.Join(args, " ")
+	if slices.Contains(args, "--config-file") ||
+		!strings.HasSuffix(line, "--netns /run/netns/anvil-01JX -- --api-sock /firecracker.sock --log-path /firecracker.log") {
+		t.Errorf("restore args = %s", line)
+	}
+
+	// Unjailed with a working directory: relative paths, and nsenter for the netns.
+	rel := Paths{APISocket: "/i/root/fc.sock", LogFile: "/i/fc.log", Chdir: "/i/root", NetNS: "/run/netns/x"}
+	if got := rel.InVMM("/i/root/disk.raw"); got != "disk.raw" {
+		t.Errorf("InVMM under Chdir = %s, want disk.raw", got)
+	}
+	if got := rel.InVMM("/i/fc.log"); got != "/i/fc.log" {
+		t.Errorf("InVMM outside Chdir = %s, want it unchanged", got)
+	}
+	bin, args, _ = rel.command()
+	if bin != "nsenter" || args[0] != "--net=/run/netns/x" || filepath.Base(args[2]) != Binary || !slices.Contains(args, "fc.sock") {
+		t.Errorf("unjailed netns command = %s %v", bin, args)
+	}
+
 	direct := Paths{APISocket: "/i/fc.sock", ConfigFile: "/i/fc.json", LogFile: "/i/fc.log"}
 	bin, args, _ = direct.command()
 	if filepath.Base(bin) != Binary || !slices.Contains(args, "/i/fc.sock") || direct.InVMM("/x") != "/x" {

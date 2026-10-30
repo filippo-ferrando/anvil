@@ -45,10 +45,18 @@ func jailerExe() string {
 // fcPathsFor lays out instanceID's firecracker files: in its instance dir, or in its jail
 // root when jail is set. The console log always stays in the instance dir.
 func fcPathsFor(instanceID string, jail *firecracker.Jail) fcInstancePaths {
+	return fcPathsIn(instanceID, jail, "")
+}
+
+// fcPathsIn is fcPathsFor where an unjailed firecracker runs from chdir, with its files
+// there under the same names as in a jail.
+func fcPathsIn(instanceID string, jail *firecracker.Jail, chdir string) fcInstancePaths {
 	dir := instanceDir(instanceID)
 	base := dir
 	if jail != nil {
 		base = jail.Root()
+	} else if chdir != "" {
+		base = chdir
 	}
 	return fcInstancePaths{
 		Paths: firecracker.Paths{
@@ -57,6 +65,7 @@ func fcPathsFor(instanceID string, jail *firecracker.Jail) fcInstancePaths {
 			ConsoleLog: filepath.Join(dir, "console.log"),
 			LogFile:    filepath.Join(base, "firecracker.log"),
 			Jail:       jail,
+			Chdir:      chdir,
 		},
 		vsock: filepath.Join(base, "vsock.sock"),
 	}
@@ -90,11 +99,24 @@ func (b *FCBackend) pathsOf(instanceID string) fcInstancePaths {
 	return fcPathsFor(instanceID, nil)
 }
 
+// root is the dir firecracker's files are linked into: the jail root, or the unjailed
+// Chdir, "" when firecracker reads them where they are.
+func (p fcInstancePaths) root() string {
+	if p.Jail != nil {
+		return p.Jail.Root()
+	}
+	return p.Chdir
+}
+
 // prepareJail starts paths' jail root afresh, with firecracker's log linked to the instance
-// dir so it outlives the jail. Without a jail it does nothing.
+// dir so it outlives the jail. Without a jail it only makes a fresh Chdir.
 func prepareJail(instanceID string, paths fcInstancePaths) error {
 	if paths.Jail == nil {
-		return nil
+		if paths.Chdir == "" {
+			return nil
+		}
+		_ = os.RemoveAll(paths.Chdir)
+		return os.MkdirAll(paths.Chdir, 0o750)
 	}
 	root := paths.Jail.Root()
 	_ = os.RemoveAll(filepath.Dir(root)) // left by a crash; nothing runs in it now
@@ -113,10 +135,10 @@ func prepareJail(instanceID string, paths fcInstancePaths) error {
 // jailFile makes src reachable by a jailed firecracker as name, and returns the path it uses.
 // A small file (copyOK) is copied; the disk is hard-linked, never copied.
 func jailFile(paths fcInstancePaths, src, name string, copyOK bool) (string, error) {
-	if paths.Jail == nil {
+	if paths.root() == "" {
 		return src, nil
 	}
-	dst := filepath.Join(paths.Jail.Root(), name)
+	dst := filepath.Join(paths.root(), name)
 	// Shared files (kernel, GUI tools) get a private copy, so one VM's firecracker can't
 	// change what another one boots. Copy-on-write makes that cheap where the filesystem allows.
 	if copyOK {
@@ -128,7 +150,7 @@ func jailFile(paths fcInstancePaths, src, name string, copyOK bool) (string, err
 	if err := os.Link(src, dst); err != nil {
 		if errors.Is(err, syscall.EXDEV) {
 			return "", fmt.Errorf("vm: putting %s into the jail: the jail dir %s must be on the same filesystem: %w",
-				src, paths.Jail.ChrootBase, err)
+				src, paths.root(), err)
 		}
 		return "", fmt.Errorf("vm: putting %s into the jail: %w", src, err)
 	}
@@ -139,5 +161,30 @@ func jailFile(paths fcInstancePaths, src, name string, copyOK bool) (string, err
 func removeJail(paths fcInstancePaths) {
 	if paths.Jail != nil {
 		_ = os.RemoveAll(filepath.Dir(paths.Jail.Root()))
+	} else if paths.Chdir != "" {
+		_ = os.RemoveAll(paths.Chdir)
 	}
+}
+
+// clonePaths lays out a clone or warm build that runs in netns: in a jail, or, with no
+// jailer, unjailed from its own dir, which only tests allow (unjailedClones).
+func (b *FCBackend) clonePaths(id, netns string) (fcInstancePaths, error) {
+	if err := b.canClone(); err != nil {
+		return fcInstancePaths{}, err
+	}
+	if b.Jailer != "" {
+		jail := b.jailFor(id, "")
+		jail.NetNS = netns
+		return fcPathsFor(id, jail), nil
+	}
+	p := fcPathsIn(id, nil, filepath.Join(instanceDir(id), "root"))
+	p.NetNS = netns
+	return p, nil
+}
+
+func (b *FCBackend) canClone() error {
+	if b.Jailer == "" && !b.unjailedClones {
+		return errNeedsJailer
+	}
+	return nil
 }

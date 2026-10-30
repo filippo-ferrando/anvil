@@ -37,6 +37,9 @@ over a unix socket.`,
 
 	root.AddCommand(
 		newLaunchCommand(flags),
+		newMatrixCommand(flags),
+		newWarmCommand(flags),
+		newEphemeralCommand(flags),
 		newForkCommand(flags),
 		newListCommand(flags),
 		newWatchCommand(flags),

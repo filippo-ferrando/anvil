@@ -39,15 +39,38 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 		autostart     bool
 		restart       string
 		devices       []string
+		ephemeral     bool
+		eph           ephemeralFlags
 	)
 
 	cmd := &cobra.Command{
 		Use:   "launch <image> [-- <command> [args...]]",
 		Short: "Launch a new VM or container instance",
 		Long: "Launch a new VM or container instance. For a container, anything after " +
-			"`--` overrides the image's own command, same as `docker run image -- cmd args`.",
+			"`--` overrides the image's own command, same as `docker run image -- cmd args`.\n\n" +
+			"With --ephemeral, `launch --ephemeral <distro> [path] -- <command>` restores a throwaway " +
+			"clone of the distro's warm snapshot instead, uploads path into /work, runs the command, " +
+			"deletes the clone and exits with the command's exit code (see anvil matrix, docs/ephemeral.md).",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if ephemeral {
+				distro, path, command, err := splitRunArgs(cmd, args)
+				if err != nil {
+					return err
+				}
+				// The launch defaults are a regular VM's; a clone's come from its warm snapshot.
+				if cmd.Flags().Changed("cpus") {
+					eph.cpus = cpus
+				}
+				if cmd.Flags().Changed("memory") {
+					eph.memoryMiB = memoryMiB
+				}
+				eph.env = envVars
+				return runEphemeral(cmd, flags, []string{distro}, path, command, eph)
+			}
+			if eph.tty || eph.keepFailed || eph.logs != "" || eph.arch != "" {
+				return fmt.Errorf("--tty, --keep-failed, --logs and --arch only apply with --ephemeral")
+			}
 			imageRef := args[0]
 			command := args[1:]
 
@@ -58,7 +81,7 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 			case "container":
 				kind = anvilv1.Kind_KIND_CONTAINER
 			default:
-				return fmt.Errorf("--kind must be \"vm\" or \"container\"")
+				return fmt.Errorf("--kind must be \"vm\" or \"container\" (or use --ephemeral)")
 			}
 			if kind == anvilv1.Kind_KIND_VM && len(command) > 0 {
 				return fmt.Errorf("a trailing command only makes sense for --kind container")
@@ -197,7 +220,6 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&kindStr, "kind", "", `instance kind: "vm" or "container" (required)`)
-	_ = cmd.MarkFlagRequired("kind")
 	cmd.Flags().StringVar(&name, "name", "", "instance name (defaults to one derived from the image, e.g. ubuntu-24.04)")
 	cmd.Flags().Int32Var(&cpus, "cpus", 1, "number of vCPUs (VM only)")
 	cmd.Flags().Int64Var(&memoryMiB, "memory", 1024, "memory in MiB (VM only)")
@@ -223,6 +245,10 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 	cmd.Flags().StringArrayVar(&devices, "device", nil, "pass a host device to the VM: usb:<vendor>:<product>, usb:<bus>-<port> or "+
 		"pci:<domain>:<bus>:<slot>.<fn>, see anvil host devices (repeatable; qemu VMs only, which then can't be migrated or forked)")
 	cmd.Flags().BoolVar(&noGuestAgent, "no-guest-agent", false, "don't install qemu-guest-agent through cloud-init (VM only); disables guest IP reporting and agent shutdown")
+	cmd.Flags().BoolVar(&ephemeral, "ephemeral", false, "run a command on a throwaway clone of the distro's warm snapshot: <distro> [path] -- <command>")
+	cmd.Flags().BoolVarP(&eph.tty, "tty", "t", false, "with --ephemeral: run the command on a terminal, with stdin")
+	cmd.Flags().StringVar(&eph.arch, "arch", "", "with --ephemeral: image architecture (default: this host's)")
+	eph.addRunFlags(cmd)
 	cmd.Flags().StringVar(&defaultUser, "default-user", "", "override the SSH login user normally read from the image catalog (VM only, kept for migrations from older anvil versions)")
 	// Older migrate sources still pass these, newer ones use migrate-import.
 	_ = cmd.Flags().MarkHidden("from-disk")

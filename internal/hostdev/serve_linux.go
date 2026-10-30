@@ -12,7 +12,7 @@ import (
 )
 
 // Serve answers one request on stdin, the connection systemd hands over with Accept=yes.
-// Devices are chowned to the peer's uid, which only anvild's user can be (SocketUser, 0600).
+// Devices and clone taps go to the peer's uid, which only anvild's user can be (SocketUser, 0600).
 func Serve() error {
 	conn, err := net.FileConn(os.Stdin)
 	if err != nil {
@@ -42,5 +42,5 @@ func Serve() error {
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
 		return fmt.Errorf("devhelper: reading request: %w", err)
 	}
-	return json.NewEncoder(conn).Encode(handle(req, int(cred.Uid)))
+	return json.NewEncoder(conn).Encode(handle(req, int(cred.Uid), int(cred.Gid)))
 }

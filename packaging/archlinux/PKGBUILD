@@ -17,6 +17,7 @@ build() {
   cd "$srcdir/anvil"
   CGO_ENABLED=0 go build -trimpath -mod=readonly -o "$srcdir/anvil-bin" ./cmd/anvil
   go build -trimpath -mod=readonly -o "$srcdir/anvild-bin" ./cmd/anvild
+  CGO_ENABLED=0 go build -trimpath -mod=readonly -o "$srcdir/anvil-guest-bin" ./cmd/anvil-guest
 }
 
 package_anvil() {
@@ -53,6 +54,8 @@ package_anvild() {
   install=anvild.install
 
   install -Dm755 "$srcdir/anvild-bin" "$pkgdir/usr/bin/anvild"
+  # Static, runs inside ephemeral clones (internal/guestexec).
+  install -Dm755 "$srcdir/anvil-guest-bin" "$pkgdir/usr/lib/anvil/guest/anvil-guest"
   # Static waypipe/xwayland-satellite for `anvil gui`, from scripts/build-gui-tools.sh.
   local gui_tools="${GUI_TOOLS_DIR:-$startdir/../gui-tools}"
   if [[ -x $gui_tools/waypipe && -x $gui_tools/xwayland-satellite ]]; then

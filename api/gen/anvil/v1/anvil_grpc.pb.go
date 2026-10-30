@@ -3299,3 +3299,341 @@ var SnapshotService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "anvil/v1/anvil.proto",
 }
+
+const (
+	EphemeralService_Run_FullMethodName         = "/anvil.v1.EphemeralService/Run"
+	EphemeralService_WarmCreate_FullMethodName  = "/anvil.v1.EphemeralService/WarmCreate"
+	EphemeralService_WarmList_FullMethodName    = "/anvil.v1.EphemeralService/WarmList"
+	EphemeralService_WarmDelete_FullMethodName  = "/anvil.v1.EphemeralService/WarmDelete"
+	EphemeralService_CloneList_FullMethodName   = "/anvil.v1.EphemeralService/CloneList"
+	EphemeralService_CloneExec_FullMethodName   = "/anvil.v1.EphemeralService/CloneExec"
+	EphemeralService_CloneDelete_FullMethodName = "/anvil.v1.EphemeralService/CloneDelete"
+)
+
+// EphemeralServiceClient is the client API for EphemeralService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// EphemeralService runs commands in throwaway clones restored from warm snapshots
+// (Firecracker with its jailer only). See docs/ephemeral.md.
+type EphemeralServiceClient interface {
+	// Run restores one clone per distro, runs the command in each, streams their output,
+	// then deletes them. The first input is the request; an upload and stdin follow.
+	Run(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RunInput, RunEvent], error)
+	// WarmCreate builds (or finds) the warm snapshot a run with these parameters uses.
+	WarmCreate(ctx context.Context, in *WarmCreateRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WarmCreateProgress], error)
+	WarmList(ctx context.Context, in *WarmListRequest, opts ...grpc.CallOption) (*WarmListReply, error)
+	WarmDelete(ctx context.Context, in *WarmDeleteRequest, opts ...grpc.CallOption) (*WarmDeleteReply, error)
+	// CloneList lists running clones and the ones kept by keep_failed.
+	CloneList(ctx context.Context, in *CloneListRequest, opts ...grpc.CallOption) (*CloneListReply, error)
+	// CloneExec runs a command in a clone, a shell with tty for `anvil ephemeral shell`.
+	CloneExec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[CloneExecInput, CloneExecOutput], error)
+	CloneDelete(ctx context.Context, in *CloneDeleteRequest, opts ...grpc.CallOption) (*CloneDeleteReply, error)
+}
+
+type ephemeralServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewEphemeralServiceClient(cc grpc.ClientConnInterface) EphemeralServiceClient {
+	return &ephemeralServiceClient{cc}
+}
+
+func (c *ephemeralServiceClient) Run(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RunInput, RunEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &EphemeralService_ServiceDesc.Streams[0], EphemeralService_Run_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[RunInput, RunEvent]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EphemeralService_RunClient = grpc.BidiStreamingClient[RunInput, RunEvent]
+
+func (c *ephemeralServiceClient) WarmCreate(ctx context.Context, in *WarmCreateRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WarmCreateProgress], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &EphemeralService_ServiceDesc.Streams[1], EphemeralService_WarmCreate_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WarmCreateRequest, WarmCreateProgress]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EphemeralService_WarmCreateClient = grpc.ServerStreamingClient[WarmCreateProgress]
+
+func (c *ephemeralServiceClient) WarmList(ctx context.Context, in *WarmListRequest, opts ...grpc.CallOption) (*WarmListReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WarmListReply)
+	err := c.cc.Invoke(ctx, EphemeralService_WarmList_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *ephemeralServiceClient) WarmDelete(ctx context.Context, in *WarmDeleteRequest, opts ...grpc.CallOption) (*WarmDeleteReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WarmDeleteReply)
+	err := c.cc.Invoke(ctx, EphemeralService_WarmDelete_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *ephemeralServiceClient) CloneList(ctx context.Context, in *CloneListRequest, opts ...grpc.CallOption) (*CloneListReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CloneListReply)
+	err := c.cc.Invoke(ctx, EphemeralService_CloneList_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *ephemeralServiceClient) CloneExec(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[CloneExecInput, CloneExecOutput], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &EphemeralService_ServiceDesc.Streams[2], EphemeralService_CloneExec_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[CloneExecInput, CloneExecOutput]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EphemeralService_CloneExecClient = grpc.BidiStreamingClient[CloneExecInput, CloneExecOutput]
+
+func (c *ephemeralServiceClient) CloneDelete(ctx context.Context, in *CloneDeleteRequest, opts ...grpc.CallOption) (*CloneDeleteReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CloneDeleteReply)
+	err := c.cc.Invoke(ctx, EphemeralService_CloneDelete_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// EphemeralServiceServer is the server API for EphemeralService service.
+// All implementations must embed UnimplementedEphemeralServiceServer
+// for forward compatibility.
+//
+// EphemeralService runs commands in throwaway clones restored from warm snapshots
+// (Firecracker with its jailer only). See docs/ephemeral.md.
+type EphemeralServiceServer interface {
+	// Run restores one clone per distro, runs the command in each, streams their output,
+	// then deletes them. The first input is the request; an upload and stdin follow.
+	Run(grpc.BidiStreamingServer[RunInput, RunEvent]) error
+	// WarmCreate builds (or finds) the warm snapshot a run with these parameters uses.
+	WarmCreate(*WarmCreateRequest, grpc.ServerStreamingServer[WarmCreateProgress]) error
+	WarmList(context.Context, *WarmListRequest) (*WarmListReply, error)
+	WarmDelete(context.Context, *WarmDeleteRequest) (*WarmDeleteReply, error)
+	// CloneList lists running clones and the ones kept by keep_failed.
+	CloneList(context.Context, *CloneListRequest) (*CloneListReply, error)
+	// CloneExec runs a command in a clone, a shell with tty for `anvil ephemeral shell`.
+	CloneExec(grpc.BidiStreamingServer[CloneExecInput, CloneExecOutput]) error
+	CloneDelete(context.Context, *CloneDeleteRequest) (*CloneDeleteReply, error)
+	mustEmbedUnimplementedEphemeralServiceServer()
+}
+
+// UnimplementedEphemeralServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedEphemeralServiceServer struct{}
+
+func (UnimplementedEphemeralServiceServer) Run(grpc.BidiStreamingServer[RunInput, RunEvent]) error {
+	return status.Error(codes.Unimplemented, "method Run not implemented")
+}
+func (UnimplementedEphemeralServiceServer) WarmCreate(*WarmCreateRequest, grpc.ServerStreamingServer[WarmCreateProgress]) error {
+	return status.Error(codes.Unimplemented, "method WarmCreate not implemented")
+}
+func (UnimplementedEphemeralServiceServer) WarmList(context.Context, *WarmListRequest) (*WarmListReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method WarmList not implemented")
+}
+func (UnimplementedEphemeralServiceServer) WarmDelete(context.Context, *WarmDeleteRequest) (*WarmDeleteReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method WarmDelete not implemented")
+}
+func (UnimplementedEphemeralServiceServer) CloneList(context.Context, *CloneListRequest) (*CloneListReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method CloneList not implemented")
+}
+func (UnimplementedEphemeralServiceServer) CloneExec(grpc.BidiStreamingServer[CloneExecInput, CloneExecOutput]) error {
+	return status.Error(codes.Unimplemented, "method CloneExec not implemented")
+}
+func (UnimplementedEphemeralServiceServer) CloneDelete(context.Context, *CloneDeleteRequest) (*CloneDeleteReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method CloneDelete not implemented")
+}
+func (UnimplementedEphemeralServiceServer) mustEmbedUnimplementedEphemeralServiceServer() {}
+func (UnimplementedEphemeralServiceServer) testEmbeddedByValue()                          {}
+
+// UnsafeEphemeralServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to EphemeralServiceServer will
+// result in compilation errors.
+type UnsafeEphemeralServiceServer interface {
+	mustEmbedUnimplementedEphemeralServiceServer()
+}
+
+func RegisterEphemeralServiceServer(s grpc.ServiceRegistrar, srv EphemeralServiceServer) {
+	// If the following call panics, it indicates UnimplementedEphemeralServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&EphemeralService_ServiceDesc, srv)
+}
+
+func _EphemeralService_Run_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(EphemeralServiceServer).Run(&grpc.GenericServerStream[RunInput, RunEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EphemeralService_RunServer = grpc.BidiStreamingServer[RunInput, RunEvent]
+
+func _EphemeralService_WarmCreate_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WarmCreateRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(EphemeralServiceServer).WarmCreate(m, &grpc.GenericServerStream[WarmCreateRequest, WarmCreateProgress]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EphemeralService_WarmCreateServer = grpc.ServerStreamingServer[WarmCreateProgress]
+
+func _EphemeralService_WarmList_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WarmListRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EphemeralServiceServer).WarmList(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EphemeralService_WarmList_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EphemeralServiceServer).WarmList(ctx, req.(*WarmListRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EphemeralService_WarmDelete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WarmDeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EphemeralServiceServer).WarmDelete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EphemeralService_WarmDelete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EphemeralServiceServer).WarmDelete(ctx, req.(*WarmDeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EphemeralService_CloneList_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CloneListRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EphemeralServiceServer).CloneList(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EphemeralService_CloneList_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EphemeralServiceServer).CloneList(ctx, req.(*CloneListRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EphemeralService_CloneExec_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(EphemeralServiceServer).CloneExec(&grpc.GenericServerStream[CloneExecInput, CloneExecOutput]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EphemeralService_CloneExecServer = grpc.BidiStreamingServer[CloneExecInput, CloneExecOutput]
+
+func _EphemeralService_CloneDelete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CloneDeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EphemeralServiceServer).CloneDelete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EphemeralService_CloneDelete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EphemeralServiceServer).CloneDelete(ctx, req.(*CloneDeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// EphemeralService_ServiceDesc is the grpc.ServiceDesc for EphemeralService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var EphemeralService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "anvil.v1.EphemeralService",
+	HandlerType: (*EphemeralServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "WarmList",
+			Handler:    _EphemeralService_WarmList_Handler,
+		},
+		{
+			MethodName: "WarmDelete",
+			Handler:    _EphemeralService_WarmDelete_Handler,
+		},
+		{
+			MethodName: "CloneList",
+			Handler:    _EphemeralService_CloneList_Handler,
+		},
+		{
+			MethodName: "CloneDelete",
+			Handler:    _EphemeralService_CloneDelete_Handler,
+		},
+	},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Run",
+			Handler:       _EphemeralService_Run_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "WarmCreate",
+			Handler:       _EphemeralService_WarmCreate_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "CloneExec",
+			Handler:       _EphemeralService_CloneExec_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+	},
+	Metadata: "anvil/v1/anvil.proto",
+}

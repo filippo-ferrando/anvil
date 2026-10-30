@@ -1,8 +1,9 @@
 [Unit]
-Description=anvil device helper socket (USB/PCI passthrough)
+Description=anvil device helper socket (USB/PCI passthrough, clone networks)
 
 # Only the anvil user (anvild) can connect. Each connection starts one
-# anvil-devhelper@.service, which claims or releases a single device as root.
+# anvil-devhelper@.service, which claims or releases a single device, or creates or
+# removes one ephemeral clone's network namespace, as root.
 [Socket]
 ListenStream=/run/anvil/devhelper.sock
 SocketUser=anvil

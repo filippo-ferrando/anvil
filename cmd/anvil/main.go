@@ -2,6 +2,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -10,6 +11,10 @@ import (
 
 func main() {
 	if err := commands.NewRootCommand().Execute(); err != nil {
+		var exit commands.ExitError
+		if errors.As(err, &exit) {
+			os.Exit(exit.Code)
+		}
 		fmt.Fprintln(os.Stderr, "anvil:", err)
 		os.Exit(1)
 	}

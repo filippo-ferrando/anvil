@@ -28,10 +28,11 @@ type Member struct {
 }
 
 type request struct {
-	Op    string // "claim" | "release"
+	Op    string // "claim" | "release" | "netns-create" | "netns-delete"
 	Bus   string
 	Addr  string
 	Claim *Claim
+	Netns *Netns
 }
 
 type reply struct {
@@ -89,8 +90,8 @@ func (c Client) Release(ctx context.Context, cl Claim) error {
 	return err
 }
 
-// handle runs one helper request as root on behalf of the peer uid.
-func handle(req request, uid int) reply {
+// handle runs one helper request as root on behalf of the peer uid and gid.
+func handle(req request, uid, gid int) reply {
 	var (
 		cl  Claim
 		err error
@@ -103,6 +104,15 @@ func handle(req request, uid int) reply {
 			err = fmt.Errorf("release without a claim")
 		} else {
 			err = release(*req.Claim)
+		}
+	case "netns-create", "netns-delete":
+		switch {
+		case req.Netns == nil:
+			err = fmt.Errorf("%s without a netns", req.Op)
+		case req.Op == "netns-create":
+			err = createNetns(*req.Netns, uid, gid)
+		default:
+			err = deleteNetns(req.Netns.ID)
 		}
 	default:
 		err = fmt.Errorf("unknown op %q", req.Op)

@@ -25,13 +25,19 @@ const Binary = "firecracker"
 // Paths are the files one Firecracker process uses, as host paths.
 type Paths struct {
 	APISocket  string // REST API
-	ConfigFile string // --config-file, written by the caller
+	ConfigFile string // --config-file, written by the caller; empty waits for API calls (a snapshot load)
 	ConsoleLog string // the guest's serial console (Firecracker's stdout)
 	LogFile    string // Firecracker's own log and stderr
 
 	// Jail, when set, runs firecracker under the jailer. Every path but ConsoleLog must
 	// then be inside Jail.Root(), and firecracker sees them relative to it (InVMM).
 	Jail *Jail
+
+	// Without a jail: Chdir is firecracker's working directory, and paths under it are
+	// passed relative to it, so a snapshot can be restored elsewhere. NetNS is the
+	// network namespace to run in, joined through nsenter.
+	Chdir string
+	NetNS string
 }
 
 // JailerBinary is the jailer executable, looked up by LookPath.
@@ -45,6 +51,7 @@ type Jail struct {
 	UID, GID   int
 	Jailer     string // jailer binary, LookPath(JailerBinary) when empty
 	ExecFile   string // firecracker binary, symlinks resolved; its name is part of the chroot path
+	NetNS      string // network namespace to join (/run/netns/<name>), the caller's when empty
 }
 
 // LookPath finds name in config.FirecrackerDir, where the packages put a static build,
@@ -78,6 +85,9 @@ func (j *Jail) Root() string { return filepath.Join(j.ChrootBase, j.execName(), 
 // InVMM returns host path as firecracker sees it: unchanged, or relative to the jail root.
 func (p Paths) InVMM(path string) string {
 	if p.Jail == nil {
+		if rel, err := filepath.Rel(p.Chdir, path); p.Chdir != "" && err == nil && !strings.HasPrefix(rel, "..") {
+			return rel
+		}
 		return path
 	}
 	return "/" + strings.TrimPrefix(strings.TrimPrefix(path, p.Jail.Root()), "/")
@@ -86,10 +96,17 @@ func (p Paths) InVMM(path string) string {
 // command builds the firecracker invocation, wrapped in the jailer when p.Jail is set.
 // With cgroup v2 and no --cgroup the jailer creates no cgroup, so it needs no cgroup rights.
 func (p Paths) command() (string, []string, error) {
-	args := []string{"--api-sock", p.InVMM(p.APISocket), "--config-file", p.InVMM(p.ConfigFile), "--log-path", p.InVMM(p.LogFile)}
+	args := []string{"--api-sock", p.InVMM(p.APISocket)}
+	if p.ConfigFile != "" {
+		args = append(args, "--config-file", p.InVMM(p.ConfigFile))
+	}
+	args = append(args, "--log-path", p.InVMM(p.LogFile))
 	if p.Jail == nil {
 		// Not resolved: Attach recognizes the process by the name it was started with.
 		fc, err := LookPath(Binary)
+		if err == nil && p.NetNS != "" {
+			return "nsenter", append([]string{"--net=" + p.NetNS, "--", fc}, args...), nil
+		}
 		return fc, args, err
 	}
 	fc := p.Jail.ExecFile
@@ -102,8 +119,12 @@ func (p Paths) command() (string, []string, error) {
 	jail := []string{
 		"--id", p.Jail.ID, "--exec-file", fc,
 		"--uid", strconv.Itoa(p.Jail.UID), "--gid", strconv.Itoa(p.Jail.GID),
-		"--chroot-base-dir", p.Jail.ChrootBase, "--cgroup-version", "2", "--",
+		"--chroot-base-dir", p.Jail.ChrootBase, "--cgroup-version", "2",
 	}
+	if p.Jail.NetNS != "" {
+		jail = append(jail, "--netns", p.Jail.NetNS)
+	}
+	jail = append(jail, "--")
 	jailer := p.Jail.Jailer
 	if jailer == "" {
 		var err error
@@ -123,7 +144,8 @@ type Process struct {
 	API *Client
 }
 
-// Spawn starts firecracker, which boots the VM described by paths.ConfigFile right away.
+// Spawn starts firecracker, which boots the VM described by paths.ConfigFile right away,
+// or waits for a snapshot load when paths.ConfigFile is empty.
 func Spawn(ctx context.Context, paths Paths) (*Process, error) {
 	if err := os.MkdirAll(filepath.Dir(paths.ConsoleLog), 0o750); err != nil {
 		return nil, fmt.Errorf("firecracker: creating log dir: %w", err)
@@ -150,6 +172,7 @@ func Spawn(ctx context.Context, paths Paths) (*Process, error) {
 	}
 	// Without --daemonize the jailer execs firecracker in its own process, so the pid stays.
 	cmd := exec.Command(bin, args...)
+	cmd.Dir = paths.Chdir
 	cmd.Stdout = console
 	cmd.Stderr = logF
 	// New process group so a kill reaches anything firecracker started too.

@@ -97,3 +97,31 @@ cd internal/vm && ANVIL_FC_KERNEL=... ANVIL_E2E_IMAGE=... \
 
 The jailer can't run in a user namespace; as root, `ANVIL_FC_TEST_JAILER=1` runs the same
 test jailed.
+
+`TestFirecrackerSnapshotRestore` (same file, same setup) restores a full snapshot of a
+booted VM in a second firecracker and runs a command in it through `anvil-guest`.
+`TestFirecrackerAnvilGuest` runs commands, an upload and a terminal through `anvil-guest`.
+Both build `anvil-guest` themselves. `TestSnapshotRestore` in `internal/vm/firecracker`
+restores a snapshot with only `ANVIL_FC_KERNEL`.
+
+## Ephemeral clones
+
+`anvil launch --ephemeral` and `anvil matrix` run commands on clones restored from warm
+Firecracker snapshots. They need the jailer; see [ephemeral.md](ephemeral.md).
+`TestEphemeralRealRun` (`internal/vm/fc_ephemeral_integration_test.go`) builds a real warm
+snapshot and runs clones of it, unjailed since it runs without root: it needs `unshare -rnm`
+instead of `-rn`, for the clones' network namespaces.
+
+## anvil-guest
+
+Ephemeral clones run commands through `anvil-guest` (`cmd/anvil-guest`), a static binary
+the anvild package ships in `/usr/lib/anvil/guest` (`ANVIL_GUEST_TOOLS` overrides it). A
+VM built for a warm snapshot gets it on a read-only ISO drive (`guest.iso`, label
+`ANVILGUEST`); cloud-init copies it to `/usr/local/bin` and starts it as a systemd or
+OpenRC service on vsock port 1025. One connection runs one command as root, with an
+optional upload extracted into `/work`, its stdio, an optional terminal and its exit code
+(`internal/guestexec`). A command that fails to install shows on the serial console.
+
+After a snapshot restore the guest clock is still at the snapshot's time, even with
+Firecracker's `clock_realtime`: anvil's guests run on the `tsc` clocksource, which it
+doesn't move. A clone sets its clock through `anvil-guest` first.

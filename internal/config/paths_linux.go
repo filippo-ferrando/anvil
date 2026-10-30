@@ -20,3 +20,12 @@ func FirecrackerDir() string {
 	}
 	return "/usr/lib/anvil/firecracker"
 }
+
+// GuestToolsDir holds anvil-guest, the static binary that runs commands inside ephemeral
+// clones. ANVIL_GUEST_TOOLS overrides it, for development builds.
+func GuestToolsDir() string {
+	if dir := os.Getenv("ANVIL_GUEST_TOOLS"); dir != "" {
+		return dir
+	}
+	return "/usr/lib/anvil/guest"
+}

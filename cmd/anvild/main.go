@@ -20,6 +20,7 @@ import (
 	"git.fferrando.cc/rdfilippo/anvil/internal/container/docker"
 	"git.fferrando.cc/rdfilippo/anvil/internal/daemon"
 	"git.fferrando.cc/rdfilippo/anvil/internal/discovery"
+	"git.fferrando.cc/rdfilippo/anvil/internal/ephemeral"
 	"git.fferrando.cc/rdfilippo/anvil/internal/export"
 	"git.fferrando.cc/rdfilippo/anvil/internal/hostdev"
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
@@ -171,6 +172,10 @@ func run() error {
 	anvilv1.RegisterMigrateServiceServer(grpcServer, daemon.NewMigrateServer(migrateMgr))
 	anvilv1.RegisterExportServiceServer(grpcServer, daemon.NewExportServer(exportMgr))
 	anvilv1.RegisterSnapshotServiceServer(grpcServer, daemon.NewSnapshotServer(mgr))
+	// Clones and warm builds of the previous anvild died with it; their leftovers go first.
+	ephemeralMgr := ephemeral.NewManager(platformEphemeralEngine(), db, config.WarmDir)
+	ephemeralMgr.Cleanup(ctx)
+	anvilv1.RegisterEphemeralServiceServer(grpcServer, daemon.NewEphemeralServer(ephemeralMgr, config.EphemeralUploadDir()))
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- grpcServer.Serve(daemon.CallerListener(lis)) }()

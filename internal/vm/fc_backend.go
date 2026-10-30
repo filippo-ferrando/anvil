@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/config"
+	"git.fferrando.cc/rdfilippo/anvil/internal/hostdev"
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/intent/ipam"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/firecracker"
@@ -49,6 +50,13 @@ type FCBackend struct {
 	exported map[string]netip.Addr // guarded by mu
 
 	paths map[string]fcInstancePaths // running VMs' files, jailed or not; guarded by mu
+
+	// Clones are the networks of ephemeral clones, each in its own netns.
+	Clones *CloneNetworks
+	clones map[string]*fcClone // running clones; guarded by mu
+
+	// unjailedClones lets tests run clones without the jailer (which needs real root).
+	unjailedClones bool
 }
 
 var (
@@ -76,6 +84,7 @@ func NewFCBackend(qemuBackend *Backend, cacheDir string, instances Instances) *F
 		nfs:        newNFSHub(),
 		exported:   make(map[string]netip.Addr),
 		paths:      make(map[string]fcInstancePaths),
+		Clones:     &CloneNetworks{Helper: hostdev.Client{Socket: config.DevHelperSocket()}},
 	}
 	b.guestTracker = newGuestTracker(func(id string) *qemu.GuestAgent {
 		return &qemu.GuestAgent{Dial: func(ctx context.Context) (net.Conn, error) {
@@ -214,6 +223,12 @@ func (b *FCBackend) Create(ctx context.Context, spec *instance.Spec, progress fu
 // Start is idempotent for an already-running instance, but rejects a
 // concurrent Start call for the same spec.ID rather than double-spawning.
 func (b *FCBackend) Start(ctx context.Context, spec *instance.Spec) error {
+	return b.start(ctx, spec, nil)
+}
+
+// start boots spec; with netns set it runs jailed in that clone netns, on its tap, with
+// no bridge, guest filter or proxies.
+func (b *FCBackend) start(ctx context.Context, spec *instance.Spec, netns *CloneNet) error {
 	if spec.VM == nil {
 		return fmt.Errorf("vm: Start called with a nil VMSpec")
 	}
@@ -239,6 +254,11 @@ func (b *FCBackend) Start(ctx context.Context, spec *instance.Spec) error {
 	}
 
 	paths := fcPathsFor(spec.ID, b.newJail(spec.ID))
+	if netns != nil {
+		if paths, err = b.clonePaths(spec.ID, netns.NetNS); err != nil {
+			return err
+		}
+	}
 	if err := prepareJail(spec.ID, paths); err != nil {
 		return err
 	}
@@ -267,6 +287,9 @@ func (b *FCBackend) Start(ctx context.Context, spec *instance.Spec) error {
 		Entropy: &struct{}{},
 	}
 	hotplugMiB := fcHotplugMiB(v.Arch, v.CPUs, v.MemoryMiB)
+	if v.AnvilGuest {
+		hotplugMiB = 0 // a snapshot's memory file would cover the whole region
+	}
 	if hotplugMiB > 0 {
 		cfg.MemoryHotplug = &firecracker.MemoryHotplug{TotalSizeMiB: hotplugMiB}
 	}
@@ -290,46 +313,29 @@ func (b *FCBackend) Start(ctx context.Context, spec *instance.Spec) error {
 		}
 	}
 
-	bridge := v.BridgeInterface
-	if standalone(v) {
-		if v.StaticIP == "" {
-			return fmt.Errorf("vm: %s was created without a network address, recreate it", spec.Name)
+	// Unlike the GUI tools, a VM asking for anvil-guest is no use without it.
+	if v.AnvilGuest {
+		iso, err := b.guestISO()
+		if err == nil {
+			iso, err = jailFile(paths, iso, "guest.iso", true)
 		}
-		if err := ensureFCNetwork(); err != nil {
+		if err != nil {
 			return err
 		}
-		bridge = FCBridge
+		cfg.Drives = append(cfg.Drives, firecracker.Drive{DriveID: "guest", PathOnHost: iso, IsReadOnly: true})
 	}
-	// A tap left by a firecracker that died while anvild was down would make Attach fail.
-	_ = b.Networker.Detach(spec.ID)
-	tap, err := b.Networker.Attach(spec.ID, bridge)
-	if err != nil {
-		return fmt.Errorf("vm: attaching to bridge %s: %w", bridge, err)
-	}
-	cfg.NetworkInterfaces = []firecracker.NetworkInterface{{IfaceID: "eth0", HostDevName: tap, GuestMAC: v.MACAddress}}
+
 	unwind := func() {
 		b.closeProxies(spec.ID)
 		b.unexportMounts(spec.ID)
 		dropGuestFilter(spec.ID)
 		_ = b.Networker.Detach(spec.ID)
 	}
-	if standalone(v) {
-		if err := runNft(fcGuestFilter(spec.ID, tap, v.MACAddress, ipam.StripCIDR(v.StaticIP))); err != nil {
-			unwind()
-			return err
-		}
-	}
-	if err := b.exportMounts(spec); err != nil {
-		unwind()
-		return err
-	}
-	if standalone(v) {
-		if err := b.startProxies(spec, 0); err != nil {
-			unwind()
-			return err
-		}
-	} else {
+	if netns != nil {
+		cfg.NetworkInterfaces = []firecracker.NetworkInterface{{IfaceID: "eth0", HostDevName: netns.Tap, GuestMAC: v.MACAddress}}
 		v.SSHPort = 0
+	} else if err := b.attachNetwork(spec, &cfg, unwind); err != nil {
+		return err
 	}
 
 	// A vsock socket left by an earlier run makes firecracker refuse the config.
@@ -365,6 +371,48 @@ func (b *FCBackend) Start(ctx context.Context, spec *instance.Spec) error {
 	b.mu.Unlock()
 	b.watchGuest(spec, proc.Exited())
 	go b.watchExit(spec.ID, proc)
+	return nil
+}
+
+// attachNetwork puts spec's VM on its bridge (anvil-fc0 for a standalone one), with the
+// guest filter, NFS exports and SSH proxy a standalone VM gets. unwind undoes it all.
+func (b *FCBackend) attachNetwork(spec *instance.Spec, cfg *firecracker.Config, unwind func()) error {
+	v := spec.VM
+	bridge := v.BridgeInterface
+	if standalone(v) {
+		if v.StaticIP == "" {
+			return fmt.Errorf("vm: %s was created without a network address, recreate it", spec.Name)
+		}
+		if err := ensureFCNetwork(); err != nil {
+			return err
+		}
+		bridge = FCBridge
+	}
+	// A tap left by a firecracker that died while anvild was down would make Attach fail.
+	_ = b.Networker.Detach(spec.ID)
+	tap, err := b.Networker.Attach(spec.ID, bridge)
+	if err != nil {
+		return fmt.Errorf("vm: attaching to bridge %s: %w", bridge, err)
+	}
+	cfg.NetworkInterfaces = []firecracker.NetworkInterface{{IfaceID: "eth0", HostDevName: tap, GuestMAC: v.MACAddress}}
+	if standalone(v) {
+		if err := runNft(fcGuestFilter(spec.ID, tap, v.MACAddress, ipam.StripCIDR(v.StaticIP))); err != nil {
+			unwind()
+			return err
+		}
+	}
+	if err := b.exportMounts(spec); err != nil {
+		unwind()
+		return err
+	}
+	if standalone(v) {
+		if err := b.startProxies(spec, 0); err != nil {
+			unwind()
+			return err
+		}
+	} else {
+		v.SSHPort = 0
+	}
 	return nil
 }
 

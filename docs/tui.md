@@ -404,3 +404,20 @@ screen shows the same list with or without `--remote`. See [gui.md](gui.md).
 | `x` | Remove the entry and its icon, after a confirmation (`anvil gui unexport`). |
 | `r` | Reload. |
 | `esc` `q` | Back to the sidebar. |
+
+## 12. Ephemeral
+
+Warm snapshots and the clones of ephemeral runs (`anvil warm list`, `anvil ephemeral
+list`): `tab` switches between the two lists. A run started here shows one pane per clone
+with its last lines of output, its progress and then its exit code. See
+[ephemeral.md](ephemeral.md).
+
+| Key | Action |
+|-----|--------|
+| `tab` | Switch between warm snapshots and clones. |
+| `n` | Start a run: distros, a path to upload, a command (run with `sh -c`), size and Keep failed. `esc` in the run view cancels it and deletes its clones, or closes it once done. |
+| `c` | Build a warm snapshot for a distro and size (`anvil warm create`). |
+| `s` `enter` | On a clone: a root shell in it (`anvil ephemeral shell`). |
+| `x` | Remove the selected warm snapshot or clone, after a confirmation. |
+| `r` | Reload. |
+| `esc` `q` | Back to the sidebar. |

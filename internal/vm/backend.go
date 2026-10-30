@@ -1065,6 +1065,9 @@ func seedUserData(v *instance.VMSpec, userData string) (string, error) {
 	}
 	if fc {
 		addFirecrackerGuest(doc, !v.NoGuestAgent)
+		if v.AnvilGuest {
+			addAnvilGuest(doc)
+		}
 	}
 	return encodeCloudConfig(doc)
 }

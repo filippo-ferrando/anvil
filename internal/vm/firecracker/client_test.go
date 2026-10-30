@@ -156,3 +156,55 @@ func TestConfigWriteFile(t *testing.T) {
 		t.Errorf("a config without drives must list none, not null: %s", data)
 	}
 }
+
+func TestClientSnapshots(t *testing.T) {
+	c, calls := fakeAPI(t, func(w http.ResponseWriter, _ recorded) { w.WriteHeader(http.StatusNoContent) })
+	ctx := context.Background()
+
+	if err := c.CreateSnapshot(ctx, SnapshotCreate{SnapshotPath: "/vmstate", MemFilePath: "/mem", SnapshotType: SnapshotFull}); err != nil {
+		t.Fatal(err)
+	}
+	load := SnapshotLoad{
+		SnapshotPath: "/vmstate", MemBackend: MemoryBackend{BackendType: "File", BackendPath: "/mem"}, ResumeVM: true,
+	}
+	if err := c.LoadSnapshot(ctx, load); err != nil {
+		t.Fatal(err)
+	}
+	load.ResumeVM = false
+	load.VsockOverride = &VsockOverride{UDSPath: "/v.sock"}
+	load.NetworkOverrides = []NetworkOverride{{IfaceID: "eth0", HostDevName: "tap1"}}
+	if err := c.LoadSnapshot(ctx, load); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(*calls) != 3 {
+		t.Fatalf("got %d calls, want 3: %+v", len(*calls), *calls)
+	}
+	create := (*calls)[0]
+	if create.method != "PUT" || create.path != "/snapshot/create" || create.body["snapshot_path"] != "/vmstate" ||
+		create.body["mem_file_path"] != "/mem" || create.body["snapshot_type"] != "Full" {
+		t.Errorf("create = %+v", create)
+	}
+	first := (*calls)[1]
+	mem, _ := first.body["mem_backend"].(map[string]any)
+	if first.method != "PUT" || first.path != "/snapshot/load" || first.body["resume_vm"] != true ||
+		mem["backend_type"] != "File" || mem["backend_path"] != "/mem" {
+		t.Errorf("load = %+v", first)
+	}
+	// Firecracker rejects a mem_file_path next to mem_backend, and unset overrides must stay out.
+	for _, key := range []string{"mem_file_path", "network_overrides", "vsock_override", "clock_realtime"} {
+		if _, ok := first.body[key]; ok {
+			t.Errorf("load sent unset %q: %v", key, first.body)
+		}
+	}
+	second := (*calls)[2]
+	if _, ok := second.body["resume_vm"]; ok {
+		t.Errorf("load without resume sent resume_vm: %v", second.body)
+	}
+	if v, _ := second.body["vsock_override"].(map[string]any); v["uds_path"] != "/v.sock" {
+		t.Errorf("vsock_override = %v", second.body["vsock_override"])
+	}
+	if n, _ := second.body["network_overrides"].([]any); len(n) != 1 || n[0].(map[string]any)["host_dev_name"] != "tap1" {
+		t.Errorf("network_overrides = %v", second.body["network_overrides"])
+	}
+}

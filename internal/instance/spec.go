@@ -180,6 +180,10 @@ type VMSpec struct {
 	// NoGuestAgent skips installing qemu-guest-agent through cloud-init.
 	NoGuestAgent bool
 
+	// AnvilGuest attaches anvil-guest and starts it on vsock (Firecracker only). Set by
+	// the warm snapshot build, never by a launch request.
+	AnvilGuest bool
+
 	// SnapshotSchedule is nil when no scheduled snapshots are set up.
 	SnapshotSchedule *SnapshotSchedule
 

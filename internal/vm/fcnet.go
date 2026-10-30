@@ -156,7 +156,7 @@ func runNft(script string) error {
 	cmd := exec.Command("nft", "-f", "-")
 	cmd.Stdin = strings.NewReader(script)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("vm: setting up nftables for %s: %w: %s", FCBridge, err, out)
+		return fmt.Errorf("vm: loading nftables rules: %w: %s", err, out)
 	}
 	return nil
 }

@@ -1,5 +1,6 @@
 /anvil
 /anvild
+/anvil-guest
 /man
 /build/
 *.qcow2

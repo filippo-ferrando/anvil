@@ -34,6 +34,13 @@ func DBPath() string { return filepath.Join(StateDir, "anvil.db") }
 // InstanceDir is where a single instance's mutable, non-registry state lives.
 func InstanceDir(id string) string { return filepath.Join(StateDir, "instances", id) }
 
+// WarmDir holds warm snapshot key's files, on the jailer's filesystem so clones can
+// hard-link the memory file into their jails.
+func WarmDir(key string) string { return filepath.Join(StateDir, "warm", key) }
+
+// EphemeralUploadDir holds a run's upload while its clones read it.
+func EphemeralUploadDir() string { return filepath.Join(CacheDir, "ephemeral-uploads") }
+
 // JailerDir holds the jailer's per-VM chroots, on the same filesystem as the instance disks
 // so they can be hard-linked in.
 func JailerDir() string { return filepath.Join(StateDir, "jailer") }

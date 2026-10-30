@@ -56,7 +56,8 @@ and keeps the host strictly in line with every `anvil.yaml` found in it, recursi
 
 ### Ephemeral VMs and matrix runs
 
-Status: designed, not started. Each milestone below is one reviewable change with its own
+Status: milestones 1 to 6 done; user docs in `docs/ephemeral.md`. Still to check on a
+real install: the jailed path (`--netns`, links into the jail), which tests can't run without root. Each milestone below is one reviewable change with its own
 tests; do them in order.
 
 **Commands.**
@@ -169,31 +170,56 @@ path and command, then one pane per clone with its output and exit code.
    integration test in `fc_integration_test.go` style: boot, pause, snapshot, restore in a
    new firecracker, agent ping.
 2. **Clone netns.** Root helper requests, host-side veth and NAT, cleanup. Test the netns
-   setup under `unshare -rn` (never on the host network).
+   setup under `unshare -rn` (never on the host network). Done: `internal/hostdev/netns*.go`
+   and `internal/vm/fc_clonenet.go`, layout in `docs/networking.md`; the guest's DNS is
+   `10.200.0.1`, forwarded to anvild on the host end. Tests need `unshare -rnm` (mount
+   namespace too, to pin the netns). A real guest in a clone netns is first tested in 4.
 3. **`anvil-guest`.** Binary, protocol, ISO delivery, cloud-init service. Unit tests for the
-   protocol over a `net.Pipe`, upload extraction, exit codes, tty.
+   protocol over a `net.Pipe`, upload extraction, exit codes, tty. Done: `cmd/anvil-guest`,
+   `internal/guestexec`, `internal/vm/fc_guest.go`, `VMSpec.AnvilGuest` (internal, for the
+   warm build). The upload is framed like everything else. `Header.SetClock` sets the
+   guest clock, which a clone needs: `clock_realtime` doesn't move it (see below).
 4. **Warm snapshots.** Store bucket, key, build, `WarmCreate/List/Delete`, `anvil warm`,
-   TUI section. Unit test for the key; integration test builds one.
+   TUI section. Unit test for the key; integration test builds one. Done: `internal/ephemeral`
+   (the Manager, one build per key at a time), `internal/vm/fc_warm.go`, `store/warm.go`. The
+   build doesn't freeze the guest filesystems: the VM is paused before the disk copy, so disk
+   and memory match, and qemu-ga isn't in warm VMs (it needs a network to install); the
+   guest only runs `sync` through anvil-guest first.
 5. **Run.** `Run` RPC, ephemeral and matrix, upload, CLI output, `--logs`, cancel cleanup,
    `eph-` sweep on start. Unit tests for the line prefixer and summary; integration test
-   runs `uname -a` on two clones of one warm snapshot in parallel.
+   runs `uname -a` on two clones of one warm snapshot in parallel. Done:
+   `internal/vm/fc_clone.go`, `daemon/ephemeral_server.go`, `cli/commands/ephemeral_run.go`.
+   The daemon spools the upload to a file each clone reads. `TestEphemeralRealRun` runs the
+   clones unjailed from their own dirs with relative paths (`firecracker.Paths.Chdir`),
+   since the jailer needs root; production refuses clones without the jailer.
 6. **TUI run view, `--keep-failed`, `anvil ephemeral list|shell|rm`** (shell = tty exec
-   over `anvil-guest`), docs (`docs/ephemeral.md`, `docs/firecracker.md`), `make man`.
+   over `anvil-guest`), docs (`docs/ephemeral.md`, `docs/firecracker.md`), `make man`. Done:
+   the TUI Ephemeral screen, `CloneExec`. `launch --ephemeral -t` runs on a terminal too.
 
 Real-VM tests need `ANVIL_FC_KERNEL` and `ANVIL_E2E_IMAGE` (`docs/firecracker.md`) and skip
 without them.
 
 #### Check before building on it
 
-- Firecracker 1.17 snapshot/load request bodies: `firecracker_spec-v1.17.0.yaml` ships in
-  the release tarball `scripts/fetch-firecracker.sh` downloads.
+- Done: Firecracker 1.17 snapshot/load request bodies, checked against
+  `firecracker_spec-v1.17.0.yaml`. Load also takes `network_overrides`, `vsock_override`
+  and `clock_realtime` (x86_64, moves kvmclock forward by the time since the snapshot).
+- Done: a full snapshot of a VM with vsock, entropy, serial and two read-only drives
+  restores (`TestSnapshotRestore`), and a guest vsock listener started before the snapshot
+  answers in the clone right after (`TestFirecrackerSnapshotRestore`).
+- Done: with virtio-mem on, the memory file covers the whole hotplug region, so warm VMs
+  must leave it off as planned.
 - Snapshot support for the devices a warm VM uses: vsock, entropy, serial console, two
   read-only drives. Memory hotplug is left off on purpose.
 - Guest RNG after restore: `CONFIG_VMGENID` is not in `scripts/fc-kernel.config`. Check that
   Firecracker 1.17 exposes VMGenID on x86_64 and aarch64; if so, add it to the kernel config
   and publish a new `fc-kernel-*` release.
 - qemu-ga's listener survives a restore (Firecracker resets vsock connections on snapshot);
-  if not, restart it through `anvil-guest`.
+  if not, restart it through `anvil-guest`. A guest vsock listener (anvil-guest's own)
+  does survive and answers within ~30ms of the load; qemu-ga itself is still unchecked.
+- Done: the clock. With `clock_realtime` the clone is still behind by the time since the
+  snapshot (guest clocksource `tsc`), so the clone sets it with `guestexec.SetClock`
+  instead of `guest-set-time`, which needs qemu-ga.
 
 #### Not in scope
 

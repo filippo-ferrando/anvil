@@ -94,7 +94,9 @@ The packaged unit (`packaging/common/anvild.service`) runs `anvild` as the syste
   refuses devices behind the root filesystem, the default route or the host display, and
   on release gives files back to root and the udev rules, never to an owner the caller names.
   Whoever controls the daemon user can still take any other host device, see
-  [passthrough.md](passthrough.md).
+  [passthrough.md](passthrough.md). The same helper creates the network namespaces of
+  ephemeral clones, with a fixed layout and only a private /30 taken from the caller
+  ([networking.md](networking.md#ephemeral-clones)).
 - Membership of the `docker` group, added by the post-install script
   (`packaging/common/post-install.sh`) when that group exists.
 

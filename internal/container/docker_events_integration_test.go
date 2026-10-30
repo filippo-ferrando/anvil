@@ -1,6 +1,7 @@
 package container
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -23,7 +24,8 @@ func TestRealDockerExitDetection(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _ = client.RemoveContainer(t.Context(), id, true) })
+		// t.Context() is already canceled when cleanups run.
+		t.Cleanup(func() { _ = client.RemoveContainer(context.Background(), id, true) })
 		return containerSpec(name, id, instance.StateRunning)
 	}
 	crash := create("anvil-test-crash", "sh", "-c", "sleep 1; exit 3")

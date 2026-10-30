@@ -50,10 +50,13 @@ systemctl enable --now anvild once installed.
 %build
 CGO_ENABLED=0 go build -trimpath -mod=readonly -o anvil-bin ./cmd/anvil
 go build -trimpath -mod=readonly -o anvild-bin ./cmd/anvild
+CGO_ENABLED=0 go build -trimpath -mod=readonly -o anvil-guest-bin ./cmd/anvil-guest
 
 %install
 install -Dm755 anvil-bin %{buildroot}%{_bindir}/anvil
 install -Dm755 anvild-bin %{buildroot}%{_bindir}/anvild
+# Static, runs inside ephemeral clones (internal/guestexec).
+install -Dm755 anvil-guest-bin %{buildroot}/usr/lib/anvil/guest/anvil-guest
 
 # Plain redirection, not `<(...)` process substitution: rpmbuild runs
 # every scriptlet, %install included, via /bin/sh, which is dash on
@@ -121,6 +124,7 @@ fi
 %files -n anvild -f anvild-bundled.files
 %license LICENSE.md
 %{_bindir}/anvild
+/usr/lib/anvil/guest/anvil-guest
 /usr/lib/anvil/post-install.sh
 /usr/lib/systemd/system/anvild.service
 /usr/lib/systemd/system/anvil-devhelper.socket

@@ -34,7 +34,14 @@ func (f *fakeInstances) Info(names []string) ([]*instance.Spec, error) {
 	return nil, instance.ErrNotFound
 }
 func (f *fakeInstances) GetByID(string) (*instance.Spec, error) { return f.spec, nil }
-func (f *fakeInstances) ReserveNames(ctx context.Context, _ []string) (context.Context, func(), error) {
+
+// ReserveNames refuses the fake's own instance name, as the real Manager does for a taken one.
+func (f *fakeInstances) ReserveNames(ctx context.Context, names []string) (context.Context, func(), error) {
+	for _, n := range names {
+		if f.spec != nil && n == f.spec.Name {
+			return ctx, nil, fmt.Errorf("instance: name %q is already in use", n)
+		}
+	}
 	return ctx, func() {}, nil
 }
 func (f *fakeInstances) Hold(ctx context.Context, _ []string) (context.Context, func(), error) {
@@ -176,7 +183,7 @@ func TestImportRefusesTakenName(t *testing.T) {
 		t.Fatalf("Export: %v", err)
 	}
 	_, err = m.Import(context.Background(), ImportParams{BundlePath: bundle}, func(string) {})
-	if err == nil || !strings.Contains(err.Error(), "already exists") {
+	if err == nil || !strings.Contains(err.Error(), "already in use") {
 		t.Fatalf("expected the import to fail on the taken name, got %v", err)
 	}
 	if instances.launched != 0 {

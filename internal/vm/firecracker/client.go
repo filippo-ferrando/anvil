@@ -14,26 +14,30 @@ import (
 )
 
 // apiCallTimeout bounds one API call, so a stuck VMM never hangs a caller.
-const apiCallTimeout = 10 * time.Second
+// Snapshot calls write or map the whole guest memory, so they get snapshotCallTimeout.
+const (
+	apiCallTimeout      = 10 * time.Second
+	snapshotCallTimeout = 5 * time.Minute
+)
 
 // Client talks to one Firecracker process over its API unix socket.
 type Client struct {
 	SocketPath string
 	http       *http.Client
+	slow       *http.Client
 }
 
 func NewClient(socketPath string) *Client {
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", socketPath)
+		},
+	}
 	return &Client{
 		SocketPath: socketPath,
-		http: &http.Client{
-			Timeout: apiCallTimeout,
-			Transport: &http.Transport{
-				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-					var d net.Dialer
-					return d.DialContext(ctx, "unix", socketPath)
-				},
-			},
-		},
+		http:       &http.Client{Timeout: apiCallTimeout, Transport: transport},
+		slow:       &http.Client{Timeout: snapshotCallTimeout, Transport: transport},
 	}
 }
 
@@ -49,6 +53,10 @@ func (e *APIError) Error() string {
 
 // do sends body as JSON (if not nil) and decodes a JSON reply into out (if not nil).
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
+	return c.doWith(ctx, c.http, method, path, body, out)
+}
+
+func (c *Client) doWith(ctx context.Context, hc *http.Client, method, path string, body, out any) error {
 	var r io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -67,7 +75,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	}
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.http.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return fmt.Errorf("firecracker: %s %s: %w", method, path, err)
 	}
@@ -156,4 +164,57 @@ func (c *Client) MemoryHotplug(ctx context.Context) (MemoryHotplugStatus, error)
 // its boot memory.
 func (c *Client) SetMemoryHotplug(ctx context.Context, sizeMiB int64) error {
 	return c.do(ctx, http.MethodPatch, "/hotplug/memory", map[string]int64{"requested_size_mib": sizeMiB}, nil)
+}
+
+// Snapshot types for SnapshotCreate.
+const (
+	SnapshotFull = "Full"
+	SnapshotDiff = "Diff"
+)
+
+// SnapshotCreate is PUT /snapshot/create. Paths are as firecracker sees them.
+type SnapshotCreate struct {
+	SnapshotPath string `json:"snapshot_path"`
+	MemFilePath  string `json:"mem_file_path"`
+	SnapshotType string `json:"snapshot_type,omitempty"`
+}
+
+// CreateSnapshot writes the VM state and guest memory to files. The VM must be paused.
+func (c *Client) CreateSnapshot(ctx context.Context, s SnapshotCreate) error {
+	return c.doWith(ctx, c.slow, http.MethodPut, "/snapshot/create", s, nil)
+}
+
+// MemoryBackend tells a snapshot load where the guest memory comes from. A File backend
+// maps the file private, so VMs loaded from one file share its unchanged pages.
+type MemoryBackend struct {
+	BackendType string `json:"backend_type"` // "File" or "Uffd"
+	BackendPath string `json:"backend_path"`
+}
+
+// NetworkOverride points a restored network interface at another tap.
+type NetworkOverride struct {
+	IfaceID     string `json:"iface_id"`
+	HostDevName string `json:"host_dev_name"`
+}
+
+// VsockOverride points a restored vsock device at another unix socket.
+type VsockOverride struct {
+	UDSPath string `json:"uds_path"`
+}
+
+// SnapshotLoad is PUT /snapshot/load. Paths are as firecracker sees them.
+type SnapshotLoad struct {
+	SnapshotPath     string            `json:"snapshot_path"`
+	MemBackend       MemoryBackend     `json:"mem_backend"`
+	ResumeVM         bool              `json:"resume_vm,omitempty"`
+	NetworkOverrides []NetworkOverride `json:"network_overrides,omitempty"`
+	VsockOverride    *VsockOverride    `json:"vsock_override,omitempty"`
+	// ClockRealtime moves the guest clock forward by the time since the snapshot (x86_64 only).
+	ClockRealtime bool `json:"clock_realtime,omitempty"`
+}
+
+// LoadSnapshot restores a VM from a snapshot. Firecracker only accepts it on a fresh
+// process started without a config file.
+func (c *Client) LoadSnapshot(ctx context.Context, s SnapshotLoad) error {
+	return c.doWith(ctx, c.slow, http.MethodPut, "/snapshot/load", s, nil)
 }

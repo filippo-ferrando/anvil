@@ -128,6 +128,29 @@ Firecracker has no SLIRP, so a standalone `--hypervisor firecracker` VM gets a t
 
 A Firecracker VM in an intent plugs its tap into the intent bridge like a QEMU VM does.
 
+
+## Ephemeral clones
+
+Clones of one warm snapshot (`anvil launch --ephemeral`, `anvil matrix`) all restore with
+the same MAC and address, so each runs in its own network namespace
+(`/run/netns/anvil-eph-<id>`) with the same layout inside: the guest is `10.200.0.2`
+behind `tap0` (`10.200.0.1/30`), its gateway and DNS server.
+
+- **Link.** A veth pair joins the netns to the host, on its own /30 from `10.253.0.0/16`
+  (or the subnet in `ANVIL_EPH_SUBNET` from anvild's environment). The host end is named
+  `anve<hash>`.
+- **Outbound.** The netns masquerades the guest behind its end of the link, and the host
+  masquerades the link (`table ip anvil-eph`), with the same `DOCKER-USER` rules as above.
+  Clones can't reach each other, `anvil-fc0`, Docker's bridges or the host itself, apart
+  from DNS.
+- **Inbound.** Nothing, only replies.
+- **DNS.** The netns forwards `10.200.0.1:53` to the host end of the link, where anvild
+  answers like on `anvil-fc0`.
+- **Privileges.** Creating a netns needs `CAP_SYS_ADMIN`, which anvild doesn't have, so the
+  root helper `anvild devhelper` builds it (`internal/hostdev/netns_linux.go`); anvild only
+  sets the host end's address and the host table (`internal/vm/fc_clonenet.go`).
+- **Cleanup.** Clones live only in anvild's memory: on start anvild removes every
+  `anvil-eph-*` netns it finds.
 ## Containers
 
 Containers are created through Docker's HTTP API (`internal/container/docker/client.go`).

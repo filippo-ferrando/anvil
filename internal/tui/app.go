@@ -43,12 +43,13 @@ const (
 	screenEvents
 	screenDevices
 	screenGUIApps
+	screenEphemeral
 	screenLaunch // full-screen takeover reached via Instances' "n"
 	screenLogs   // full-screen takeover reached via Instances' "l"
 )
 
 // screenOrder is the sidebar's own list, top to bottom.
-var screenOrder = []screen{screenInstances, screenSnapshots, screenImages, screenIntents, screenManifests, screenCloudInit, screenMirrors, screenMigration, screenEvents, screenDevices, screenGUIApps}
+var screenOrder = []screen{screenInstances, screenSnapshots, screenImages, screenIntents, screenManifests, screenCloudInit, screenMirrors, screenMigration, screenEvents, screenDevices, screenGUIApps, screenEphemeral}
 
 var screenLabels = map[screen]string{
 	screenInstances: "Instances",
@@ -62,6 +63,7 @@ var screenLabels = map[screen]string{
 	screenEvents:    "Events",
 	screenDevices:   "Devices",
 	screenGUIApps:   "GUI Apps",
+	screenEphemeral: "Ephemeral",
 }
 
 const (
@@ -102,6 +104,7 @@ type model struct {
 	events    eventsModel
 	devices   devicesModel
 	guiApps   guiAppsModel
+	ephemeral ephemeralModel
 
 	watchReloadPending bool // a reload triggered by a Watch event is already scheduled
 	watchFullReload    bool // a pending Watch event couldn't be patched into the Instances list
@@ -145,6 +148,7 @@ func Run(dial func() (*client.Client, error), socketPath string) error {
 		cloudInit:      newCloudInitModel(),
 		manifests:      newManifestsModel(),
 		mirrors:        newMirrorsModel(),
+		ephemeral:      newEphemeralModel(),
 		migration:      newMigrationModel(),
 		events:         newEventsModel(),
 		devices:        newDevicesModel(),
@@ -236,6 +240,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cloudInit.setSize(contentWidth, h)
 		m.manifests.setSize(contentWidth, h)
 		m.mirrors.list.SetSize(contentWidth-2, h)
+		m.ephemeral.setSize(contentWidth, h)
 		m.events.list.SetSize(contentWidth-2, h-1) // -1: the help bar under the list
 		m.devices.list.SetSize(contentWidth-2, h-1)
 		m.guiApps.list.SetSize(contentWidth-2, h-1)
@@ -287,6 +292,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateIntents(msg)
 	case manifestSavedMsg, manifestContentLoadedMsg:
 		return m.updateManifests(msg)
+	case warmLoadedMsg, clonesLoadedMsg, warmBuildMsg, runEventMsg:
+		return m.updateEphemeral(msg) // streams keep going while another screen shows
 	}
 
 	// Dispatch actionDoneMsg to the screen that originated the action, not necessarily m.screen.
@@ -308,6 +315,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateMirrors(msg)
 		case screenMigration:
 			return m.updateMigration(msg)
+		case screenEphemeral:
+			return m.updateEphemeral(msg)
 		}
 	}
 
@@ -339,6 +348,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateDevices(msg)
 	case screenGUIApps:
 		return m.updateGUIApps(msg)
+	case screenEphemeral:
+		return m.updateEphemeral(msg)
 	}
 	return m, nil
 }
@@ -433,6 +444,8 @@ func (m model) loadCmdForScreen(s screen) tea.Cmd {
 		return loadCloudInitList(c)
 	case screenMirrors:
 		return loadMirrors(c)
+	case screenEphemeral:
+		return loadEphemeral(c)
 	case screenMigration:
 		// Instances and intents feed the migrate form's Name suggestions.
 		return tea.Batch(loadHosts(c), loadInstances(c), loadIntents(c))
@@ -547,6 +560,8 @@ func (m model) screenView() string {
 		return m.cloudInit.View()
 	case screenMirrors:
 		return m.mirrors.View()
+	case screenEphemeral:
+		return m.ephemeral.View(m.width-sidebarWidth-sidebarGutter, contentHeight(m.height))
 	case screenMigration:
 		return m.migration.View()
 	case screenEvents:

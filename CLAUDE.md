@@ -74,6 +74,7 @@ solves cross-host trust itself: whatever SSH access already exists is sufficient
 ```
 cmd/anvild/      daemon entrypoint (platform_linux.go / platform_darwin.go pick the VM backend)
 cmd/anvil/       CLI entrypoint
+cmd/anvil-guest/ static command runner inside ephemeral clones, listens on vsock (internal/guestexec)
 pkg/client/      thin gRPC client (unix socket, or SSH for --remote), shared by the CLI and TUI
 api/proto/       gRPC API definition (anvil.proto), the source of truth; api/gen is generated, don't hand-edit
 internal/
@@ -82,7 +83,9 @@ internal/
   instance/      domain model + Backend interface + the Manager that dispatches to it
   vm/            VM backends (Linux): QEMU (backend.go) and Firecracker (fc_*.go) behind
                  Hypervisors (hypervisors.go), cloud-init, image catalog
-  vm/firecracker/  Firecracker process, REST API client, vsock, jailer
+  vm/firecracker/  Firecracker process, REST API client, snapshots, vsock, jailer
+  guestexec/     anvil-guest's frame protocol (command, upload, stdio, tty, exit code), its
+                 server and the host's client
   vm/qemu/       QEMU process, args, QMP and guest agent clients, qemu-img, virtiofsd
   vm/image/      image catalog, mirrors, downloads and the prepared-image vault (plus Firecracker raw cache)
   vm/cloudinit/  NoCloud seed builder
@@ -90,6 +93,8 @@ internal/
   vm/vz/         Apple Virtualization.framework backend (darwin), a stub, not implemented yet
   container/docker/   Docker backend
   container/      the Backend that picks an engine; Podman is rejected, not implemented (see PLAN.md)
+  ephemeral/     warm snapshots and throwaway clones behind `launch --ephemeral`, `anvil matrix`,
+                 `anvil warm`, `anvil ephemeral`; vm.FCBackend is its Engine (fc_warm.go, fc_clone.go)
   intent/        grouping VMs/containers together, shared per-intent bridge network + IPAM
   intent/dns/    per-intent DNS server on each intent's gateway ("<role>.<intent>.anvil")
   intent/ipam/   subnet and address allocation for intent networks
@@ -98,11 +103,12 @@ internal/
   discovery/     mDNS announce and browse behind `anvil host discover`
   export/        bundle export/import behind `anvil export` and `anvil import`
   hostdev/       USB/PCI device listing, boot-device denylist, and the root helper
-                 (`anvild devhelper`, anvil-devhelper.socket) behind `launch --device`
+                 (`anvild devhelper`, anvil-devhelper.socket) behind `launch --device`,
+                 which also builds ephemeral clones' network namespaces (netns*.go)
   gui/           `anvil gui`: fd-passing socket relay + xauth (gui/relay), app .desktop/icon lookup (gui/appinfo)
   config/        fixed on-disk paths (run/state/cache dirs, GUI relay and tools dirs)
   intent/apply/  the compare-and-apply engine behind `anvil apply`
-  store/         bbolt-backed registry (instances, intents, mirrors, hosts, cloud-init, events)
+  store/         bbolt-backed registry (instances, intents, mirrors, hosts, cloud-init, events, warm snapshots)
   cloudinitrepo/ fetches a cloud-init template repo manifest and its templates
   hostpath/      ACL grants and path checks for host dirs the anvil user must reach (`anvil create-dir`)
   progress/      progress line formatting shared by the CLI and TUI

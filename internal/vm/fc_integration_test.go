@@ -3,11 +3,14 @@
 package vm
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,7 +18,9 @@ import (
 
 	"github.com/vishvananda/netlink"
 
+	"git.fferrando.cc/rdfilippo/anvil/internal/guestexec"
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/firecracker"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
 )
 
@@ -27,59 +32,7 @@ import (
 // The standalone bridge needs CAP_NET_ADMIN: run it under `unshare -rn` to keep it off
 // the host's network.
 func TestFirecrackerRealBoot(t *testing.T) {
-	baseImage, kernel := os.Getenv("ANVIL_E2E_IMAGE"), os.Getenv(image.KernelEnv)
-	if baseImage == "" || kernel == "" {
-		t.Skipf("ANVIL_E2E_IMAGE and %s not both set, skipping", image.KernelEnv)
-	}
-	for _, bin := range []string{"firecracker", "qemu-img", "xorriso"} {
-		if _, err := exec.LookPath(bin); err != nil {
-			t.Skipf("%s not installed, skipping", bin)
-		}
-	}
-
-	// The jailer needs real root (mknod is refused in a user namespace): opt in as root.
-	if os.Getenv("ANVIL_FC_TEST_JAILER") == "" {
-		t.Setenv(fcJailerEnv, "off")
-	}
-	if err := ensureFCNetwork(); err != nil {
-		t.Skipf("can't set up the standalone bridge (needs CAP_NET_ADMIN, try unshare -rn): %v", err)
-	}
-	// In a fresh network namespace loopback starts down; the proxies listen on it.
-	if lo, err := netlink.LinkByName("lo"); err == nil {
-		_ = netlink.LinkSetUp(lo)
-	}
-
-	// Short paths: unix sockets live here and are limited to 108 bytes.
-	root, err := os.MkdirTemp("", "anvil-fc")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(root) })
-	orig := instanceDir
-	instanceDir = func(id string) string { return filepath.Join(root, id) }
-	t.Cleanup(func() { instanceDir = orig })
-
-	base, err := image.LoadEmbedded()
-	if err != nil {
-		t.Fatal(err)
-	}
-	catalog, err := base.WithMirrors([]image.MirrorManifest{{ManifestJSON: `{"schema_version": 1,
-		"distros": [{"id": "e2e", "arch": "x86_64", "url": "http://unused.invalid/"}],
-		"firecracker": {"distros": [{"id": "e2e", "kernel_args": "` + os.Getenv("ANVIL_FC_KERNEL_ARGS") + `"}]}}`}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	vault := image.NewVault(filepath.Join(root, "prepared"))
-	entry, _ := catalog.Find("e2e", "")
-	cached, _ := vault.CachedPath(entry)
-	if err := os.MkdirAll(filepath.Dir(cached), 0o750); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(baseImage, cached); err != nil {
-		t.Fatal(err)
-	}
-	b := NewFCBackend(NewBackend(catalog, vault, noMirrors{}), filepath.Join(root, "fc"), nil)
-	b.ChrootBase = filepath.Join(root, "jailer")
+	b, root := newFCTestBackend(t)
 	t.Logf("jailer: %q", b.Jailer)
 	exits := make(chan instance.State, 1)
 	b.SetExitHook(func(_ string, state instance.State, _ string) { exits <- state })
@@ -258,6 +211,215 @@ func TestFirecrackerRealBoot(t *testing.T) {
 	t.Log("migrated disk booted with its old address")
 }
 
+// TestFirecrackerSnapshotRestore restores a full snapshot next to the paused source, 10s
+// later, and runs a command through anvil-guest in the clone, whose clock must have caught up.
+func TestFirecrackerSnapshotRestore(t *testing.T) {
+	b, root := newFCTestBackend(t)
+	t.Setenv("ANVIL_GUEST_TOOLS", buildAnvilGuest(t))
+	const id, cloneID = "FCSNAP", "FCSNAPCLONE"
+	spec := &instance.Spec{ID: id, Name: "fc-snap", Kind: instance.KindVM, VM: &instance.VMSpec{
+		ImageRef: "e2e", CPUs: 1, MemoryMiB: 512, DiskGiB: 10, NoGuestAgent: true, AnvilGuest: true,
+		Hypervisor: instance.VMHypervisorFirecracker,
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	defer b.Delete(context.Background(), spec)
+	defer logConsoleOnFailure(t, id)
+	if err := b.Create(ctx, spec, func(s string) { t.Log(s) }); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := b.Start(ctx, spec); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := b.WaitReady(ctx, spec, func(s string) { t.Log(s) }); err != nil {
+		t.Fatalf("WaitReady: %v", err)
+	}
+	src, _ := b.lookup(id)
+	if out, code := guestRun(t, ctx, b.pathsOf(id).vsock, guestexec.Request{Header: guestexec.Header{Argv: []string{"true"}}}); code != 0 {
+		t.Fatalf("anvil-guest in the source = %d: %s", code, out)
+	}
+	if err := src.API.Pause(ctx); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	snap := filepath.Join(root, "snap")
+	if err := os.MkdirAll(snap, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	state, mem := filepath.Join(snap, "vmstate"), filepath.Join(snap, "mem")
+	start := time.Now()
+	if err := src.API.CreateSnapshot(ctx, firecracker.SnapshotCreate{
+		SnapshotPath: state, MemFilePath: mem, SnapshotType: firecracker.SnapshotFull,
+	}); err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+	t.Logf("snapshot took %s", time.Since(start).Round(time.Millisecond))
+	time.Sleep(10 * time.Second) // so a clock left at snapshot time would show
+
+	// The source stays paused for good, so only the clone uses the disk from here on.
+	cloneDir := filepath.Join(root, cloneID)
+	if err := os.MkdirAll(cloneDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	tap, err := b.Networker.Attach(cloneID, FCBridge)
+	if err != nil {
+		t.Fatalf("clone tap: %v", err)
+	}
+	defer b.Networker.Detach(cloneID)
+	paths := firecracker.Paths{
+		APISocket:  filepath.Join(cloneDir, "firecracker.sock"),
+		ConsoleLog: filepath.Join(cloneDir, "console.log"),
+		LogFile:    filepath.Join(cloneDir, "firecracker.log"),
+	}
+	clone, err := firecracker.Spawn(ctx, paths)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	defer func() {
+		_ = clone.Stop(context.Background(), 0)
+		_ = clone.Close()
+	}()
+	if err := clone.WaitAPI(ctx); err != nil {
+		t.Fatalf("WaitAPI: %v", err)
+	}
+	vsock := filepath.Join(cloneDir, "vsock.sock")
+	start = time.Now()
+	if err := clone.API.LoadSnapshot(ctx, firecracker.SnapshotLoad{
+		SnapshotPath:     state,
+		MemBackend:       firecracker.MemoryBackend{BackendType: "File", BackendPath: mem},
+		ResumeVM:         true,
+		NetworkOverrides: []firecracker.NetworkOverride{{IfaceID: "eth0", HostDevName: tap}},
+		VsockOverride:    &firecracker.VsockOverride{UDSPath: vsock},
+		ClockRealtime:    true,
+	}); err != nil {
+		data, _ := os.ReadFile(paths.LogFile)
+		t.Fatalf("LoadSnapshot: %v\nfirecracker log:\n%s", err, tail(string(data), 3000))
+	}
+	t.Logf("restored in %s", time.Since(start).Round(time.Millisecond))
+	skew := func() int64 {
+		out, code := guestRun(t, ctx, vsock, guestexec.Request{Header: guestexec.Header{Argv: []string{"date", "+%s"}}})
+		if code != 0 {
+			t.Fatalf("anvil-guest in the clone = %d: %s", code, out)
+		}
+		guestNow, _ := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
+		return time.Now().Unix() - guestNow
+	}
+	before := skew()
+	t.Logf("clone ran a command %s after the restore", time.Since(start).Round(time.Millisecond))
+	source, _ := guestRun(t, ctx, vsock, guestexec.Request{Header: guestexec.Header{
+		Argv: []string{"cat", "/sys/devices/system/clocksource/clocksource0/current_clocksource"}}})
+	t.Logf("clock %ds behind after the restore (clocksource %s, clock_realtime on)", before, strings.TrimSpace(source))
+
+	// clock_realtime alone doesn't move the guest's wall clock, so a clone sets it.
+	conn, err := firecracker.DialVsock(ctx, vsock, guestexec.Port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := guestexec.SetClock(ctx, conn, time.Now()); err != nil {
+		t.Fatalf("SetClock: %v", err)
+	}
+	if after := skew(); after > 1 || after < -1 {
+		t.Errorf("the clone's clock is %ds off the host's after SetClock", after)
+	}
+}
+
+// TestFirecrackerAnvilGuest boots a VM with anvil-guest and runs commands through it:
+// output and exit codes, an upload into /work, and a terminal.
+func TestFirecrackerAnvilGuest(t *testing.T) {
+	b, _ := newFCTestBackend(t)
+	t.Setenv("ANVIL_GUEST_TOOLS", buildAnvilGuest(t))
+	const id = "FCGUEST"
+	spec := &instance.Spec{ID: id, Name: "fc-guest", Kind: instance.KindVM, VM: &instance.VMSpec{
+		ImageRef: "e2e", CPUs: 1, MemoryMiB: 512, DiskGiB: 10, NoGuestAgent: true, AnvilGuest: true,
+		Hypervisor: instance.VMHypervisorFirecracker,
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	defer b.Delete(context.Background(), spec)
+	defer logConsoleOnFailure(t, id)
+	if err := b.Create(ctx, spec, func(s string) { t.Log(s) }); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := b.Start(ctx, spec); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := b.WaitReady(ctx, spec, func(s string) { t.Log(s) }); err != nil {
+		t.Fatalf("WaitReady: %v", err)
+	}
+	vsock := b.pathsOf(id).vsock
+
+	if out, code := guestRun(t, ctx, vsock, guestexec.Request{Header: guestexec.Header{Argv: []string{"uname", "-a"}}}); code != 0 || !strings.Contains(out, "Linux") {
+		t.Errorf("uname = %d: %q", code, out)
+	} else {
+		t.Logf("guest: %s", strings.TrimSpace(out))
+	}
+	if out, code := guestRun(t, ctx, vsock, guestexec.Request{Header: guestexec.Header{Argv: []string{"sh", "-c", "id -u; exit 7"}}}); code != 7 || out != "0\n" {
+		t.Errorf("id/exit = %d: %q, want 7 and root", code, out)
+	}
+	if _, code := guestRun(t, ctx, vsock, guestexec.Request{Header: guestexec.Header{Argv: []string{"no-such-command"}}}); code != 127 {
+		t.Errorf("a missing command exited %d, want 127", code)
+	}
+
+	var upload bytes.Buffer
+	tw := tar.NewWriter(&upload)
+	body := "#!/bin/sh\necho \"hello from $(pwd)\"\n"
+	_ = tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: "hello.sh", Mode: 0o755, Size: int64(len(body))})
+	_, _ = tw.Write([]byte(body))
+	_ = tw.Close()
+	if out, code := guestRun(t, ctx, vsock, guestexec.Request{Header: guestexec.Header{Argv: []string{"./hello.sh"}}, Upload: &upload}); code != 0 || out != "hello from /work\n" {
+		t.Errorf("uploaded script = %d: %q", code, out)
+	}
+
+	tty := guestexec.Request{Header: guestexec.Header{Argv: []string{"sh", "-c", "stty size; tty"}, TTY: true, Rows: 33, Cols: 99}}
+	if out, code := guestRun(t, ctx, vsock, tty); code != 0 || !strings.Contains(out, "33 99") || !strings.Contains(out, "/dev/pts/") {
+		t.Errorf("tty = %d: %q", code, out)
+	}
+}
+
+// logConsoleOnFailure logs the end of instance id's serial console when t failed.
+func logConsoleOnFailure(t *testing.T, id string) {
+	if t.Failed() {
+		data, _ := os.ReadFile(filepath.Join(instanceDir(id), "console.log"))
+		t.Logf("console.log tail:\n%s", tail(string(data), 4000))
+	}
+}
+
+// guestRun runs r through anvil-guest behind vsock, retrying the dial while it starts,
+// and returns stdout and stderr together with the exit code.
+func guestRun(t *testing.T, ctx context.Context, vsock string, r guestexec.Request) (string, int) {
+	t.Helper()
+	var conn net.Conn
+	var err error
+	for deadline := time.Now().Add(60 * time.Second); ; time.Sleep(500 * time.Millisecond) {
+		if conn, err = firecracker.DialVsock(ctx, vsock, guestexec.Port); err == nil || time.Now().After(deadline) {
+			break
+		}
+	}
+	if err != nil {
+		t.Fatalf("dialing anvil-guest: %v", err)
+	}
+	var out bytes.Buffer
+	r.Stdout, r.Stderr = &out, &out
+	code, err := guestexec.Run(ctx, conn, r)
+	if err != nil {
+		t.Fatalf("running %v: %v", r.Argv, err)
+	}
+	return out.String(), code
+}
+
+// buildAnvilGuest builds the static anvil-guest into a fresh dir, for ANVIL_GUEST_TOOLS.
+func buildAnvilGuest(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	_, self, _, _ := runtime.Caller(0) // the test binary may run outside the module
+	cmd := exec.Command("go", "build", "-o", filepath.Join(dir, guestBinary), "./cmd/anvil-guest")
+	cmd.Dir = filepath.Join(filepath.Dir(self), "..", "..")
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("building anvil-guest: %v\n%s", err, out)
+	}
+	return dir
+}
+
 // sshBanner checks the guest's sshd answers through host port, retrying while it starts.
 func sshBanner(t *testing.T, port int) {
 	t.Helper()
@@ -278,4 +440,64 @@ func sshBanner(t *testing.T, port int) {
 		}
 		time.Sleep(time.Second)
 	}
+}
+
+// newFCTestBackend sets up an FCBackend whose "e2e" image is the qcow2 in ANVIL_E2E_IMAGE,
+// with its instance dirs under a fresh temp root it returns. It skips t without the tools.
+func newFCTestBackend(t *testing.T) (*FCBackend, string) {
+	t.Helper()
+	baseImage, kernel := os.Getenv("ANVIL_E2E_IMAGE"), os.Getenv(image.KernelEnv)
+	if baseImage == "" || kernel == "" {
+		t.Skipf("ANVIL_E2E_IMAGE and %s not both set, skipping", image.KernelEnv)
+	}
+	for _, bin := range []string{"firecracker", "qemu-img", "xorriso"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s not installed, skipping", bin)
+		}
+	}
+
+	// The jailer needs real root (mknod is refused in a user namespace): opt in as root.
+	if os.Getenv("ANVIL_FC_TEST_JAILER") == "" {
+		t.Setenv(fcJailerEnv, "off")
+	}
+	if err := ensureFCNetwork(); err != nil {
+		t.Skipf("can't set up the standalone bridge (needs CAP_NET_ADMIN, try unshare -rn): %v", err)
+	}
+	// In a fresh network namespace loopback starts down; the proxies listen on it.
+	if lo, err := netlink.LinkByName("lo"); err == nil {
+		_ = netlink.LinkSetUp(lo)
+	}
+
+	// Short paths: unix sockets live here and are limited to 108 bytes.
+	root, err := os.MkdirTemp("", "anvil-fc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
+	orig := instanceDir
+	instanceDir = func(id string) string { return filepath.Join(root, id) }
+	t.Cleanup(func() { instanceDir = orig })
+
+	base, err := image.LoadEmbedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := base.WithMirrors([]image.MirrorManifest{{ManifestJSON: `{"schema_version": 1,
+		"distros": [{"id": "e2e", "arch": "x86_64", "url": "http://unused.invalid/"}],
+		"firecracker": {"distros": [{"id": "e2e", "kernel_args": "` + os.Getenv("ANVIL_FC_KERNEL_ARGS") + `"}]}}`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vault := image.NewVault(filepath.Join(root, "prepared"))
+	entry, _ := catalog.Find("e2e", "")
+	cached, _ := vault.CachedPath(entry)
+	if err := os.MkdirAll(filepath.Dir(cached), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(baseImage, cached); err != nil {
+		t.Fatal(err)
+	}
+	b := NewFCBackend(NewBackend(catalog, vault, noMirrors{}), filepath.Join(root, "fc"), nil)
+	b.ChrootBase = filepath.Join(root, "jailer")
+	return b, root
 }

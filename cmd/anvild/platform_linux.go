@@ -4,6 +4,7 @@ package main
 
 import (
 	"git.fferrando.cc/rdfilippo/anvil/internal/config"
+	"git.fferrando.cc/rdfilippo/anvil/internal/ephemeral"
 	"git.fferrando.cc/rdfilippo/anvil/internal/intent/dns"
 	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm"
@@ -15,18 +16,29 @@ import (
 func newVMBackend(catalog *image.Catalog, vault *image.Vault, db *store.Store) VMBackend {
 	qemuBackend := vm.NewBackend(catalog, vault, db)
 	h := vm.NewHypervisors(qemuBackend)
-	h.Firecracker = vm.NewFCBackend(qemuBackend, config.FirecrackerImageDir(), db)
+	fcBackend = vm.NewFCBackend(qemuBackend, config.FirecrackerImageDir(), db)
+	h.Firecracker = fcBackend
 	return h
 }
 
-// platformDNSHook makes the DNS server pick up the standalone Firecracker zone as soon as
-// its bridge is created, not on the next periodic refresh.
-func platformDNSHook(refresh func()) { vm.FCNetworkUp = refresh }
+// platformEphemeralEngine runs ephemeral clones: Firecracker, set up by newVMBackend.
+func platformEphemeralEngine() ephemeral.Engine { return fcBackend }
 
-// platformDNSZones adds the forward-only zone of standalone Firecracker VMs, once their bridge exists.
+var fcBackend *vm.FCBackend
+
+// platformDNSHook makes the DNS server pick up the standalone Firecracker zone as soon as
+// its bridge is created, and clone zones as clones come and go.
+func platformDNSHook(refresh func()) {
+	vm.FCNetworkUp = refresh
+	fcBackend.Clones.OnChange = refresh
+}
+
+// platformDNSZones adds the forward-only zones of standalone Firecracker VMs (once their
+// bridge exists) and of ephemeral clones.
 func platformDNSZones() []dns.Zone {
+	zones := fcBackend.Clones.DNSZones()
 	if z, ok := vm.FCDNSZone(); ok {
-		return []dns.Zone{z}
+		zones = append(zones, z)
 	}
-	return nil
+	return zones
 }

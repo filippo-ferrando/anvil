@@ -1193,3 +1193,179 @@ message VersionReply {
   string version = 1; // module version from git, e.g. "v1.1.1", "+dirty" for a modified tree
   string commit = 2;  // short VCS revision, empty when built outside git
 }
+
+// EphemeralService runs commands in throwaway clones restored from warm snapshots
+// (Firecracker with its jailer only). See docs/ephemeral.md.
+service EphemeralService {
+  // Run restores one clone per distro, runs the command in each, streams their output,
+  // then deletes them. The first input is the request; an upload and stdin follow.
+  rpc Run(stream RunInput) returns (stream RunEvent);
+
+  // WarmCreate builds (or finds) the warm snapshot a run with these parameters uses.
+  rpc WarmCreate(WarmCreateRequest) returns (stream WarmCreateProgress);
+  rpc WarmList(WarmListRequest) returns (WarmListReply);
+  rpc WarmDelete(WarmDeleteRequest) returns (WarmDeleteReply);
+
+  // CloneList lists running clones and the ones kept by keep_failed.
+  rpc CloneList(CloneListRequest) returns (CloneListReply);
+  // CloneExec runs a command in a clone, a shell with tty for `anvil ephemeral shell`.
+  rpc CloneExec(stream CloneExecInput) returns (stream CloneExecOutput);
+  rpc CloneDelete(CloneDeleteRequest) returns (CloneDeleteReply);
+}
+
+message TerminalSize {
+  uint32 rows = 1;
+  uint32 cols = 2;
+}
+
+message RunRequest {
+  repeated string distros = 1;  // one clone each, all in parallel
+  repeated string command = 2;
+  repeated string env = 3;      // KEY=value
+  int32 cpus = 4;               // 0 for the default; part of the warm snapshot's key
+  int64 memory_mib = 5;         // 0 for the default; part of the warm snapshot's key
+  bool keep_failed = 6;         // keep clones whose command failed, for `anvil ephemeral shell`
+  bool upload = 7;              // a tar stream follows in upload_chunk, extracted into /work
+  bool tty = 8;                 // one distro only: run on a terminal, with stdin
+  TerminalSize size = 9;
+  string cwd = 10;              // /work with an upload, / otherwise
+  string arch = 11;
+}
+
+message RunInput {
+  oneof input {
+    RunRequest request = 1;
+    bytes upload_chunk = 2;
+    bool upload_done = 3;
+    bytes stdin = 4;
+    bool stdin_close = 5;
+    TerminalSize resize = 6;
+  }
+}
+
+enum OutputStream {
+  OUTPUT_STREAM_UNSPECIFIED = 0;
+  OUTPUT_STREAM_STDOUT = 1;
+  OUTPUT_STREAM_STDERR = 2;
+}
+
+message RunProgress {
+  string clone_id = 1;  // empty before the clone exists
+  string distro = 2;
+  string message = 3;
+}
+
+message RunOutput {
+  string clone_id = 1;
+  string distro = 2;
+  OutputStream stream = 3;
+  bytes data = 4;
+}
+
+message RunExit {
+  string clone_id = 1;
+  string distro = 2;
+  int32 exit_code = 3;   // -1 when the command never ran, see error
+  int64 duration_ms = 4; // the command's run time, from restore to exit
+  bool kept = 5;
+  string error = 6;      // why the clone failed before or around the command
+}
+
+message RunEvent {
+  oneof event {
+    RunProgress progress = 1;
+    RunOutput output = 2;
+    RunExit exit = 3;
+  }
+}
+
+message WarmSnapshot {
+  string key = 1;
+  string distro = 2;
+  string arch = 3;
+  int32 cpus = 4;
+  int64 memory_mib = 5;
+  int64 disk_gib = 6;
+  string firecracker_version = 7;
+  int64 size_bytes = 8;
+  int64 created_at_unix = 9;
+  int64 last_used_at_unix = 10;
+}
+
+message WarmCreateRequest {
+  string distro = 1;
+  string arch = 2;
+  int32 cpus = 3;
+  int64 memory_mib = 4;
+  bool rebuild = 5; // build it again even when it exists
+}
+
+message WarmCreateProgress {
+  string status = 1;
+  WarmSnapshot snapshot = 2; // set on the last message
+}
+
+message WarmListRequest {}
+
+message WarmListReply {
+  repeated WarmSnapshot snapshots = 1;
+}
+
+message WarmDeleteRequest {
+  repeated string keys = 1; // a key or a unique prefix of one
+  bool all = 2;
+}
+
+message WarmDeleteReply {
+  repeated string deleted = 1;
+}
+
+message EphemeralClone {
+  string id = 1;
+  string distro = 2;
+  string warm_key = 3;
+  int64 started_at_unix = 4;
+  bool exited = 5;     // the run's command is done; the clone itself still runs
+  int32 exit_code = 6;
+  bool kept = 7;
+}
+
+message CloneListRequest {}
+
+message CloneListReply {
+  repeated EphemeralClone clones = 1;
+}
+
+message CloneExecRequest {
+  string clone_id = 1;  // or a unique prefix
+  repeated string command = 2;
+  repeated string env = 3;
+  bool tty = 4;
+  TerminalSize size = 5;
+}
+
+message CloneExecInput {
+  oneof input {
+    CloneExecRequest request = 1;
+    bytes stdin = 2;
+    bool stdin_close = 3;
+    TerminalSize resize = 4;
+  }
+}
+
+message CloneExecOutput {
+  oneof output {
+    bytes stdout = 1;
+    bytes stderr = 2;
+    int32 exit_code = 3; // the last message
+  }
+}
+
+message CloneDeleteRequest {
+  repeated string ids = 1; // ids or unique prefixes
+  bool all = 2;
+}
+
+message CloneDeleteReply {
+  repeated string deleted = 1;
+}

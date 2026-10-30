@@ -452,6 +452,10 @@ func (m *Manager) Import(ctx context.Context, p ImportParams, progress func(stat
 			removeAdopted()
 			return Result{}, fmt.Errorf("import: launching %q: %w", destName, launchErr)
 		}
+		if launched == nil {
+			removeAdopted()
+			return Result{}, fmt.Errorf("import: launching %q: no instance was created", destName)
+		}
 		result.Members = append(result.Members, MemberResult{Role: mem.Role, NewID: launched.ID})
 	}
 

@@ -34,6 +34,7 @@ echo "==> building anvil ${version} for ${arch}"
 echo "==> compiling"
 ( cd "$repo" && CGO_ENABLED=0 go build -trimpath -o "$work/anvil-bin" ./cmd/anvil )
 ( cd "$repo" && go build -trimpath -o "$work/anvild-bin" ./cmd/anvild )
+( cd "$repo" && CGO_ENABLED=0 go build -trimpath -o "$work/anvil-guest-bin" ./cmd/anvil-guest )
 
 render_control() {
   # $1 = template, $2 = installed-size in KiB (dpkg wants this in the
@@ -78,6 +79,8 @@ install -d "$pkg_anvild/DEBIAN" "$pkg_anvild/usr/bin" \
   "$pkg_anvild/usr/share/man/man8" \
   "$pkg_anvild/usr/share/doc/anvild"
 install -m755 "$work/anvild-bin" "$pkg_anvild/usr/bin/anvild"
+# Static, runs inside ephemeral clones (internal/guestexec).
+install -Dm755 "$work/anvil-guest-bin" "$pkg_anvild/usr/lib/anvil/guest/anvil-guest"
 # Static waypipe/xwayland-satellite for `anvil gui`, from scripts/build-gui-tools.sh.
 gui_tools="${GUI_TOOLS_DIR:-$repo/build/gui-tools}"
 if [ -x "$gui_tools/waypipe" ] && [ -x "$gui_tools/xwayland-satellite" ]; then

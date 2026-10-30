@@ -28,10 +28,14 @@ var toolsISOMu sync.Mutex
 // toolsISO packs the GUI tools dir into a read-only ISO drive, since firecracker has no
 // virtiofs. Built once into the cache and again when the tools change.
 func (b *FCBackend) toolsISO() (string, error) {
+	return b.packISO(config.GUIToolsDir(), gui.ToolsTag, "gui-tools.iso")
+}
+
+// packISO packs dir into the cached ISO name labelled label, unless it is newer than dir's files.
+func (b *FCBackend) packISO(src, label, name string) (string, error) {
 	toolsISOMu.Lock()
 	defer toolsISOMu.Unlock()
-	src := config.GUIToolsDir()
-	iso := filepath.Join(b.Cache.Dir, "gui-tools.iso")
+	iso := filepath.Join(b.Cache.Dir, name)
 	if fresh, err := newerThanAll(iso, src); err != nil || fresh {
 		return iso, err
 	}
@@ -39,11 +43,11 @@ func (b *FCBackend) toolsISO() (string, error) {
 		return "", err
 	}
 	tmp := iso + ".part"
-	// -R keeps the binaries executable, -L the label the guest mounts it by.
-	cmd := exec.Command("xorriso", "-as", "genisoimage", "-R", "-V", gui.ToolsTag, "-o", tmp, src)
+	// -R keeps the binaries executable, -V sets the label the guest mounts it by.
+	cmd := exec.Command("xorriso", "-as", "genisoimage", "-R", "-V", label, "-o", tmp, src)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		_ = os.Remove(tmp)
-		return "", fmt.Errorf("vm: packing the GUI tools: %w: %s", err, out)
+		return "", fmt.Errorf("vm: packing %s: %w: %s", src, err, out)
 	}
 	return iso, os.Rename(tmp, iso)
 }

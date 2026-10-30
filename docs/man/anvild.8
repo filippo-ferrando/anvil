@@ -21,7 +21,7 @@ API for containers (no SDK). It takes no command-line
 flags and its on-disk layout is fixed. Its runtime behavior is
 controlled through the requests it receives over the socket, with a few
 exceptions read from its environment, described under ENVIRONMENT:
-\fBANVIL_MDNS\fR, \fBANVIL_METRICS\fR, \fBANVIL_GUI_TOOLS\fR and the
+\fBANVIL_MDNS\fR, \fBANVIL_METRICS\fR, \fBANVIL_GUI_TOOLS\fR, \fBANVIL_GUEST_TOOLS\fR and the
 \fBANVIL_FC_*\fR ones for Firecracker VMs.
 
 On startup it creates its run, state, and cache directories if missing,
@@ -154,6 +154,12 @@ ones, the same numbers as \fBanvil stats\fR.
 .RS 4
 Directory holding the GUI tools shared into VMs, instead of
 \fB/usr/lib/anvil/gui\fR. Meant for development builds.
+.RE
+.PP
+\fBANVIL_GUEST_TOOLS\fP
+.RS 4
+Directory holding \fBanvil-guest\fR, the command runner put into ephemeral
+clones, instead of \fB/usr/lib/anvil/guest\fR. Meant for development builds.
 .RE
 .PP
 \fBANVIL_FC_KERNEL\fP

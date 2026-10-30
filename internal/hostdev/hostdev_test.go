@@ -165,7 +165,7 @@ func TestClaimRefusesBlockedAndBadInput(t *testing.T) {
 		{Op: "release", Claim: &Claim{Bus: "disk", Addr: "sda"}},
 		{Op: "format"},
 	} {
-		if rep := handle(req, os.Getuid()); rep.Error == "" {
+		if rep := handle(req, os.Getuid(), os.Getgid()); rep.Error == "" {
 			t.Errorf("%+v succeeded, want an error", req)
 		}
 	}
@@ -173,7 +173,7 @@ func TestClaimRefusesBlockedAndBadInput(t *testing.T) {
 
 func TestClaimUSB(t *testing.T) {
 	root := fakeHost(t)
-	rep := handle(request{Op: "claim", Bus: "usb", Addr: "3-2"}, os.Getuid())
+	rep := handle(request{Op: "claim", Bus: "usb", Addr: "3-2"}, os.Getuid(), os.Getgid())
 	if rep.Error != "" {
 		t.Fatal(rep.Error)
 	}
