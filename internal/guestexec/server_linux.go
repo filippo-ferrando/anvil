@@ -126,7 +126,8 @@ func runAs(cmd *exec.Cmd, name string, home bool) error {
 		}
 	}
 	cmd.SysProcAttr.Credential = cred
-	if home {
+	// A missing home (nobody's /nonexistent, say) would fail the exec, so stay in / then.
+	if st, err := os.Stat(u.HomeDir); home && err == nil && st.IsDir() {
 		cmd.Dir = u.HomeDir
 	}
 	// Later entries win, so these replace the defaults' HOME.

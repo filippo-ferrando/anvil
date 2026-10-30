@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -325,8 +326,20 @@ func TestServeAsUser(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("switching users needs root")
 	}
+	u, err := user.Lookup("nobody")
+	if err != nil {
+		t.Skip("no nobody user")
+	}
 	r := runPipe(t, context.Background(), Request{Header: Header{Argv: []string{"sh", "-c", `id -un; echo "$HOME"; pwd`}, User: "nobody"}})
-	if r.err != nil || r.code != 0 || !strings.HasPrefix(r.stdout, "nobody\n") {
+	if r.err != nil || r.code != 0 || !strings.HasPrefix(r.stdout, "nobody\n"+u.HomeDir+"\n") {
 		t.Fatalf("got %+v", r)
+	}
+	// pwd is the home when it exists, / otherwise (nobody's home is often missing).
+	wantDir := "/"
+	if st, err := os.Stat(u.HomeDir); err == nil && st.IsDir() {
+		wantDir = u.HomeDir
+	}
+	if !strings.HasSuffix(r.stdout, "\n"+wantDir+"\n") {
+		t.Fatalf("pwd: got %q, want %s", r.stdout, wantDir)
 	}
 }
