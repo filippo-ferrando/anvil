@@ -124,6 +124,14 @@ func Schedule(s *anvilv1.SnapshotSchedule, timeLayout string) string {
 	return out
 }
 
+// CPUs renders a vCPU count, "1 CPU" or "4 CPUs".
+func CPUs[N ~int32 | ~int64 | ~int](n N) string {
+	if n == 1 {
+		return "1 CPU"
+	}
+	return fmt.Sprintf("%d CPUs", n)
+}
+
 // Uptime renders a second count like "1d<sep>2h<sep>3m", or "-" when not positive.
 func Uptime(seconds int64, sep string) string {
 	if seconds <= 0 {

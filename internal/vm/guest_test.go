@@ -160,3 +160,35 @@ func TestWaitReadyFollowsPoller(t *testing.T) {
 		t.Fatal("waitReady didn't return after the poller's report")
 	}
 }
+
+// A VM without a guest agent never waits for one, so its progress doesn't mention it.
+func TestWaitReadyWithoutAgent(t *testing.T) {
+	b := newGuestTracker(func(string) *qemu.GuestAgent { return nil }, "powerdown")
+	gs := &guestState{cancel: func() {}}
+	b.guests["vm1"] = gs
+	var statuses []string
+	done := make(chan error, 1)
+	go func() {
+		spec := &instance.Spec{ID: "vm1", Name: "vm1", VM: &instance.VMSpec{NoGuestAgent: true}}
+		done <- b.waitReady(t.Context(), spec, nil, func(s string) { statuses = append(statuses, s) })
+	}()
+	for {
+		b.guestMu.Lock()
+		waiting := gs.probed != nil
+		if waiting {
+			gs.info = instance.GuestInfo{CloudInit: instance.CloudInitDone}
+			gs.notifyProbed()
+		}
+		b.guestMu.Unlock()
+		if waiting {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if len(statuses) != 1 || statuses[0] != "waiting for cloud-init" {
+		t.Errorf("progress = %q", statuses)
+	}
+}

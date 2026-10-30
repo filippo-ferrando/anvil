@@ -256,8 +256,60 @@ func TestServeSetClock(t *testing.T) {
 	}
 	host, guest := net.Pipe()
 	go func() { _ = Serve(guest) }()
-	err := SetClock(context.Background(), host, time.Now())
+	err := SetupClone(context.Background(), host, time.Now(), "")
 	if err == nil || !strings.Contains(err.Error(), "setting the clock") {
-		t.Errorf("SetClock without CAP_SYS_TIME = %v", err)
+		t.Errorf("SetupClone without CAP_SYS_TIME = %v", err)
+	}
+}
+
+func TestRenameInHosts(t *testing.T) {
+	for _, tc := range []struct{ hosts, want string }{
+		{"127.0.0.1 localhost\n127.0.1.1 eph-wabc.localdomain eph-wabc # cloud-init\n",
+			"127.0.0.1 localhost\n127.0.1.1 eph-new.localdomain eph-new # cloud-init\n"},
+		{"127.0.0.1 localhost\n", "127.0.0.1 localhost\n127.0.1.1 eph-new\n"},
+		{"127.0.0.1 localhost", "127.0.0.1 localhost\n127.0.1.1 eph-new\n"},
+		{"", "127.0.1.1 eph-new\n"},
+		{"10.0.0.1 eph-wabcd\n", "10.0.0.1 eph-wabcd\n127.0.1.1 eph-new\n"},
+	} {
+		if got := renameInHosts(tc.hosts, "eph-wabc", "eph-new"); got != tc.want {
+			t.Errorf("renameInHosts(%q) = %q, want %q", tc.hosts, got, tc.want)
+		}
+	}
+}
+
+// TestServeHostname checks a bad name is refused before anything changes.
+func TestServeHostname(t *testing.T) {
+	host, guest := net.Pipe()
+	go func() { _ = Serve(guest) }()
+	var stderr strings.Builder
+	code, err := Run(context.Background(), host, Request{Header: Header{Hostname: "bad name"}, Stderr: &stderr})
+	if err != nil || code != 1 || !strings.Contains(stderr.String(), "invalid hostname") {
+		t.Errorf("bad hostname = %d, %v, %q", code, err, stderr.String())
+	}
+}
+
+// TestServeSetsHostname renames the host it runs on, so it needs its own user and UTS
+// namespaces: run under `unshare -r --uts`.
+func TestServeSetsHostname(t *testing.T) {
+	data, _ := os.ReadFile("/proc/self/uid_map")
+	if os.Geteuid() != 0 || strings.Join(strings.Fields(string(data)), " ") == "0 0 4294967295" {
+		t.Skip("needs its own user and UTS namespaces, run under unshare -r --uts")
+	}
+	old, _ := os.Hostname()
+	hostsFile = filepath.Join(t.TempDir(), "hosts")
+	t.Cleanup(func() { hostsFile = "/etc/hosts" })
+	if err := os.WriteFile(hostsFile, []byte("127.0.1.1 "+old+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	host, guest := net.Pipe()
+	go func() { _ = Serve(guest) }()
+	var stderr strings.Builder
+	if code, err := Run(context.Background(), host, Request{Header: Header{Hostname: "eph-test1"}, Stderr: &stderr}); err != nil || code != 0 {
+		t.Fatalf("set hostname = %d, %v, %q", code, err, stderr.String())
+	}
+	got, _ := os.Hostname()
+	hosts, _ := os.ReadFile(hostsFile)
+	if got != "eph-test1" || string(hosts) != "127.0.1.1 eph-test1\n" {
+		t.Errorf("hostname %q, hosts %q", got, hosts)
 	}
 }

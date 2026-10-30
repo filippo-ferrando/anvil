@@ -85,14 +85,16 @@ func TestEphemeralRealRun(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
-	probe := `uname -sr; ip -4 -o addr show eth0 | awk '{print $4}'; cat /proc/sys/kernel/random/boot_id; ` +
-		`timeout 5 bash -c 'exec 3<>/dev/tcp/10.200.0.1/53' && echo dns-reachable`
+	probe := `uname -sr; ip -4 -o addr show eth0 | awk '{print $4}'; cat /proc/sys/kernel/random/boot_id; hostname; grep -qw $(hostname) /etc/hosts && echo resolves; ` +
+		`(timeout 5 bash -c 'exec 3<>/dev/tcp/10.200.0.1/53' 2>/dev/null || timeout 5 nc -z 10.200.0.1 53) && echo dns-reachable; ` +
+		`if test -d /run/systemd/system; then echo systemd; fi`
 	start := time.Now()
 	got := runClones(t, ctx, m, ephemeral.RunRequest{Distros: []string{"e2e", "e2e"}, Argv: []string{"sh", "-c", probe}})
 	t.Logf("first run (warm build included) took %s", time.Since(start).Round(time.Second))
 	if len(got) != 2 {
 		t.Fatalf("got %d clones, want 2: %v", len(got), got)
 	}
+	// The kernel makes boot_id on its first read: under systemd that's before the snapshot.
 	var bootIDs []string
 	for id, r := range got {
 		out := r.out.String()
@@ -100,8 +102,13 @@ func TestEphemeralRealRun(t *testing.T) {
 		if r.exit.Code != 0 || !strings.Contains(out, "Linux") || !strings.Contains(out, "10.200.0.2/30") || !strings.Contains(out, "dns-reachable") {
 			t.Errorf("clone %s: exit %+v, output %q", id, r.exit, out)
 		}
-		if lines := strings.Split(strings.TrimSpace(out), "\n"); len(lines) >= 3 {
-			bootIDs = append(bootIDs, lines[2])
+		if lines := strings.Split(strings.TrimSpace(out), "\n"); len(lines) >= 5 {
+			if strings.HasSuffix(out, "systemd\n") {
+				bootIDs = append(bootIDs, lines[2])
+			}
+			if lines[3] != strings.ToLower(id) || lines[4] != "resolves" {
+				t.Errorf("clone %s: hostname %q, %q, want its own id resolving", id, lines[3], lines[4])
+			}
 		}
 	}
 	if len(bootIDs) == 2 && bootIDs[0] != bootIDs[1] {

@@ -102,10 +102,10 @@ func (b *FCBackend) RestoreClone(ctx context.Context, id string, s ephemeral.War
 	// The guest clock is still at the snapshot's time, which breaks TLS among others.
 	conn, err := dialGuest(ctx, c.vsock, 10*time.Second)
 	if err == nil {
-		err = guestexec.SetClock(ctx, conn, time.Now())
+		err = guestexec.SetupClone(ctx, conn, time.Now(), strings.ToLower(id))
 	}
 	if err != nil {
-		return nil, fmt.Errorf("vm: setting the clone's clock through anvil-guest: %w", err)
+		return nil, fmt.Errorf("vm: setting the clone's clock and hostname through anvil-guest: %w", err)
 	}
 	return c, nil
 }

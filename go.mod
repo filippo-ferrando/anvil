@@ -9,6 +9,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/go-git/go-billy/v5 v5.6.0
+	github.com/muesli/termenv v0.16.0
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/spf13/cobra v1.10.2
 	github.com/vishvananda/netlink v1.3.1
@@ -43,7 +44,6 @@ require (
 	github.com/mattn/go-runewidth v0.0.19 // indirect
 	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
-	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/rasky/go-xdr v0.0.0-20170124162913-1a41d1a06c93 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect

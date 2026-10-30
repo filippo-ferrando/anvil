@@ -48,6 +48,9 @@ type Header struct {
 	// SetClock, in Unix nanoseconds, sets the guest clock before the command runs, which
 	// may then be empty. A restored snapshot's clock is still at the snapshot's time.
 	SetClock int64
+	// Hostname, when set, renames the guest (and its /etc/hosts entry) the same way: every
+	// clone of a snapshot starts with the build VM's name.
+	Hostname string
 }
 
 // Size is a terminal size.

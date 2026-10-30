@@ -77,3 +77,12 @@ func TestUptime(t *testing.T) {
 		}
 	}
 }
+
+func TestCPUs(t *testing.T) {
+	if got := CPUs(int32(1)); got != "1 CPU" {
+		t.Errorf("CPUs(1) = %q", got)
+	}
+	if got := CPUs(4); got != "4 CPUs" {
+		t.Errorf("CPUs(4) = %q", got)
+	}
+}

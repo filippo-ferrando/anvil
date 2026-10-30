@@ -113,6 +113,7 @@ func TestCloneNftRules(t *testing.T) {
 		`iifname "anve*" oifname "anve*" drop`,
 		`iifname "anve*" oifname "` + FCBridge + `" drop`,
 		`oifname "anve*" ct state established,related accept`,
+		`iifname "anve*" fib daddr . iif type != local drop`,
 		`iifname "anve*" meta l4proto { tcp, udp } th dport 53 accept`,
 	} {
 		if !strings.Contains(rules, want) {

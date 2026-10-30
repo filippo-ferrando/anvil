@@ -124,4 +124,4 @@ optional upload extracted into `/work`, its stdio, an optional terminal and its 
 
 After a snapshot restore the guest clock is still at the snapshot's time, even with
 Firecracker's `clock_realtime`: anvil's guests run on the `tsc` clocksource, which it
-doesn't move. A clone sets its clock through `anvil-guest` first.
+doesn't move. A clone sets its clock, and its hostname, through `anvil-guest` first.

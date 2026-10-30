@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"git.fferrando.cc/rdfilippo/anvil/internal/termbg"
 	"git.fferrando.cc/rdfilippo/anvil/internal/version"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
@@ -155,6 +156,7 @@ func Run(dial func() (*client.Client, error), socketPath string) error {
 		guiApps:        newGUIAppsModel(),
 	}
 
+	termbg.Detect()
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err = p.Run()
 	return err

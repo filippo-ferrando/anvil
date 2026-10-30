@@ -184,6 +184,9 @@ func collect(t *testing.T, ctx context.Context, m *Manager, r RunRequest) (exits
 		switch {
 		case ev.Exit != nil:
 			exits[ev.Exit.Distro] = *ev.Exit
+		case ev.Output != nil && ev.Output.Stderr:
+			// stdout and stderr are separate pipes with no order between them.
+			out[ev.Output.Distro+"/stderr"] += string(ev.Output.Data)
 		case ev.Output != nil:
 			out[ev.Output.Distro] += string(ev.Output.Data)
 		}
@@ -212,8 +215,8 @@ func TestRunMatrix(t *testing.T) {
 		Argv:    []string{"sh", "-c", "cat hello; echo oops >&2; exit 3"}, Upload: upload,
 	})
 	for _, d := range []string{"ubuntu", "alpine"} {
-		if ex := exits[d]; ex.Code != 3 || ex.Err != "" || ex.Kept || out[d] != "hi\noops\n" {
-			t.Errorf("%s: exit %+v, output %q", d, ex, out[d])
+		if ex := exits[d]; ex.Code != 3 || ex.Err != "" || ex.Kept || out[d] != "hi\n" || out[d+"/stderr"] != "oops\n" {
+			t.Errorf("%s: exit %+v, stdout %q, stderr %q", d, ex, out[d], out[d+"/stderr"])
 		}
 	}
 	for d, want := range map[string]string{"broken": "restore failed", "unknown": "no such distro"} {

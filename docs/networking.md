@@ -142,7 +142,7 @@ behind `tap0` (`10.200.0.1/30`), its gateway and DNS server.
 - **Outbound.** The netns masquerades the guest behind its end of the link, and the host
   masquerades the link (`table ip anvil-eph`), with the same `DOCKER-USER` rules as above.
   Clones can't reach each other, `anvil-fc0`, Docker's bridges or the host itself, apart
-  from DNS.
+  from DNS and ping on the host end of their own link. They do reach the LAN, as containers do.
 - **Inbound.** Nothing, only replies.
 - **DNS.** The netns forwards `10.200.0.1:53` to the host end of the link, where anvild
   answers like on `anvil-fc0`.
@@ -151,6 +151,7 @@ behind `tap0` (`10.200.0.1/30`), its gateway and DNS server.
   sets the host end's address and the host table (`internal/vm/fc_clonenet.go`).
 - **Cleanup.** Clones live only in anvild's memory: on start anvild removes every
   `anvil-eph-*` netns it finds.
+
 ## Containers
 
 Containers are created through Docker's HTTP API (`internal/container/docker/client.go`).

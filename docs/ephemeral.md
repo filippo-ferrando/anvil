@@ -83,8 +83,8 @@ ones included.
 
 ## Networking
 
-Clones reach outside through NAT, and nothing reaches them. They can't reach each other,
-the host, or other VMs and containers. Each runs in its own network namespace with the
+Clones reach outside through NAT (the LAN included), and nothing reaches them. They can't
+reach each other, the host, or other VMs and containers. Each runs in its own network namespace with the
 same layout inside; [networking.md](networking.md#ephemeral-clones) has the details.
 
 ## TUI
@@ -102,9 +102,9 @@ clone and `x` removes the selected one.
   file would cover the whole hotplug region.
 - **Restore.** A new firecracker starts in the clone's jail and netns with no config, then
   loads the snapshot with its memory file mapped private, so clones of one snapshot share
-  its pages. The first thing a clone does is set its clock through `anvil-guest`: the guest
-  clock is still at the snapshot's time, which `clock_realtime` doesn't fix on the `tsc`
-  clocksource.
+  its pages. The first thing a clone does is set its clock and hostname (its clone ID)
+  through `anvil-guest`: the guest clock is still at the snapshot's time, which
+  `clock_realtime` doesn't fix on the `tsc` clocksource.
 - **Commands.** `anvil-guest` runs one command per vsock connection, as root, with the
   upload, stdio, an optional terminal and the exit code (`internal/guestexec`).
 

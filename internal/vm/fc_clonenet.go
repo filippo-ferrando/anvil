@@ -227,7 +227,7 @@ func ensureCloneNAT(pool netip.Prefix) error {
 }
 
 // cloneNftRules is the host's clone table: clones reach outside through masquerade, but not
-// each other, anvil's other networks or the host itself beyond DNS. Recreated whole.
+// each other, anvil's other networks or the host beyond DNS and ping on their own link.
 func cloneNftRules(pool netip.Prefix) string {
 	return fmt.Sprintf(`table ip anvil-eph
 delete table ip anvil-eph
@@ -249,6 +249,8 @@ table ip anvil-eph {
 	chain input {
 		type filter hook input priority filter; policy accept;
 		iifname "%[1]s" ct state established,related accept
+		# Only the host end of the clone's own link, not other clones' or the host's addresses.
+		iifname "%[1]s" fib daddr . iif type != local drop
 		iifname "%[1]s" meta l4proto { tcp, udp } th dport 53 accept
 		iifname "%[1]s" icmp type echo-request accept
 		iifname "%[1]s" drop

@@ -108,10 +108,11 @@ func ctxErr(ctx context.Context, err error) error {
 	return err
 }
 
-// SetClock sets the guest's clock to t, as the first thing on a clone restored from a snapshot.
-func SetClock(ctx context.Context, conn io.ReadWriteCloser, t time.Time) error {
+// SetupClone sets the guest's clock to now and, when not empty, its hostname: the first
+// thing on a clone restored from a snapshot.
+func SetupClone(ctx context.Context, conn io.ReadWriteCloser, now time.Time, hostname string) error {
 	var stderr strings.Builder
-	code, err := Run(ctx, conn, Request{Header: Header{SetClock: t.UnixNano()}, Stderr: &stderr})
+	code, err := Run(ctx, conn, Request{Header: Header{SetClock: now.UnixNano(), Hostname: hostname}, Stderr: &stderr})
 	if err == nil && code != 0 {
 		err = fmt.Errorf("guestexec: %s", strings.TrimSpace(stderr.String()))
 	}

@@ -314,11 +314,15 @@ func TestFirecrackerSnapshotRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := guestexec.SetClock(ctx, conn, time.Now()); err != nil {
-		t.Fatalf("SetClock: %v", err)
+	if err := guestexec.SetupClone(ctx, conn, time.Now(), "eph-renamed"); err != nil {
+		t.Fatalf("SetupClone: %v", err)
 	}
 	if after := skew(); after > 1 || after < -1 {
-		t.Errorf("the clone's clock is %ds off the host's after SetClock", after)
+		t.Errorf("the clone's clock is %ds off the host's after SetupClone", after)
+	}
+	if name, _ := guestRun(t, ctx, vsock, guestexec.Request{Header: guestexec.Header{
+		Argv: []string{"sh", "-c", "hostname; grep -w eph-renamed /etc/hosts"}}}); !strings.HasPrefix(name, "eph-renamed\n127.0.1.1") {
+		t.Errorf("hostname and its /etc/hosts entry after SetupClone: %q", name)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/format"
 	"git.fferrando.cc/rdfilippo/anvil/internal/progress"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
@@ -27,7 +28,7 @@ type warmItem struct{ snap *anvilv1.WarmSnapshot }
 func (i warmItem) FilterValue() string { return i.snap.GetDistro() }
 func (i warmItem) Title() string       { return i.snap.GetDistro() + "  " + i.snap.GetKey() }
 func (i warmItem) Description() string {
-	return fmt.Sprintf("%s  •  %d CPUs  •  %d MiB  •  %s  •  last used %s", i.snap.GetArch(), i.snap.GetCpus(),
+	return fmt.Sprintf("%s  •  %s  •  %d MiB  •  %s  •  last used %s", i.snap.GetArch(), format.CPUs(i.snap.GetCpus()),
 		i.snap.GetMemoryMib(), progress.Bytes(i.snap.GetSizeBytes()), time.Unix(i.snap.GetLastUsedAtUnix(), 0).Format("2006-01-02 15:04"))
 }
 

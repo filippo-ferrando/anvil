@@ -78,6 +78,18 @@ func TestCloneNetworkReal(t *testing.T) {
 	if err != nil {
 		t.Errorf("DNS from inside the clone: %v", err)
 	}
+	// The host end of another clone's link is the host too, but not this clone's to reach.
+	err = inCloneNetns(t, cn.NetNS, func() error {
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(second.Host.String(), "53"), 2*time.Second)
+		if err == nil {
+			conn.Close()
+			return errors.New("connected")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Errorf("DNS of clone 2 from clone 1: %v", err)
+	}
 
 	if err := c.Teardown(ctx, "eph-REAL1"); err != nil {
 		t.Fatalf("Teardown: %v", err)

@@ -104,7 +104,11 @@ func (m *Manager) Warm(ctx context.Context, p WarmParams, rebuild bool, progress
 }
 
 func (m *Manager) buildWarm(ctx context.Context, e Engine, s WarmSpec, progress func(string)) (store.WarmSnapshot, error) {
-	progress(fmt.Sprintf("building the %s warm snapshot (%d CPUs, %d MiB), once", s.Distro, s.CPUs, s.MemoryMiB))
+	cpus := "1 CPU"
+	if s.CPUs != 1 {
+		cpus = fmt.Sprintf("%d CPUs", s.CPUs)
+	}
+	progress(fmt.Sprintf("building the %s warm snapshot (%s, %d MiB), once", s.Distro, cpus, s.MemoryMiB))
 	start := time.Now()
 	dir := m.Dir(s.Key)
 	if err := e.BuildWarm(ctx, s, dir, progress); err != nil {

@@ -52,9 +52,14 @@ func Serve(conn io.ReadWriteCloser) error {
 		if err := unix.ClockSettime(unix.CLOCK_REALTIME, &ts); err != nil {
 			return fail(fw, hdr.TTY, 1, "anvil-guest: setting the clock: %v", err)
 		}
-		if len(hdr.Argv) == 0 {
-			return sendExit(fw, 0)
+	}
+	if hdr.Hostname != "" {
+		if err := setHostname(hdr.Hostname); err != nil {
+			return fail(fw, hdr.TTY, 1, "anvil-guest: setting the hostname: %v", err)
 		}
+	}
+	if (hdr.SetClock != 0 || hdr.Hostname != "") && len(hdr.Argv) == 0 {
+		return sendExit(fw, 0)
 	}
 	if len(hdr.Argv) == 0 {
 		return fail(fw, hdr.TTY, 2, "anvil-guest: no command")

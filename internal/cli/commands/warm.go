@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/format"
 	"git.fferrando.cc/rdfilippo/anvil/internal/progress"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
@@ -62,7 +63,7 @@ func newWarmCreateCommand(flags *globalFlags) *cobra.Command {
 					return err
 				}
 				if snap != nil {
-					fmt.Printf("%s %s (%d CPUs, %d MiB, %s)\n", snap.GetKey(), snap.GetDistro(), snap.GetCpus(),
+					fmt.Printf("%s %s (%s, %d MiB, %s)\n", snap.GetKey(), snap.GetDistro(), format.CPUs(snap.GetCpus()),
 						snap.GetMemoryMib(), progress.Bytes(snap.GetSizeBytes()))
 				}
 				return nil

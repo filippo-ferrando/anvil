@@ -367,7 +367,9 @@ func (b *guestTracker) waitReady(ctx context.Context, spec *instance.Spec, exite
 		}
 
 		status := "waiting for cloud-init: guest agent not up yet"
-		if info.AgentConnected {
+		if spec.VM != nil && spec.VM.NoGuestAgent {
+			status = "waiting for cloud-init"
+		} else if info.AgentConnected {
 			status = "waiting for cloud-init: running"
 			if len(info.IPAddresses) > 0 {
 				status += " (" + strings.Join(info.IPAddresses, ", ") + ")"
