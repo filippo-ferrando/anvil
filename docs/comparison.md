@@ -33,6 +33,8 @@ progress).
 | First-boot config | cloud-init, saved template library | cloud-init | cloud-init | provisioners (shell, Ansible, ...) | cloud-init-like provisioning | image + env |
 | Snapshots | yes, live, scheduled with retention | yes | yes, scheduled | yes, provider-dependent | experimental | no |
 | Clone a running VM | `anvil fork`, shares the base image | `multipass clone` (stopped) | `incus copy` | no | `limactl clone` | no |
+| Throwaway VM for one command | `launch --ephemeral`, clone of a warm Firecracker snapshot, exit code back | no | `--ephemeral` instances, deleted on stop, VMs boot cold | no | no | `compose run --rm`, containers only |
+| Same command on several distros | `anvil matrix`, in parallel, per-distro output and summary | no | no | no | no | no |
 | Export to a file | bundle with disks and bind-mounted data | no | `incus export` | `vagrant package` | no | no |
 | Cross-host move | cold, over plain SSH, delta transfer | no | live or cold between remotes | no | no | no |
 | Remote control | `--remote` over SSH | no | HTTPS API with TLS certs | no | no | `DOCKER_HOST` |

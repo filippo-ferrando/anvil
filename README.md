@@ -85,6 +85,8 @@ with [`docs/demo/record.sh`](docs/demo/README.md).
 | Declarative multi-instance file | ✅ | ❌ | ➖ ⁵ | ✅ | ❌ | ✅ |
 | Many distros out of the box | ✅ | ➖ | ✅ | ✅ | ✅ | n/a |
 | Snapshots | ✅ | ✅ | ✅ | ✅ | ➖ | ❌ |
+| Throwaway VM for one command | ✅ warm clone, sub-second start | ❌ | ➖ ⁶ | ❌ | ❌ | ➖ ⁷ |
+| Same command on several distros at once | ✅ `anvil matrix` | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Move to another host | ✅ cold, over SSH | ❌ | ✅ via an Incus remote, live or cold | ❌ | ❌ | ❌ |
 | Export to a single file | ✅ | ❌ | ✅ | ✅ (box) | ❌ | ❌ |
 | TUI | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
@@ -95,7 +97,9 @@ with [`docs/demo/record.sh`](docs/demo/README.md).
 <sub>¹ Incus 6.3+ runs OCI images as app containers. ² Through the Docker provider, one
 provider per machine. ³ Containers run inside the Lima VM (containerd/nerdctl), not
 managed as instances. ⁴ Through a shared network and projects, wired by hand. ⁵ Through
-profiles, preseeds or the Terraform provider. Based on upstream docs as of late 2026;
+profiles, preseeds or the Terraform provider. ⁶ `--ephemeral` instances are deleted on
+stop, but launch, exec and stop are separate steps and a VM boots cold. ⁷ `docker compose
+run --rm`, containers only. Based on upstream docs as of late 2026;
 corrections welcome.</sub>
 
 Short version: Incus is the closest and far more mature; pick it for clusters and live
