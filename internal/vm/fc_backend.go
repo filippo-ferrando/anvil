@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/config"
@@ -53,6 +54,9 @@ type FCBackend struct {
 
 	// Clones are the networks of ephemeral clones, each in its own netns.
 	Clones *CloneNetworks
+	// Disks builds clone disks as dm-snapshots where reflinks don't work; dmOff once that failed.
+	Disks  DiskHelper
+	dmOff  atomic.Bool
 	clones map[string]*fcClone // running clones; guarded by mu
 
 	// unjailedClones lets tests run clones without the jailer (which needs real root).
@@ -85,6 +89,7 @@ func NewFCBackend(qemuBackend *Backend, cacheDir string, instances Instances) *F
 		exported:   make(map[string]netip.Addr),
 		paths:      make(map[string]fcInstancePaths),
 		Clones:     &CloneNetworks{Helper: hostdev.Client{Socket: config.DevHelperSocket()}},
+		Disks:      hostdev.Client{Socket: config.DevHelperSocket()},
 	}
 	b.guestTracker = newGuestTracker(func(id string) *qemu.GuestAgent {
 		return &qemu.GuestAgent{Dial: func(ctx context.Context) (net.Conn, error) {
@@ -289,6 +294,9 @@ func (b *FCBackend) start(ctx context.Context, spec *instance.Spec, netns *Clone
 	hotplugMiB := fcHotplugMiB(v.Arch, v.CPUs, v.MemoryMiB)
 	if v.AnvilGuest {
 		hotplugMiB = 0 // a snapshot's memory file would cover the whole region
+		// An empty balloon, only for free page reporting: the clones restored from this VM
+		// give back the memory they free.
+		cfg.Balloon = &firecracker.Balloon{DeflateOnOOM: true, FreePageReporting: true}
 	}
 	if hotplugMiB > 0 {
 		cfg.MemoryHotplug = &firecracker.MemoryHotplug{TotalSizeMiB: hotplugMiB}
@@ -549,6 +557,16 @@ func hasExited(proc *firecracker.Process) bool {
 
 // removeLeftovers clears what a firecracker that's gone untracked can leave: its tap, jail
 // (whose disk hard link keeps the disk's space in use) and runtime state.
+// removeCloneLeftovers is removeLeftovers for a clone, which has no guest filter and no
+// tap on the host (its tap is in its netns), so neither nft nor netlink is asked.
+func removeCloneLeftovers(chrootBase, id string) {
+	jails, _ := filepath.Glob(filepath.Join(chrootBase, "*", id))
+	for _, dir := range jails {
+		_ = os.RemoveAll(dir)
+	}
+	removeRuntimeState(instanceDir(id))
+}
+
 func (b *FCBackend) removeLeftovers(instanceID string) {
 	dropGuestFilter(instanceID)
 	if err := b.Networker.Detach(instanceID); err != nil {
@@ -605,11 +623,20 @@ func (b *FCBackend) Stats(ctx context.Context, spec *instance.Spec) (instance.St
 	if spec.VM == nil {
 		return instance.Stats{}, fmt.Errorf("vm: Stats called with a nil VMSpec")
 	}
+	st, _, err := b.SampleStats(ctx, spec, nil)
+	return st, err
+}
+
+// SampleStats is Stats with rates since prev, for a stream of stats.
+func (b *FCBackend) SampleStats(ctx context.Context, spec *instance.Spec, prev instance.StatsSample) (instance.Stats, instance.StatsSample, error) {
+	if spec.VM == nil {
+		return instance.Stats{}, nil, fmt.Errorf("vm: Stats called with a nil VMSpec")
+	}
 	proc, ok := b.lookup(spec.ID)
 	if !ok {
-		return instance.Stats{}, fmt.Errorf("vm: %s isn't running", spec.Name)
+		return instance.Stats{}, nil, fmt.Errorf("vm: %s isn't running", spec.Name)
 	}
-	return sampleStats(ctx, spec, proc.Pid(), b.Networker, true)
+	return sampleStats(ctx, spec, proc.Pid(), b.Networker, true, prev)
 }
 
 func proxyKey(hostPort int, protocol string) string {

@@ -268,3 +268,46 @@ func TestTCPConnectionsAreBounded(t *testing.T) {
 		t.Errorf("expected db to resolve once below the limit, got %+v", m)
 	}
 }
+
+// A dead first upstream costs one timeout, not one per query: the one that answered goes first.
+func TestForwardRemembersAnsweringUpstream(t *testing.T) {
+	dead, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dead.Close() // reads nothing: a query to it times out
+	upstream, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstream.Close()
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, from, err := upstream.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			var p dnsmessage.Parser
+			hdr, _ := p.Start(buf[:n])
+			q, _ := p.Question()
+			addr := netip.MustParseAddr("93.184.216.34")
+			_, _ = upstream.WriteToUDP(reply(hdr, &q, dnsmessage.RCodeSuccess, &addr), from)
+		}
+	}()
+	s := NewServer(nil)
+	s.upstreams = []string{dead.LocalAddr().String(), upstream.LocalAddr().String()}
+	if m := parse(t, s.handle(testZone(), query(t, "example.com.", dnsmessage.TypeA), "udp")); len(m.Answers) != 1 {
+		t.Fatalf("first query: %+v", m)
+	}
+	start := time.Now()
+	if m := parse(t, s.handle(testZone(), query(t, "example.org.", dnsmessage.TypeA), "udp")); len(m.Answers) != 1 {
+		t.Fatalf("second query: %+v", m)
+	}
+	if took := time.Since(start); took > forwardTimeout/2 {
+		t.Errorf("second query took %s: the dead upstream was tried first again", took)
+	}
+	if got := s.currentUpstreams(); got[0] != upstream.LocalAddr().String() || len(got) != 2 {
+		t.Errorf("upstreams order %v", got)
+	}
+}

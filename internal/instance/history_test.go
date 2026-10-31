@@ -154,3 +154,32 @@ func TestStreamStatsEndsCleanlyWhenStopped(t *testing.T) {
 		t.Errorf("expected the 2 samples taken while running, got %d", sent)
 	}
 }
+
+// samplingBackend counts calls and hands each one the sample the previous call returned.
+type samplingBackend struct {
+	statsBackend
+	prevs []StatsSample
+}
+
+func (b *samplingBackend) SampleStats(_ context.Context, _ *Spec, prev StatsSample) (Stats, StatsSample, error) {
+	b.prevs = append(b.prevs, prev)
+	return Stats{CPUPercent: 1}, len(b.prevs), nil
+}
+
+func TestStreamStatsPassesSamples(t *testing.T) {
+	reg := &memRegistry{}
+	_ = reg.PutInstance(&Spec{ID: "01", Name: "web", Kind: KindVM, State: StateRunning})
+	b := &samplingBackend{}
+	m := NewManager(reg, map[Kind]Backend{KindVM: b})
+	sent := 0
+	ctx, cancel := context.WithCancel(context.Background())
+	_ = m.StreamStats(ctx, "web", time.Millisecond, func(Stats) error {
+		if sent++; sent == 3 {
+			cancel()
+		}
+		return nil
+	})
+	if len(b.prevs) != 3 || b.prevs[0] != nil || b.prevs[1] != 1 || b.prevs[2] != 2 {
+		t.Errorf("samples passed along = %v, want nil, 1, 2", b.prevs)
+	}
+}

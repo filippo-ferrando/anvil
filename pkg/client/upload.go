@@ -2,6 +2,8 @@ package client
 
 import (
 	"archive/tar"
+	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -36,6 +38,39 @@ func UploadFiles(dir string) (files []string, fromGit bool, err error) {
 		return nil
 	})
 	return files, false, err
+}
+
+// UploadChunkSize is the size of the chunks SendUpload hands out, one message each.
+const UploadChunkSize = 256 << 10
+
+// SendUpload streams the tar of dir to send in full UploadChunkSize chunks (the last one
+// shorter), so a tree of small files isn't one message per tar header and file.
+func SendUpload(dir string, send func(chunk []byte) error) error {
+	pr, pw := io.Pipe()
+	go func() {
+		bw := bufio.NewWriterSize(pw, UploadChunkSize)
+		err := WriteUploadTar(dir, bw)
+		if err == nil {
+			err = bw.Flush()
+		}
+		pw.CloseWithError(err)
+	}()
+	for {
+		buf := make([]byte, UploadChunkSize) // its own buffer: send may keep it
+		n, err := io.ReadFull(pr, buf)
+		if n > 0 {
+			if serr := send(buf[:n]); serr != nil {
+				pr.CloseWithError(serr) // stops the tar writer too
+				return serr
+			}
+		}
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("packing %s: %w", dir, err)
+		}
+	}
 }
 
 // WriteUploadTar writes the tar of UploadFiles(dir) that an ephemeral run extracts into /work.

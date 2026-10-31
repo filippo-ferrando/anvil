@@ -10,6 +10,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"git.fferrando.cc/rdfilippo/anvil/internal/backoff"
 )
 
 // virtiofsdCandidates lists where distros install virtiofsd, which is usually not on PATH.
@@ -88,6 +90,7 @@ func startVirtiofsd(bin, sharedDir, socketPath string, readOnly bool, sandbox, l
 	}()
 
 	deadline := time.After(virtiofsdStartTimeout)
+	wait := backoff.New(time.Millisecond, 20*time.Millisecond)
 	for {
 		if _, err := os.Stat(socketPath); err == nil {
 			return v, nil
@@ -98,7 +101,7 @@ func startVirtiofsd(bin, sharedDir, socketPath string, readOnly bool, sandbox, l
 		case <-deadline:
 			v.Kill()
 			return nil, fmt.Errorf("socket %s never appeared", socketPath)
-		case <-time.After(20 * time.Millisecond):
+		case <-time.After(wait.Next()):
 		}
 	}
 }

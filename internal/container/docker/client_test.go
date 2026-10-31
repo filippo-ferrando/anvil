@@ -473,8 +473,9 @@ func TestLogsDemux(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Logs: %v", err)
 	}
-	if len(chunks) != 2 || chunks[0] != "hello stdout\n" || chunks[1] != "hello stderr\n" {
-		t.Errorf("expected two demuxed chunks, got %v", chunks)
+	// Frames that arrive together may go out as one chunk; their bytes keep their order.
+	if got := strings.Join(chunks, ""); got != "hello stdout\nhello stderr\n" {
+		t.Errorf("expected both frames demuxed in order, got %q", chunks)
 	}
 }
 

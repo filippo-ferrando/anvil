@@ -110,3 +110,31 @@ func TestRunPrinterLogs(t *testing.T) {
 		t.Errorf("no log for a distro without output: %v", err)
 	}
 }
+
+// countingWriter counts its writes.
+type countingWriter struct {
+	bytes.Buffer
+	writes int
+}
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	w.writes++
+	return w.Buffer.Write(p)
+}
+
+func TestWriteLinesOneWrite(t *testing.T) {
+	var out countingWriter
+	p := newRunPrinter(&out, io.Discard, []string{"alpine", "ubuntu-24.04"}, false)
+	p.writeLines("alpine", anvilv1.OutputStream_OUTPUT_STREAM_STDOUT, &out, []byte("one\ntwo\nthree\npart"))
+	if out.writes != 1 {
+		t.Errorf("%d writes for three lines, want one", out.writes)
+	}
+	want := "[alpine      ] one\n[alpine      ] two\n[alpine      ] three\n"
+	if out.String() != want {
+		t.Errorf("output %q, want %q", out.String(), want)
+	}
+	p.writeLines("alpine", anvilv1.OutputStream_OUTPUT_STREAM_STDOUT, &out, []byte("ial\n"))
+	if !strings.HasSuffix(out.String(), "[alpine      ] partial\n") || out.writes != 2 {
+		t.Errorf("the rest of a line came out as %q in %d writes", out.String(), out.writes)
+	}
+}

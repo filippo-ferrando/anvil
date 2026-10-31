@@ -251,8 +251,16 @@ the fork starts with no snapshots.
 ### Disk copy: stopped source
 
 `Backend.Fork` (`internal/vm/backend.go`) first reads the source's backing file and
-refuses to fork a disk that has none (`has no backing file to preserve`). For a stopped
-source it runs:
+refuses to fork a disk that has none (`has no backing file to preserve`).
+
+Where the filesystem has reflinks (btrfs, xfs), a stopped source's disk is cloned in one
+call whatever its size (`reflinkFork`): the clone shares the source's blocks until either
+side writes. A clone is the qcow2 file byte for byte, so this is used only when the
+backing file name in it is absolute (it is for every disk anvil creates); the source's
+internal snapshots it carries are deleted from the fork with `qemu-img snapshot -d`, so
+the fork starts with none, as below. The fork isn't compacted the way a convert compacts
+it: its file is the source's size, with the same blocks shared. Without reflinks, or when
+any of this fails, it runs:
 
 ```
 qemu-img convert -U -O qcow2 -o backing_file=<base>,backing_fmt=qcow2 <source disk> <new disk>

@@ -1205,6 +1205,10 @@ service EphemeralService {
   rpc WarmCreate(WarmCreateRequest) returns (stream WarmCreateProgress);
   rpc WarmList(WarmListRequest) returns (WarmListReply);
   rpc WarmDelete(WarmDeleteRequest) returns (WarmDeleteReply);
+  // WarmPoolSet keeps a number of clones of a warm snapshot restored ahead of time, so a
+  // run takes one instead of restoring; size 0 removes the pool.
+  rpc WarmPoolSet(WarmPoolSetRequest) returns (WarmPoolSetReply);
+  rpc WarmPoolList(WarmPoolListRequest) returns (WarmPoolListReply);
 
   // CloneList lists running clones and the ones kept by keep_failed.
   rpc CloneList(CloneListRequest) returns (CloneListReply);
@@ -1297,6 +1301,8 @@ message WarmSnapshot {
   int64 last_used_at_unix = 10;
   string app = 11;   // the package installed for `anvil gui --ephemeral`, empty for none
   bool x11 = 12;     // with app: Xwayland is installed too
+  int32 pool_size = 13;  // clones its pool keeps ready, 0 without a pool
+  int32 pool_ready = 14; // clones ready now
 }
 
 message WarmCreateRequest {
@@ -1325,6 +1331,37 @@ message WarmDeleteRequest {
 
 message WarmDeleteReply {
   repeated string deleted = 1;
+}
+
+// WarmPool is a pool of clones restored ahead of time. It is named by distro, arch and
+// size, not by warm key, so it carries over to the new snapshot after an upgrade.
+message WarmPool {
+  string distro = 1;
+  string arch = 2;
+  int32 cpus = 3;
+  int64 memory_mib = 4;
+  int32 size = 5;
+  int32 ready = 6;      // clones ready now
+  string warm_key = 7;  // the snapshot its clones come from, empty until the first fill
+  string error = 8;     // why the last refill failed, empty when it didn't
+}
+
+message WarmPoolSetRequest {
+  string distro = 1;
+  string arch = 2;
+  int32 cpus = 3;
+  int64 memory_mib = 4;
+  int32 size = 5; // 0 removes the pool
+}
+
+message WarmPoolSetReply {
+  WarmPool pool = 1;
+}
+
+message WarmPoolListRequest {}
+
+message WarmPoolListReply {
+  repeated WarmPool pools = 1;
 }
 
 message EphemeralClone {

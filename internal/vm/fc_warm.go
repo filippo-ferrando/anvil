@@ -14,8 +14,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
+	"git.fferrando.cc/rdfilippo/anvil/internal/backoff"
 	"git.fferrando.cc/rdfilippo/anvil/internal/config"
 	"git.fferrando.cc/rdfilippo/anvil/internal/ephemeral"
 	"git.fferrando.cc/rdfilippo/anvil/internal/guestexec"
@@ -95,7 +98,7 @@ func (b *FCBackend) WarmSpec(p ephemeral.WarmParams) (ephemeral.WarmSpec, error)
 	}
 	h := sha256.New()
 	for _, part := range []string{
-		"warm-v1", entry.ID, entry.Arch, entry.Version, entry.URL, entry.SHA256, distro.KernelArgs,
+		"warm-v2", entry.ID, entry.Arch, entry.Version, entry.URL, entry.SHA256, distro.KernelArgs,
 		fmt.Sprint(s.CPUs, s.MemoryMiB, s.DiskGiB), userData, bridgeNetworkConfig(v, v.MACAddress),
 		fcVersion, kernelSum, guestSum,
 	} {
@@ -105,31 +108,80 @@ func (b *FCBackend) WarmSpec(p ephemeral.WarmParams) (ephemeral.WarmSpec, error)
 	return s, nil
 }
 
-// firecrackerVersion is `firecracker --version`'s first line, e.g. "Firecracker v1.17.0".
+// firecrackerVersion is `firecracker --version`'s first line, e.g. "Firecracker v1.17.0",
+// run again only when the binary changes.
 func firecrackerVersion() (string, error) {
 	bin, err := firecracker.LookPath(firecracker.Binary)
 	if err != nil {
 		return "", fmt.Errorf("vm: firecracker isn't installed on this host: %w", err)
 	}
-	out, err := exec.Command(bin, "--version").Output()
-	if err != nil {
-		return "", fmt.Errorf("vm: %s --version: %w", bin, err)
-	}
-	line, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
-	return line, nil
+	return fileFacts.get("version", bin, func() (string, error) {
+		out, err := exec.Command(bin, "--version").Output()
+		if err != nil {
+			return "", fmt.Errorf("vm: %s --version: %w", bin, err)
+		}
+		line, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+		return line, nil
+	})
 }
 
+// fileSHA256 hashes path, again only when the file changes.
 func fileSHA256(path string) (string, error) {
-	f, err := os.Open(path)
+	return fileFacts.get("sha256", path, func() (string, error) {
+		f, err := os.Open(path)
+		if err != nil {
+			return "", err
+		}
+		defer f.Close()
+		h := sha256.New()
+		if _, err := io.Copy(h, f); err != nil {
+			return "", err
+		}
+		return hex.EncodeToString(h.Sum(nil)), nil
+	})
+}
+
+// fileFacts remembers what was worked out from a file (its hash, a binary's version) for
+// as long as the file stays the same: same inode, size and modification time.
+var fileFacts = &factCache{facts: map[factKey]fact{}}
+
+type factKey struct{ kind, path string }
+
+type fact struct {
+	ino, size int64
+	mtime     time.Time
+	value     string
+}
+
+type factCache struct {
+	mu    sync.Mutex
+	facts map[factKey]fact
+}
+
+func (c *factCache) get(kind, path string, compute func() (string, error)) (string, error) {
+	info, err := os.Stat(path)
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	var ino int64
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		ino = int64(st.Ino)
+	}
+	key := factKey{kind, path}
+	c.mu.Lock()
+	f, ok := c.facts[key]
+	c.mu.Unlock()
+	if ok && f.ino == ino && f.size == info.Size() && f.mtime.Equal(info.ModTime()) {
+		return f.value, nil
+	}
+	value, err := compute()
+	if err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	c.mu.Lock()
+	c.facts[key] = fact{ino: ino, size: info.Size(), mtime: info.ModTime(), value: value}
+	c.mu.Unlock()
+	return value, nil
 }
 
 // BuildWarm boots a build VM for s in a clone netns, waits for cloud-init and anvil-guest,
@@ -248,6 +300,7 @@ func guestCommand(ctx context.Context, vsock string, wait time.Duration, argv ..
 // dialGuest connects to anvil-guest, retrying for up to wait while nothing listens yet.
 func dialGuest(ctx context.Context, vsock string, wait time.Duration) (io.ReadWriteCloser, error) {
 	deadline := time.Now().Add(wait)
+	pause := backoff.New(2*time.Millisecond, 200*time.Millisecond)
 	for {
 		conn, err := firecracker.DialVsock(ctx, vsock, guestexec.Port)
 		if err == nil || time.Now().After(deadline) {
@@ -256,7 +309,7 @@ func dialGuest(ctx context.Context, vsock string, wait time.Duration) (io.ReadWr
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(200 * time.Millisecond):
+		case <-time.After(pause.Next()):
 		}
 	}
 }

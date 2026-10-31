@@ -243,11 +243,18 @@ it supports the operation:
 | `Forker` | `Fork` | `backend.go` | yes (`internal/vm/fork_resize.go`) | no |
 | `Reconciler` | `Reconcile` | `backend.go` | yes | no (see section 8) |
 | `StatsProvider` | `Stats` | `backend.go` | yes (`internal/vm/stats.go`) | yes |
+| `StatsSampler` | `SampleStats` | `backend.go` | yes | yes |
 | `GuestInspector` | `GuestInfo`, `SetGuestChangeHook` | `backend.go` | yes (`internal/vm/guest.go`) | no |
 | `ReadyWaiter` | `WaitReady` | `backend.go` | yes (cloud-init status) | no |
 | `ExitNotifier` | `SetExitHook` | `backend.go` | yes (`internal/vm/exit.go`) | yes (`internal/container/docker_events.go`) |
 | `Resizer` | `ResizeDisk` | `update.go` | yes | no |
 | `LiveResizer` | `SetCPUsLive`, `SetMemoryLive` | `update.go` | yes (`internal/vm/hotplug.go`) | no |
+
+`StatsSampler` serves the stats stream (`anvil stats`, the TUI's live view): a one-shot
+`Stats` measures CPU and network rates over a 200 ms window, while each tick of a stream
+takes its rates from the previous tick's counters, so it waits no window at all. A sample
+from another process or container (a restart in between) isn't used: that tick measures
+over the window again.
 
 The `Manager` never branches on the instance kind to decide what is possible. It
 looks up the backend for the kind and type-asserts the capability, for example in

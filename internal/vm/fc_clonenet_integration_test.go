@@ -30,6 +30,7 @@ func TestCloneNetworkReal(t *testing.T) {
 	if _, err := exec.LookPath("nft"); err != nil {
 		t.Skip("nft not installed")
 	}
+	t.Setenv(netnsPoolEnv, "0") // the test owns every netns it sees
 	hostdev.NetnsDir = t.TempDir()
 	t.Cleanup(func() { hostdev.NetnsDir = "/run/netns" })
 	// With lo up the unreachable upstream refuses at once, so the server answers SERVFAIL fast.

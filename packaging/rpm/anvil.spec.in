@@ -32,6 +32,7 @@ Requires:       openssh-clients
 Requires:       systemd
 Recommends:     docker-ce
 Suggests:       nftables
+Suggests:       device-mapper
 Suggests:       libcap
 Suggests:       hwdata
 

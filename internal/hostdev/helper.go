@@ -28,11 +28,12 @@ type Member struct {
 }
 
 type request struct {
-	Op    string // "claim" | "release" | "netns-create" | "netns-delete"
+	Op    string // "claim" | "release" | "netns-create" | "netns-delete" | "disk-create" | "disk-delete"
 	Bus   string
 	Addr  string
 	Claim *Claim
 	Netns *Netns
+	Disk  *CloneDisk
 }
 
 type reply struct {
@@ -113,6 +114,15 @@ func handle(req request, uid, gid int) reply {
 			err = createNetns(*req.Netns, uid, gid)
 		default:
 			err = deleteNetns(req.Netns.ID)
+		}
+	case "disk-create", "disk-delete":
+		switch {
+		case req.Disk == nil:
+			err = fmt.Errorf("%s without a disk", req.Op)
+		case req.Op == "disk-create":
+			err = createCloneDisk(*req.Disk, uid, gid)
+		default:
+			err = deleteCloneDisk(req.Disk.ID)
 		}
 	default:
 		err = fmt.Errorf("unknown op %q", req.Op)

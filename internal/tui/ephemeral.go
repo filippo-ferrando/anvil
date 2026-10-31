@@ -34,8 +34,12 @@ func (i warmItem) Title() string {
 	return name + "  " + i.snap.GetKey()
 }
 func (i warmItem) Description() string {
-	return fmt.Sprintf("%s  •  %s  •  %d MiB  •  %s  •  last used %s", i.snap.GetArch(), format.CPUs(i.snap.GetCpus()),
-		i.snap.GetMemoryMib(), progress.Bytes(i.snap.GetSizeBytes()), time.Unix(i.snap.GetLastUsedAtUnix(), 0).Format("2006-01-02 15:04"))
+	pool := ""
+	if i.snap.GetPoolSize() > 0 {
+		pool = fmt.Sprintf("  •  pool %d/%d ready", i.snap.GetPoolReady(), i.snap.GetPoolSize())
+	}
+	return fmt.Sprintf("%s  •  %s  •  %d MiB  •  %s%s  •  last used %s", i.snap.GetArch(), format.CPUs(i.snap.GetCpus()),
+		i.snap.GetMemoryMib(), progress.Bytes(i.snap.GetSizeBytes()), pool, time.Unix(i.snap.GetLastUsedAtUnix(), 0).Format("2006-01-02 15:04"))
 }
 
 type cloneItem struct{ clone *anvilv1.EphemeralClone }
@@ -58,10 +62,11 @@ type ephemeralModel struct {
 	warm       list.Model
 	clones     list.Model
 
-	form     *simpleForm // the open form, nil for none
-	formKind string      // "warm" | "run" | "app"
-	confirm  string      // the warm key or clone id waiting for a yes
-	building transcript  // a warm snapshot build in progress
+	form     *simpleForm           // the open form, nil for none
+	formKind string                // "warm" | "run" | "app" | "pool"
+	poolSnap *anvilv1.WarmSnapshot // the snapshot the pool form is for
+	confirm  string                // the warm key or clone id waiting for a yes
+	building transcript            // a warm snapshot build in progress
 	run      *runView
 }
 
@@ -251,27 +256,42 @@ func buildWarm(c *client.Client, req *anvilv1.WarmCreateRequest) tea.Cmd {
 	}
 }
 
-// startRun opens the Run stream, sends the request and the upload, then hands over the
-// first event; each runEventMsg carries the command that receives the next one.
+// startRun opens the Run stream, sends the request, then hands over the first event while
+// the upload goes in the background (the daemon restores the clones meanwhile); each
+// runEventMsg carries the command that receives the next one.
 func startRun(ctx context.Context, c *client.Client, req *anvilv1.RunRequest, path string) tea.Cmd {
 	return func() tea.Msg {
+		ctx, cancel := context.WithCancel(ctx)
 		stream, err := c.Ephemeral.Run(ctx)
 		if err == nil {
 			err = stream.Send(&anvilv1.RunInput{Input: &anvilv1.RunInput_Request{Request: req}})
 		}
-		if err == nil && path != "" {
-			err = sendRunUpload(stream, path)
-		}
 		if err != nil {
+			cancel()
 			return runEventMsg{err: err, done: true}
+		}
+		uploadErr := make(chan error, 1)
+		if path != "" {
+			go func() {
+				if err := sendRunUpload(stream, path); err != nil {
+					uploadErr <- err
+					cancel() // the daemon would wait for the rest of the upload
+				}
+			}()
 		}
 		var next tea.Cmd
 		next = func() tea.Msg {
 			ev, err := stream.Recv()
 			if errors.Is(err, io.EOF) {
+				cancel()
 				return runEventMsg{done: true}
 			}
 			if err != nil {
+				cancel()
+				select {
+				case err = <-uploadErr:
+				default:
+				}
 				return runEventMsg{err: err, done: true}
 			}
 			return runEventMsg{ev: ev, next: next}
@@ -281,29 +301,30 @@ func startRun(ctx context.Context, c *client.Client, req *anvilv1.RunRequest, pa
 }
 
 func sendRunUpload(stream anvilv1.EphemeralService_RunClient, path string) error {
-	pr, pw := io.Pipe()
-	go func() { pw.CloseWithError(client.WriteUploadTar(path, pw)) }()
-	buf := make([]byte, 256<<10)
-	for {
-		n, err := pr.Read(buf)
-		if n > 0 {
-			if serr := stream.Send(&anvilv1.RunInput{Input: &anvilv1.RunInput_UploadChunk{UploadChunk: append([]byte(nil), buf[:n]...)}}); serr != nil {
-				return serr
-			}
-		}
-		if errors.Is(err, io.EOF) {
-			return stream.Send(&anvilv1.RunInput{Input: &anvilv1.RunInput_UploadDone{UploadDone: true}})
-		}
-		if err != nil {
-			return err
-		}
+	err := client.SendUpload(path, func(chunk []byte) error {
+		return stream.Send(&anvilv1.RunInput{Input: &anvilv1.RunInput_UploadChunk{UploadChunk: chunk}})
+	})
+	if err != nil {
+		return err
 	}
+	return stream.Send(&anvilv1.RunInput{Input: &anvilv1.RunInput_UploadDone{UploadDone: true}})
 }
 
 func deleteWarm(c *client.Client, key string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.Ephemeral.WarmDelete(context.Background(), &anvilv1.WarmDeleteRequest{Keys: []string{key}})
 		return actionDoneMsg{screen: screenEphemeral, verb: "removed warm snapshot " + key, err: err}
+	}
+}
+
+func setWarmPool(c *client.Client, req *anvilv1.WarmPoolSetRequest) tea.Cmd {
+	return func() tea.Msg {
+		verb := fmt.Sprintf("the %s pool keeps %d clones ready", req.GetDistro(), req.GetSize())
+		if req.GetSize() == 0 {
+			verb = "removed the " + req.GetDistro() + " pool"
+		}
+		_, err := c.Ephemeral.WarmPoolSet(context.Background(), req)
+		return actionDoneMsg{screen: screenEphemeral, verb: verb, err: err}
 	}
 }
 
@@ -322,6 +343,23 @@ func newWarmForm() simpleForm {
 		textField("CPUs", "default 2", ""),
 		textField("Memory (MiB)", "default 512", ""),
 	})
+}
+
+func newPoolForm(snap *anvilv1.WarmSnapshot) simpleForm {
+	title := fmt.Sprintf("Pool of %s (%s, %d MiB)", snap.GetDistro(), format.CPUs(snap.GetCpus()), snap.GetMemoryMib())
+	return newSimpleForm(title, []formField{
+		textField("Size", "clones kept restored and ready, 0 removes the pool", strconv.Itoa(int(snap.GetPoolSize()))),
+	})
+}
+
+// buildPoolRequest turns the pool form for snap into a request.
+func buildPoolRequest(form simpleForm, snap *anvilv1.WarmSnapshot) (*anvilv1.WarmPoolSetRequest, error) {
+	size, err := optionalInt(form, "Size")
+	if err != nil {
+		return nil, err
+	}
+	return &anvilv1.WarmPoolSetRequest{Distro: snap.GetDistro(), Arch: snap.GetArch(), Cpus: snap.GetCpus(),
+		MemoryMib: snap.GetMemoryMib(), Size: int32(size)}, nil
 }
 
 func newRunForm() simpleForm {
@@ -540,6 +578,15 @@ func (m model) updateEphemeralKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, launchEphemeralApp(m.socketPath, a)
 		}
+		if e.formKind == "pool" {
+			req, err := buildPoolRequest(form, e.poolSnap)
+			if err != nil {
+				e.form.errMsg = err.Error()
+				return m, nil
+			}
+			e.form = nil
+			return m, setWarmPool(m.client, req)
+		}
 		if e.formKind == "warm" {
 			req, err := buildWarmRequest(form)
 			if err != nil {
@@ -574,6 +621,19 @@ func (m model) updateEphemeralKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		f := newWarmForm()
 		f.SetHeight(contentHeight(m.height) - 2)
 		e.form, e.formKind = &f, "warm"
+		return m, nil
+	case "p":
+		it, ok := e.warm.SelectedItem().(warmItem)
+		if e.showClones || !ok {
+			return m, nil
+		}
+		if it.snap.GetApp() != "" {
+			m.setStatus("warm snapshots with an app have no pool", true)
+			return m, nil
+		}
+		f := newPoolForm(it.snap)
+		f.SetHeight(contentHeight(m.height) - 2)
+		e.form, e.formKind, e.poolSnap = &f, "pool", it.snap
 		return m, nil
 	case "a":
 		f := newAppForm()
@@ -648,6 +708,8 @@ func (e ephemeralModel) View(width, height int) string {
 	keys := []string{"tab", other, "n", "run", "a", "gui app", "c", "build warm", "x", "remove", "r", "refresh", "esc", "back"}
 	if e.showClones {
 		keys = append([]string{"s", "shell"}, keys...)
+	} else {
+		keys = append([]string{"p", "pool"}, keys...)
 	}
 	return l.View() + "\n" + helpBar(keys...)
 }

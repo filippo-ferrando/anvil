@@ -110,7 +110,9 @@ func TestAddMembersRefusesMissingIntentAndBadMembers(t *testing.T) {
 	}
 }
 
-func TestAddMembersStopsAtFirstFailureAndKeepsEarlierMembers(t *testing.T) {
+// Members launch side by side, so one failing doesn't stop the others: they are kept and
+// the failure is the one error reported.
+func TestAddMembersReportsFailureAndKeepsTheOthers(t *testing.T) {
 	s := newIntentTestServer(t)
 	events := addMembers(t, s, &anvilv1.IntentAddMembersRequest{Name: "shop", Create: true, Members: []*anvilv1.IntentMemberSpec{
 		vmMember("db", "x"), vmMember("web", "bad"), vmMember("cache", "x"),
@@ -123,15 +125,17 @@ func TestAddMembersStopsAtFirstFailureAndKeepsEarlierMembers(t *testing.T) {
 		if ev.GetError() != "" {
 			errs++
 		}
-		if ev.GetMember().GetRole() == "cache" {
-			t.Error("expected no launch after the failed member")
-		}
 	}
 	if e := events[len(events)-1].GetError(); errs != 1 || !strings.Contains(e, "broken") {
 		t.Fatalf("expected one final error about the failed member, got %d, %q", errs, e)
 	}
 	it, err := s.Manager.Info("shop")
-	if err != nil || len(it.Members) != 1 || it.Members[0].Role != "db" {
-		t.Errorf("expected the earlier member to be kept, got %+v, %v", it, err)
+	if err != nil || len(it.Members) != 2 {
+		t.Fatalf("expected db and cache kept, got %+v, %v", it, err)
+	}
+	for _, m := range it.Members {
+		if m.Role == "web" {
+			t.Errorf("the failed member was kept: %+v", it.Members)
+		}
 	}
 }

@@ -45,3 +45,35 @@ func TestWarmRoundTrip(t *testing.T) {
 		t.Errorf("second DeleteWarm = %v", err)
 	}
 }
+
+func TestWarmPoolRoundTrip(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "anvil.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	a := WarmPool{Distro: "ubuntu-24.04", Arch: "x86_64", CPUs: 2, MemoryMiB: 512, Size: 2}
+	b := WarmPool{Distro: "alpine-3.22", Arch: "x86_64", CPUs: 1, MemoryMiB: 256, Size: 4}
+	for _, p := range []WarmPool{a, b} {
+		if err := s.PutWarmPool(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a.Size = 3 // same distro and size: replaces the first
+	if err := s.PutWarmPool(a); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListWarmPools()
+	if err != nil || len(got) != 2 || got[0] != b || got[1] != a {
+		t.Fatalf("ListWarmPools = %+v, %v", got, err)
+	}
+	if err := s.DeleteWarmPool(a.ID()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteWarmPool(a.ID()); err != nil {
+		t.Errorf("deleting a missing pool: %v", err)
+	}
+	if got, _ := s.ListWarmPools(); len(got) != 1 || got[0] != b {
+		t.Errorf("after delete: %+v", got)
+	}
+}

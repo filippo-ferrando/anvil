@@ -28,6 +28,7 @@ type fakeEngine struct {
 	builds   atomic.Int32
 	setups   atomic.Int32 // builds with a setup
 	buildErr error
+	slowDel  chan struct{} // when set, DeleteClone waits for it
 	mu       sync.Mutex
 	deleted  []string
 	swept    bool
@@ -68,6 +69,9 @@ func (f *fakeEngine) RestoreClone(_ context.Context, id string, s WarmSpec, dir 
 }
 
 func (f *fakeEngine) DeleteClone(_ context.Context, id string) error {
+	if f.slowDel != nil {
+		<-f.slowDel
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.deleted = append(f.deleted, id)
@@ -108,7 +112,9 @@ func newTestManager(t *testing.T) (*Manager, *fakeEngine) {
 	t.Cleanup(func() { s.Close() })
 	root := t.TempDir()
 	e := &fakeEngine{}
-	return NewManager(e, s, func(key string) string { return filepath.Join(root, "warm", key) }), e
+	m := NewManager(e, s, func(key string) string { return filepath.Join(root, "warm", key) })
+	m.memAvailable = func() (int64, error) { return 1 << 20, nil }
+	return m, e
 }
 
 func TestWarmBuildsOnce(t *testing.T) {
@@ -208,6 +214,7 @@ func collect(t *testing.T, ctx context.Context, m *Manager, r RunRequest) (exits
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+	m.WaitDeletes()
 	return exits, out
 }
 
@@ -303,7 +310,102 @@ func TestRunCancelDeletesClones(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run didn't return after the cancel")
 	}
+	m.WaitDeletes()
 	if len(m.Clones()) != 0 || len(e.deleted) != 2 {
 		t.Errorf("after a cancel: clones %v, deleted %v (keep_failed doesn't apply)", m.Clones(), e.deleted)
+	}
+}
+
+func TestRunExitsBeforeTeardown(t *testing.T) {
+	m, e := newTestManager(t)
+	e.slowDel = make(chan struct{})
+	var exit Exit
+	done := make(chan error, 1)
+	go func() {
+		done <- m.Run(context.Background(), RunRequest{Distros: []string{"ubuntu"}, Argv: []string{"true"}}, func(ev Event) {
+			if ev.Exit != nil {
+				exit = *ev.Exit
+			}
+		})
+	}()
+	select {
+	case err := <-done:
+		if err != nil || exit.Code != 0 {
+			t.Fatalf("Run = %v, exit %+v", err, exit)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run waited for the clone's teardown")
+	}
+	// Still listed, so it still counts for memory, and a second delete is a no-op.
+	if c := m.Clones(); len(c) != 1 || c[0].ID != exit.CloneID {
+		t.Errorf("clones during the teardown: %+v", c)
+	}
+	if got, err := m.DeleteClones(context.Background(), nil, true); err != nil || len(got) != 1 {
+		t.Errorf("DeleteClones during the teardown = %v, %v", got, err)
+	}
+	close(e.slowDel)
+	m.WaitDeletes()
+	if len(m.Clones()) != 0 || len(e.deletedIDs()) != 1 {
+		t.Errorf("after the teardown: clones %+v, deleted %v", m.Clones(), e.deletedIDs())
+	}
+}
+
+// The clones restore while the upload still arrives; the command waits for it.
+func TestRunRestoresDuringUpload(t *testing.T) {
+	m, _ := newTestManager(t)
+	guestexec.WorkDir = filepath.Join(t.TempDir(), "work")
+	t.Cleanup(func() { guestexec.WorkDir = "/work" })
+	upload := filepath.Join(t.TempDir(), "upload.tar")
+	ready := make(chan struct{})
+	restored := make(chan struct{}, 1)
+	var exit Exit
+	var out strings.Builder
+	go func() {
+		<-restored // the clone is up before the upload is complete
+		f, _ := os.Create(upload)
+		tw := tar.NewWriter(f)
+		_ = tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: "hello", Mode: 0o644, Size: 3})
+		_, _ = tw.Write([]byte("hi\n"))
+		_ = tw.Close()
+		f.Close()
+		close(ready)
+	}()
+	err := m.Run(context.Background(), RunRequest{
+		Distros: []string{"ubuntu"}, Argv: []string{"cat", "hello"}, Upload: upload,
+		WaitUpload: func(ctx context.Context) error {
+			select {
+			case <-ready:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		},
+	}, func(ev Event) {
+		switch {
+		case ev.Progress != nil && strings.HasPrefix(ev.Progress.Message, "restored"):
+			restored <- struct{}{}
+		case ev.Output != nil:
+			out.Write(ev.Output.Data)
+		case ev.Exit != nil:
+			exit = *ev.Exit
+		}
+	})
+	m.WaitDeletes()
+	if err != nil || exit.Code != 0 || out.String() != "hi\n" {
+		t.Fatalf("Run = %v, exit %+v, output %q", err, exit, out.String())
+	}
+
+	// A broken upload fails the command, not the daemon.
+	err = m.Run(context.Background(), RunRequest{
+		Distros: []string{"ubuntu"}, Argv: []string{"true"}, Upload: upload,
+		WaitUpload: func(context.Context) error { return errors.New("stream closed") },
+	}, func(ev Event) {
+		if ev.Exit != nil {
+			exit = *ev.Exit
+		}
+	})
+	m.WaitDeletes()
+	if err != nil || exit.Code != -1 || !strings.Contains(exit.Err, "receiving the upload") {
+		t.Errorf("broken upload: Run = %v, exit %+v", err, exit)
 	}
 }

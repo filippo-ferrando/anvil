@@ -22,7 +22,7 @@ flags and its on-disk layout is fixed. Its runtime behavior is
 controlled through the requests it receives over the socket, with a few
 exceptions read from its environment, described under ENVIRONMENT:
 \fBANVIL_MDNS\fR, \fBANVIL_METRICS\fR, \fBANVIL_GUI_TOOLS\fR, \fBANVIL_GUEST_TOOLS\fR and the
-\fBANVIL_FC_*\fR ones for Firecracker VMs.
+\fBANVIL_FC_*\fR ones for Firecracker VMs and the \fBANVIL_EPH_*\fR ones for ephemeral clones.
 
 On startup it creates its run, state, and cache directories if missing,
 opens its registry, reconciles instance and intent-network state against
@@ -179,6 +179,27 @@ on, instead of \fB10.254.254.0/24\fR, for a host that already uses it.
 Set to \fBoff\fR to run firecracker directly instead of under its jailer,
 which needs capabilities the unit may not grant. Anything else, including
 unset, uses the jailer when it is installed.
+.RE
+.PP
+\fBANVIL_EPH_RESERVE_MIB\fP
+.RS 4
+Memory, in MiB, kept free for the host when ephemeral clones start, instead
+of 1024. A clone waits until the host's available memory covers its own plus
+this reserve. \fB0\fR turns the reserve off.
+.RE
+.PP
+\fBANVIL_EPH_NETNS_POOL\fP
+.RS 4
+How many clone network namespaces are kept built ahead of time, instead of
+4, so a clone doesn't wait for the root helper. \fB0\fR turns the pool off.
+.RE
+.PP
+\fBANVIL_EPH_MEMORY\fP
+.RS 4
+Set to \fBuffd\fR to serve ephemeral clones' memory through a page handler in
+anvild that prefetches each warm snapshot's working set, instead of mapping the
+memory file shared. Faster first steps for large guests, but clones no longer
+share memory pages. Firecracker then needs a userfaultfd.
 .RE
 
 .SH RUNNING

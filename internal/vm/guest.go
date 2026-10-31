@@ -28,7 +28,16 @@ var (
 const (
 	guestPollFast = 3 * time.Second  // until cloud-init is finished
 	guestPollSlow = 30 * time.Second // afterwards, only to follow IP changes
+	// guestPollWaiting is the pace while someone waits for the guest to be ready.
+	guestPollWaiting = 500 * time.Millisecond
+	// consoleCheckEvery is how often a wait reads the console log for cloud-init's last line.
+	consoleCheckEvery = 250 * time.Millisecond
 )
+
+// agentGrace is how long a VM with a guest agent may show cloud-init done (on its console)
+// before it counts as ready without the agent: the agent starts at the very end of
+// cloud-init, and a wait that returns before it reports leaves the VM with no known IP.
+var agentGrace = guestPollFast
 
 // guestTracker polls each running VM's guest agent and keeps its last report. Both
 // hypervisor backends embed it; only how the agent is reached differs.
@@ -49,10 +58,12 @@ func newGuestTracker(newAgent func(instanceID string) *qemu.GuestAgent, shutdown
 
 // guestState is the backend's view of one running VM's guest.
 type guestState struct {
-	agent  *qemu.GuestAgent
-	info   instance.GuestInfo
-	cancel context.CancelFunc
-	probed chan struct{} // closed after the next stored report, made on demand by guestReport
+	agent   *qemu.GuestAgent
+	info    instance.GuestInfo
+	cancel  context.CancelFunc
+	probed  chan struct{} // closed after the next stored report, made on demand by guestReport
+	waiters int           // WaitReady calls following this poller; it polls faster for them
+	wake    chan struct{} // cuts the poller's current wait short
 }
 
 // notifyProbed wakes everyone waiting for gs's next report. Called with guestMu held.
@@ -103,7 +114,7 @@ func (b *guestTracker) watchGuest(spec *instance.Spec, exited <-chan struct{}) {
 	if old, ok := b.guests[spec.ID]; ok {
 		old.cancel()
 	}
-	gs := &guestState{agent: b.newAgent(spec.ID), cancel: cancel}
+	gs := &guestState{agent: b.newAgent(spec.ID), cancel: cancel, wake: make(chan struct{}, 1)}
 	b.guests[spec.ID] = gs
 	b.guestMu.Unlock()
 
@@ -118,8 +129,15 @@ func (b *guestTracker) watchGuest(spec *instance.Spec, exited <-chan struct{}) {
 		for {
 			info := b.refreshGuest(ctx, &specCopy)
 			interval := guestPollFast
-			if info.AgentConnected && isFinal(info.CloudInit) {
-				interval = guestPollSlow
+			b.guestMu.Lock()
+			waited := gs.waiters > 0
+			b.guestMu.Unlock()
+			noAgent := specCopy.VM != nil && specCopy.VM.NoGuestAgent
+			switch {
+			case (info.AgentConnected || noAgent) && isFinal(info.CloudInit):
+				interval = guestPollSlow // only IP changes left to follow, or nothing at all without an agent
+			case waited:
+				interval = guestPollWaiting
 			}
 			select {
 			case <-ctx.Done():
@@ -128,6 +146,7 @@ func (b *guestTracker) watchGuest(spec *instance.Spec, exited <-chan struct{}) {
 				// The VM went away without Stop (guest poweroff, crash): drop the stale report.
 				b.forgetGuest(specCopy.ID, gs)
 				return
+			case <-gs.wake:
 			case <-time.After(interval):
 			}
 		}
@@ -349,9 +368,62 @@ func (b *guestTracker) guestReport(instanceID string) (info instance.GuestInfo, 
 	return gs.info, gs.probed, true
 }
 
+// followGuest makes instanceID's poller poll faster until the returned func is called.
+func (b *guestTracker) followGuest(instanceID string) (done func()) {
+	b.guestMu.Lock()
+	gs, ok := b.guests[instanceID]
+	if ok {
+		gs.waiters++
+	}
+	b.guestMu.Unlock()
+	if !ok {
+		return func() {}
+	}
+	select {
+	case gs.wake <- struct{}{}:
+	default:
+	}
+	return func() {
+		b.guestMu.Lock()
+		gs.waiters--
+		b.guestMu.Unlock()
+	}
+}
+
+// consoleDone records that the console log shows cloud-init finished, as the poller would.
+func (b *guestTracker) consoleDone(instanceID string) {
+	b.guestMu.Lock()
+	gs, ok := b.guests[instanceID]
+	changed := ok && !isFinal(gs.info.CloudInit)
+	if changed {
+		gs.info.CloudInit = instance.CloudInitDone
+	}
+	hook := b.guestHook
+	b.guestMu.Unlock()
+	if changed && hook != nil {
+		hook(instanceID)
+	}
+}
+
 // waitReady waits until cloud-init is final or exited closes. It follows the guest
-// poller's reports, and only probes the guest itself when no poller runs.
+// poller's reports, and only probes the guest itself when no poller runs. Between
+// reports it reads the console log, which shows the end of cloud-init without the agent.
 func (b *guestTracker) waitReady(ctx context.Context, spec *instance.Spec, exited <-chan struct{}, progress func(status string)) error {
+	defer b.followGuest(spec.ID)()
+	console := ""
+	if spec.VM != nil && spec.VM.SeedISOPath != "" {
+		console = filepath.Join(instanceDir(spec.ID), "console.log")
+	}
+	tick := time.NewTicker(consoleCheckEvery)
+	defer tick.Stop()
+	expectsAgent := spec.VM != nil && !spec.VM.NoGuestAgent
+	var doneSince time.Time // cloud-init seen done while the agent isn't up yet
+	readyWithoutAgent := func() bool {
+		if doneSince.IsZero() {
+			doneSince = time.Now()
+		}
+		return !expectsAgent || time.Since(doneSince) >= agentGrace
+	}
 	last := ""
 	quiet := false // the poller missed a round, so probe directly
 	for {
@@ -360,15 +432,21 @@ func (b *guestTracker) waitReady(ctx context.Context, spec *instance.Spec, exite
 			info = b.refreshGuest(ctx, spec)
 		}
 		switch info.CloudInit {
-		case instance.CloudInitDone, instance.CloudInitDisabled:
+		case instance.CloudInitDisabled:
 			return nil
+		case instance.CloudInitDone:
+			if info.AgentConnected || readyWithoutAgent() {
+				return nil
+			}
 		case instance.CloudInitError:
 			return fmt.Errorf("vm: cloud-init on %s finished with errors (see `anvil logs %s`)", spec.Name, spec.Name)
 		}
 
 		status := "waiting for cloud-init: guest agent not up yet"
-		if spec.VM != nil && spec.VM.NoGuestAgent {
+		if !expectsAgent {
 			status = "waiting for cloud-init"
+		} else if info.CloudInit == instance.CloudInitDone && !info.AgentConnected {
+			status = "cloud-init done, waiting for the guest agent"
 		} else if info.AgentConnected {
 			status = "waiting for cloud-init: running"
 			if len(info.IPAddresses) > 0 {
@@ -384,15 +462,29 @@ func (b *guestTracker) waitReady(ctx context.Context, spec *instance.Spec, exite
 		if polled {
 			wait = 2 * guestPollFast
 		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("vm: waiting for %s's cloud-init: %w", spec.Name, ctx.Err())
-		case <-exited:
-			return fmt.Errorf("vm: %s stopped while waiting for cloud-init", spec.Name)
-		case <-next:
-			quiet = false
-		case <-time.After(wait):
-			quiet = polled
+		timeout := time.After(wait)
+	waiting:
+		for {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("vm: waiting for %s's cloud-init: %w", spec.Name, ctx.Err())
+			case <-exited:
+				return fmt.Errorf("vm: %s stopped while waiting for cloud-init", spec.Name)
+			case <-next:
+				quiet = false
+				break waiting
+			case <-timeout:
+				quiet = polled
+				break waiting
+			case <-tick.C:
+				// Only without the agent, as probeGuest does: a connected agent also reports errors.
+				if console != "" && !info.AgentConnected && consoleSaysCloudInitFinished(console) {
+					b.consoleDone(spec.ID)
+					if readyWithoutAgent() {
+						return nil
+					}
+				}
+			}
 		}
 	}
 }

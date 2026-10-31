@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -73,6 +74,9 @@ func runEphemeral(cmd *cobra.Command, flags *globalFlags, distros []string, path
 	}
 	defer c.Close()
 
+	// Cancelled when the upload fails, so the daemon stops waiting for the rest of it.
+	ctx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
 	stream, err := c.Ephemeral.Run(ctx)
 	if err != nil {
 		return err
@@ -95,13 +99,6 @@ func runEphemeral(cmd *cobra.Command, flags *globalFlags, distros []string, path
 	if err := send(&anvilv1.RunInput{Input: &anvilv1.RunInput_Request{Request: req}}); err != nil {
 		return err
 	}
-	if path != "" {
-		if err := sendUpload(path, send); err != nil {
-			return err
-		}
-	}
-	restore := forwardInput(f.tty, len(distros) == 1, send)
-	defer restore()
 
 	out := newRunPrinter(os.Stdout, os.Stderr, distros, f.tty)
 	stopLive := out.live()
@@ -112,6 +109,30 @@ func runEphemeral(cmd *cobra.Command, flags *globalFlags, distros []string, path
 		}
 		defer out.closeLogs()
 	}
+	// The daemon restores the clones while the upload goes, so it runs alongside the events.
+	// A terminal run sends it first: raw keystrokes must not start before it ends.
+	restore := func() {}
+	uploadErr := make(chan error, 1)
+	if f.tty {
+		if path != "" {
+			if err := sendUpload(path, send); err != nil {
+				return err
+			}
+		}
+		restore = forwardInput(f.tty, len(distros) == 1, send)
+	} else {
+		go func() {
+			if path != "" {
+				if err := sendUpload(path, send); err != nil {
+					uploadErr <- err
+					cancelRun()
+					return
+				}
+			}
+			forwardInput(false, len(distros) == 1, send) // no terminal to restore
+		}()
+	}
+	defer func() { restore() }()
 	for {
 		ev, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
@@ -120,6 +141,11 @@ func runEphemeral(cmd *cobra.Command, flags *globalFlags, distros []string, path
 		if err != nil {
 			restore()
 			out.stopBoard()
+			select {
+			case upErr := <-uploadErr: // the stream broke because the upload did
+				return upErr
+			default:
+			}
 			if status.Code(err) == codes.Canceled || ctx.Err() != nil {
 				fmt.Fprintln(os.Stderr, "anvil: cancelled, the clones are deleted")
 				return ExitError{Code: 130}
@@ -147,24 +173,13 @@ func (e ExitError) orNil() error {
 
 // sendUpload streams path as a tar in upload chunks.
 func sendUpload(path string, send func(*anvilv1.RunInput) error) error {
-	pr, pw := io.Pipe()
-	go func() { pw.CloseWithError(client.WriteUploadTar(path, pw)) }()
-	buf := make([]byte, 256<<10)
-	for {
-		n, err := pr.Read(buf)
-		if n > 0 {
-			chunk := append([]byte(nil), buf[:n]...)
-			if serr := send(&anvilv1.RunInput{Input: &anvilv1.RunInput_UploadChunk{UploadChunk: chunk}}); serr != nil {
-				return serr
-			}
-		}
-		if errors.Is(err, io.EOF) {
-			return send(&anvilv1.RunInput{Input: &anvilv1.RunInput_UploadDone{UploadDone: true}})
-		}
-		if err != nil {
-			return fmt.Errorf("packing %s: %w", path, err)
-		}
+	err := client.SendUpload(path, func(chunk []byte) error {
+		return send(&anvilv1.RunInput{Input: &anvilv1.RunInput_UploadChunk{UploadChunk: chunk}})
+	})
+	if err != nil {
+		return err
 	}
+	return send(&anvilv1.RunInput{Input: &anvilv1.RunInput_UploadDone{UploadDone: true}})
 }
 
 // forwardInput sends stdin to a one-distro run: raw keystrokes and resizes with tty, a piped
@@ -215,6 +230,7 @@ type runPrinter struct {
 	color          bool
 	width          int
 	colors         map[string]string
+	prefixes       map[string]string        // distro -> its line prefix, made once
 	partial        map[string]*bytes.Buffer // distro + stream -> a line not ended yet
 	logs           map[string]*os.File
 	exits          map[string]*anvilv1.RunExit
@@ -286,11 +302,19 @@ func (p *runPrinter) closeLogs() {
 }
 
 func (p *runPrinter) prefix(distro string) string {
-	label := fmt.Sprintf("[%-*s]", p.width, distro)
-	if p.color {
-		return "\x1b[" + p.colors[distro] + "m" + label + "\x1b[0m "
+	if s, ok := p.prefixes[distro]; ok {
+		return s
 	}
-	return label + " "
+	label := fmt.Sprintf("[%-*s]", p.width, distro)
+	s := label + " "
+	if p.color {
+		s = "\x1b[" + p.colors[distro] + "m" + label + "\x1b[0m "
+	}
+	if p.prefixes == nil {
+		p.prefixes = map[string]string{}
+	}
+	p.prefixes[distro] = s
+	return s
 }
 
 func (p *runPrinter) event(ev *anvilv1.RunEvent) {
@@ -342,13 +366,20 @@ func (p *runPrinter) writeLines(distro string, st anvilv1.OutputStream, w io.Wri
 		p.partial[key] = buf
 	}
 	buf.Write(data)
+	// Every complete line goes out in one write, not one per line.
+	var out bytes.Buffer
+	prefix := p.prefix(distro)
 	for {
 		line, err := buf.ReadBytes('\n')
 		if err != nil {
 			buf.Write(line) // not a full line yet
-			return
+			break
 		}
-		fmt.Fprintf(w, "%s%s", p.prefix(distro), line)
+		out.WriteString(prefix)
+		out.Write(line)
+	}
+	if out.Len() > 0 {
+		_, _ = w.Write(out.Bytes())
 	}
 }
 

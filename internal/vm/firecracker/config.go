@@ -19,6 +19,7 @@ type Config struct {
 	NetworkInterfaces []NetworkInterface `json:"network-interfaces,omitempty"`
 	Vsock             *Vsock             `json:"vsock,omitempty"`
 	MemoryHotplug     *MemoryHotplug     `json:"memory-hotplug,omitempty"`
+	Balloon           *Balloon           `json:"balloon,omitempty"`
 	// Entropy adds a virtio-rng device, so first boot doesn't wait on guest entropy.
 	Entropy *struct{} `json:"entropy,omitempty"`
 }
@@ -59,6 +60,14 @@ type Vsock struct {
 // MemoryHotplug sets up a virtio-mem region of TotalSizeMiB on top of the boot memory.
 type MemoryHotplug struct {
 	TotalSizeMiB int64 `json:"total_size_mib"`
+}
+
+// Balloon is the virtio-balloon device. With FreePageReporting the guest reports the pages
+// it frees and firecracker gives them back to the host.
+type Balloon struct {
+	AmountMiB         int64 `json:"amount_mib"`
+	DeflateOnOOM      bool  `json:"deflate_on_oom"`
+	FreePageReporting bool  `json:"free_page_reporting,omitempty"`
 }
 
 // GuestCID is the vsock context ID every guest gets; each VM has its own vsock socket.

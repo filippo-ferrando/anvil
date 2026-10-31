@@ -223,9 +223,98 @@ without them.
 
 #### Not in scope
 
-QEMU ephemeral runs, inbound networking to clones, a `--parallel` limit (all clones start
-at once; add a limit when a large matrix exhausts host memory), user cloud-init for
-ephemeral runs.
+QEMU ephemeral runs, inbound networking to clones, user cloud-init for ephemeral runs. A
+limit on clones starting at once is planned under "AI workloads" (admission control).
+
+## AI workloads
+
+Agents use sandboxes differently from CI: many at once, each one long-lived with many small
+calls, plus checkpoints, rollback and a tight network policy. The ephemeral path (warm
+snapshots, clones, `anvil-guest`) is the base; this section turns it into a sandbox platform.
+Every milestone gets gRPC, CLI and TUI surface where it makes sense, tests, and user docs
+(why it exists, how it works, how to use it) in `docs/ephemeral.md` or a new `docs/sandbox.md`.
+
+### 1. Latency and density
+
+Status: all seven done, user docs in `docs/ephemeral.md` (and `networking.md`,
+`security.md`, `tui.md`, `anvild.8`). Checked on real VMs (`TestEphemeralRealRun`,
+`TestEphemeralRealPool`): balloon and VMGenID bound in clones, a pooled clone handed out
+in under 1ms (a run in ~80ms, against ~350ms restoring). Still to check on a real install,
+since tests can't without root: the dm-snapshot disk in a jail (`TestCloneDiskReal` needs
+root), and UFFD with real firecracker (`TestEphemeralRealRunUffd` needs
+`vm.unprivileged_userfaultfd=1`, and a jailed firecracker needs `/dev/userfaultfd` in its jail).
+
+Before this work a clone restore (`RestoreClone`, `internal/vm/fc_clone.go`) builds a netns through the
+root helper (one process per request), copies the warm disk (`cp --reflink=auto`, a full
+copy on ext4), spawns firecracker, loads the snapshot, then sets the clock and hostname.
+
+1. **Phase timings and admission control.** Each restore reports how long each phase took
+   (netns, disk, spawn, load, setup) in the run's progress events and anvild's log, so the
+   rest is measured, not guessed. A clone starts only when the host's `MemAvailable` covers
+   its memory plus a reserve (`ANVIL_EPH_RESERVE_MIB`, default 1024); otherwise it waits
+   with a "waiting for memory" step instead of all clones of a large matrix starting at once.
+2. **Netns pool.** The helper builds clone netns ahead of time under pool ids; a clone takes
+   one instead of waiting for a helper round trip, and the pool refills in the background.
+3. **dm-snapshot disks.** On a filesystem without reflink, the root helper builds a
+   device-mapper snapshot per clone: the warm disk is the read-only origin (a read-only
+   loop device), a sparse file of the disk's size is the copy-on-write store, and the
+   helper puts the device node in the clone's jail as `disk.raw`. Clone disk setup becomes
+   O(1) whatever the disk size. With reflink (btrfs, xfs) the copy stays, it is already
+   O(1) and cheaper than a helper round trip. The helper opens both files itself, refuses
+   anything not a regular file owned by anvild's user, and makes the node with
+   `RESOLVE_NO_SYMLINKS` under the fixed jail root. Needs `dmsetup` and `dm_snapshot`;
+   without them clones fall back to the copy, with a log line.
+4. **Clone pool.** `anvil warm pool <distro> [--cpus --memory] --size N` keeps N clones of
+   that warm snapshot restored and running, ready to hand out. The pool is stored in
+   bbolt by distro and size, not by warm key, so a kernel or firecracker upgrade refills it
+   from the new snapshot. Handing out a clone sets its clock again and takes milliseconds;
+   a miss falls back to a normal restore. gRPC `WarmPoolSet/List`, `anvil warm pool`,
+   pool sizes in `anvil warm list` and the TUI Ephemeral screen. Pooled clones count for
+   admission control.
+5. **Free page reporting.** Warm VMs get a balloon at 0 MiB with `free_page_reporting`
+   and `deflate_on_oom`, so memory a guest frees goes back to the host. Needs
+   `CONFIG_VIRTIO_BALLOON` and `CONFIG_PAGE_REPORTING`, already in Firecracker's 6.18 base
+   config; pinned in `scripts/fc-kernel.config` so the build checks them. Part of the warm
+   key, so warm snapshots rebuild once.
+6. **VMGenID.** Firecracker always exposes it and writes a new id on every restore, so each
+   clone's kernel reseeds its RNG. `CONFIG_VMGENID` is in the x86_64 base config; pin it in
+   the fragment and check aarch64 (needs the 6.10 DeviceTree binding, fine on 6.18).
+   Userspace state copied from the snapshot (machine-id, cached randomness) still repeats
+   across clones, which `docs/security.md` should say.
+7. **UFFD memory backend, opt-in.** With UFFD, Firecracker maps guest memory anonymously
+   and a handler copies each faulting page in (`UFFDIO_COPY`), so clones no longer share
+   the snapshot's pages as they do with the `File` backend: it trades density for latency.
+   `File` stays the default; `ANVIL_EPH_MEMORY=uffd` turns on a handler in anvild (one
+   goroutine per clone on the socket in its jail). The first clone of a warm snapshot
+   records the pages it touches (its working set) into the warm dir; later clones copy that
+   set in one batch right after the load, then serve the rest on demand. Balloon removals
+   (`UFFD_EVENT_REMOVE`) unregister the range, as Firecracker's example handler does.
+
+### 2. Sandbox sessions
+
+A named, TTL-bound sandbox resource: `SandboxCreate` (warm params, TTL, limits),
+`SandboxExec` (streaming, like `CloneExec`), `SandboxPutFile`/`GetFile`/`ListDir` as
+`anvil-guest` frames without a shell or tar, `SandboxCheckpoint`/`Restore`/`Fork` (a
+snapshot of a running clone becomes a new warm entry: rollback and branching), idle TTL
+with auto-reap, pausing idle sandboxes. Builds on kept clones and `CloneExec`.
+
+### 3. AI-native interface
+
+`anvil mcp`: an MCP server over stdio mapping tools (create, exec, read/write file,
+checkpoint, destroy) onto the gRPC client, a thin client like the CLI. Python and
+TypeScript SDKs generated from `anvil.proto` with a little ergonomics on top.
+
+### 4. Safety for untrusted code
+
+Per-sandbox egress policy (domain allowlist at the clone DNS forwarder plus nft in the
+netns, and a no-network mode), inbound port exposure for dev servers, CPU and IO limits
+(cgroups through the jailer, firecracker drive rate limiters).
+
+### 5. Uploads
+
+A content-addressed upload cache: the client sends file hashes and uploads only missing
+files, instead of a full tar per run; or the project as a read-only drive shared by a
+sandbox's calls.
 
 ## Daemon concurrency
 

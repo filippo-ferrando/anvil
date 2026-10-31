@@ -88,3 +88,46 @@ func TestWarmVMSpec(t *testing.T) {
 		}
 	}
 }
+
+func TestFactCache(t *testing.T) {
+	c := &factCache{facts: map[factKey]fact{}}
+	path := filepath.Join(t.TempDir(), "anvil-guest")
+	if err := os.WriteFile(path, []byte("v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	compute := func() (string, error) {
+		calls++
+		data, err := os.ReadFile(path)
+		return string(data), err
+	}
+	for range 3 {
+		if v, err := c.get("sha256", path, compute); err != nil || v != "v1" {
+			t.Fatalf("get = %q, %v", v, err)
+		}
+	}
+	if calls != 1 {
+		t.Errorf("computed %d times for an unchanged file, want once", calls)
+	}
+	// A replaced binary (new inode) is worked out again, even with the same size and time.
+	info, _ := os.Stat(path)
+	next := path + ".new"
+	if err := os.WriteFile(next, []byte("v2"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(next, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(next, path); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := c.get("sha256", path, compute); v != "v2" || calls != 2 {
+		t.Errorf("after a replace: %q, %d computes", v, calls)
+	}
+	if v, _ := c.get("version", path, func() (string, error) { return "other kind", nil }); v != "other kind" {
+		t.Errorf("kinds share a cache entry: %q", v)
+	}
+	if _, err := c.get("sha256", filepath.Join(t.TempDir(), "missing"), compute); err == nil {
+		t.Error("a missing file was answered")
+	}
+}

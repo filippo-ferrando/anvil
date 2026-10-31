@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
@@ -143,6 +144,7 @@ func (s *IntentServer) Apply(req *anvilv1.IntentApplyRequest, stream anvilv1.Int
 type memberSender struct {
 	role   string
 	stream anvilv1.IntentService_AddMembersServer
+	mu     *sync.Mutex // shared by the members launching at once: one Send at a time
 	err    string
 }
 
@@ -151,10 +153,15 @@ func (m *memberSender) Send(ev *anvilv1.LaunchProgress) error {
 		m.err = e
 		return nil
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.stream.Send(&anvilv1.IntentAddMembersProgress{Event: &anvilv1.IntentAddMembersProgress_Member{
 		Member: &anvilv1.IntentMemberProgress{Role: m.role, Launch: ev},
 	}})
 }
+
+// parallelMembers bounds how many members one AddMembers launches at once.
+const parallelMembers = 4
 
 // checkMembers rejects an empty or malformed member list before anything is launched.
 func checkMembers(members []*anvilv1.IntentMemberSpec) error {
@@ -211,12 +218,26 @@ func (s *IntentServer) AddMembers(req *anvilv1.IntentAddMembersRequest, stream a
 		return sendErr(fmt.Errorf("intent: looking up %q: %w", name, err))
 	}
 
-	for _, m := range req.GetMembers() {
-		send := &memberSender{role: m.GetRole(), stream: stream}
-		err := s.Launcher.launch(stream.Context(), memberLaunchRequest(req, m), send)
-		if send.err != "" {
-			return sendErr(errors.New(send.err))
-		}
+	// Members launch side by side; the first one's error in member order is reported.
+	members := req.GetMembers()
+	errs := make([]error, len(members))
+	var sendMu sync.Mutex
+	sem := make(chan struct{}, parallelMembers)
+	var wg sync.WaitGroup
+	for i, m := range members {
+		sem <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-sem }()
+			send := &memberSender{role: m.GetRole(), stream: stream, mu: &sendMu}
+			err := s.Launcher.launch(stream.Context(), memberLaunchRequest(req, m), send)
+			if send.err != "" {
+				err = errors.New(send.err)
+			}
+			errs[i] = err
+		})
+	}
+	wg.Wait()
+	for _, err := range errs {
 		if err != nil {
 			return sendErr(err)
 		}

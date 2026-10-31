@@ -281,6 +281,24 @@ func (m *Manifest) Order() ([]string, error) {
 	return order, nil
 }
 
+// levels gives each member its dependency level: 0 without depends_on, otherwise one more
+// than the deepest member it depends on. Members of one level don't depend on each other.
+func (m *Manifest) levels() map[string]int {
+	order, err := m.Order()
+	if err != nil {
+		return nil
+	}
+	level := make(map[string]int, len(order))
+	for _, role := range order {
+		l := 0
+		for _, dep := range m.Members[role].DependsOn {
+			l = max(l, level[dep]+1)
+		}
+		level[role] = l
+	}
+	return level
+}
+
 // hasDependents reports whether any member lists role in depends_on.
 func (m *Manifest) hasDependents(role string) bool {
 	for _, mem := range m.Members {

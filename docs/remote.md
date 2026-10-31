@@ -16,6 +16,27 @@ connection, made by the SSH login user.
 anvil (host A) ── ssh ──▶ anvil dial-stdio (host B) ── unix socket ──▶ anvild (host B)
 ```
 
+### One SSH connection per remote host
+
+An SSH login costs several network round trips (TCP, key exchange, authentication), from
+about a hundred milliseconds on a LAN to a second over a slow link, and every `anvil
+--remote` command used to pay it. So anvil's `ssh` calls share one connection per remote
+host, with OpenSSH's own connection sharing: `ControlMaster=auto`, `ControlPersist=60s`
+and a control socket `anvil-ssh-<hash>` in `$XDG_RUNTIME_DIR` (or in a private
+`anvil-ssh-<uid>` dir under the temp dir; with neither, sharing is off). The first command
+opens the connection, every command in the next 60 seconds reuses it, and it closes a
+minute after the last one. Against a local `sshd` a remote `anvil list` went from about
+120 ms to 14 ms; on a real network the gain per command is the whole login.
+
+A VM shell, exec or transfer reaches the guest through the same connection: instead of
+`ssh -J <host>`, which would open its own, the hop is a `ProxyCommand` running
+`ssh -W %h:%p <host>` with the same sharing options.
+
+These options are passed on the command line, so for anvil's calls they win over
+`ControlMaster`/`ControlPath`/`ControlPersist` in `~/.ssh/config`. `ANVIL_SSH_MUX=off`
+turns the sharing off: every call opens its own connection, and the guest hop goes back
+to `-J`.
+
 ## Two clients at once
 
 Each `anvil --remote` call (or TUI session) starts its own `ssh` process and its own
@@ -72,9 +93,9 @@ After reconnecting, check with `anvil --remote <host> list` / `info` before retr
 |---|---|
 | `launch` | `Create` aborts. If `Start` fails because of the cancellation, the rollback `b.Delete` runs with the same canceled context and can fail too, leaving disk/container leftovers with no store record (logged by the daemon). If the instance already reached `PutInstance`, it exists normally. |
 | `stop` / `start` | The backend call is interrupted. The instance can end up in either state; the stored state is only updated on success. |
-| `delete` | Instances are deleted one by one; those done before the drop are gone, the rest remain. |
+| `delete` | Instances are deleted side by side, up to 4 at a time; those done before the drop are gone, the rest remain. |
 | `logs -f`, `stats` stream | Just stop. Nothing to clean up. |
-| `shell` / `exec` / `transfer` | These do not go through the daemon (`ssh -J <host>` or `DOCKER_HOST=ssh://<host>`), so the session ends like any dropped SSH session. |
+| `shell` / `exec` / `transfer` | These do not go through the daemon (a hop through `<host>`, see above, or `DOCKER_HOST=ssh://<host>`), so the session ends like any dropped SSH session. |
 
 ### Migration from a remote daemon
 

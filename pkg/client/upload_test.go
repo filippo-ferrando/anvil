@@ -3,6 +3,8 @@ package client
 import (
 	"archive/tar"
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -53,5 +55,43 @@ func TestUploadTar(t *testing.T) {
 	want := []string{".gitignore", "main.go", "src/a.txt"} // untracked but not ignored files come too
 	if !slices.Equal(got, want) {
 		t.Errorf("in a git repo = %v, want %v", got, want)
+	}
+}
+
+// A tree of many small files goes out in full chunks, not one per header and file.
+func TestSendUploadFullChunks(t *testing.T) {
+	dir := t.TempDir()
+	for i := range 300 {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%03d.txt", i)), bytes.Repeat([]byte("x"), 1000), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var chunks [][]byte
+	if err := SendUpload(dir, func(c []byte) error { chunks = append(chunks, c); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	// 300 entries of 512 + 1024 bytes and the end blocks: about 450 KiB, two chunks.
+	if len(chunks) != 2 || len(chunks[0]) != UploadChunkSize {
+		t.Fatalf("%d chunks (first %d bytes), want 2 with a full first one", len(chunks), len(chunks[0]))
+	}
+	tr := tar.NewReader(bytes.NewReader(slices.Concat(chunks...)))
+	n := 0
+	for {
+		if _, err := tr.Next(); err == io.EOF {
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		n++
+	}
+	if n != 300 {
+		t.Errorf("tar holds %d files, want 300", n)
+	}
+
+	// A failed send stops the upload, and the tar writer with it.
+	sent := 0
+	err := SendUpload(dir, func([]byte) error { sent++; return errors.New("stream closed") })
+	if err == nil || sent != 1 {
+		t.Errorf("SendUpload = %v after %d sends, want the send error after one", err, sent)
 	}
 }

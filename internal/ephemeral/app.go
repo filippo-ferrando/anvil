@@ -361,12 +361,12 @@ func (m *Manager) RunApp(ctx context.Context, r AppRequest, emit func(Event)) er
 	if err != nil {
 		return fail(err)
 	}
-	progress("restoring a clone")
 	start := time.Now()
-	clone, err := e.RestoreClone(ctx, id, spec, m.Dir(spec.Key))
+	clone, err := m.restore(ctx, e, id, spec, progress)
 	if err != nil {
 		return fail(err)
 	}
+	id = clone.ID() // a pooled clone has its own
 	st := &cloneState{id: id, distro: distro, warmKey: spec.Key, startedAt: start, clone: clone}
 	m.mu.Lock()
 	m.clones[id] = st

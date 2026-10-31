@@ -23,6 +23,9 @@ type WarmStore interface {
 	GetWarm(key string) (store.WarmSnapshot, error)
 	ListWarm() ([]store.WarmSnapshot, error)
 	DeleteWarm(key string) error
+	PutWarmPool(store.WarmPool) error
+	ListWarmPools() ([]store.WarmPool, error)
+	DeleteWarmPool(id string) error
 }
 
 // Manager owns warm snapshots and clones. Engine is nil where clones can't run.
@@ -34,9 +37,18 @@ type Manager struct {
 	mu       sync.Mutex
 	building map[string]*build // warm key -> the build in progress
 	clones   map[string]*cloneState
+	pools    map[string]*pool // store.WarmPool.ID() -> its clones
+	teardown sync.WaitGroup   // clones of finished runs being deleted
 
 	// guestRun runs a command in a clone; tests replace it.
 	guestRun func(ctx context.Context, clone Clone, r guestexec.Request) (int, error)
+
+	admitMu   sync.Mutex
+	restoring int64 // MiB of clones admitted and still restoring
+	// memAvailable is the host's available memory in MiB; tests replace it.
+	memAvailable func() (int64, error)
+	// wake readies a pooled clone as it is handed out; tests replace it.
+	wake func(ctx context.Context, c Clone) error
 }
 
 // build is one warm snapshot build that later callers for the same key wait on.
@@ -47,8 +59,8 @@ type build struct {
 }
 
 func NewManager(engine Engine, s WarmStore, dir func(string) string) *Manager {
-	return &Manager{Engine: engine, Store: s, Dir: dir, building: map[string]*build{}, clones: map[string]*cloneState{},
-		guestRun: runInClone}
+	return &Manager{Engine: engine, Store: s, Dir: dir, building: map[string]*build{}, clones: map[string]*cloneState{}, pools: map[string]*pool{},
+		guestRun: runInClone, memAvailable: hostMemAvailable, wake: setClock}
 }
 
 func (m *Manager) engine() (Engine, error) {
@@ -78,8 +90,11 @@ func (m *Manager) Warm(ctx context.Context, p WarmParams, rebuild bool, progress
 	for {
 		if !rebuild {
 			if rec, err := m.Store.GetWarm(s.Key); err == nil && m.complete(s.Key) {
-				rec.LastUsedAt = time.Now()
-				_ = m.Store.PutWarm(rec)
+				// A write (and its fsync) at most once a minute: the listing shows minutes.
+				if now := time.Now(); now.Sub(rec.LastUsedAt) >= time.Minute {
+					rec.LastUsedAt = now
+					_ = m.Store.PutWarm(rec)
+				}
 				return rec, s, nil
 			}
 		}
@@ -209,6 +224,9 @@ func (m *Manager) DeleteWarm(prefixes []string, all bool) ([]string, error) {
 	}
 	var deleted []string
 	for _, key := range keys {
+		if err := m.dropPoolsOf(key); err != nil {
+			return deleted, err
+		}
 		if err := os.RemoveAll(m.Dir(key)); err != nil {
 			return deleted, err
 		}

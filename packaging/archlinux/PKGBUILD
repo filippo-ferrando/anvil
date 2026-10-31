@@ -46,6 +46,7 @@ package_anvild() {
     'docker: run containers via Docker'
     'podman: run containers via Podman (backend not implemented yet)'
     'nftables: outbound NAT for standalone Firecracker VMs'
+    'device-mapper: copy-on-write disks for ephemeral clones on filesystems without reflinks'
     'libcap: setcap for the Firecracker jailer'
     'qemu-hw-usb-host: pass USB devices to VMs with --device'
     'hwdata: device names in anvil host devices'

@@ -1,5 +1,5 @@
 [Unit]
-Description=anvil device helper socket (USB/PCI passthrough, clone networks)
+Description=anvil device helper socket (USB/PCI passthrough, clone networks and disks)
 
 # Only the anvil user (anvild) can connect. Each connection starts one
 # anvil-devhelper@.service, which claims or releases a single device, or creates or

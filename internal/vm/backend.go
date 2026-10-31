@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/config"
@@ -458,10 +459,12 @@ func (b *Backend) Fork(ctx context.Context, source, dest *instance.Spec, progres
 		if progress != nil {
 			progress("copying disk")
 		}
-		// -U still opens a disk some untracked QEMU might hold locked.
-		if err := qemuImg(ctx, "forking disk", "convert", "-U", "-O", "qcow2",
-			"-o", "backing_file="+backing+",backing_fmt=qcow2", source.VM.DiskPath, diskPath); err != nil {
-			return err
+		if !reflinkFork(ctx, source.VM.DiskPath, diskPath) {
+			// -U still opens a disk some untracked QEMU might hold locked.
+			if err := qemuImg(ctx, "forking disk", "convert", "-U", "-O", "qcow2",
+				"-o", "backing_file="+backing+",backing_fmt=qcow2", source.VM.DiskPath, diskPath); err != nil {
+				return err
+			}
 		}
 	}
 	dest.VM.DiskPath = diskPath
@@ -470,6 +473,31 @@ func (b *Backend) Fork(ctx context.Context, source, dest *instance.Spec, progres
 		progress("building cloud-init seed")
 	}
 	return b.buildSeed(dest)
+}
+
+// reflinkFork makes dst a copy-on-write clone of a stopped source's disk, in one call
+// whatever its size, where the filesystem can. A clone keeps the backing file's name as
+// written, so only an absolute one qualifies, and the source's internal snapshots are
+// dropped, as a convert leaves them out. False leaves nothing behind, for a convert instead.
+func reflinkFork(ctx context.Context, src, dst string) bool {
+	if backing, err := image.BackingFile(src); err != nil || !filepath.IsAbs(backing) {
+		return false
+	}
+	if reflink(src, dst) != nil {
+		return false
+	}
+	snaps, err := image.ListSnapshots(dst)
+	for _, s := range snaps {
+		if err != nil {
+			break
+		}
+		err = qemuImg(ctx, "dropping the source's snapshots", "snapshot", "-d", s.Name, dst)
+	}
+	if err != nil {
+		_ = os.Remove(dst)
+		return false
+	}
+	return true
 }
 
 // validSnapshotName restricts names to a safe token, since qemu-img's CLI
@@ -931,21 +959,56 @@ func (b *Backend) Logs(ctx context.Context, spec *instance.Spec, follow bool, ta
 	}
 
 	// console.log is append-only, so keep reading from the current offset.
-	buf := make([]byte, 4096)
-	for {
+	return followFile(ctx, f, path, send)
+}
+
+// followPoll is how often followFile looks for new data without inotify, and how often it
+// checks ctx with it.
+const followPoll = 250 * time.Millisecond
+
+// followFile sends what is appended to f (opened on path) until ctx ends. inotify wakes it
+// as soon as the file grows, and every wake sends all there is, not one buffer.
+func followFile(ctx context.Context, f *os.File, path string, send func([]byte) error) error {
+	wait := func() error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(followPoll):
+			return nil
 		}
-		n, err := f.Read(buf)
-		if n > 0 {
-			if sendErr := send(buf[:n]); sendErr != nil {
-				return sendErr
+	}
+	if fd, err := unix.InotifyInit1(unix.IN_CLOEXEC | unix.IN_NONBLOCK); err == nil {
+		defer unix.Close(fd)
+		if _, err := unix.InotifyAddWatch(fd, path, unix.IN_MODIFY); err == nil {
+			events := make([]byte, 4096)
+			wait = func() error {
+				fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+				for {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					n, err := unix.Poll(fds, int(followPoll.Milliseconds()))
+					if err != nil && err != unix.EINTR {
+						return fmt.Errorf("vm: watching console log: %w", err)
+					}
+					if n > 0 {
+						for { // drained, so the next poll waits for new writes
+							if _, err := unix.Read(fd, events); err != nil {
+								break
+							}
+						}
+						return nil
+					}
+				}
 			}
 		}
-		if err != nil && err != io.EOF {
-			return fmt.Errorf("vm: reading console log: %w", err)
+	}
+	for {
+		if err := sendInChunks(f, send); err != nil {
+			return err
+		}
+		if err := wait(); err != nil {
+			return err
 		}
 	}
 }

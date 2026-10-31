@@ -25,6 +25,7 @@ func TestParseTransfer(t *testing.T) {
 }
 
 func TestTransferCommandVM(t *testing.T) {
+	t.Setenv(muxEnv, "off") // the plain -J form; TestJumpArgs covers the shared connection
 	fakeBins(t, "scp")
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())

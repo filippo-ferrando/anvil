@@ -18,6 +18,7 @@ type Backend struct {
 var (
 	_ instance.Backend       = (*Backend)(nil)
 	_ instance.StatsProvider = (*Backend)(nil)
+	_ instance.StatsSampler  = (*Backend)(nil)
 	_ instance.ExitNotifier  = (*Backend)(nil)
 )
 
@@ -141,6 +142,18 @@ func (b *Backend) Stats(ctx context.Context, spec *instance.Spec) (instance.Stat
 		return instance.Stats{}, fmt.Errorf("container: this engine doesn't support stats")
 	}
 	return sp.Stats(ctx, spec)
+}
+
+func (b *Backend) SampleStats(ctx context.Context, spec *instance.Spec, prev instance.StatsSample) (instance.Stats, instance.StatsSample, error) {
+	eng, err := b.engineFor(spec)
+	if err != nil {
+		return instance.Stats{}, nil, err
+	}
+	if s, ok := eng.(instance.StatsSampler); ok {
+		return s.SampleStats(ctx, spec, prev)
+	}
+	st, err := b.Stats(ctx, spec)
+	return st, nil, err
 }
 
 func (b *Backend) PrepareGUI(ctx context.Context, spec *instance.Spec, x11 bool, progress func(status string)) (instance.GUISession, error) {

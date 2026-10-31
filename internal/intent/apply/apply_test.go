@@ -7,7 +7,9 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/store"
@@ -85,6 +87,7 @@ func TestParseErrors(t *testing.T) {
 
 // fakes records every call in one log, so tests can check the order of operations.
 type fakes struct {
+	mu      sync.Mutex
 	log     []string
 	intent  *store.Intent
 	specs   map[string]*instance.Spec // by ID
@@ -92,6 +95,46 @@ type fakes struct {
 
 	held, reserved []string
 	holdErr        error
+}
+
+func (f *fakes) record(call string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.log = append(f.log, call)
+}
+
+// inLevels checks got ran levels one after another: every call of a level before any of
+// the next, each step's own calls in order, while the steps of one level may interleave.
+func inLevels(t *testing.T, got []string, levels ...[][]string) {
+	t.Helper()
+	i := 0
+	for n, level := range levels {
+		next := make([]int, len(level)) // per step: how many of its calls were seen
+		left := 0
+		for _, step := range level {
+			left += len(step)
+		}
+		for ; left > 0; left-- {
+			if i >= len(got) {
+				t.Fatalf("calls = %v: level %d missing calls of %v", got, n, level)
+			}
+			found := false
+			for j, step := range level {
+				if next[j] < len(step) && step[next[j]] == got[i] {
+					next[j]++
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("calls = %v: %q (call %d) is not next in level %d %v", got, got[i], i, n, level)
+			}
+			i++
+		}
+	}
+	if i != len(got) {
+		t.Fatalf("calls = %v: unexpected calls after %d", got, i)
+	}
 }
 
 func (f *fakes) Hold(ctx context.Context, names []string) (context.Context, func(), error) {
@@ -115,7 +158,7 @@ func (f *fakes) Info(name string) (store.Intent, error) {
 }
 
 func (f *fakes) Launch(ctx context.Context, p instance.LaunchParams, progress func(instance.LaunchEvent)) error {
-	f.log = append(f.log, "launch "+p.Role)
+	f.record("launch " + p.Role)
 	if p.VM != nil && !slices.Contains(p.VM.SSHPublicKeys, "ssh-ed25519 CALLER") {
 		return fmt.Errorf("caller key missing from %v", p.VM.SSHPublicKeys)
 	}
@@ -124,7 +167,7 @@ func (f *fakes) Launch(ctx context.Context, p instance.LaunchParams, progress fu
 }
 
 func (f *fakes) Remove(ctx context.Context, name, member string) (store.Intent, error) {
-	f.log = append(f.log, "remove "+member)
+	f.record("remove " + member)
 	return store.Intent{}, nil
 }
 
@@ -136,23 +179,25 @@ func (f *fakes) GetByID(id string) (*instance.Spec, error) {
 }
 
 func (f *fakes) Start(ctx context.Context, names []string) error {
-	f.log = append(f.log, "start "+strings.Join(names, ","))
+	f.record("start " + strings.Join(names, ","))
 	return nil
 }
 
 func (f *fakes) Delete(ctx context.Context, names []string) error {
-	f.log = append(f.log, "delete "+strings.Join(names, ","))
+	f.record("delete " + strings.Join(names, ","))
 	return nil
 }
 
 func (f *fakes) Update(ctx context.Context, name string, p instance.UpdateParams) (instance.UpdateResult, error) {
-	f.log = append(f.log, "update "+name)
+	f.record("update " + name)
+	f.mu.Lock()
 	f.updated = p
+	f.mu.Unlock()
 	return instance.UpdateResult{}, nil
 }
 
 func (f *fakes) WaitReady(ctx context.Context, name string, progress func(string)) error {
-	f.log = append(f.log, "wait "+name)
+	f.record("wait " + name)
 	return nil
 }
 
@@ -208,10 +253,9 @@ func TestApplyCreatesInDependencyOrder(t *testing.T) {
 			t.Errorf("%s: action %s, want create", role, s.Action)
 		}
 	}
-	want := []string{"launch cache", "wait shop-cache", "launch db", "wait shop-db", "launch app"}
-	if !slices.Equal(f.log, want) {
-		t.Fatalf("calls = %v\nwant    %v", f.log, want)
-	}
+	inLevels(t, f.log,
+		[][]string{{"launch cache", "wait shop-cache"}, {"launch db", "wait shop-db"}},
+		[][]string{{"launch app"}})
 }
 
 func TestApplyNoChanges(t *testing.T) {
@@ -230,9 +274,7 @@ func TestApplyNoChanges(t *testing.T) {
 		}
 	}
 	// Dependencies are still checked for readiness, nothing else is touched.
-	if want := []string{"wait shop-cache", "wait shop-db"}; !slices.Equal(f.log, want) {
-		t.Fatalf("calls = %v, want %v", f.log, want)
-	}
+	inLevels(t, f.log, [][]string{{"wait shop-cache"}, {"wait shop-db"}})
 }
 
 func TestApplyDiff(t *testing.T) {
@@ -259,15 +301,10 @@ func TestApplyDiff(t *testing.T) {
 	if _, err := runApply(t, f, m, Options{Prune: true}); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{
-		"delete shop-old", "remove id-old",
-		"wait shop-cache",
-		"delete shop-db", "remove id-db", "launch db", "wait shop-db",
-		"update shop-app", "start shop-app",
-	}
-	if !slices.Equal(f.log, want) {
-		t.Fatalf("calls = %v\nwant    %v", f.log, want)
-	}
+	inLevels(t, f.log,
+		[][]string{{"delete shop-old", "remove id-old"}},
+		[][]string{{"wait shop-cache"}, {"delete shop-db", "remove id-db", "launch db", "wait shop-db"}},
+		[][]string{{"update shop-app", "start shop-app"}})
 	if f.updated.CPUs == nil || *f.updated.CPUs != 2 || f.updated.MemoryMiB != nil {
 		t.Fatalf("update params = %+v, want only cpus=2", f.updated)
 	}
@@ -413,5 +450,52 @@ func TestCheckLines(t *testing.T) {
 	}
 	if ps := Check([]byte(Starter("demo")), nil); ps != nil {
 		t.Errorf("Starter: %+v", ps)
+	}
+}
+
+// blockingFakes holds every launch until all of a level's launches are in, failing one role.
+type blockingFakes struct {
+	*fakes
+	entered chan string
+	release chan struct{}
+	fail    string
+}
+
+func (f *blockingFakes) Launch(ctx context.Context, p instance.LaunchParams, progress func(instance.LaunchEvent)) error {
+	f.entered <- p.Role
+	<-f.release
+	if p.Role == f.fail {
+		return errors.New("boot failed")
+	}
+	return f.fakes.Launch(ctx, p, progress)
+}
+
+func TestApplyLevelRunsInParallel(t *testing.T) {
+	f := &blockingFakes{fakes: &fakes{}, entered: make(chan string, 3), release: make(chan struct{}), fail: "db"}
+	a := &Applier{Instances: f, Intents: f}
+	done := make(chan error, 1)
+	go func() {
+		done <- a.Apply(context.Background(), mustParse(t, sample), Options{SSHKeys: []string{"ssh-ed25519 CALLER"}}, func([]Step) {}, func(string) {})
+	}()
+	got := map[string]bool{}
+	for range 2 { // cache and db, which app depends on, launch together
+		select {
+		case role := <-f.entered:
+			got[role] = true
+		case <-time.After(5 * time.Second):
+			t.Fatalf("only %v launched: the level ran one at a time", got)
+		}
+	}
+	if !got["cache"] || !got["db"] {
+		t.Fatalf("first level launched %v", got)
+	}
+	close(f.release)
+	err := <-done
+	if err == nil || !strings.Contains(err.Error(), "db (create)") {
+		t.Fatalf("Apply = %v, want db's failure", err)
+	}
+	// A failed level stops the apply: app, which depends on db, never launches.
+	if len(f.entered) != 0 || slices.Contains(f.log, "launch app") {
+		t.Errorf("app launched after its dependency failed: %v", f.log)
 	}
 }

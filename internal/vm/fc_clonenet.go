@@ -9,9 +9,11 @@ import (
 	"log"
 	"net/netip"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/oklog/ulid/v2"
 	"github.com/vishvananda/netlink"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/hostdev"
@@ -23,6 +25,11 @@ import (
 const cloneSubnetEnv = "ANVIL_EPH_SUBNET"
 
 const defaultCloneSubnet = "10.253.0.0/16"
+
+// netnsPoolEnv sets how many clone netns are kept built ahead of time; 0 turns the pool off.
+const netnsPoolEnv = "ANVIL_EPH_NETNS_POOL"
+
+const defaultNetnsPool = 4
 
 // cloneVethGlob matches the host end of every clone's veth pair (hostdev.CloneVeth).
 const cloneVethGlob = "anve*"
@@ -42,12 +49,19 @@ type CloneNet struct {
 
 // CloneNetworks hands out clone networks. Clones live only in anvild's memory, so a link
 // is free again once its clone is torn down, and Sweep clears what a crash left.
+// A few netns are built ahead of time under their own ids, so a clone doesn't wait for one.
 type CloneNetworks struct {
 	Helper   NetnsHelper
 	OnChange func() // runs when the DNS zones change
 
-	mu    sync.Mutex
-	links map[string]netip.Prefix // clone ID -> its /30
+	mu      sync.Mutex
+	links   map[string]netip.Prefix // netns ID -> its /30
+	owner   map[string]string       // clone ID -> the netns ID it took, when not its own
+	ready   []string                // pooled netns IDs no clone holds yet
+	filling bool
+
+	// hostSide sets up the host end of a netns; tests replace it.
+	hostSide func(pool, host netip.Prefix, veth string) error
 }
 
 // cloneSubnet returns the pool of clone links, checked against the other fixed subnets.
@@ -77,6 +91,7 @@ func (c *CloneNetworks) allocate(id string, pool netip.Prefix) (netip.Prefix, er
 	defer c.mu.Unlock()
 	if c.links == nil {
 		c.links = map[string]netip.Prefix{}
+		c.owner = map[string]string{}
 	}
 	if link, ok := c.links[id]; ok {
 		return link, nil
@@ -103,40 +118,125 @@ func (c *CloneNetworks) free(id string) {
 	c.mu.Unlock()
 }
 
-// Setup gives clone id its netns, link and host NAT.
-func (c *CloneNetworks) Setup(ctx context.Context, id string) (_ CloneNet, err error) {
-	pool, err := cloneSubnet()
+// Setup gives clone id its netns, link and host NAT: a pooled one when there is one ready,
+// otherwise one built now under its own id.
+func (c *CloneNetworks) Setup(ctx context.Context, id string) (CloneNet, error) {
+	defer c.refill()
+	c.mu.Lock()
+	if n := len(c.ready); n > 0 {
+		ns := c.ready[n-1]
+		c.ready = c.ready[:n-1]
+		c.owner[id] = ns
+		link := c.links[ns]
+		c.mu.Unlock()
+		return cloneNetOf(ns, link), nil
+	}
+	c.mu.Unlock()
+	link, err := c.build(ctx, id)
 	if err != nil {
 		return CloneNet{}, err
 	}
-	link, err := c.allocate(id, pool)
+	return cloneNetOf(id, link), nil
+}
+
+func cloneNetOf(ns string, link netip.Prefix) CloneNet {
+	host, _, _ := hostdev.CloneLink(link.String())
+	return CloneNet{NetNS: hostdev.NetnsPath(ns), Tap: hostdev.CloneTap, Host: host.Addr()}
+}
+
+// build creates netns ns: its link, the helper's netns and veth pair, and the host side.
+func (c *CloneNetworks) build(ctx context.Context, ns string) (_ netip.Prefix, err error) {
+	pool, err := cloneSubnet()
 	if err != nil {
-		return CloneNet{}, err
+		return netip.Prefix{}, err
+	}
+	link, err := c.allocate(ns, pool)
+	if err != nil {
+		return netip.Prefix{}, err
 	}
 	defer func() {
 		if err != nil {
-			_ = c.Helper.DeleteNetns(context.WithoutCancel(ctx), id)
-			c.free(id)
+			_ = c.Helper.DeleteNetns(context.WithoutCancel(ctx), ns)
+			c.free(ns)
 		}
 	}()
-	if err := ensureCloneNAT(pool); err != nil {
-		return CloneNet{}, err
-	}
-	if err := c.Helper.CreateNetns(ctx, hostdev.Netns{ID: id, Link: link.String()}); err != nil {
-		return CloneNet{}, fmt.Errorf("vm: setting up the network of clone %s: %w", id, err)
+	if err := c.Helper.CreateNetns(ctx, hostdev.Netns{ID: ns, Link: link.String()}); err != nil {
+		return netip.Prefix{}, fmt.Errorf("vm: setting up the network of clone %s: %w", ns, err)
 	}
 	host, _, _ := hostdev.CloneLink(link.String())
-	if err := hostEndUp(hostdev.CloneVeth(id), host); err != nil {
-		return CloneNet{}, err
+	side := c.hostSide
+	if side == nil {
+		side = hostSideUp
+	}
+	if err := side(pool, host, hostdev.CloneVeth(ns)); err != nil {
+		return netip.Prefix{}, err
 	}
 	c.changed()
-	return CloneNet{NetNS: hostdev.NetnsPath(id), Tap: hostdev.CloneTap, Host: host.Addr()}, nil
+	return link, nil
+}
+
+func hostSideUp(pool, host netip.Prefix, veth string) error {
+	if err := ensureCloneNAT(pool); err != nil {
+		return err
+	}
+	return hostEndUp(veth, host)
+}
+
+// netnsPoolSize reads netnsPoolEnv, falling back to the default on a missing or bad value.
+func netnsPoolSize() int {
+	if n, err := strconv.Atoi(os.Getenv(netnsPoolEnv)); err == nil && n >= 0 {
+		return n
+	}
+	return defaultNetnsPool
+}
+
+// refill builds pooled netns in the background until the pool is full again. The pool
+// starts with the first clone, so a host that never runs one never builds one.
+func (c *CloneNetworks) refill() {
+	size := netnsPoolSize()
+	c.mu.Lock()
+	if c.filling || len(c.ready) >= size {
+		c.mu.Unlock()
+		return
+	}
+	c.filling = true
+	c.mu.Unlock()
+	go func() {
+		defer func() {
+			c.mu.Lock()
+			c.filling = false
+			c.mu.Unlock()
+		}()
+		for {
+			c.mu.Lock()
+			full := len(c.ready) >= size
+			c.mu.Unlock()
+			if full {
+				return
+			}
+			ns := "eph-N" + ulid.Make().String()
+			if _, err := c.build(context.Background(), ns); err != nil {
+				log.Printf("vm: building a pooled clone network: %v", err)
+				return
+			}
+			c.mu.Lock()
+			c.ready = append(c.ready, ns)
+			c.mu.Unlock()
+		}
+	}()
 }
 
 // Teardown removes clone id's network, once its firecracker is gone.
 func (c *CloneNetworks) Teardown(ctx context.Context, id string) error {
-	err := c.Helper.DeleteNetns(ctx, id)
-	c.free(id)
+	c.mu.Lock()
+	ns, ok := c.owner[id]
+	delete(c.owner, id)
+	c.mu.Unlock()
+	if !ok {
+		ns = id
+	}
+	err := c.Helper.DeleteNetns(ctx, ns)
+	c.free(ns)
 	c.changed()
 	if err != nil {
 		return fmt.Errorf("vm: removing the network of clone %s: %w", id, err)
@@ -210,8 +310,8 @@ func hostEndUp(name string, addr netip.Prefix) error {
 	return nil
 }
 
-// ensureCloneNAT loads the host's clone table and turns on forwarding. Run on every Setup
-// (both are idempotent), so a firewall reload that flushed the table heals.
+// ensureCloneNAT loads the host's clone table and turns on forwarding. Run on every netns
+// build, pooled ones included (both are idempotent), so a firewall reload that flushed the table heals.
 func ensureCloneNAT(pool netip.Prefix) error {
 	if err := runNft(cloneNftRules(pool)); err != nil {
 		return err

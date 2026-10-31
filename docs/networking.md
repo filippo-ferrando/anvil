@@ -149,8 +149,15 @@ behind `tap0` (`10.200.0.1/30`), its gateway and DNS server.
 - **Privileges.** Creating a netns needs `CAP_SYS_ADMIN`, which anvild doesn't have, so the
   root helper `anvild devhelper` builds it (`internal/hostdev/netns_linux.go`); anvild only
   sets the host end's address and the host table (`internal/vm/fc_clonenet.go`).
+- **Pool.** Building a netns takes a round trip to the root helper, which starts a new
+  process per request, plus the netlink and nft work, tens of milliseconds a clone. So
+  anvild keeps a few netns built ahead of time (`anvil-eph-N<id>`) and a clone takes one
+  instead of waiting; the pool refills in the background. It holds 4 by default,
+  `ANVIL_EPH_NETNS_POOL` in anvild's environment changes it, `0` turns it off. It starts
+  with the first clone, so a host that never runs one never builds any. When the pool is
+  empty, as when a large matrix takes them all, a clone builds its own netns as before.
 - **Cleanup.** Clones live only in anvild's memory: on start anvild removes every
-  `anvil-eph-*` netns it finds.
+  `anvil-eph-*` netns it finds, pooled ones included.
 
 ## Containers
 

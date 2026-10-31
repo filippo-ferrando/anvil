@@ -327,31 +327,69 @@ func (b *DockerBackend) Logs(ctx context.Context, spec *instance.Spec, follow bo
 // samples when computing network/disk-IO rates.
 const statsSampleWindow = 200 * time.Millisecond
 
-var _ instance.StatsProvider = (*DockerBackend)(nil)
+var (
+	_ instance.StatsProvider = (*DockerBackend)(nil)
+	_ instance.StatsSampler  = (*DockerBackend)(nil)
+)
 
 // Stats samples the container's live resource usage. CPU, network and disk-IO
 // rates come from the delta between two one-shot samples statsSampleWindow apart.
 func (b *DockerBackend) Stats(ctx context.Context, spec *instance.Spec) (instance.Stats, error) {
+	st, _, err := b.SampleStats(ctx, spec, nil)
+	return st, err
+}
+
+// containerSample is one stats reading of a container.
+type containerSample struct {
+	id string
+	docker.StatsSnapshot
+}
+
+// counted reports whether s1's counters all follow on from s0's, as within one run of the container.
+func counted(s0, s1 docker.StatsSnapshot) bool {
+	return s1.CPUTotalUsageNanos >= s0.CPUTotalUsageNanos && s1.NetRxBytes >= s0.NetRxBytes && s1.NetTxBytes >= s0.NetTxBytes &&
+		s1.BlkReadBytes >= s0.BlkReadBytes && s1.BlkWriteBytes >= s0.BlkWriteBytes
+}
+
+// SampleStats is Stats with rates since prev, for a stream of stats. The inspect for the
+// uptime and address runs while the first sample's window passes.
+func (b *DockerBackend) SampleStats(ctx context.Context, spec *instance.Spec, prev instance.StatsSample) (instance.Stats, instance.StatsSample, error) {
 	if spec.Container == nil {
-		return instance.Stats{}, fmt.Errorf("docker: Stats called with a nil ContainerSpec")
+		return instance.Stats{}, nil, fmt.Errorf("docker: Stats called with a nil ContainerSpec")
 	}
 	id := spec.Container.ContainerID
 	if id == "" {
-		return instance.Stats{}, fmt.Errorf("docker: %s isn't running", spec.Name)
+		return instance.Stats{}, nil, fmt.Errorf("docker: %s isn't running", spec.Name)
 	}
+	type inspected struct {
+		insp docker.Inspection
+		err  error
+	}
+	inspCh := make(chan inspected, 1)
+	go func() {
+		insp, err := b.Client.Inspect(ctx, id)
+		inspCh <- inspected{insp, err}
+	}()
 
-	s0, err := b.Client.Stats(ctx, id)
-	if err != nil {
-		return instance.Stats{}, err
-	}
-	select {
-	case <-time.After(statsSampleWindow):
-	case <-ctx.Done():
-		return instance.Stats{}, ctx.Err()
+	p, ok := prev.(containerSample)
+	s0 := p.StatsSnapshot
+	if !ok || p.id != id {
+		var err error
+		if s0, err = b.Client.Stats(ctx, id); err != nil {
+			return instance.Stats{}, nil, err
+		}
+		select {
+		case <-time.After(statsSampleWindow):
+		case <-ctx.Done():
+			return instance.Stats{}, nil, ctx.Err()
+		}
 	}
 	s1, err := b.Client.Stats(ctx, id)
 	if err != nil {
-		return instance.Stats{}, err
+		return instance.Stats{}, nil, err
+	}
+	if !counted(s0, s1) { // restarted since prev: no rates for this tick
+		s0 = s1
 	}
 	elapsed := s1.At.Sub(s0.At).Seconds()
 
@@ -370,10 +408,11 @@ func (b *DockerBackend) Stats(ctx context.Context, spec *instance.Spec) (instanc
 		blkWrite = float64(s1.BlkWriteBytes-s0.BlkWriteBytes) / elapsed
 	}
 
-	insp, err := b.Client.Inspect(ctx, id)
-	if err != nil {
-		return instance.Stats{}, err
+	in := <-inspCh
+	if in.err != nil {
+		return instance.Stats{}, nil, in.err
 	}
+	insp := in.insp
 	var uptime int64
 	if !insp.StartedAt.IsZero() {
 		if d := time.Since(insp.StartedAt); d > 0 {
@@ -392,7 +431,7 @@ func (b *DockerBackend) Stats(ctx context.Context, spec *instance.Spec) (instanc
 		NetTxBytesPerSec:     netTx,
 		UptimeSeconds:        uptime,
 		Address:              insp.Address,
-	}, nil
+	}, containerSample{id: id, StatsSnapshot: s1}, nil
 }
 
 // ListImages returns every image in Docker's local store, each tagged

@@ -120,3 +120,29 @@ func TestRunPaneSteps(t *testing.T) {
 		t.Fatalf("lines %q", p.lines)
 	}
 }
+
+func TestEphemeralPoolForm(t *testing.T) {
+	snap := &anvilv1.WarmSnapshot{Key: "abc123", Distro: "ubuntu-24.04", Arch: "x86_64", Cpus: 2, MemoryMib: 512, PoolSize: 3, PoolReady: 1}
+	if d := (warmItem{snap: snap}).Description(); !strings.Contains(d, "pool 1/3 ready") {
+		t.Errorf("description lacks the pool: %q", d)
+	}
+	m := model{screen: screenEphemeral, ephemeral: newEphemeralModel()}
+	next, _ := m.Update(warmLoadedMsg{snaps: []*anvilv1.WarmSnapshot{snap}})
+	m = next.(model)
+	next, _ = m.Update(key("p"))
+	m = next.(model)
+	if m.ephemeral.form == nil || m.ephemeral.formKind != "pool" || m.ephemeral.form.Value("Size") != "3" {
+		t.Fatalf("p opened form %v (%q)", m.ephemeral.form != nil, m.ephemeral.formKind)
+	}
+	f := newPoolForm(snap)
+	setField(&f, "Size", "5")
+	req, err := buildPoolRequest(f, snap)
+	if err != nil || req.GetDistro() != "ubuntu-24.04" || req.GetArch() != "x86_64" || req.GetCpus() != 2 ||
+		req.GetMemoryMib() != 512 || req.GetSize() != 5 {
+		t.Errorf("pool request = %+v, %v", req, err)
+	}
+	setField(&f, "Size", "-1")
+	if _, err := buildPoolRequest(f, snap); err == nil {
+		t.Error("a negative size was accepted")
+	}
+}

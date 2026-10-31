@@ -26,6 +26,7 @@ var (
 	_ instance.Snapshotter     = (*Hypervisors)(nil)
 	_ instance.Forker          = (*Hypervisors)(nil)
 	_ instance.StatsProvider   = (*Hypervisors)(nil)
+	_ instance.StatsSampler    = (*Hypervisors)(nil)
 	_ instance.GuestInspector  = (*Hypervisors)(nil)
 	_ instance.ReadyWaiter     = (*Hypervisors)(nil)
 	_ instance.ExitNotifier    = (*Hypervisors)(nil)
@@ -215,6 +216,14 @@ func (h *Hypervisors) Stats(ctx context.Context, spec *instance.Spec) (instance.
 		return instance.Stats{}, err
 	}
 	return s.Stats(ctx, spec)
+}
+
+func (h *Hypervisors) SampleStats(ctx context.Context, spec *instance.Spec, prev instance.StatsSample) (instance.Stats, instance.StatsSample, error) {
+	s, err := capability[instance.StatsSampler](h, spec, "stats")
+	if err != nil {
+		return instance.Stats{}, nil, err
+	}
+	return s.SampleStats(ctx, spec, prev)
 }
 
 func (h *Hypervisors) GuestInfo(spec *instance.Spec) (instance.GuestInfo, bool) {

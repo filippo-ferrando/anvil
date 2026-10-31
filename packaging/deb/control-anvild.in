@@ -5,7 +5,7 @@ Priority: optional
 Architecture: @ARCH@
 Depends: qemu-system-x86, qemu-utils, xorriso, virtiofsd, openssh-client, systemd
 Recommends: docker.io | docker-ce
-Suggests: nftables, libcap2-bin, pci.ids, usb.ids
+Suggests: nftables, dmsetup, libcap2-bin, pci.ids, usb.ids
 Installed-Size: @INSTALLED_SIZE@
 Maintainer: filippo ferrando <ferrandodfilippo@ik.me>
 Homepage: https://git.fferrando.cc/rdfilippo/anvil

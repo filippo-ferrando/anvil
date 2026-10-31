@@ -42,7 +42,7 @@ func writeTarZst(ctx context.Context, destPath string, build func(tw *tar.Writer
 	defer out.Close()
 
 	pr, pw := io.Pipe()
-	cmd := exec.CommandContext(ctx, zstdPath, "-q", "-c")
+	cmd := exec.CommandContext(ctx, zstdPath, "-q", "-c", "-T0") // every core; the output is the same format
 	cmd.Stdin = pr
 	cmd.Stdout = out
 	cmd.Stderr = os.Stderr

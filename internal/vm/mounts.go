@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/hostpath"
@@ -265,25 +266,41 @@ func (b *Backend) umountLive(ctx context.Context, spec *instance.Spec, proc *qem
 	return nil
 }
 
-// startVirtiofsds starts one virtiofsd per mount of spec, before QEMU connects to them.
+// startVirtiofsds starts one virtiofsd per mount of spec, all at once, before QEMU
+// connects to them. A failure stops them all and reports the first mount's error.
 func (b *Backend) startVirtiofsds(spec *instance.Spec) ([]qemu.Mount, error) {
-	var mounts []qemu.Mount
 	for _, m := range spec.VM.Mounts {
 		if err := hostpath.CheckResolved(m.HostPath); err != nil {
-			b.killVirtiofsds(spec.ID)
 			return nil, fmt.Errorf("vm: shared folder %w", err)
 		}
-		sock := virtiofsSocket(spec.ID, m.Tag)
-		d, err := qemu.StartVirtiofsd(m.HostPath, sock, m.ReadOnly, virtiofsLog(spec.ID, m.Tag))
+	}
+	mounts := make([]qemu.Mount, len(spec.VM.Mounts))
+	errs := make([]error, len(spec.VM.Mounts))
+	var wg sync.WaitGroup
+	for i, m := range spec.VM.Mounts {
+		wg.Go(func() {
+			sock := virtiofsSocket(spec.ID, m.Tag)
+			d, err := qemu.StartVirtiofsd(m.HostPath, sock, m.ReadOnly, virtiofsLog(spec.ID, m.Tag))
+			if err != nil {
+				if _, statErr := os.Stat(m.HostPath); os.IsPermission(statErr) {
+					err = fmt.Errorf("%w%s", err, hostpath.Hint(m.HostPath))
+				}
+				errs[i] = fmt.Errorf("vm: %w", err)
+				return
+			}
+			b.trackVirtiofsd(spec.ID, m.Tag, d)
+			mounts[i] = qemu.Mount{Tag: m.Tag, SocketPath: sock}
+		})
+	}
+	wg.Wait()
+	for _, err := range errs {
 		if err != nil {
 			b.killVirtiofsds(spec.ID)
-			if _, statErr := os.Stat(m.HostPath); os.IsPermission(statErr) {
-				return nil, fmt.Errorf("vm: %w%s", err, hostpath.Hint(m.HostPath))
-			}
-			return nil, fmt.Errorf("vm: %w", err)
+			return nil, err
 		}
-		b.trackVirtiofsd(spec.ID, m.Tag, d)
-		mounts = append(mounts, qemu.Mount{Tag: m.Tag, SocketPath: sock})
+	}
+	if len(mounts) == 0 {
+		return nil, nil // as before: no mounts is a nil list
 	}
 	return mounts, nil
 }

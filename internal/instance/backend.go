@@ -99,6 +99,17 @@ type StatsProvider interface {
 	Stats(ctx context.Context, spec *Spec) (Stats, error)
 }
 
+// StatsSampler is a StatsProvider whose rates can come from the previous sample, so a
+// stream of stats doesn't wait a sampling window on every tick.
+type StatsSampler interface {
+	// SampleStats returns spec's stats with rates since prev, or over a short window when
+	// prev is nil or no longer fits (a restart), and the sample for the next call.
+	SampleStats(ctx context.Context, spec *Spec, prev StatsSample) (Stats, StatsSample, error)
+}
+
+// StatsSample is a backend's raw counters from one stats call, opaque to the caller.
+type StatsSample any
+
 // CloudInitStatus is the guest's first-boot setup progress as cloud-init reports it.
 type CloudInitStatus string
 

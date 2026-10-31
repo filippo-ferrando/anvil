@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"syscall"
 
@@ -142,8 +141,9 @@ func jailFile(paths fcInstancePaths, src, name string, copyOK bool) (string, err
 	// Shared files (kernel, GUI tools) get a private copy, so one VM's firecracker can't
 	// change what another one boots. Copy-on-write makes that cheap where the filesystem allows.
 	if copyOK {
-		if out, err := exec.Command("cp", "--reflink=auto", src, dst).CombinedOutput(); err != nil {
-			return "", fmt.Errorf("vm: copying %s into the jail: %w: %s", src, err, out)
+		_ = os.Remove(dst) // as cp did: a copy left in the jail is replaced
+		if err := privateCopy(src, dst); err != nil {
+			return "", fmt.Errorf("vm: copying %s into the jail: %w", src, err)
 		}
 		return paths.InVMM(dst), nil
 	}

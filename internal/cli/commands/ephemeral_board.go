@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -117,10 +118,12 @@ func (b *statusBoard) clear() {
 	}
 }
 
+// draw writes the board in one write, so a terminal never shows half of it.
 func (b *statusBoard) draw() {
 	if b.stopped {
 		return
 	}
+	var out strings.Builder
 	width := 0
 	for _, d := range b.order {
 		width = max(width, len(d))
@@ -135,7 +138,10 @@ func (b *statusBoard) draw() {
 		if r := []rune(line); b.width > 1 && len(r) >= b.width {
 			line = string(r[:b.width-2]) + "…"
 		}
-		fmt.Fprintln(b.out, "\x1b[2m"+line+"\x1b[0m")
+		out.WriteString("\x1b[2m" + line + "\x1b[0m\n")
 		b.drawn++
+	}
+	if out.Len() > 0 {
+		_, _ = io.WriteString(b.out, out.String())
 	}
 }

@@ -33,7 +33,8 @@ over a unix socket.`,
 	}
 	root.PersistentFlags().StringVar(&flags.socket, "socket", config.SocketPath(), "anvild unix socket path")
 	root.PersistentFlags().StringVar(&flags.remote, "remote", os.Getenv("ANVIL_REMOTE"),
-		`use the anvild on this ssh host ("[user@]host" or "ssh://[user@]host[:port]"), defaults to $ANVIL_REMOTE`)
+		`use the anvild on this ssh host ("[user@]host" or "ssh://[user@]host[:port]"), defaults to $ANVIL_REMOTE; `+
+			`commands share one ssh connection per host for 60s (ANVIL_SSH_MUX=off turns that off)`)
 
 	root.AddCommand(
 		newLaunchCommand(flags),

@@ -52,6 +52,8 @@ type RunRequest struct {
 	MemoryMiB  int64
 	KeepFailed bool
 	Upload     string // a tar file extracted into /work in every clone, "" for none
+	// WaitUpload, when set, waits until Upload is complete; the clones restore meanwhile.
+	WaitUpload func(ctx context.Context) error
 	// TTY, Stdin and Resize are for a run on one distro.
 	TTY    bool
 	Size   guestexec.Size
@@ -64,6 +66,7 @@ type cloneState struct {
 	id, distro, warmKey string
 	startedAt           time.Time
 	clone               Clone
+	deleting            bool // guarded by Manager.mu
 
 	mu       sync.Mutex
 	exited   bool
@@ -121,13 +124,13 @@ func (m *Manager) runOne(ctx context.Context, e Engine, r RunRequest, distro str
 		fail(err)
 		return
 	}
-	progress("restoring a clone")
 	start := time.Now()
-	clone, err := e.RestoreClone(ctx, id, spec, m.Dir(spec.Key))
+	clone, err := m.restore(ctx, e, id, spec, progress)
 	if err != nil {
 		fail(err)
 		return
 	}
+	id = clone.ID() // a pooled clone has its own
 	st := &cloneState{id: id, distro: distro, warmKey: spec.Key, startedAt: start, clone: clone}
 	m.mu.Lock()
 	m.clones[id] = st
@@ -142,12 +145,13 @@ func (m *Manager) runOne(ctx context.Context, e Engine, r RunRequest, distro str
 	st.mu.Lock()
 	st.exited, st.exitCode, st.kept = true, code, keep
 	st.mu.Unlock()
-	if !keep {
-		m.deleteClone(context.WithoutCancel(ctx), id)
-	}
 	exit := &Exit{CloneID: id, Distro: distro, Code: code, Duration: time.Since(start), Kept: keep}
 	if runErr != nil {
 		exit.Code, exit.Err = -1, runErr.Error()
+	}
+	// The result doesn't wait for the teardown; the clone counts as running until it's gone.
+	if !keep && m.claimDelete(id) {
+		m.teardown.Go(func() { m.removeClone(context.WithoutCancel(ctx), id) })
 	}
 	emit(Event{Exit: exit})
 }
@@ -160,6 +164,11 @@ func (m *Manager) runCommand(ctx context.Context, clone Clone, r RunRequest, out
 		Stderr: writerFunc(func(p []byte) { out(true, p) }),
 	}
 	if r.Upload != "" {
+		if r.WaitUpload != nil {
+			if err := r.WaitUpload(ctx); err != nil {
+				return -1, fmt.Errorf("receiving the upload: %w", err)
+			}
+		}
 		f, err := os.Open(r.Upload)
 		if err != nil {
 			return -1, err
@@ -187,12 +196,40 @@ func (w writerFunc) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// deleteClone deletes clone id, which stays listed (and counted for memory) until it's
+// gone. A clone already being deleted is left to that deletion.
 func (m *Manager) deleteClone(ctx context.Context, id string) error {
+	if !m.claimDelete(id) {
+		return nil
+	}
+	return m.removeClone(ctx, id)
+}
+
+// claimDelete marks clone id as being deleted, false when someone already is.
+func (m *Manager) claimDelete(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st := m.clones[id]
+	if st == nil {
+		return true // not tracked (yet): the engine still cleans up what there is
+	}
+	if st.deleting {
+		return false
+	}
+	st.deleting = true
+	return true
+}
+
+func (m *Manager) removeClone(ctx context.Context, id string) error {
+	err := m.Engine.DeleteClone(ctx, id)
 	m.mu.Lock()
 	delete(m.clones, id)
 	m.mu.Unlock()
-	return m.Engine.DeleteClone(ctx, id)
+	return err
 }
+
+// WaitDeletes waits until the clones of finished runs are deleted.
+func (m *Manager) WaitDeletes() { m.teardown.Wait() }
 
 // Clones lists the clones of runs in progress and the kept ones, oldest first.
 func (m *Manager) Clones() []CloneInfo {

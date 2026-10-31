@@ -175,6 +175,7 @@ func run() error {
 	// Clones and warm builds of the previous anvild died with it; their leftovers go first.
 	ephemeralMgr := ephemeral.NewManager(platformEphemeralEngine(), db, config.WarmDir)
 	ephemeralMgr.Cleanup(ctx)
+	ephemeralMgr.StartPools() // in the background, after the sweep above
 	anvilv1.RegisterEphemeralServiceServer(grpcServer, daemon.NewEphemeralServer(ephemeralMgr, config.EphemeralUploadDir()))
 
 	errCh := make(chan error, 1)

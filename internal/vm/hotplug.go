@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"git.fferrando.cc/rdfilippo/anvil/internal/backoff"
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/qemu"
 )
@@ -150,6 +151,7 @@ func sortSlots(s []qemu.HotpluggableCPU) {
 // waitForCPUs polls until the VM holds want vCPUs or hotplugWait passes, and returns the count.
 func (b *Backend) waitForCPUs(ctx context.Context, proc *qemu.Process, want int) (int, error) {
 	deadline := time.Now().Add(hotplugWait)
+	wait := backoff.New(10*time.Millisecond, 250*time.Millisecond)
 	for {
 		slots, err := proc.QMP.HotpluggableCPUs(ctx)
 		if err != nil {
@@ -167,7 +169,7 @@ func (b *Backend) waitForCPUs(ctx context.Context, proc *qemu.Process, want int)
 		select {
 		case <-ctx.Done():
 			return n, ctx.Err()
-		case <-time.After(250 * time.Millisecond):
+		case <-time.After(wait.Next()):
 		}
 	}
 }

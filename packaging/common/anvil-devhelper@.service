@@ -1,9 +1,10 @@
 [Unit]
-Description=anvil device helper (USB/PCI passthrough, clone networks)
+Description=anvil device helper (USB/PCI passthrough, clone networks and disks)
 
 # Runs as root: binds PCI devices to vfio-pci and hands device files to the anvil
 # user. It refuses devices behind the root filesystem, the default route or the display.
-# It also builds the network namespaces of ephemeral clones (/run/netns/anvil-eph-*).
+# It also builds the network namespaces of ephemeral clones (/run/netns/anvil-eph-*)
+# and their dm-snapshot disks (/dev/mapper/anvil-eph-*).
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/anvild devhelper

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -23,6 +24,8 @@ type logsModel struct {
 	pending   string // bytes received since the last "\n"; not yet a committed line
 	following bool   // auto-scroll to the bottom on new data; turned off once the user scrolls up manually
 	streaming bool
+	dirty     bool // lines changed since the viewport was last filled
+	queued    bool // a logsRenderMsg is on its way
 
 	// cancel ends the Logs RPC's context; call it when the user leaves this screen.
 	cancel context.CancelFunc
@@ -73,9 +76,20 @@ func (m model) updateLogs(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.done {
 			m.logs.streaming = false
+			m.logs.render()
 			return m, nil
 		}
+		// A busy log fills the viewport at most every logsRenderEvery, not on every chunk.
+		if m.logs.dirty && !m.logs.queued {
+			m.logs.queued = true
+			return m, tea.Batch(msg.next, tea.Tick(logsRenderEvery, func(time.Time) tea.Msg { return logsRenderMsg{} }))
+		}
 		return m, msg.next
+
+	case logsRenderMsg:
+		m.logs.queued = false
+		m.logs.render()
+		return m, nil
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -105,19 +119,18 @@ func (m model) updateLogs(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// appendLines feeds streamed bytes into the buffer and re-renders the
-// viewport. Boot tools rewrite lines in place with "\r"+ANSI codes rather than "\n", so commitLine/cleanLine collapse each to its final display; "\n" boundaries are found before stripping so a split ANSI escape is fully reassembled first.
-func (m *logsModel) appendLines(text string) {
-	m.pending += text
-	for {
-		i := strings.IndexByte(m.pending, '\n')
-		if i < 0 {
-			break
-		}
-		m.commitLine(m.pending[:i])
-		m.pending = m.pending[i+1:]
-	}
+// logsRenderEvery is how often a streaming log refills the viewport.
+const logsRenderEvery = 50 * time.Millisecond
 
+// logsRenderMsg fills the viewport with the lines received since the last one.
+type logsRenderMsg struct{}
+
+// render fills the viewport with the buffer, once something changed.
+func (m *logsModel) render() {
+	if !m.dirty {
+		return
+	}
+	m.dirty = false
 	lines := m.lines
 	if live := cleanLine(m.pending); live != "" {
 		// Show the in-progress line (e.g. "Starting foo...") before its
@@ -128,6 +141,20 @@ func (m *logsModel) appendLines(text string) {
 	if m.following {
 		m.viewport.GotoBottom()
 	}
+}
+
+// appendLines feeds streamed bytes into the buffer, for the next render. Boot tools rewrite lines in place with "\r"+ANSI codes rather than "\n", so commitLine/cleanLine collapse each to its final display; "\n" boundaries are found before stripping so a split ANSI escape is fully reassembled first.
+func (m *logsModel) appendLines(text string) {
+	m.pending += text
+	for {
+		i := strings.IndexByte(m.pending, '\n')
+		if i < 0 {
+			break
+		}
+		m.commitLine(m.pending[:i])
+		m.pending = m.pending[i+1:]
+	}
+	m.dirty = true
 }
 
 // commitLine appends one complete raw line to the buffer, capping it at

@@ -35,6 +35,7 @@ func TestCmdConn_SurfacesStderr(t *testing.T) {
 }
 
 func TestClient_RemoteHelpers(t *testing.T) {
+	t.Setenv(muxEnv, "off") // the plain -J form; TestJumpArgs covers the shared connection
 	local := &Client{}
 	if local.jumpArgs() != nil || local.DockerEnv() != nil {
 		t.Fatal("a local client must not touch ssh flags or the docker env")

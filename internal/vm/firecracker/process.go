@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"git.fferrando.cc/rdfilippo/anvil/internal/backoff"
 	"git.fferrando.cc/rdfilippo/anvil/internal/config"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/proc"
 )
@@ -234,6 +235,8 @@ func containsArg(args []string, want string) bool {
 func (p *Process) WaitAPI(ctx context.Context) error {
 	deadline := time.Now().Add(5 * time.Second)
 	var lastErr error
+	// The socket is usually up within a few milliseconds of the start.
+	wait := backoff.New(time.Millisecond, 50*time.Millisecond)
 	for time.Now().Before(deadline) {
 		if _, err := p.API.Info(ctx); err == nil {
 			return nil
@@ -246,7 +249,7 @@ func (p *Process) WaitAPI(ctx context.Context) error {
 		case <-p.Exited():
 			// The log may be gone by the time anyone reads it, so its tail goes in the error.
 			return fmt.Errorf("firecracker: exited during startup (%s): %s", p.ExitStatus(), logTail(p.paths.LogFile))
-		case <-time.After(50 * time.Millisecond):
+		case <-time.After(wait.Next()):
 		}
 	}
 	return fmt.Errorf("firecracker: API never became reachable at %s: %w", p.paths.APISocket, lastErr)

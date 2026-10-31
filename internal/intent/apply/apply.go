@@ -73,18 +73,37 @@ type Options struct {
 
 const defaultWaitTimeout = 15 * time.Minute
 
-// Applier plans and applies manifests. One apply runs at a time.
+// Applier plans and applies manifests. One apply per intent runs at a time; applies of
+// different intents run side by side.
 type Applier struct {
 	Instances Instances
 	Intents   Intents
-	mu        sync.Mutex
+
+	locksMu sync.Mutex
+	locks   map[string]*sync.Mutex // intent name -> its apply lock
+}
+
+// parallelSteps bounds how many members of one dependency level are applied at once.
+const parallelSteps = 4
+
+func (a *Applier) intentLock(name string) *sync.Mutex {
+	a.locksMu.Lock()
+	defer a.locksMu.Unlock()
+	if a.locks == nil {
+		a.locks = map[string]*sync.Mutex{}
+	}
+	if a.locks[name] == nil {
+		a.locks[name] = &sync.Mutex{}
+	}
+	return a.locks[name]
 }
 
 // Apply plans m against the current state, reports the plan through onPlan and, unless
 // opts.DryRun, carries it out. A VM that needs replacing without opts.Recreate fails the plan.
 func (a *Applier) Apply(ctx context.Context, m *Manifest, opts Options, onPlan func([]Step), progress func(string)) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	mu := a.intentLock(m.Intent)
+	mu.Lock()
+	defer mu.Unlock()
 
 	if !opts.DryRun {
 		var release func()
@@ -101,12 +120,59 @@ func (a *Applier) Apply(ctx context.Context, m *Manifest, opts Options, onPlan f
 	if err != nil || opts.DryRun {
 		return err
 	}
-	for _, s := range steps {
-		if err := a.run(ctx, m, s, opts, progress); err != nil {
-			return fmt.Errorf("apply: %s (%s): %w", s.Role, s.Action, err)
+	var progressMu sync.Mutex
+	say := func(msg string) {
+		progressMu.Lock()
+		defer progressMu.Unlock()
+		progress(msg)
+	}
+	// Members that don't depend on each other are applied side by side, one dependency
+	// level at a time; a failed level stops the apply before the next one.
+	for _, group := range stepGroups(m, steps) {
+		errs := make([]error, len(group))
+		sem := make(chan struct{}, parallelSteps)
+		var wg sync.WaitGroup
+		for i, s := range group {
+			sem <- struct{}{}
+			wg.Go(func() {
+				defer func() { <-sem }()
+				if err := a.run(ctx, m, s, opts, say); err != nil {
+					errs[i] = fmt.Errorf("apply: %s (%s): %w", s.Role, s.Action, err)
+				}
+			})
+		}
+		wg.Wait()
+		if err := errors.Join(errs...); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// stepGroups splits the plan into what can run side by side: the members no longer in the
+// manifest one at a time first (a replacement may reuse a name or port), then one group per
+// dependency level, each after the levels it depends on.
+func stepGroups(m *Manifest, steps []Step) [][]Step {
+	level := m.levels()
+	var groups [][]Step
+	var byLevel [][]Step
+	for _, s := range steps {
+		l, declared := level[s.Role]
+		if !declared {
+			groups = append(groups, []Step{s})
+			continue
+		}
+		for len(byLevel) <= l {
+			byLevel = append(byLevel, nil)
+		}
+		byLevel[l] = append(byLevel[l], s)
+	}
+	for _, g := range byLevel {
+		if len(g) > 0 {
+			groups = append(groups, g)
+		}
+	}
+	return groups
 }
 
 // lock holds the intent's current members and reserves the names still to be created,

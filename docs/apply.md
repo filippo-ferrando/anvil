@@ -122,8 +122,26 @@ given. Containers are replaced as needed, data in their volumes stays on the hos
 Changing cloud-init or SSH keys only means something on first boot, which is why it
 counts as a replacement.
 
-Members are handled in `depends_on` order. Before a member starts, each member it depends
-on has to be ready: running, and for a VM, cloud-init finished. `--wait-timeout` bounds
-each of these waits.
+Members are handled in `depends_on` order, one dependency level at a time: first every
+member that depends on nothing, then those depending only on the first level, and so on.
+The members of one level don't depend on each other, so they are applied side by side, up
+to 4 at once: an intent of five independent members takes about as long as its slowest
+member instead of the sum of all five. Before a member starts, each member it depends on
+has to be ready: running, and for a VM, cloud-init finished. `--wait-timeout` bounds each
+of these waits. Members no longer in the manifest are deleted (or kept) one at a time
+before anything else, since a replacement may reuse their name or host port.
 
-Only one apply runs at a time on a host.
+When a member of a level fails, the other members of that level still finish, every
+failure is reported, and the next levels don't start. So several members can fail in one
+apply, where a one-at-a-time apply stopped at the first.
+
+One apply per intent runs at a time; applies of different intents run side by side.
+
+`anvil intent create` and `anvil intent add` launch their members side by side too, up to
+4 at once. A failing member doesn't stop the others: they are kept, and the failure is the
+error reported. Inside the daemon, launching members of one intent at once works because
+only the short setup (network, address, role check) and the final save hold the intent's
+lock, not the launch itself; addresses and roles of launches still running are reserved,
+so two members never get the same IP. A member started next to others in the same level
+doesn't find them in its `/etc/hosts`, as their addresses aren't known yet; it reaches them
+through the intent's DNS (`<role>.<intent>.anvil`), like any member started later.

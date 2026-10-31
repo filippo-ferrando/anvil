@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"google.golang.org/grpc"
@@ -26,8 +27,9 @@ func DialSSH(dest, socketPath string) (*Client, error) {
 	}
 	dialer := func(context.Context, string) (net.Conn, error) {
 		// BatchMode: a password prompt can't work behind gRPC, key or agent auth is required.
-		return startCmdConn(exec.Command(sshBin, "-T", "-o", "BatchMode=yes", dest,
-			"anvil", "dial-stdio", "--socket", socketPath))
+		args := append([]string{"-T", "-o", "BatchMode=yes"}, muxArgs()...)
+		args = append(args, dest, "anvil", "dial-stdio", "--socket", socketPath)
+		return startCmdConn(exec.Command(sshBin, args...))
 	}
 	conn, err := grpc.NewClient("passthrough:///anvild",
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -42,11 +44,55 @@ func DialSSH(dest, socketPath string) (*Client, error) {
 }
 
 // jumpArgs returns ssh flags that reach a guest through the daemon's host, nil when local.
+// The hop shares the remote host's connection: -J would start one of its own.
 func (c *Client) jumpArgs() []string {
 	if c.Remote == "" {
 		return nil
 	}
-	return []string{"-J", c.Remote}
+	mux := muxArgs()
+	if mux == nil {
+		return []string{"-J", c.Remote}
+	}
+	hop := []string{"ssh"}
+	for _, a := range mux {
+		// ssh expands %-tokens in a ProxyCommand: %% leaves the inner ssh its own %C.
+		hop = append(hop, shQuote(strings.ReplaceAll(a, "%", "%%")))
+	}
+	hop = append(hop, "-W", "%h:%p", shQuote(strings.ReplaceAll(c.Remote, "%", "%%")))
+	return []string{"-o", "ProxyCommand=" + strings.Join(hop, " ")}
+}
+
+// muxEnv set to "off" gives every ssh call to the remote host its own connection.
+const muxEnv = "ANVIL_SSH_MUX"
+
+// muxArgs makes the ssh calls to one remote host share one connection, kept for 60s after
+// the last one, so each command doesn't pay a new handshake. Nil when turned off, or when
+// there is no private dir for the control socket.
+func muxArgs() []string {
+	if os.Getenv(muxEnv) == "off" {
+		return nil
+	}
+	dir := os.Getenv("XDG_RUNTIME_DIR")
+	if dir == "" {
+		dir = filepath.Join(os.TempDir(), fmt.Sprintf("anvil-ssh-%d", os.Getuid()))
+		if err := os.Mkdir(dir, 0o700); err != nil && !os.IsExist(err) {
+			return nil
+		}
+		// In a shared /tmp, only a dir of our own, closed to others, is safe.
+		if st, err := os.Lstat(dir); err != nil || !st.IsDir() || st.Mode().Perm() != 0o700 || !ownedByMe(st) {
+			return nil
+		}
+	}
+	return []string{
+		"-o", "ControlMaster=auto",
+		"-o", "ControlPath=" + filepath.Join(dir, "anvil-ssh-%C"),
+		"-o", "ControlPersist=60s",
+	}
+}
+
+// shQuote quotes s for sh, which runs a ProxyCommand.
+func shQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // DockerEnv returns the environment for a docker CLI call that must reach the daemon's host.
@@ -136,3 +182,9 @@ type cmdAddr struct{}
 
 func (cmdAddr) Network() string { return "ssh" }
 func (cmdAddr) String() string  { return "ssh" }
+
+// ownedByMe reports whether st belongs to the current user.
+func ownedByMe(st os.FileInfo) bool {
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	return ok && int(sys.Uid) == os.Getuid()
+}

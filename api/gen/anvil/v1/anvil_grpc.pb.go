@@ -3301,14 +3301,16 @@ var SnapshotService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	EphemeralService_Run_FullMethodName         = "/anvil.v1.EphemeralService/Run"
-	EphemeralService_WarmCreate_FullMethodName  = "/anvil.v1.EphemeralService/WarmCreate"
-	EphemeralService_WarmList_FullMethodName    = "/anvil.v1.EphemeralService/WarmList"
-	EphemeralService_WarmDelete_FullMethodName  = "/anvil.v1.EphemeralService/WarmDelete"
-	EphemeralService_CloneList_FullMethodName   = "/anvil.v1.EphemeralService/CloneList"
-	EphemeralService_CloneExec_FullMethodName   = "/anvil.v1.EphemeralService/CloneExec"
-	EphemeralService_CloneDelete_FullMethodName = "/anvil.v1.EphemeralService/CloneDelete"
-	EphemeralService_RunApp_FullMethodName      = "/anvil.v1.EphemeralService/RunApp"
+	EphemeralService_Run_FullMethodName          = "/anvil.v1.EphemeralService/Run"
+	EphemeralService_WarmCreate_FullMethodName   = "/anvil.v1.EphemeralService/WarmCreate"
+	EphemeralService_WarmList_FullMethodName     = "/anvil.v1.EphemeralService/WarmList"
+	EphemeralService_WarmDelete_FullMethodName   = "/anvil.v1.EphemeralService/WarmDelete"
+	EphemeralService_WarmPoolSet_FullMethodName  = "/anvil.v1.EphemeralService/WarmPoolSet"
+	EphemeralService_WarmPoolList_FullMethodName = "/anvil.v1.EphemeralService/WarmPoolList"
+	EphemeralService_CloneList_FullMethodName    = "/anvil.v1.EphemeralService/CloneList"
+	EphemeralService_CloneExec_FullMethodName    = "/anvil.v1.EphemeralService/CloneExec"
+	EphemeralService_CloneDelete_FullMethodName  = "/anvil.v1.EphemeralService/CloneDelete"
+	EphemeralService_RunApp_FullMethodName       = "/anvil.v1.EphemeralService/RunApp"
 )
 
 // EphemeralServiceClient is the client API for EphemeralService service.
@@ -3325,6 +3327,10 @@ type EphemeralServiceClient interface {
 	WarmCreate(ctx context.Context, in *WarmCreateRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WarmCreateProgress], error)
 	WarmList(ctx context.Context, in *WarmListRequest, opts ...grpc.CallOption) (*WarmListReply, error)
 	WarmDelete(ctx context.Context, in *WarmDeleteRequest, opts ...grpc.CallOption) (*WarmDeleteReply, error)
+	// WarmPoolSet keeps a number of clones of a warm snapshot restored ahead of time, so a
+	// run takes one instead of restoring; size 0 removes the pool.
+	WarmPoolSet(ctx context.Context, in *WarmPoolSetRequest, opts ...grpc.CallOption) (*WarmPoolSetReply, error)
+	WarmPoolList(ctx context.Context, in *WarmPoolListRequest, opts ...grpc.CallOption) (*WarmPoolListReply, error)
 	// CloneList lists running clones and the ones kept by keep_failed.
 	CloneList(ctx context.Context, in *CloneListRequest, opts ...grpc.CallOption) (*CloneListReply, error)
 	// CloneExec runs a command in a clone, a shell with tty for `anvil ephemeral shell`.
@@ -3396,6 +3402,26 @@ func (c *ephemeralServiceClient) WarmDelete(ctx context.Context, in *WarmDeleteR
 	return out, nil
 }
 
+func (c *ephemeralServiceClient) WarmPoolSet(ctx context.Context, in *WarmPoolSetRequest, opts ...grpc.CallOption) (*WarmPoolSetReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WarmPoolSetReply)
+	err := c.cc.Invoke(ctx, EphemeralService_WarmPoolSet_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *ephemeralServiceClient) WarmPoolList(ctx context.Context, in *WarmPoolListRequest, opts ...grpc.CallOption) (*WarmPoolListReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WarmPoolListReply)
+	err := c.cc.Invoke(ctx, EphemeralService_WarmPoolList_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *ephemeralServiceClient) CloneList(ctx context.Context, in *CloneListRequest, opts ...grpc.CallOption) (*CloneListReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CloneListReply)
@@ -3456,6 +3482,10 @@ type EphemeralServiceServer interface {
 	WarmCreate(*WarmCreateRequest, grpc.ServerStreamingServer[WarmCreateProgress]) error
 	WarmList(context.Context, *WarmListRequest) (*WarmListReply, error)
 	WarmDelete(context.Context, *WarmDeleteRequest) (*WarmDeleteReply, error)
+	// WarmPoolSet keeps a number of clones of a warm snapshot restored ahead of time, so a
+	// run takes one instead of restoring; size 0 removes the pool.
+	WarmPoolSet(context.Context, *WarmPoolSetRequest) (*WarmPoolSetReply, error)
+	WarmPoolList(context.Context, *WarmPoolListRequest) (*WarmPoolListReply, error)
 	// CloneList lists running clones and the ones kept by keep_failed.
 	CloneList(context.Context, *CloneListRequest) (*CloneListReply, error)
 	// CloneExec runs a command in a clone, a shell with tty for `anvil ephemeral shell`.
@@ -3486,6 +3516,12 @@ func (UnimplementedEphemeralServiceServer) WarmList(context.Context, *WarmListRe
 }
 func (UnimplementedEphemeralServiceServer) WarmDelete(context.Context, *WarmDeleteRequest) (*WarmDeleteReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method WarmDelete not implemented")
+}
+func (UnimplementedEphemeralServiceServer) WarmPoolSet(context.Context, *WarmPoolSetRequest) (*WarmPoolSetReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method WarmPoolSet not implemented")
+}
+func (UnimplementedEphemeralServiceServer) WarmPoolList(context.Context, *WarmPoolListRequest) (*WarmPoolListReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method WarmPoolList not implemented")
 }
 func (UnimplementedEphemeralServiceServer) CloneList(context.Context, *CloneListRequest) (*CloneListReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method CloneList not implemented")
@@ -3574,6 +3610,42 @@ func _EphemeralService_WarmDelete_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EphemeralService_WarmPoolSet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WarmPoolSetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EphemeralServiceServer).WarmPoolSet(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EphemeralService_WarmPoolSet_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EphemeralServiceServer).WarmPoolSet(ctx, req.(*WarmPoolSetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EphemeralService_WarmPoolList_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WarmPoolListRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EphemeralServiceServer).WarmPoolList(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EphemeralService_WarmPoolList_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EphemeralServiceServer).WarmPoolList(ctx, req.(*WarmPoolListRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _EphemeralService_CloneList_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CloneListRequest)
 	if err := dec(in); err != nil {
@@ -3638,6 +3710,14 @@ var EphemeralService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "WarmDelete",
 			Handler:    _EphemeralService_WarmDelete_Handler,
+		},
+		{
+			MethodName: "WarmPoolSet",
+			Handler:    _EphemeralService_WarmPoolSet_Handler,
+		},
+		{
+			MethodName: "WarmPoolList",
+			Handler:    _EphemeralService_WarmPoolList_Handler,
 		},
 		{
 			MethodName: "CloneList",

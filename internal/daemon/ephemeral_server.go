@@ -97,13 +97,24 @@ func (s *EphemeralServer) Run(stream anvilv1.EphemeralService_RunServer) error {
 	if len(r.Distros) == 0 || len(r.Argv) == 0 {
 		return status.Error(codes.InvalidArgument, "ephemeral: a run needs at least one distro and a command")
 	}
+	// The upload is spooled while the clones restore; each one waits for it only to run.
+	var upload *os.File
+	uploaded := make(chan struct{})
+	var uploadErr error
 	if req.GetUpload() {
-		path, err := s.receiveUpload(stream)
-		if err != nil {
+		if upload, err = s.uploadFile(); err != nil {
 			return err
 		}
-		defer os.Remove(path)
-		r.Upload = path
+		defer os.Remove(upload.Name())
+		r.Upload = upload.Name()
+		r.WaitUpload = func(ctx context.Context) error {
+			select {
+			case <-uploaded:
+				return uploadErr
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 	}
 	// Only a run on one distro takes input; it ends with the stream.
 	feed := newStdinFeed()
@@ -112,6 +123,16 @@ func (s *EphemeralServer) Run(stream anvilv1.EphemeralService_RunServer) error {
 		r.Stdin, r.Resize = feed.r, feed.resize
 	}
 	go func() {
+		// One reader for the stream: the upload first, then stdin.
+		if upload != nil {
+			uploadErr = receiveUpload(stream, upload)
+			upload.Close()
+			close(uploaded)
+			if uploadErr != nil {
+				feed.w.Close()
+				return
+			}
+		}
 		for {
 			in, err := stream.Recv()
 			if err != nil {
@@ -134,20 +155,20 @@ func (s *EphemeralServer) Run(stream anvilv1.EphemeralService_RunServer) error {
 	return sendErr
 }
 
-// receiveUpload spools the upload chunks into a file every clone reads on its own.
-func (s *EphemeralServer) receiveUpload(stream anvilv1.EphemeralService_RunServer) (string, error) {
+// uploadFile makes the file a run's upload is spooled to, which every clone reads on its own.
+func (s *EphemeralServer) uploadFile() (*os.File, error) {
 	if err := os.MkdirAll(s.UploadDir, 0o750); err != nil {
-		return "", err
+		return nil, err
 	}
-	f, err := os.CreateTemp(s.UploadDir, "upload-*.tar")
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
+	return os.CreateTemp(s.UploadDir, "upload-*.tar")
+}
+
+// receiveUpload writes the upload chunks to f until the upload is done.
+func receiveUpload(stream anvilv1.EphemeralService_RunServer, f *os.File) error {
 	for {
 		in, err := stream.Recv()
 		if err == nil && in.GetUploadDone() {
-			return f.Name(), nil
+			return nil
 		}
 		if err == nil && in.GetUploadChunk() == nil {
 			err = status.Error(codes.InvalidArgument, "ephemeral: the upload was interrupted")
@@ -156,8 +177,7 @@ func (s *EphemeralServer) receiveUpload(stream anvilv1.EphemeralService_RunServe
 			_, err = f.Write(in.GetUploadChunk())
 		}
 		if err != nil {
-			os.Remove(f.Name())
-			return "", err
+			return err
 		}
 	}
 }
@@ -203,9 +223,53 @@ func (s *EphemeralServer) WarmList(context.Context, *anvilv1.WarmListRequest) (*
 	if err != nil {
 		return nil, err
 	}
+	pools, err := s.Manager.Pools()
+	if err != nil {
+		return nil, err
+	}
 	reply := &anvilv1.WarmListReply{}
 	for _, w := range list {
-		reply.Snapshots = append(reply.Snapshots, warmToPB(w))
+		pb := warmToPB(w)
+		for _, p := range pools {
+			if p.WarmKey == w.Key {
+				pb.PoolSize, pb.PoolReady = int32(p.Size), int32(p.Ready)
+			}
+		}
+		reply.Snapshots = append(reply.Snapshots, pb)
+	}
+	return reply, nil
+}
+
+func poolToPB(p ephemeral.PoolInfo) *anvilv1.WarmPool {
+	return &anvilv1.WarmPool{
+		Distro: p.Distro, Arch: p.Arch, Cpus: int32(p.CPUs), MemoryMib: p.MemoryMiB, Size: int32(p.Size),
+		Ready: int32(p.Ready), WarmKey: p.WarmKey, Error: p.Err,
+	}
+}
+
+func (s *EphemeralServer) WarmPoolSet(_ context.Context, req *anvilv1.WarmPoolSetRequest) (*anvilv1.WarmPoolSetReply, error) {
+	if req.GetDistro() == "" {
+		return nil, status.Error(codes.InvalidArgument, "ephemeral: a pool needs a distro")
+	}
+	if req.GetSize() < 0 {
+		return nil, status.Error(codes.InvalidArgument, "ephemeral: a pool size can't be negative")
+	}
+	p := ephemeral.WarmParams{Distro: req.GetDistro(), Arch: req.GetArch(), CPUs: int(req.GetCpus()), MemoryMiB: req.GetMemoryMib()}
+	info, err := s.Manager.SetPool(p, int(req.GetSize()))
+	if err != nil {
+		return nil, ephemeralErr(err)
+	}
+	return &anvilv1.WarmPoolSetReply{Pool: poolToPB(info)}, nil
+}
+
+func (s *EphemeralServer) WarmPoolList(context.Context, *anvilv1.WarmPoolListRequest) (*anvilv1.WarmPoolListReply, error) {
+	pools, err := s.Manager.Pools()
+	if err != nil {
+		return nil, err
+	}
+	reply := &anvilv1.WarmPoolListReply{}
+	for _, p := range pools {
+		reply.Pools = append(reply.Pools, poolToPB(p))
 	}
 	return reply, nil
 }

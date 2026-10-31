@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
@@ -195,6 +196,9 @@ func (s *Server) Stop(ctx context.Context, req *anvilv1.StopRequest) (*anvilv1.S
 	return &anvilv1.StopReply{}, nil
 }
 
+// parallelDeletes bounds how many instances one Delete removes at once.
+const parallelDeletes = 4
+
 func (s *Server) Delete(ctx context.Context, req *anvilv1.DeleteRequest) (*anvilv1.DeleteReply, error) {
 	if len(req.GetNames()) == 0 {
 		return nil, instance.ErrNoNames
@@ -206,25 +210,37 @@ func (s *Server) Delete(ctx context.Context, req *anvilv1.DeleteRequest) (*anvil
 		return nil, err
 	}
 
-	// Deleted one instance at a time so a failure on one instance doesn't
+	// Each instance is deleted on its own, several at once, so a failure on one doesn't
 	// block deletion or intent cleanup of the others.
-	var errs []error
-	for _, spec := range specs {
-		// Read before the disk is gone: the overlay names the base image it sits on.
-		var base string
-		if req.GetPurge() {
-			base = baseImageOf(spec, s.Vault)
-		}
-		if err := s.Manager.Delete(ctx, []string{spec.Name}); err != nil {
-			errs = append(errs, err)
+	bases := make([]string, len(specs))
+	errs := make([]error, len(specs))
+	sem := make(chan struct{}, parallelDeletes)
+	var wg sync.WaitGroup
+	for i, spec := range specs {
+		sem <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-sem }()
+			// Read before the disk is gone: the overlay names the base image it sits on.
+			if req.GetPurge() {
+				bases[i] = baseImageOf(spec, s.Vault)
+			}
+			errs[i] = s.Manager.Delete(ctx, []string{spec.Name})
+		})
+	}
+	wg.Wait()
+
+	// Base images after, one at a time: a base goes once none of the deleted VMs holds it.
+	pruned := map[string]bool{}
+	for i, spec := range specs {
+		if errs[i] != nil {
 			continue
 		}
-		if base != "" {
+		if base := bases[i]; base != "" && !pruned[base] {
+			pruned[base] = true
 			if err := s.pruneBaseImage(base); err != nil {
 				errs = append(errs, err)
 			}
 		}
-
 		// Best-effort cleanup of the deleted instance's intent membership.
 		intentName := spec.Labels["intent"]
 		if intentName == "" {
@@ -234,8 +250,8 @@ func (s *Server) Delete(ctx context.Context, req *anvilv1.DeleteRequest) (*anvil
 			log.Printf("daemon: removing deleted instance %s from intent %q: %v", spec.Name, intentName, err)
 		}
 	}
-	if len(errs) > 0 {
-		return nil, errors.Join(errs...)
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
 	}
 
 	return &anvilv1.DeleteReply{}, nil

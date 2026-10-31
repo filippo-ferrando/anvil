@@ -25,6 +25,10 @@ the export output has no default. A transfer's local path stays on the machine r
 the TUI, as with `anvil transfer`: `scp -J <host>` for a VM, `docker cp` with
 `DOCKER_HOST=ssh://<host>` for a container.
 
+On start the TUI asks the terminal for its background color, to pick readable colors.
+A terminal that never answers costs 5 seconds there; `ANVIL_THEME=dark` or
+`ANVIL_THEME=light` skips the question.
+
 ## Layout
 
 ```
@@ -417,6 +421,7 @@ with its last lines of output, its progress and then its exit code. See
 | `tab` | Switch between warm snapshots and clones. |
 | `n` | Start a run: distros, a path to upload, a command (run with `sh -c`), size and Keep failed. `esc` in the run view cancels it and deletes its clones, or closes it once done. |
 | `c` | Build a warm snapshot for a distro and size (`anvil warm create`). |
+| `p` | On a warm snapshot: set how many clones its pool keeps ready, 0 removes it (`anvil warm pool set`). The list shows each pool as `pool <ready>/<size>`. |
 | `s` `enter` | On a clone: a root shell in it (`anvil ephemeral shell`). |
 | `x` | Remove the selected warm snapshot or clone, after a confirmation. |
 | `r` | Reload. |

@@ -153,3 +153,51 @@ func TestMatrixThroughTheStack(t *testing.T) {
 		t.Errorf("uploads left behind: %v", entries)
 	}
 }
+
+// TestWarmPoolThroughTheStack sets, lists and removes a pool through the CLI and gRPC.
+func TestWarmPoolThroughTheStack(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "anvil.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	root := t.TempDir()
+	mgr := ephemeral.NewManager(stackEngine{}, db, func(key string) string { return filepath.Join(root, "warm", key) })
+	sock := filepath.Join(t.TempDir(), "anvild.sock")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := grpc.NewServer()
+	anvilv1.RegisterEphemeralServiceServer(srv, daemon.NewEphemeralServer(mgr, filepath.Join(root, "uploads")))
+	go func() { _ = srv.Serve(l) }()
+	defer srv.Stop()
+	run := func(args ...string) (string, error) {
+		var err error
+		stdout, _ := captureOutput(t, func() {
+			cmd := NewRootCommand()
+			cmd.SetArgs(append([]string{"--socket", sock}, args...))
+			err = cmd.Execute()
+		})
+		return stdout, err
+	}
+
+	if _, err := run("warm", "pool", "set", "ubuntu"); err == nil {
+		t.Error("pool set without --size was accepted")
+	}
+	out, err := run("warm", "pool", "set", "ubuntu", "--size", "2", "--memory", "256")
+	if err != nil || !strings.Contains(out, "keeps 2 clones ready") {
+		t.Fatalf("pool set = %v: %s", err, out)
+	}
+	out, err = run("warm", "pool", "list")
+	if err != nil || !strings.Contains(out, "ubuntu") || !strings.Contains(out, "/2") {
+		t.Errorf("pool list = %v:\n%s", err, out)
+	}
+	out, err = run("warm", "pool", "rm", "ubuntu", "--memory", "256")
+	if err != nil || !strings.Contains(out, "removed the ubuntu") {
+		t.Errorf("pool rm = %v: %s", err, out)
+	}
+	if out, _ := run("warm", "pool", "list", "-o", "json"); strings.Contains(out, "ubuntu") {
+		t.Errorf("pool still listed after rm:\n%s", out)
+	}
+}

@@ -3,6 +3,7 @@
 package docker
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -46,6 +47,8 @@ func NewClient(socket string) *Client {
 					var d net.Dialer
 					return d.DialContext(ctx, "unix", socket)
 				},
+				// Stats of many containers run in parallel; the default keeps only 2 connections for reuse.
+				MaxIdleConnsPerHost: 32,
 			},
 		},
 	}
@@ -742,25 +745,43 @@ func (c *Client) Logs(ctx context.Context, id string, follow bool, tailLines int
 
 // demuxLogs strips Docker's log stream framing: each chunk is prefixed
 // with an 8-byte header giving its stream type and size, then the payload.
+// Frames already received go out together, up to logBatch bytes; a frame with
+// nothing behind it yet goes out at once, so a followed log doesn't lag.
 func demuxLogs(r io.Reader, send func([]byte) error) error {
+	br := bufio.NewReaderSize(r, 64<<10)
 	header := make([]byte, 8)
+	var batch []byte
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		err := send(batch)
+		batch = nil
+		return err
+	}
 	for {
-		if _, err := io.ReadFull(r, header); err != nil {
+		if _, err := io.ReadFull(br, header); err != nil {
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				return nil
+				return flush()
 			}
 			return fmt.Errorf("docker: reading log stream header: %w", err)
 		}
-		size := binary.BigEndian.Uint32(header[4:8])
-		payload := make([]byte, size)
-		if _, err := io.ReadFull(r, payload); err != nil {
+		size := int(binary.BigEndian.Uint32(header[4:8]))
+		start := len(batch)
+		batch = append(batch, make([]byte, size)...)
+		if _, err := io.ReadFull(br, batch[start:]); err != nil {
 			return fmt.Errorf("docker: reading log stream payload: %w", err)
 		}
-		if err := send(payload); err != nil {
-			return err
+		if len(batch) >= logBatch || br.Buffered() == 0 {
+			if err := flush(); err != nil {
+				return err
+			}
 		}
 	}
 }
+
+// logBatch is the most log data demuxLogs gathers into one send.
+const logBatch = 32 << 10
 
 // Event is one entry of Docker's /events stream.
 type Event struct {

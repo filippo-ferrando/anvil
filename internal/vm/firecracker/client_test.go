@@ -139,13 +139,26 @@ func TestConfigWriteFile(t *testing.T) {
 			t.Errorf("config is missing %q: %s", key, data)
 		}
 	}
-	for _, key := range []string{"network-interfaces", "memory-hotplug"} {
+	for _, key := range []string{"network-interfaces", "memory-hotplug", "balloon"} {
 		if _, ok := got[key]; ok {
 			t.Errorf("config has unset %q: %s", key, data)
 		}
 	}
 	if d := got["drives"].([]any)[0].(map[string]any); d["partuuid"] != "abc" || d["is_read_only"] != false {
 		t.Errorf("drive = %v", d)
+	}
+
+	cfg.Balloon = &Balloon{DeflateOnOOM: true, FreePageReporting: true}
+	if err := cfg.WriteFile(path); err != nil {
+		t.Fatal(err)
+	}
+	data, _ = os.ReadFile(path)
+	if !strings.Contains(string(data), `"balloon": {
+    "amount_mib": 0,
+    "deflate_on_oom": true,
+    "free_page_reporting": true
+  }`) {
+		t.Errorf("balloon not as firecracker takes it: %s", data)
 	}
 
 	if err := (Config{}).WriteFile(path); err != nil {

@@ -96,7 +96,13 @@ The packaged unit (`packaging/common/anvild.service`) runs `anvild` as the syste
   Whoever controls the daemon user can still take any other host device, see
   [passthrough.md](passthrough.md). The same helper creates the network namespaces of
   ephemeral clones, with a fixed layout and only a private /30 taken from the caller
-  ([networking.md](networking.md#ephemeral-clones)).
+  ([networking.md](networking.md#ephemeral-clones)), and their dm-snapshot disks
+  ([ephemeral.md](ephemeral.md#clone-disks)). For a disk the caller names only a clone id,
+  a warm key and the clone's jail: the helper builds every path itself, opens the warm disk
+  and the copy-on-write file without following symlinks and only when they are regular
+  files owned by the caller, and creates the device node in the jail through
+  `openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)` from the fixed jailer dir. So the caller
+  only ever gets a device over files it could already write.
 - Membership of the `docker` group, added by the post-install script
   (`packaging/common/post-install.sh`) when that group exists.
 
@@ -321,6 +327,8 @@ address into `anvil host add`.
 | Guests using the intent DNS server as an open resolver for others | answers only loopback and the intent subnet |
 | A guest flooding the intent DNS server | at most 64 queries in flight per zone |
 | Corrupted or swapped base image | SHA256 check when the catalog entry has one; base images sent with a migration are hashed before use |
+| Ephemeral clones sharing the snapshot's kernel RNG state, so making the same keys | Firecracker's VMGenID device, which writes a new id on every restore; the guest kernel (`CONFIG_VMGENID`) reseeds its RNG from it |
+| Root helper tricked into giving the daemon user a device over someone else's file | clone disks: paths built by the helper from ids, files opened without symlinks and checked to be the caller's own, jail node created with `openat2` beneath the fixed jailer dir |
 
 ### Out of scope
 
@@ -329,6 +337,10 @@ address into `anvil host add`.
 - **Users who can already act as root, the `anvil` user, or a `docker` group member.**
 - **Security inside guests**, including the guest OS, its SSH configuration, and what
   cloud-init templates do.
+- **User-space state copied into every clone.** Clones of one warm snapshot all start with
+  the same memory: the same `boot_id`, `machine-id`, SSH host keys and whatever a program
+  read from the RNG before the snapshot. VMGenID reseeds only the kernel's RNG. Code that
+  needs unique secrets per clone must make them after the clone starts.
 - **Docker, QEMU, `virtiofsd` and OpenSSH vulnerabilities.** Anvil relies on these
   components and applies no extra sandboxing to them.
 - **Denial of service by `anvil` group members**, for example by starting many instances

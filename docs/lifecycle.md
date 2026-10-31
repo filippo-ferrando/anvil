@@ -239,10 +239,16 @@ step (its backend is not an `instance.ReadyWaiter`), so it is ready at once. Wit
 (`internal/daemon/server.go`); `--wait` and `--no-start` are mutually exclusive. If the
 wait fails (cloud-init error, timeout) the error is reported, but the instance is kept.
 
-For a VM, `vm.Backend.WaitReady` (`internal/vm/guest.go`) polls every 2 s, streams a
-progress line when it changes, and returns when cloud-init is `done` or `disabled`, fails
-on `error`, and also fails if QEMU exits meanwhile. Each poll (`probeGuest`) decides the
-cloud-init status like this:
+For a VM, `vm.Backend.WaitReady` (`internal/vm/guest.go`) follows the background poller's
+reports, streams a progress line when it changes, and returns when cloud-init is `done` or
+`disabled`, fails on `error`, and also fails if QEMU exits meanwhile. While someone waits,
+the poller probes every 500 ms instead of every 3 s (and is woken when the wait starts),
+and the wait itself reads the console log every 250 ms: a guest without its agent up yet is
+seen ready within a quarter of a second of cloud-init's last line, where it used to take up
+to 6 s (a probe of an agent that isn't up yet blocks for its 3 s sync timeout). The console
+only decides while the agent isn't connected, as in step 3 below, so an agent that reports
+a cloud-init error is never overruled. Each poll (`probeGuest`) decides the cloud-init
+status like this:
 
 1. With the guest agent connected: run `cloud-init status` through `guest-exec` and parse
    its `status:` line (`running`/`not started`/`not run`, `done`/`degraded done`,
@@ -255,8 +261,10 @@ cloud-init status like this:
    cloud-init's final line, `Cloud-init v. <version> finished at`. A match means `done`.
 
 Once a final status (`done`, `error`, `disabled`) is seen, it is kept and not asked again.
-The background poller uses the same probe: every 3 s until the agent is connected and
-cloud-init reached a final status, then every 30 s, only to follow IP address changes.
+The background poller uses the same probe: every 3 s (500 ms while someone waits) until
+the agent is connected and cloud-init reached a final status, then every 30 s, only to
+follow IP address changes. A VM launched without the guest agent (`--no-guest-agent`) also
+drops to every 30 s once cloud-init is final, as no agent will ever answer.
 
 ## `anvil set`: live resize
 
@@ -394,7 +402,7 @@ Inside a VM's instance directory:
 | `seed.iso` | `buildSeed`: the NoCloud seed. |
 | `runtime.json` | `Start`: PID, QMP socket, start time, hotplug limits; removed on stop. Read by `Reconcile`. |
 | `qmp.sock`, `qga.sock` | QEMU's QMP and guest agent sockets. |
-| `console.log` | Serial console, append-only; what `anvil logs` streams for a VM. |
+| `console.log` | Serial console, append-only; what `anvil logs` streams for a VM. `-f` wakes on inotify as soon as it grows and sends everything new at once, so a burst of boot output isn't held back. |
 | `qemu.log` | QEMU's own stdout and stderr. |
 | `fs-<tag>.sock`, `virtiofsd-<tag>.log` | One per shared folder. |
 

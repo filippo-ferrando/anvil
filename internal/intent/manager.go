@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -81,6 +82,11 @@ type Manager struct {
 	// intent's zone is served before its first member boots.
 	pendingMu sync.Mutex
 	pending   map[string]store.Intent
+
+	// inflights are the intents with launches running, by name. The map has its own lock,
+	// each record is only touched under its intent's lock.
+	inflightMu sync.Mutex
+	inflights  map[string]*inflight
 }
 
 // lock takes name's intent lock and returns its release.
@@ -240,97 +246,24 @@ func hostsFor(members []store.IntentMember, vmOnly bool) map[string]string {
 }
 
 // Launch provisions one intent member, creating the intent if it doesn't
-// exist, and wires it onto the shared network if one is configured.
+// exist, and wires it onto the shared network if one is configured. Several members of
+// one intent can launch at once: only the setup and the save hold the intent's lock.
 func (m *Manager) Launch(ctx context.Context, params instance.LaunchParams, progress func(instance.LaunchEvent)) error {
 	if params.IntentName == "" {
 		return fmt.Errorf("intent: Launch called without an intent name")
 	}
-
-	defer m.lock(params.IntentName)()
-
-	it, err := m.Store.GetIntentByName(params.IntentName)
-	if err != nil {
-		it = store.Intent{ID: ulid.Make().String(), Name: params.IntentName}
-	}
-
 	role := params.Role
 	if role == "" {
 		role = params.Name
 	}
-	for _, mem := range it.Members {
-		if mem.Role == role {
-			err := fmt.Errorf("intent: %q already has a member with role %q", it.Name, role)
-			progress(instance.LaunchEvent{Err: err})
-			return err
-		}
-	}
-
-	hadNetwork := it.Network != nil
-	if err := m.ensureNetwork(ctx, &it, params.PinnedNetwork); err != nil {
+	launchParams, it, err := m.beginLaunch(ctx, params, role)
+	if err != nil {
 		progress(instance.LaunchEvent{Err: err})
 		return err
 	}
-	// A network made by this call is only referenced once the member is saved below.
-	// Take it back out on any failure, or it survives until the next daemon restart reconciles.
 	persisted := false
-	if !hadNetwork && it.Network != nil && m.Networker != nil {
-		defer func() {
-			if persisted {
-				return
-			}
-			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
-			defer cancel()
-			if err := m.Networker.RemoveNetwork(ctx, it.Network.EngineNetworkName); err != nil {
-				log.Printf("intent: removing %q's unused network: %v", it.Name, err)
-			}
-		}()
-	}
-	m.setPending(&it)
-	defer m.clearPending(it.Name)
+	defer func() { m.endLaunch(ctx, it.Name, role, persisted) }()
 	m.refreshDNS(ctx)
-
-	labels := make(map[string]string, len(params.Labels)+2)
-	for k, v := range params.Labels {
-		labels[k] = v
-	}
-	labels["intent"] = it.Name
-	labels["role"] = role
-	launchParams := params
-	launchParams.Labels = labels
-
-	if it.Network != nil {
-		switch {
-		case launchParams.Container != nil:
-			launchParams.Container.NetworkMode = it.Network.EngineNetworkName
-			launchParams.Container.NetworkAlias = role
-			launchParams.Container.ExtraHosts = hostsFor(it.Members, true)
-			if m.DNS != nil {
-				launchParams.Container.DNSServers = []string{it.Network.Gateway}
-				launchParams.Container.DNSSearch = []string{Domain(it.Name)}
-			}
-		case launchParams.VM != nil:
-			// A migrated member reuses its original address instead of
-			// getting the next one in sequence.
-			ip := params.PinnedStaticIP
-			if ip == "" {
-				var ipErr error
-				ip, ipErr = nextVMAddress(it.Network.Subnet, it.Members)
-				if ipErr != nil {
-					progress(instance.LaunchEvent{Err: ipErr})
-					return ipErr
-				}
-			}
-			launchParams.VM.NetworkMode = "bridge"
-			launchParams.VM.BridgeInterface = it.Network.BridgeInterface
-			launchParams.VM.StaticIP = ip
-			launchParams.VM.Gateway = it.Network.Gateway
-			launchParams.VM.ExtraHosts = hostsFor(it.Members, false)
-			if m.DNS != nil {
-				launchParams.VM.DNSServers = []string{it.Network.Gateway}
-				launchParams.VM.DNSSearch = []string{Domain(it.Name)}
-			}
-		}
-	}
 
 	var launched *instance.Spec
 	var launchErr error
@@ -367,14 +300,164 @@ func (m *Manager) Launch(ctx context.Context, params instance.LaunchParams, prog
 		}
 	}
 
+	release := m.lock(it.Name)
+	// Other members may have been saved meanwhile: add to the latest record.
+	if saved, err := m.Store.GetIntentByName(it.Name); err == nil {
+		it.Members = saved.Members
+	}
 	it.Members = append(it.Members, store.IntentMember{InstanceID: launched.ID, Role: role, Kind: launched.Kind, IP: memberIP})
-	if err := m.Store.PutIntent(it); err != nil {
+	err = m.Store.PutIntent(it)
+	persisted = err == nil
+	release()
+	if err != nil {
 		return err
 	}
-	persisted = true
-	m.clearPending(it.Name)
 	m.refreshDNS(ctx)
 	return nil
+}
+
+// inflight is an intent with member launches still running: the intent as they see it
+// (its ID and network, maybe not saved yet), and the role and VM address each one holds.
+type inflight struct {
+	it          store.Intent
+	launches    []store.IntentMember
+	madeNetwork bool // created for these launches and not saved with a member yet
+}
+
+// beginLaunch checks role is free, makes sure the intent's network exists, picks a VM's
+// address and fills in params, all under the intent's lock, and records the launch.
+func (m *Manager) beginLaunch(ctx context.Context, params instance.LaunchParams, role string) (instance.LaunchParams, store.Intent, error) {
+	defer m.lock(params.IntentName)()
+
+	fl := m.inflightOf(params.IntentName)
+	it, err := m.Store.GetIntentByName(params.IntentName)
+	switch {
+	case err == nil:
+	case fl != nil:
+		it = fl.it // not saved yet: the ID and network the running launches use
+	default:
+		it = store.Intent{ID: ulid.Make().String(), Name: params.IntentName}
+	}
+	var running []store.IntentMember
+	if fl != nil {
+		running = fl.launches
+	}
+	for _, mem := range slices.Concat(it.Members, running) {
+		if mem.Role == role {
+			return params, it, fmt.Errorf("intent: %q already has a member with role %q", it.Name, role)
+		}
+	}
+
+	hadNetwork := it.Network != nil
+	if err := m.ensureNetwork(ctx, &it, params.PinnedNetwork); err != nil {
+		return params, it, err
+	}
+	if fl == nil {
+		fl = &inflight{}
+		m.inflightMu.Lock()
+		if m.inflights == nil {
+			m.inflights = map[string]*inflight{}
+		}
+		m.inflights[it.Name] = fl
+		m.inflightMu.Unlock()
+	}
+	fl.it = it
+	fl.madeNetwork = fl.madeNetwork || (!hadNetwork && it.Network != nil && m.Networker != nil)
+
+	labels := make(map[string]string, len(params.Labels)+2)
+	for k, v := range params.Labels {
+		labels[k] = v
+	}
+	labels["intent"] = it.Name
+	labels["role"] = role
+	launchParams := params
+	launchParams.Labels = labels
+
+	held := store.IntentMember{Role: role}
+	if it.Network != nil {
+		switch {
+		case launchParams.Container != nil:
+			held.Kind = instance.KindContainer
+			launchParams.Container.NetworkMode = it.Network.EngineNetworkName
+			launchParams.Container.NetworkAlias = role
+			launchParams.Container.ExtraHosts = hostsFor(it.Members, true)
+			if m.DNS != nil {
+				launchParams.Container.DNSServers = []string{it.Network.Gateway}
+				launchParams.Container.DNSSearch = []string{Domain(it.Name)}
+			}
+		case launchParams.VM != nil:
+			// A migrated member reuses its original address instead of
+			// getting the next one in sequence.
+			ip := params.PinnedStaticIP
+			if ip == "" {
+				// Addresses held by launches still running count as used.
+				ip, err = nextVMAddress(it.Network.Subnet, slices.Concat(it.Members, running))
+				if err != nil {
+					m.dropIfIdle(ctx, it.Name)
+					return params, it, err
+				}
+			}
+			held.Kind, held.IP = instance.KindVM, ipam.StripCIDR(ip)
+			launchParams.VM.NetworkMode = "bridge"
+			launchParams.VM.BridgeInterface = it.Network.BridgeInterface
+			launchParams.VM.StaticIP = ip
+			launchParams.VM.Gateway = it.Network.Gateway
+			launchParams.VM.ExtraHosts = hostsFor(it.Members, false)
+			if m.DNS != nil {
+				launchParams.VM.DNSServers = []string{it.Network.Gateway}
+				launchParams.VM.DNSSearch = []string{Domain(it.Name)}
+			}
+		}
+	}
+	fl.launches = append(fl.launches, held)
+	m.setPending(&it)
+	return launchParams, it, nil
+}
+
+func (m *Manager) inflightOf(name string) *inflight {
+	m.inflightMu.Lock()
+	defer m.inflightMu.Unlock()
+	return m.inflights[name]
+}
+
+// endLaunch forgets role's launch. With the last one gone, the intent is no longer pending,
+// and a network made for launches that all failed is taken back out.
+func (m *Manager) endLaunch(ctx context.Context, name, role string, persisted bool) {
+	defer m.lock(name)()
+	fl := m.inflightOf(name)
+	if fl == nil {
+		return
+	}
+	fl.launches = slices.DeleteFunc(fl.launches, func(mem store.IntentMember) bool { return mem.Role == role })
+	if persisted {
+		fl.madeNetwork = false // a saved member references it now
+	}
+	m.dropIfIdle(ctx, name)
+}
+
+// dropIfIdle forgets name's in-flight record once no launch runs, removing a network made for
+// launches that saved no member, or it would survive until the next daemon restart reconciles.
+// Called with name's lock held.
+func (m *Manager) dropIfIdle(ctx context.Context, name string) {
+	fl := m.inflightOf(name)
+	if fl == nil || len(fl.launches) > 0 {
+		return
+	}
+	m.inflightMu.Lock()
+	delete(m.inflights, name)
+	m.inflightMu.Unlock()
+	m.clearPending(name)
+	if !fl.madeNetwork || fl.it.Network == nil {
+		return
+	}
+	if _, err := m.Store.GetIntentByName(name); err == nil {
+		return // saved since, with the network
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer cancel()
+	if err := m.Networker.RemoveNetwork(ctx, fl.it.Network.EngineNetworkName); err != nil {
+		log.Printf("intent: removing %q's unused network: %v", name, err)
+	}
 }
 
 func (m *Manager) List() ([]store.Intent, error) {

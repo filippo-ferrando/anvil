@@ -97,8 +97,9 @@ mount with an empty `Archive`.
 
 ### Bundle layout
 
-A bundle is a tar stream compressed by the external `zstd` binary (`zstd -q -c`), which
-must be on `PATH` on both hosts. The archive layout:
+A bundle is a tar stream compressed by the external `zstd` binary (`zstd -q -c -T0`, on
+every core, as migration does; the format is the same as with one), which must be on
+`PATH` on both hosts. The archive layout:
 
 ```
 manifest.json

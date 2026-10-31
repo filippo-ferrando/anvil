@@ -13,5 +13,19 @@ import (
 // The TUI asks for the real value with Detect.
 func init() { lipgloss.SetHasDarkBackground(true) }
 
-// Detect asks the terminal for its background color, before a Bubble Tea program takes it.
-func Detect() { lipgloss.SetHasDarkBackground(termenv.NewOutput(os.Stdout).HasDarkBackground()) }
+// ThemeEnv set to "dark" or "light" skips the question to the terminal, which a terminal
+// that never answers costs 5 seconds.
+const ThemeEnv = "ANVIL_THEME"
+
+// Detect asks the terminal for its background color, before a Bubble Tea program takes it,
+// unless ThemeEnv already says.
+func Detect() {
+	switch os.Getenv(ThemeEnv) {
+	case "dark":
+		lipgloss.SetHasDarkBackground(true)
+	case "light":
+		lipgloss.SetHasDarkBackground(false)
+	default:
+		lipgloss.SetHasDarkBackground(termenv.NewOutput(os.Stdout).HasDarkBackground())
+	}
+}

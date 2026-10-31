@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/store"
@@ -396,5 +397,101 @@ func TestLaunchRefusesDuplicateRole(t *testing.T) {
 	}, func(instance.LaunchEvent) {})
 	if err == nil || launched {
 		t.Errorf("expected a second %q member to be refused before launching, got %v", "db", err)
+	}
+}
+
+// Members of one intent launch at once, sharing one network, with their own addresses.
+func TestLaunchSameIntentInParallel(t *testing.T) {
+	entered := make(chan string, 3)
+	release := make(chan struct{})
+	var mu sync.Mutex
+	ips := map[string]string{}
+	insts := &fakeInstances{launch: func(p instance.LaunchParams, progress func(instance.LaunchEvent)) error {
+		entered <- p.Name
+		<-release
+		if p.Name == "broken" {
+			return errors.New("boot failed")
+		}
+		mu.Lock()
+		ips[p.Name] = p.VM.StaticIP
+		mu.Unlock()
+		progress(instance.LaunchEvent{Instance: &instance.Spec{ID: "id-" + p.Name, Name: p.Name, Kind: instance.KindVM,
+			VM: &instance.VMSpec{StaticIP: p.VM.StaticIP}}})
+		return nil
+	}}
+	s := newFakeStore()
+	net := newFakeNetworker()
+	m := NewManager(s, insts, net)
+	launch := func(name string) error {
+		return m.Launch(t.Context(), instance.LaunchParams{Name: name, IntentName: "app", VM: &instance.VMSpec{}}, func(instance.LaunchEvent) {})
+	}
+	errs := make(chan error, 3)
+	for _, name := range []string{"web", "db", "broken"} {
+		go func() { errs <- launch(name) }()
+	}
+	for range 3 { // all three are inside Instances.Launch at the same time
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the launches ran one after another")
+		}
+	}
+	// A role already launching is refused, not launched twice.
+	if err := launch("db"); err == nil {
+		t.Error("a second db launched while the first one runs")
+	}
+	close(release)
+	failed := 0
+	for range 3 {
+		if err := <-errs; err != nil {
+			failed++
+		}
+	}
+	if failed != 1 {
+		t.Errorf("%d launches failed, want only the broken one", failed)
+	}
+	if len(net.networks) != 1 || len(net.removed) != 0 {
+		t.Errorf("networks %v, removed %v: want one shared network, kept", net.networks, net.removed)
+	}
+	if ips["web"] == "" || ips["web"] == ips["db"] {
+		t.Errorf("addresses %v, want two different ones", ips)
+	}
+	it, err := s.GetIntentByName("app")
+	if err != nil || len(it.Members) != 2 {
+		t.Fatalf("saved intent %+v, %v; want web and db", it, err)
+	}
+	if m.inflightOf("app") != nil {
+		t.Error("the in-flight record outlived its launches")
+	}
+}
+
+// When every launch of a new intent fails, its network goes once, after the last one.
+func TestLaunchParallelAllFailRemovesNetworkOnce(t *testing.T) {
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	insts := &fakeInstances{launch: func(p instance.LaunchParams, progress func(instance.LaunchEvent)) error {
+		entered <- struct{}{}
+		<-release
+		return errors.New("boot failed")
+	}}
+	s := newFakeStore()
+	net := newFakeNetworker()
+	m := NewManager(s, insts, net)
+	errs := make(chan error, 2)
+	for _, name := range []string{"a", "b"} {
+		go func() {
+			errs <- m.Launch(t.Context(), instance.LaunchParams{Name: name, IntentName: "app", Container: &instance.ContainerSpec{ImageRef: "nginx"}}, func(instance.LaunchEvent) {})
+		}()
+	}
+	<-entered
+	<-entered
+	close(release)
+	<-errs
+	<-errs
+	if len(net.networks) != 0 || len(net.removed) != 1 {
+		t.Errorf("networks %v, removed %v: want the one network removed once", net.networks, net.removed)
+	}
+	if its, _ := s.ListIntents(); len(its) != 0 {
+		t.Errorf("intent saved after every launch failed: %+v", its)
 	}
 }

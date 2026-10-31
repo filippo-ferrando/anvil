@@ -53,6 +53,48 @@ func TestDeletePurgeRemovesUnusedBaseImage(t *testing.T) {
 	}
 }
 
+// TestDeletePurgeMany deletes several VMs in one request, as they now go in parallel:
+// all of them go, and their base stays while a VM outside the request still uses it.
+func TestDeletePurgeMany(t *testing.T) {
+	if _, err := exec.LookPath("qemu-img"); err != nil {
+		t.Skip("qemu-img not installed, skipping")
+	}
+	dir := t.TempDir()
+	vault := image.NewVault(filepath.Join(dir, "images"))
+	if err := os.MkdirAll(vault.PreparedDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(vault.PreparedDir, "test-x86_64.qcow2")
+	qemuImg(t, "create", "-f", "qcow2", base, "16M")
+	s := newTestServer(t, readyBackend{})
+	s.Vault = vault
+	names := []string{"a", "b", "c", "d", "e", "f"}
+	for _, name := range names {
+		disk := filepath.Join(dir, name+".qcow2")
+		qemuImg(t, "create", "-f", "qcow2", "-F", "qcow2", "-b", base, disk)
+		params := instance.LaunchParams{Name: name, Kind: instance.KindVM, VM: &instance.VMSpec{DiskPath: disk}, NoStart: true}
+		if err := s.Manager.Launch(context.Background(), params, func(instance.LaunchEvent) {}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.Delete(context.Background(), &anvilv1.DeleteRequest{Names: names[:5], Purge: true}); err != nil {
+		t.Fatal(err)
+	}
+	left, err := s.Manager.List("")
+	if err != nil || len(left) != 1 || left[0].Name != "f" {
+		t.Fatalf("left after deleting a..e: %v, %v", left, err)
+	}
+	if _, err := os.Stat(base); err != nil {
+		t.Fatalf("base image removed while f still uses it: %v", err)
+	}
+	if _, err := s.Delete(context.Background(), &anvilv1.DeleteRequest{Names: []string{"f"}, Purge: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(base); !os.IsNotExist(err) {
+		t.Errorf("base image should be gone with its last user, stat: %v", err)
+	}
+}
+
 func qemuImg(t *testing.T, args ...string) {
 	t.Helper()
 	if out, err := exec.Command("qemu-img", args...).CombinedOutput(); err != nil {

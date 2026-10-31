@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"git.fferrando.cc/rdfilippo/anvil/internal/backoff"
 )
 
 // GuestAgentChannel is the virtio-serial port name qemu-guest-agent listens on.
@@ -300,6 +302,8 @@ func (c *QGAConn) Exec(ctx context.Context, path string, args ...string) (ExecRe
 	if err := c.call("guest-exec", map[string]any{"path": path, "arg": args, "capture-output": true}, &started); err != nil {
 		return ExecResult{}, err
 	}
+	// Most commands end in a few milliseconds; a long one is still checked every 200ms.
+	wait := backoff.New(2*time.Millisecond, 200*time.Millisecond)
 	for {
 		var st struct {
 			Exited   bool   `json:"exited"`
@@ -318,7 +322,7 @@ func (c *QGAConn) Exec(ctx context.Context, path string, args ...string) (ExecRe
 		select {
 		case <-ctx.Done():
 			return ExecResult{}, ctx.Err()
-		case <-time.After(200 * time.Millisecond):
+		case <-time.After(wait.Next()):
 		}
 	}
 }

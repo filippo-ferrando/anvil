@@ -13,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"git.fferrando.cc/rdfilippo/anvil/internal/backoff"
 )
 
 // qmpWriteTimeout bounds a single command write, so a QEMU that has stopped
@@ -439,6 +441,7 @@ func (c *QMPClient) FinishTopBackup(ctx context.Context, jobID string, progress 
 		_, _ = c.Execute(cleanup, "blockdev-del", map[string]string{"node-name": backupTargetNode(jobID)})
 	}()
 	lastPct := -1
+	wait := backoff.New(5*time.Millisecond, 200*time.Millisecond) // a small disk's backup is done in milliseconds
 	for {
 		j, err := c.queryJob(ctx, jobID)
 		if err != nil {
@@ -462,7 +465,7 @@ func (c *QMPClient) FinishTopBackup(ctx context.Context, jobID string, progress 
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(200 * time.Millisecond):
+		case <-time.After(wait.Next()):
 		}
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"git.fferrando.cc/rdfilippo/anvil/internal/backoff"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/proc"
 )
 
@@ -74,6 +75,7 @@ func looksLikeOurQEMU(pid int, diskPath string) bool {
 func (p *Process) AttachQMP(ctx context.Context) error {
 	deadline := time.Now().Add(5 * time.Second)
 	var lastErr error
+	wait := backoff.New(2*time.Millisecond, 100*time.Millisecond)
 	for time.Now().Before(deadline) {
 		client, err := DialQMP(ctx, p.cfg.QMPSocket)
 		if err == nil {
@@ -86,7 +88,7 @@ func (p *Process) AttachQMP(ctx context.Context) error {
 			return ctx.Err()
 		case <-p.Exited():
 			return fmt.Errorf("qemu: exited (%s) before QMP was reachable at %s: %w", p.ExitStatus(), p.cfg.QMPSocket, lastErr)
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(wait.Next()):
 		}
 	}
 	return fmt.Errorf("qemu: QMP never became reachable at %s: %w", p.cfg.QMPSocket, lastErr)

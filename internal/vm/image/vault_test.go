@@ -48,6 +48,13 @@ func TestOverlayForUsesExistingPreparedImage(t *testing.T) {
 	if info.Size() == 0 {
 		t.Error("expected non-empty overlay file")
 	}
+	// Made at the requested size in one step, on the base.
+	if size, err := qemuImgVirtualSize(overlayPath); err != nil || size != 1<<30 {
+		t.Errorf("overlay virtual size = %d, %v; want 1 GiB", size, err)
+	}
+	if backing, err := BackingFile(overlayPath); err != nil || backing != v.preparedPath(entry) {
+		t.Errorf("overlay backing file = %q, %v", backing, err)
+	}
 }
 
 func TestOverlayForRejectsShrinkingBelowBaseImageSize(t *testing.T) {
@@ -355,5 +362,38 @@ func TestQemuImgErrorCarriesOutput(t *testing.T) {
 	err := QemuImg(t.Context(), "info", missing)
 	if err == nil || !strings.Contains(err.Error(), "missing.qcow2") {
 		t.Fatalf("QemuImg info on a missing file = %v, want an error naming the file", err)
+	}
+}
+
+func TestQemuImgInfoCache(t *testing.T) {
+	if _, err := exec.LookPath("qemu-img"); err != nil {
+		t.Skip("qemu-img not installed, skipping")
+	}
+	runs := 0
+	orig := qemuImgInfoRun
+	qemuImgInfoRun = func(path string) (qemuImgInfo, error) { runs++; return runQemuImgInfo(path) }
+	t.Cleanup(func() { qemuImgInfoRun = orig })
+	path := filepath.Join(t.TempDir(), "disk.qcow2")
+	if out, err := exec.Command("qemu-img", "create", "-f", "qcow2", path, "64M").CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	for range 3 {
+		if size, err := qemuImgVirtualSize(path); err != nil || size != 64<<20 {
+			t.Fatalf("size = %d, %v", size, err)
+		}
+	}
+	if runs != 1 {
+		t.Errorf("qemu-img ran %d times for an unchanged disk, want once", runs)
+	}
+	// A changed disk (here a new one at the same path) is read again.
+	_ = os.Remove(path)
+	if out, err := exec.Command("qemu-img", "create", "-f", "qcow2", path, "128M").CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if size, err := qemuImgVirtualSize(path); err != nil || size != 128<<20 || runs != 2 {
+		t.Errorf("after a change: size %d, %v, %d runs", size, err, runs)
+	}
+	if _, err := qemuImgVirtualSize(filepath.Join(t.TempDir(), "missing.qcow2")); err == nil {
+		t.Error("a missing disk was answered")
 	}
 }

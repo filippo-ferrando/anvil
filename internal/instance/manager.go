@@ -502,11 +502,26 @@ func (m *Manager) Stats(ctx context.Context, name string) (Stats, error) {
 	return sp.Stats(ctx, spec)
 }
 
+// sampleStats is Stats with rates since prev, for a backend that can (StatsSampler).
+func (m *Manager) sampleStats(ctx context.Context, name string, prev StatsSample) (Stats, StatsSample, error) {
+	spec, sp, err := capability[StatsProvider](m, name, "stats")
+	if err != nil {
+		return Stats{}, nil, err
+	}
+	if s, ok := sp.(StatsSampler); ok {
+		return s.SampleStats(ctx, spec, prev)
+	}
+	st, err := sp.Stats(ctx, spec)
+	return st, nil, err
+}
+
 // StreamStats sends name's stats every interval. It returns nil once the instance is no
 // longer running or ctx ends, and an error when sampling or send fails.
 func (m *Manager) StreamStats(ctx context.Context, name string, interval time.Duration, send func(Stats) error) error {
+	var prev StatsSample
 	for {
-		st, err := m.Stats(ctx, name)
+		st, next, err := m.sampleStats(ctx, name, prev)
+		prev = next
 		if ctx.Err() != nil {
 			return nil
 		}

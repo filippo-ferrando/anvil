@@ -19,7 +19,6 @@ import (
 	"git.fferrando.cc/rdfilippo/anvil/internal/ephemeral"
 	"git.fferrando.cc/rdfilippo/anvil/internal/guestexec"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/firecracker"
-	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/proc"
 )
 
@@ -30,10 +29,18 @@ type fcClone struct {
 	started time.Time
 	proc    *firecracker.Process
 	paths   fcInstancePaths
+	phases  []ephemeral.Phase
+	dmDisk  bool // its disk is a dm-snapshot from the root helper
+
+	pages          *firecracker.PageHandler // with ANVIL_EPH_MEMORY=uffd
+	saveWorkingSet func()                   // set on the clone that records the working set
 }
 
 func (c *fcClone) ID() string           { return c.id }
 func (c *fcClone) StartedAt() time.Time { return c.started }
+func (c *fcClone) RestorePhases() []ephemeral.Phase {
+	return c.phases
+}
 func (c *fcClone) Dial(ctx context.Context) (io.ReadWriteCloser, error) {
 	return firecracker.DialVsock(ctx, c.vsock, guestexec.Port)
 }
@@ -58,10 +65,12 @@ func (b *FCBackend) RestoreClone(ctx context.Context, id string, s ephemeral.War
 			_ = b.DeleteClone(context.WithoutCancel(ctx), id)
 		}
 	}()
+	phases := phaseClock{last: time.Now()}
 	cn, err := b.Clones.Setup(ctx, id)
 	if err != nil {
 		return nil, err
 	}
+	phases.done("network")
 	paths, err := b.clonePaths(id, cn.NetNS)
 	if err != nil {
 		return nil, err
@@ -73,17 +82,13 @@ func (b *FCBackend) RestoreClone(ctx context.Context, id string, s ephemeral.War
 	if err := prepareJail(id, paths); err != nil {
 		return nil, err
 	}
-	// The clone writes its own copy of the disk; everything else is shared read-only.
-	disk := filepath.Join(instanceDir(id), warmDisk)
-	if err := image.CloneDisk(ctx, filepath.Join(dir, warmDisk), disk, 0); err != nil {
+	// The clone writes its own disk; everything else is shared read-only.
+	how, err := b.cloneDisk(ctx, id, s.Key, dir, paths)
+	if err != nil {
 		return nil, err
 	}
-	files := map[string]string{warmDisk: disk}
 	for _, name := range []string{warmMem, warmSeed, warmGuest} {
-		files[name] = filepath.Join(dir, name)
-	}
-	for name, src := range files {
-		if _, err := jailFile(paths, src, name, false); err != nil {
+		if _, err := jailFile(paths, filepath.Join(dir, name), name, false); err != nil {
 			return nil, err
 		}
 	}
@@ -91,22 +96,37 @@ func (b *FCBackend) RestoreClone(ctx context.Context, id string, s ephemeral.War
 	if err != nil {
 		return nil, err
 	}
+	phases.done(how)
 
 	proc, err := firecracker.Spawn(ctx, paths.Paths)
 	if err != nil {
 		return nil, fmt.Errorf("vm: spawning the clone's firecracker: %w", err)
 	}
-	c := &fcClone{id: id, vsock: paths.vsock, started: time.Now(), proc: proc, paths: paths}
+	c := &fcClone{id: id, vsock: paths.vsock, started: time.Now(), proc: proc, paths: paths, dmDisk: how == diskDM}
 	b.trackClone(c)
 	if err := proc.WaitAPI(ctx); err != nil {
 		return nil, fmt.Errorf("vm: %w", err)
 	}
-	if err := proc.API.LoadSnapshot(ctx, firecracker.SnapshotLoad{
-		SnapshotPath: state,
-		MemBackend:   firecracker.MemoryBackend{BackendType: "File", BackendPath: paths.InVMM(filepath.Join(paths.root(), warmMem))},
-		ResumeVM:     true,
-	}); err != nil {
+	phases.done("spawn")
+	mem, err := b.cloneMemory(c, dir)
+	if err != nil {
+		return nil, err
+	}
+	if err := proc.API.LoadSnapshot(ctx, firecracker.SnapshotLoad{SnapshotPath: state, MemBackend: mem, ResumeVM: true}); err != nil {
 		return nil, fmt.Errorf("vm: restoring the clone: %w: %s", err, logTailOf(paths.LogFile))
+	}
+	phases.done("load")
+	if c.pages != nil {
+		select {
+		case <-c.pages.Ready():
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		if err := c.pages.Err(); err != nil {
+			return nil, fmt.Errorf("vm: serving the clone's memory: %w", err)
+		}
+		n, _ := c.pages.Prefetched()
+		phases.done(fmt.Sprintf("prefetch %d pages", n))
 	}
 	// The guest clock is still at the snapshot's time, which breaks TLS among others.
 	conn, err := dialGuest(ctx, c.vsock, 10*time.Second)
@@ -116,7 +136,21 @@ func (b *FCBackend) RestoreClone(ctx context.Context, id string, s ephemeral.War
 	if err != nil {
 		return nil, fmt.Errorf("vm: setting the clone's clock and hostname through anvil-guest: %w", err)
 	}
+	phases.done("setup")
+	c.phases = phases.list
 	return c, nil
+}
+
+// phaseClock records restore phases, each one ending where the previous one did.
+type phaseClock struct {
+	last time.Time
+	list []ephemeral.Phase
+}
+
+func (p *phaseClock) done(name string) {
+	now := time.Now()
+	p.list = append(p.list, ephemeral.Phase{Name: name, Took: now.Sub(p.last)})
+	p.last = now
 }
 
 func (b *FCBackend) trackClone(c *fcClone) {
@@ -143,9 +177,21 @@ func (b *FCBackend) DeleteClone(ctx context.Context, id string) error {
 			errs = append(errs, err)
 		}
 		_ = c.proc.Close()
+		if c.pages != nil {
+			if c.saveWorkingSet != nil {
+				c.saveWorkingSet()
+			}
+			_ = c.pages.Close()
+		}
 		removeJail(c.paths)
 	}
-	b.removeLeftovers(id)
+	// A leftover clone (c nil) may have one too.
+	if c == nil || c.dmDisk {
+		if err := b.deleteCloneDisk(ctx, id); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	removeCloneLeftovers(b.ChrootBase, id)
 	if err := b.Clones.Teardown(ctx, id); err != nil {
 		errs = append(errs, err)
 	}

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -144,15 +145,13 @@ func (v *Vault) OverlayFor(ctx context.Context, entry DistroEntry, overlayPath s
 	if progress != nil {
 		progress("creating disk overlay")
 	}
-	if err := QemuImg(ctx, "create", "-f", "qcow2", "-F", "qcow2", "-b", base, overlayPath); err != nil {
-		return fmt.Errorf("image: qemu-img create failed: %w", err)
-	}
-
-	// Only resize when actually growing.
+	args := []string{"create", "-f", "qcow2", "-F", "qcow2", "-b", base, overlayPath}
+	// A larger disk is made at its size right away, instead of a resize after.
 	if requestedBytes > baseSizeBytes {
-		if err := QemuImg(ctx, "resize", overlayPath, fmt.Sprintf("%dG", diskGiB)); err != nil {
-			return fmt.Errorf("image: qemu-img resize failed: %w", err)
-		}
+		args = append(args, fmt.Sprintf("%dG", diskGiB))
+	}
+	if err := QemuImg(ctx, args...); err != nil {
+		return fmt.Errorf("image: qemu-img create failed: %w", err)
 	}
 	return nil
 }
@@ -179,7 +178,58 @@ type qemuImgInfo struct {
 	Snapshots       []qemuImgSnapshotInfo `json:"snapshots"`
 }
 
+// qemuImgInspect is `qemu-img info`, run again only once the file changed (inode, size or
+// modification time): a stopped VM's disk is read once, one in use every time.
 func qemuImgInspect(path string) (qemuImgInfo, error) {
+	st, err := os.Stat(path)
+	if err != nil {
+		return qemuImgInfo{}, fmt.Errorf("qemu-img info: %w", err)
+	}
+	key := fileVersionOf(st)
+	infoCacheMu.Lock()
+	c, ok := infoCache[path]
+	infoCacheMu.Unlock()
+	if ok && c.version == key {
+		return c.info, nil
+	}
+	info, err := qemuImgInfoRun(path)
+	if err != nil {
+		return qemuImgInfo{}, err
+	}
+	infoCacheMu.Lock()
+	infoCache[path] = cachedInfo{version: key, info: info}
+	infoCacheMu.Unlock()
+	return info, nil
+}
+
+var (
+	infoCacheMu sync.Mutex
+	infoCache   = map[string]cachedInfo{}
+)
+
+type cachedInfo struct {
+	version fileVersion
+	info    qemuImgInfo
+}
+
+// fileVersion tells two states of a file apart.
+type fileVersion struct {
+	ino, size int64
+	mtime     int64 // nanoseconds
+}
+
+func fileVersionOf(st os.FileInfo) fileVersion {
+	v := fileVersion{size: st.Size(), mtime: st.ModTime().UnixNano()}
+	if sys, ok := st.Sys().(*syscall.Stat_t); ok {
+		v.ino = int64(sys.Ino)
+	}
+	return v
+}
+
+// qemuImgInfoRun runs qemu-img info; tests count its calls.
+var qemuImgInfoRun = runQemuImgInfo
+
+func runQemuImgInfo(path string) (qemuImgInfo, error) {
 	// -U opens the image read-only in shared mode, so this still works
 	// against a disk a running QEMU process holds a write lock on.
 	cmd := exec.Command("qemu-img", "info", "-U", "--output=json", path)

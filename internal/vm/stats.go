@@ -23,56 +23,85 @@ const statsSampleWindow = 200 * time.Millisecond
 // utime/stime fields into seconds. 100 on every mainstream distro/kernel.
 const clockTicksPerSec = 100
 
-var _ instance.StatsProvider = (*Backend)(nil)
+var (
+	_ instance.StatsProvider = (*Backend)(nil)
+	_ instance.StatsSampler  = (*Backend)(nil)
+)
 
 // Stats samples spec's live resource usage: CPU and (bridged) network
 // throughput from two samples statsSampleWindow apart; memory/disk from single reads.
 func (b *Backend) Stats(ctx context.Context, spec *instance.Spec) (instance.Stats, error) {
-	if spec.VM == nil {
-		return instance.Stats{}, fmt.Errorf("vm: Stats called with a nil VMSpec")
-	}
-	v := spec.VM
-
-	proc, ok := b.lookup(spec.ID)
-	if !ok {
-		return instance.Stats{}, fmt.Errorf("vm: %s isn't running", spec.Name)
-	}
-	return sampleStats(ctx, spec, proc.Pid(), b.Networker, v.NetworkMode == "bridge")
+	st, _, err := b.SampleStats(ctx, spec, nil)
+	return st, err
 }
 
-// sampleStats measures the hypervisor process pid running spec. Network rates come from
-// the tap device, so only when the VM has one (bridged).
-func sampleStats(ctx context.Context, spec *instance.Spec, pid int, networker Networker, bridged bool) (instance.Stats, error) {
+// SampleStats is Stats with rates since prev, for a stream of stats.
+func (b *Backend) SampleStats(ctx context.Context, spec *instance.Spec, prev instance.StatsSample) (instance.Stats, instance.StatsSample, error) {
+	if spec.VM == nil {
+		return instance.Stats{}, nil, fmt.Errorf("vm: Stats called with a nil VMSpec")
+	}
+	proc, ok := b.lookup(spec.ID)
+	if !ok {
+		return instance.Stats{}, nil, fmt.Errorf("vm: %s isn't running", spec.Name)
+	}
+	return sampleStats(ctx, spec, proc.Pid(), b.Networker, spec.VM.NetworkMode == "bridge", prev)
+}
+
+// vmSample is one reading of a VM process's counters.
+type vmSample struct {
+	pid    int
+	at     time.Time
+	cpu    uint64
+	rx, tx uint64
+	net    bool // the tap's counters were read
+}
+
+func takeVMSample(pid int, networker Networker, instanceID string, bridged bool) (vmSample, error) {
+	s := vmSample{pid: pid}
+	var err error
+	if s.cpu, err = readProcCPUTicks(pid); err != nil {
+		return s, fmt.Errorf("vm: reading CPU usage: %w", err)
+	}
+	if bridged {
+		var err error
+		s.rx, s.tx, err = networker.Stats(instanceID)
+		s.net = err == nil
+	}
+	s.at = time.Now()
+	return s, nil
+}
+
+// sampleStats measures the hypervisor process pid running spec, its rates since prev or,
+// without a usable prev, over statsSampleWindow. Network rates come from the tap device,
+// so only when the VM has one (bridged).
+func sampleStats(ctx context.Context, spec *instance.Spec, pid int, networker Networker, bridged bool, prev instance.StatsSample) (instance.Stats, instance.StatsSample, error) {
 	v := spec.VM
 
-	cpu0, err := readProcCPUTicks(pid)
+	s0, ok := prev.(vmSample)
+	if !ok || s0.pid != pid {
+		var err error
+		if s0, err = takeVMSample(pid, networker, spec.ID, bridged); err != nil {
+			return instance.Stats{}, nil, err
+		}
+		select {
+		case <-time.After(statsSampleWindow):
+		case <-ctx.Done():
+			return instance.Stats{}, nil, ctx.Err()
+		}
+	}
+	s1, err := takeVMSample(pid, networker, spec.ID, bridged)
 	if err != nil {
-		return instance.Stats{}, fmt.Errorf("vm: reading CPU usage: %w", err)
+		return instance.Stats{}, nil, err
 	}
-	var rx0, tx0 uint64
-	if bridged {
-		rx0, tx0, _ = networker.Stats(spec.ID)
-	}
-	t0 := time.Now()
-
-	select {
-	case <-time.After(statsSampleWindow):
-	case <-ctx.Done():
-		return instance.Stats{}, ctx.Err()
-	}
-
-	cpu1, err := readProcCPUTicks(pid)
-	if err != nil {
-		return instance.Stats{}, fmt.Errorf("vm: reading CPU usage: %w", err)
-	}
-	elapsed := time.Since(t0).Seconds()
+	cpu0, cpu1 := s0.cpu, s1.cpu
+	elapsed := s1.at.Sub(s0.at).Seconds()
 
 	vcpus := v.CPUs
 	if vcpus <= 0 {
 		vcpus = 1
 	}
 	var cpuPercent float64
-	if elapsed > 0 {
+	if elapsed > 0 && cpu1 >= cpu0 {
 		cpuSeconds := float64(cpu1-cpu0) / clockTicksPerSec
 		cpuPercent = cpuSeconds / elapsed / float64(vcpus) * 100
 	}
@@ -94,17 +123,16 @@ func sampleStats(ctx context.Context, spec *instance.Spec, pid int, networker Ne
 		Address:        vmAddress(v),
 	}
 
-	if bridged {
-		if rx1, tx1, err := networker.Stats(spec.ID); err == nil {
-			stats.NetAvailable = true
-			if elapsed > 0 {
-				stats.NetRxBytesPerSec = float64(rx1-rx0) / elapsed
-				stats.NetTxBytesPerSec = float64(tx1-tx0) / elapsed
-			}
+	if s1.net {
+		stats.NetAvailable = true
+		// A recreated tap starts its counters over: no rate for that tick.
+		if s0.net && elapsed > 0 && s1.rx >= s0.rx && s1.tx >= s0.tx {
+			stats.NetRxBytesPerSec = float64(s1.rx-s0.rx) / elapsed
+			stats.NetTxBytesPerSec = float64(s1.tx-s0.tx) / elapsed
 		}
 	}
 
-	return stats, nil
+	return stats, s1, nil
 }
 
 // vmUptimeSeconds reads how long ago instanceID's process was started, 0 if unknown.

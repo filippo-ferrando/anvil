@@ -58,6 +58,7 @@ type Server struct {
 	mu        sync.Mutex
 	listeners map[netip.Addr]*zoneListener
 	upstreams []string
+	answered  string // the upstream that last answered, tried first
 }
 
 func NewServer(source ZoneSource) *Server {
@@ -138,10 +139,22 @@ func (s *Server) Close() {
 	}
 }
 
+// currentUpstreams lists the upstreams, the one that last answered first, so a dead
+// first nameserver doesn't cost every query its timeout.
 func (s *Server) currentUpstreams() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.upstreams
+	if s.answered == "" || len(s.upstreams) < 2 || s.upstreams[0] == s.answered {
+		return s.upstreams
+	}
+	out := make([]string, 0, len(s.upstreams))
+	out = append(out, s.answered)
+	for _, up := range s.upstreams {
+		if up != s.answered {
+			out = append(out, up)
+		}
+	}
+	return out
 }
 
 // zoneListener serves one zone. zone is swapped whole on Refresh, never
@@ -337,6 +350,9 @@ func (s *Server) forward(hdr dnsmessage.Header, q dnsmessage.Question, req []byt
 	for _, up := range s.currentUpstreams() {
 		resp, err := exchange(network, up, req)
 		if err == nil {
+			s.mu.Lock()
+			s.answered = up
+			s.mu.Unlock()
 			return resp
 		}
 	}
