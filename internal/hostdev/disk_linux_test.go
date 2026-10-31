@@ -87,6 +87,14 @@ func TestCloneDiskReal(t *testing.T) {
 	if _, err := exec.LookPath(dmsetup); err != nil {
 		t.Skip("needs dmsetup")
 	}
+	for _, dev := range []string{"/dev/loop-control", "/dev/mapper/control"} {
+		if _, err := os.Stat(dev); err != nil {
+			t.Skipf("needs %s", dev)
+		}
+	}
+	if err := loadDMSnapshot(); err != nil {
+		t.Skipf("needs the dm_snapshot kernel module: %v", err)
+	}
 	root := t.TempDir()
 	for v, dir := range map[*string]string{&WarmRoot: "warm", &InstanceRoot: "instances", &JailerRoot: "jailer"} {
 		orig := *v
