@@ -2,6 +2,12 @@
 
 Built from commit subjects by `scripts/changelog.sh`.
 
+## v1.3.1 (2026-10-31)
+
+### Features
+
+- CI/CD on ephemeral clones (7200a30)
+
 ## v1.3.0 (2026-10-30)
 
 ### Features
@@ -97,10 +103,22 @@ Built from commit subjects by `scripts/changelog.sh`.
 
 - full firecracker integration (test version) (0c1ee19)
 - firecracker implementation (phase 7) (64129df)
+- firecracker implementation (phase 4) (e14111d)
+- firecracker implementation (phase 3) (0d21418)
+- firecracker implementation (phase 2) (4e598cc)
+- Event log (44128ea)
 
 ### Fixes
 
 - jailer problems (dd5a6e2)
+- virtiofsd path fix (ad95008)
+- missing `virtiofsd` on bookworm image (35c9c3e)
+
+### Other changes
+
+- fix sed command (a4850d4)
+- added missing doc files (e6e79b4)
+- added caching on build-gui (a03c738)
 
 ## v1.2.3 (2026-10-17)
 
