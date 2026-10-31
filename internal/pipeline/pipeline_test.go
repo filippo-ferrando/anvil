@@ -403,8 +403,8 @@ func TestWatcher(t *testing.T) {
 		t.Errorf("watch = %+v", got)
 	}
 
-	// A broken repo shows as the watch's error.
-	bad := store.PipelineWatch{Name: "bad", Repo: filepath.Join(repo, "missing"), Interval: minInterval}
+	// A broken repo shows as the watch's error. Paused, so only the trigger checks it.
+	bad := store.PipelineWatch{Name: "bad", Repo: filepath.Join(repo, "missing"), Interval: minInterval, Paused: true}
 	_ = Normalize(&bad)
 	_ = e.Store.PutPipelineWatch(bad)
 	if err := w.Trigger(ctx, "bad"); err != nil {
