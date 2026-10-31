@@ -13,7 +13,7 @@ func newMatrixCommand(flags *globalFlags) *cobra.Command {
 		Short: "Run a command on throwaway clones of several distros at once",
 		Long: "Restore one clone per distro from its warm snapshot (built first when there is none), " +
 			"all in parallel, upload path (honoring .gitignore in a git repo) into /work, run the command " +
-			"and delete the clones. Each line of output carries its distro. Exits non-zero when any clone " +
+			"and delete the clones. --collect copies files back into <host-dir>/<distro>/. Each line of output carries its distro. Exits non-zero when any clone " +
 			"failed. Needs Firecracker with its jailer, see docs/ephemeral.md.",
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -27,11 +27,13 @@ func newMatrixCommand(flags *globalFlags) *cobra.Command {
 					distros = append(distros, d)
 				}
 			}
+			f.perDistro = true
 			return runEphemeral(cmd, flags, distros, path, command, f)
 		},
 	}
 	f.addSizeFlags(cmd)
 	f.addRunFlags(cmd)
+	f.addSetupFlags(cmd)
 	cmd.Flags().StringArrayVarP(&f.env, "env", "e", nil, "environment variable KEY=VALUE for the command (repeatable)")
 	return cmd
 }

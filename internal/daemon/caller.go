@@ -73,6 +73,12 @@ func checkCallerOwns(ctx context.Context, paths ...*string) error {
 	if !ok {
 		return status.Error(codes.PermissionDenied, "daemon: can't identify the caller to check its host paths")
 	}
+	return checkUIDOwns(uid, paths...)
+}
+
+// checkUIDOwns resolves each host path in place and fails unless uid owns it; root and
+// anvild's own user own everything.
+func checkUIDOwns(uid uint32, paths ...*string) error {
 	for _, p := range paths {
 		real, owner, err := hostpath.Resolve(*p)
 		if errors.Is(err, fs.ErrPermission) {

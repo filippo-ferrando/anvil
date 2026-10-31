@@ -26,6 +26,10 @@ type WarmSnapshot struct {
 	SizeBytes          int64  // disk space its files take
 	App                string // the package installed for `anvil gui --ephemeral`, "" for none
 	X11                bool
+	User               string // the image's default user
+	Base               string // with a setup script or saved from a clone: the snapshot it builds on
+	Setup              string // the setup script's name, or "saved from <clone>"
+	Saved              bool   // saved from a clone: never built again
 	CreatedAt          time.Time
 	LastUsedAt         time.Time
 }
@@ -96,7 +100,7 @@ var bucketWarmPools = []byte("warm_pools") // WarmPool.ID() -> json(WarmPool)
 // WarmPool keeps Size clones of a warm snapshot restored ahead of time. It names the
 // snapshot by what it is built from, not its key, so an upgrade that changes the key keeps it.
 type WarmPool struct {
-	Distro    string // catalog id
+	Distro    string // catalog id, or "@<key>" for one warm snapshot by key
 	Arch      string
 	CPUs      int
 	MemoryMiB int64

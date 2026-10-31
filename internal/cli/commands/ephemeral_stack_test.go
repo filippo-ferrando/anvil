@@ -43,6 +43,8 @@ func (stackEngine) BuildWarm(_ context.Context, _ ephemeral.WarmSpec, dir string
 	return nil
 }
 
+func (stackEngine) SaveClone(context.Context, string, string, string) error { return nil }
+
 func (stackEngine) RestoreClone(_ context.Context, id string, s ephemeral.WarmSpec, _ string) (ephemeral.Clone, error) {
 	if s.Distro == "broken" {
 		return nil, errors.New("restore failed")

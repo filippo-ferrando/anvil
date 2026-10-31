@@ -419,10 +419,26 @@ with its last lines of output, its progress and then its exit code. See
 | Key | Action |
 |-----|--------|
 | `tab` | Switch between warm snapshots and clones. |
-| `n` | Start a run: distros, a path to upload, a command (run with `sh -c`), size and Keep failed. `esc` in the run view cancels it and deletes its clones, or closes it once done. |
-| `c` | Build a warm snapshot for a distro and size (`anvil warm create`). |
+| `n` | Start a run: distros, a path to upload, a command (run with `sh -c`), size, Keep failed, a setup script and key files, and paths to collect back into `<Collect into>/<distro>/` (`--collect`). `esc` in the run view cancels it and deletes its clones, or closes it once done. |
+| `c` | Build a warm snapshot for a distro and size, with an optional setup script and key files (`anvil warm create`). |
 | `p` | On a warm snapshot: set how many clones its pool keeps ready, 0 removes it (`anvil warm pool set`). The list shows each pool as `pool <ready>/<size>`. |
 | `s` `enter` | On a clone: a root shell in it (`anvil ephemeral shell`). |
+| `w` | On a clone: save it as a warm snapshot (`anvil warm save`). |
 | `x` | Remove the selected warm snapshot or clone, after a confirmation. |
+| `r` | Reload. |
+| `esc` `q` | Back to the sidebar. |
+
+## 13. CI
+
+Runners, their jobs, pipeline runs and pipeline watches, one list each: `tab` moves to the
+next one. See [runner.md](runner.md) and [pipelines.md](pipelines.md).
+
+| Key | Action |
+|-----|--------|
+| `tab` `shift+tab` | Switch between runners, runner jobs, pipeline runs and watches. |
+| `p` | On a runner or a watch: pause it, or resume it. |
+| `enter` | On a pipeline run: its jobs, with state, exit code and duration. `esc` goes back. |
+| `x` | On a running pipeline run: cancel it. |
+| `t` | On a watch: run its pipeline now. |
 | `r` | Reload. |
 | `esc` `q` | Back to the sidebar. |

@@ -28,6 +28,8 @@ type WarmParams struct {
 	// App is a package installed in the snapshot, with the GUI tools, for `anvil gui --ephemeral`.
 	App string
 	X11 bool // with App: also Xwayland
+	// Setup is a script run in the build, on top of the plain distro snapshot.
+	Setup *SetupScript
 }
 
 // WarmSpec is a resolved WarmParams, plus the key that names its snapshot: a hash of
@@ -43,6 +45,9 @@ type WarmSpec struct {
 	User               string // the image's default user, who runs GUI apps
 	App                string
 	X11                bool
+	Base               string       // with a setup script or saved: the snapshot it builds on
+	SetupName          string       // the setup script's name, or "saved from <clone>"
+	Setup              *SetupScript // run in the build, nil for none
 }
 
 // Dialer opens a new connection to a VM's anvil-guest.
@@ -60,6 +65,9 @@ type Engine interface {
 	BuildWarm(ctx context.Context, s WarmSpec, dir string, setup Setup, progress func(string)) error
 	// RestoreClone starts clone id from the warm snapshot in dir.
 	RestoreClone(ctx context.Context, id string, s WarmSpec, dir string) (Clone, error)
+	// SaveClone snapshots running clone id, restored from the warm snapshot in baseDir,
+	// into dir as a warm snapshot of its own. The clone keeps running.
+	SaveClone(ctx context.Context, id, baseDir, dir string) error
 	// DeleteClone stops clone id and removes everything it holds.
 	DeleteClone(ctx context.Context, id string) error
 	// SweepClones removes clones an earlier anvild left behind.

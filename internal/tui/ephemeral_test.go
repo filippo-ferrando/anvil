@@ -1,12 +1,16 @@
 package tui
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func TestBuildRunRequest(t *testing.T) {
@@ -31,6 +35,16 @@ func TestBuildRunRequest(t *testing.T) {
 	if req, path, err := buildRunRequest(f); err != nil || !req.GetUpload() || path != dir {
 		t.Errorf("with a path = %+v, %q, %v", req, path, err)
 	}
+	setField(&f, "Collect", " dist, /work/**/*.xml ,")
+	if req, _, err := buildRunRequest(f); err != nil || !slices.Equal(req.GetCollect(), []string{"dist", "/work/**/*.xml"}) {
+		t.Errorf("collect = %q, %v", req.GetCollect(), err)
+	} else if runCollector(req, f) == nil {
+		t.Error("no collector for a run with collect paths")
+	}
+	setField(&f, "Collect", "")
+	if req, _, _ := buildRunRequest(f); runCollector(req, f) != nil {
+		t.Error("a collector for a run without collect paths")
+	}
 	setField(&f, "Path", dir+"/missing")
 	if _, _, err := buildRunRequest(f); err == nil {
 		t.Error("a missing path was accepted")
@@ -41,8 +55,25 @@ func TestBuildRunRequest(t *testing.T) {
 		t.Error("CPUs \"two\" was accepted")
 	}
 
+	script := filepath.Join(t.TempDir(), "setup.sh")
+	_ = os.WriteFile(script, []byte("make deps"), 0o755)
+	setField(&f, "CPUs", "")
+	setField(&f, "Setup script", script)
+	if req, _, err := buildRunRequest(f); err != nil || string(req.GetSetup().GetScript()) != "make deps" {
+		t.Errorf("run with setup = %+v, %v", req.GetSetup(), err)
+	}
+	setField(&f, "Key files", "missing.lock")
+	if _, _, err := buildRunRequest(f); err == nil {
+		t.Error("a missing key file was accepted")
+	}
+
 	w := newWarmForm()
+	setField(&w, "Setup script", script)
 	setField(&w, "Distro", "alpine")
+	if req, err := buildWarmRequest(w); err != nil || req.GetSetup().GetName() == "" {
+		t.Errorf("warm with setup = %+v, %v", req, err)
+	}
+	setField(&w, "Setup script", "")
 	if req, err := buildWarmRequest(w); err != nil || req.GetDistro() != "alpine" || req.GetCpus() != 0 {
 		t.Errorf("warm request = %+v, %v", req, err)
 	}
@@ -60,8 +91,10 @@ func TestRunViewPanes(t *testing.T) {
 	if p := v.panes["ubuntu"]; !slices.Equal(p.lines, []string{"one", "two", "thr"}) || p.partial != "" || p.exit.GetExitCode() != 2 {
 		t.Errorf("ubuntu pane = %+v", p)
 	}
+	v.collected(&client.CollectResult{Distro: "alpine", Path: "dist", Dir: "out/alpine"})
+	v.collected(&client.CollectResult{Distro: "ubuntu", Path: "*.xml", Err: errors.New("*.xml: no match")})
 	view := v.view(80, 20)
-	for _, want := range []string{"restoring a clone", "exit 2", "kept as eph-K", "two", "cancel"} {
+	for _, want := range []string{"restoring a clone", "exit 2", "kept as eph-K", "two", "cancel", "collected dist into out/alpine", "collect: *.xml: no match"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("run view lacks %q:\n%s", want, view)
 		}

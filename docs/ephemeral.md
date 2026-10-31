@@ -58,6 +58,32 @@ debian-13     1     2.40s
 - `-e KEY=value` sets environment variables for the command.
 - Ctrl-C (or a dropped connection) stops the run and deletes its clones.
 
+## Collecting files
+
+`--collect <guest-path>[:<host-dir>]` copies files back from each clone after its command,
+whether it passed or failed, before the clone is deleted. It is repeatable, and the host
+dir defaults to `.`:
+
+```
+anvil launch --ephemeral ubuntu-24.04 . --collect dist:out -- make build
+anvil matrix ubuntu-24.04,debian-13 . --collect '**/junit.xml:reports' -- make test
+```
+
+- **Where in the guest.** A relative path is relative to the command's directory: `/work`
+  with an upload, `/` otherwise. Globs work, `**` included for any number of directories.
+- **Where on the host.** A plain path lands as its last element: `dist` becomes
+  `out/dist`. A glob keeps the path below the directory before its first wildcard:
+  `/work/**/junit.xml` gives `reports/pkg/a/junit.xml`. `matrix` puts each distro under its
+  own directory, `reports/<distro>/...`; `launch --ephemeral` writes straight into it.
+- **No match.** A path that doesn't exist, or a glob with no match, prints a note and is
+  skipped. The exit code stays the command's.
+- **Over `--remote`.** The files come back through the same connection, and land on the
+  machine running `anvil`.
+
+Each path comes back as a tar made by the guest's own `find` and `tar` (busybox works),
+streamed through anvild, and is extracted on the client. Entries can't land outside the
+host dir, and a second run into the same dir overwrites files and links.
+
 ## Clone size and warm snapshots
 
 `--cpus` (default 2) and `--memory` (default 512 MiB) size the clones. They are part of
@@ -76,6 +102,61 @@ A warm snapshot takes the guest memory size plus the disk's used space. Its file
 `/var/lib/anvil/warm/<key>`, on the jailer's filesystem: every clone links the memory file
 into its jail and gets its own copy-on-write disk (see [Clone disks](#clone-disks)). Warm
 snapshots are never exported or migrated.
+
+## Setup scripts
+
+A CI job usually installs its toolchain before it does anything. `--setup` runs a script
+once, in the warm build, so every clone starts with it installed:
+
+```
+anvil matrix ubuntu-24.04,debian-13 . --setup ci/setup.sh --key-files go.mod,go.sum -- make test
+anvil warm create ubuntu-24.04 --setup ci/setup.sh --key-files go.mod,go.sum   # ahead of time
+```
+
+- **Key files.** Each one is put at the same relative path in `/work` while the script
+  runs, so `go mod download` or `npm ci` can use it. Their content and the script are part
+  of the snapshot's key: a changed lockfile builds a new snapshot on the next run, an
+  unchanged one reuses the old one. Paths are relative to the current directory. The
+  script and its key files can take up to 3 MiB together.
+- **Running.** The script runs as root from `/work`, with its shebang or `sh`. A failure
+  stops the build with the end of the script's output. `/work` is removed afterwards, so a
+  run's upload starts clean.
+- **Building.** The distro's plain warm snapshot is built first when missing, then a
+  second build VM boots, runs the script and is snapshotted. `anvil warm list` shows the
+  script in the SETUP column.
+- **Removing.** `anvil warm rm` of the plain snapshot also removes the setup snapshots
+  built on it.
+
+## Picking a warm snapshot by key
+
+`@<key>` (or a unique start of one) works wherever a distro does: in `launch --ephemeral`,
+`matrix` and `warm pool set`. The run uses that exact snapshot and never builds one:
+
+```
+anvil launch --ephemeral @3f9a2c -- make test
+anvil warm pool set @3f9a2c --size 4
+```
+
+A pool set this way stays with that snapshot. It doesn't follow upgrades, unlike a pool
+set by distro.
+
+## Saving a clone
+
+`anvil warm save <clone-id>` turns a running or kept clone into a warm snapshot of its
+own. The clone is paused, snapshotted with its disk and memory, then resumed. Clones of the
+new snapshot start where the clone was, which is useful after setting something up by hand
+in `anvil ephemeral shell`:
+
+```
+anvil launch --ephemeral --keep-failed debian-13 -- false
+anvil ephemeral shell eph-01M66      # install things
+anvil warm save eph-01M66            # prints the new key
+anvil launch --ephemeral @<key> -- ./run.sh
+```
+
+A saved snapshot is never built again; it is gone when the snapshot its clone came from is
+removed, and may stop loading after a Firecracker upgrade. Clones on the UFFD memory
+backend can't be saved yet.
 
 ## Clone pools
 
@@ -218,7 +299,7 @@ same layout inside; [networking.md](networking.md#ephemeral-clones) has the deta
 ## TUI
 
 The Ephemeral screen lists warm snapshots and clones (`tab` switches between them). `c`
-builds a warm snapshot, `p` sets the pool size of the selected one, `n` starts a run with one pane per clone, `a` starts a GUI app in
+builds a warm snapshot (with an optional setup script), `p` sets the pool size of the selected one, `w` saves the selected clone as a warm snapshot, `n` starts a run with one pane per clone (its Collect field takes comma-separated paths, copied back under `<Collect into>/<distro>/`), `a` starts a GUI app in
 a throwaway clone ([gui.md](gui.md#throwaway-apps)), `s` opens a shell in a clone and `x`
 removes the selected one. Each pane shows the clone's current step with a spinner.
 

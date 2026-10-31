@@ -9,8 +9,8 @@ import (
 	"path"
 )
 
-// extract unpacks the tar stream r into dir. Every entry stays inside dir, symlinks included.
-func extract(r io.Reader, dir string) error {
+// Extract unpacks the tar stream r into dir. Every entry stays inside dir, symlinks included.
+func Extract(r io.Reader, dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -38,6 +38,10 @@ func extract(r io.Reader, dir string) error {
 			if err := root.MkdirAll(parent, 0o755); err != nil {
 				return err
 			}
+		}
+		// An earlier extract's link is replaced, not written through.
+		if fi, err := root.Lstat(name); err == nil && (fi.Mode()&os.ModeSymlink != 0 || h.Typeflag == tar.TypeSymlink && !fi.IsDir()) {
+			_ = root.Remove(name)
 		}
 		switch h.Typeflag {
 		case tar.TypeDir:

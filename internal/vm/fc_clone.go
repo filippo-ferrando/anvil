@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"git.fferrando.cc/rdfilippo/anvil/internal/ephemeral"
 	"git.fferrando.cc/rdfilippo/anvil/internal/guestexec"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/firecracker"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/proc"
 )
 
@@ -254,4 +256,69 @@ func killJailed(id string) {
 			}
 		}
 	}
+}
+
+// The names a saved clone's snapshot gets in its jail, next to the warm files it links.
+const (
+	savedState = "saved.vmstate"
+	savedMem   = "saved.mem"
+)
+
+// SaveClone pauses clone id, snapshots it into dir with a copy of its disk and the drives
+// of baseDir, and resumes it.
+func (b *FCBackend) SaveClone(ctx context.Context, id, baseDir, dir string) (err error) {
+	b.mu.Lock()
+	c := b.clones[id]
+	b.mu.Unlock()
+	if c == nil {
+		return fmt.Errorf("vm: clone %s isn't running here", id)
+	}
+	if c.pages != nil {
+		return errors.New("vm: a clone with ANVIL_EPH_MEMORY=uffd can't be saved yet")
+	}
+	// The page cache goes into the snapshot anyway; sync only keeps the disk copy current.
+	if err := guestCommand(ctx, c.vsock, 10*time.Second, "sync"); err != nil {
+		return fmt.Errorf("vm: anvil-guest in the clone: %w", err)
+	}
+	if err := c.proc.API.Pause(ctx); err != nil {
+		return fmt.Errorf("vm: pausing the clone: %w", err)
+	}
+	defer func() {
+		if rerr := c.proc.API.Resume(context.WithoutCancel(ctx)); rerr != nil && err == nil {
+			err = fmt.Errorf("vm: resuming the clone after saving it: %w", rerr)
+		}
+	}()
+	root := c.paths.root()
+	if err := c.proc.API.CreateSnapshot(ctx, firecracker.SnapshotCreate{
+		SnapshotPath: c.paths.InVMM(filepath.Join(root, savedState)), MemFilePath: c.paths.InVMM(filepath.Join(root, savedMem)),
+		SnapshotType: firecracker.SnapshotFull,
+	}); err != nil {
+		return fmt.Errorf("vm: snapshotting the clone: %w", err)
+	}
+	part := dir + ".part"
+	_ = os.RemoveAll(part)
+	if err := os.MkdirAll(part, 0o750); err != nil {
+		return err
+	}
+	defer os.RemoveAll(part)
+	for name, saved := range map[string]string{warmState: savedState, warmMem: savedMem} {
+		if err := os.Rename(filepath.Join(root, saved), filepath.Join(part, name)); err != nil {
+			return fmt.Errorf("vm: keeping the snapshot: %w", err)
+		}
+	}
+	// A dm-snapshot disk is only a device in the jail; a copied one is a file of its own.
+	disk := filepath.Join(instanceDir(id), warmDisk)
+	if c.dmDisk {
+		disk = filepath.Join(root, warmDisk)
+	}
+	if err := image.CloneDisk(ctx, disk, filepath.Join(part, warmDisk), 0); err != nil {
+		return fmt.Errorf("vm: copying the clone's disk: %w", err)
+	}
+	for _, name := range []string{warmSeed, warmGuest} {
+		if out, err := exec.CommandContext(ctx, "cp", "--reflink=auto", filepath.Join(baseDir, name), filepath.Join(part, name)).CombinedOutput(); err != nil {
+			return fmt.Errorf("vm: keeping %s: %w: %s", name, err, out)
+		}
+	}
+	_ = os.RemoveAll(dir)
+	return os.Rename(part, dir)
 }

@@ -31,6 +31,9 @@ func (i warmItem) Title() string {
 	if i.snap.GetApp() != "" {
 		name += " + " + i.snap.GetApp()
 	}
+	if i.snap.GetSetup() != "" {
+		name += " + " + i.snap.GetSetup()
+	}
 	return name + "  " + i.snap.GetKey()
 }
 func (i warmItem) Description() string {
@@ -38,8 +41,12 @@ func (i warmItem) Description() string {
 	if i.snap.GetPoolSize() > 0 {
 		pool = fmt.Sprintf("  •  pool %d/%d ready", i.snap.GetPoolReady(), i.snap.GetPoolSize())
 	}
-	return fmt.Sprintf("%s  •  %s  •  %d MiB  •  %s%s  •  last used %s", i.snap.GetArch(), format.CPUs(i.snap.GetCpus()),
-		i.snap.GetMemoryMib(), progress.Bytes(i.snap.GetSizeBytes()), pool, time.Unix(i.snap.GetLastUsedAtUnix(), 0).Format("2006-01-02 15:04"))
+	base := ""
+	if i.snap.GetBase() != "" {
+		base = "  •  on " + i.snap.GetBase() + ", run with @" + i.snap.GetKey()
+	}
+	return fmt.Sprintf("%s  •  %s  •  %d MiB  •  %s%s  •  last used %s%s", i.snap.GetArch(), format.CPUs(i.snap.GetCpus()),
+		i.snap.GetMemoryMib(), progress.Bytes(i.snap.GetSizeBytes()), pool, time.Unix(i.snap.GetLastUsedAtUnix(), 0).Format("2006-01-02 15:04"), base)
 }
 
 type cloneItem struct{ clone *anvilv1.EphemeralClone }
@@ -155,6 +162,22 @@ func (v *runView) event(ev *anvilv1.RunEvent) {
 	}
 }
 
+// collected notes in a clone's pane where a collect path went, or why it didn't.
+func (v *runView) collected(res *client.CollectResult) {
+	p := v.panes[res.Distro]
+	if p == nil {
+		return
+	}
+	if p.partial != "" {
+		p.lines, p.partial = append(p.lines, p.partial), ""
+	}
+	line := fmt.Sprintf("· collected %s into %s", res.Path, res.Dir)
+	if res.Err != nil {
+		line = "· collect: " + res.Err.Error()
+	}
+	p.lines = append(p.lines, line)
+}
+
 func (v *runView) view(width, height int) string {
 	var b strings.Builder
 	title := "Run"
@@ -224,10 +247,11 @@ type warmBuildMsg struct {
 
 // runEventMsg carries one event of a TUI run, or its end.
 type runEventMsg struct {
-	ev   *anvilv1.RunEvent
-	next tea.Cmd
-	err  error
-	done bool
+	ev        *anvilv1.RunEvent
+	collected *client.CollectResult // a collect path of one clone is done
+	next      tea.Cmd
+	err       error
+	done      bool
 }
 
 func loadEphemeral(c *client.Client) tea.Cmd {
@@ -259,7 +283,8 @@ func buildWarm(c *client.Client, req *anvilv1.WarmCreateRequest) tea.Cmd {
 // startRun opens the Run stream, sends the request, then hands over the first event while
 // the upload goes in the background (the daemon restores the clones meanwhile); each
 // runEventMsg carries the command that receives the next one.
-func startRun(ctx context.Context, c *client.Client, req *anvilv1.RunRequest, path string) tea.Cmd {
+// Collected files are extracted here, off the UI loop; only the result reaches the view.
+func startRun(ctx context.Context, c *client.Client, req *anvilv1.RunRequest, path string, collector *client.Collector) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithCancel(ctx)
 		stream, err := c.Ephemeral.Run(ctx)
@@ -279,22 +304,37 @@ func startRun(ctx context.Context, c *client.Client, req *anvilv1.RunRequest, pa
 				}
 			}()
 		}
+		end := func(err error) tea.Msg {
+			cancel()
+			if collector != nil {
+				collector.Close()
+			}
+			return runEventMsg{err: err, done: true}
+		}
 		var next tea.Cmd
 		next = func() tea.Msg {
-			ev, err := stream.Recv()
-			if errors.Is(err, io.EOF) {
-				cancel()
-				return runEventMsg{done: true}
-			}
-			if err != nil {
-				cancel()
-				select {
-				case err = <-uploadErr:
-				default:
+			for {
+				ev, err := stream.Recv()
+				if errors.Is(err, io.EOF) {
+					return end(nil)
 				}
-				return runEventMsg{err: err, done: true}
+				if err != nil {
+					select {
+					case err = <-uploadErr:
+					default:
+					}
+					return end(err)
+				}
+				if ev.GetCollect() == nil {
+					return runEventMsg{ev: ev, next: next}
+				}
+				if collector == nil {
+					continue
+				}
+				if res := collector.Handle(ev.GetCollect()); res != nil {
+					return runEventMsg{collected: res, next: next}
+				}
 			}
-			return runEventMsg{ev: ev, next: next}
 		}
 		return next()
 	}
@@ -308,6 +348,17 @@ func sendRunUpload(stream anvilv1.EphemeralService_RunClient, path string) error
 		return err
 	}
 	return stream.Send(&anvilv1.RunInput{Input: &anvilv1.RunInput_UploadDone{UploadDone: true}})
+}
+
+func saveClone(c *client.Client, id string) tea.Cmd {
+	return func() tea.Msg {
+		reply, err := c.Ephemeral.WarmSave(context.Background(), &anvilv1.WarmSaveRequest{CloneId: id})
+		verb := "saved " + id
+		if err == nil {
+			verb += " as warm snapshot " + reply.GetSnapshot().GetKey() + ", run it with @" + reply.GetSnapshot().GetKey()
+		}
+		return actionDoneMsg{screen: screenEphemeral, verb: verb, err: err}
+	}
 }
 
 func deleteWarm(c *client.Client, key string) tea.Cmd {
@@ -342,6 +393,8 @@ func newWarmForm() simpleForm {
 		textField("Distro", "catalog id, e.g. ubuntu-24.04", ""),
 		textField("CPUs", "default 2", ""),
 		textField("Memory (MiB)", "default 512", ""),
+		textField("Setup script", "a script run once in the build (optional)", ""),
+		textField("Key files", "comma separated, put in /work for the script, part of the key", ""),
 	})
 }
 
@@ -370,6 +423,10 @@ func newRunForm() simpleForm {
 		textField("CPUs", "default 2", ""),
 		textField("Memory (MiB)", "default 512", ""),
 		toggleField("Keep failed", "keep clones whose command failed", false),
+		textField("Collect", "guest paths or globs to copy back, comma separated (optional)", ""),
+		textField("Collect into", "host directory, one subdirectory per distro (default .)", ""),
+		textField("Setup script", "a script run once in the warm build (optional)", ""),
+		textField("Key files", "comma separated, put in /work for the script, part of the key", ""),
 	})
 }
 
@@ -426,7 +483,27 @@ func buildWarmRequest(form simpleForm) (*anvilv1.WarmCreateRequest, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &anvilv1.WarmCreateRequest{Distro: distro, Cpus: int32(cpus), MemoryMib: mem}, nil
+	setup, err := formSetup(form)
+	if err != nil {
+		return nil, err
+	}
+	return &anvilv1.WarmCreateRequest{Distro: distro, Cpus: int32(cpus), MemoryMib: mem, Setup: setup}, nil
+}
+
+// formSetup reads a form's setup script and key files, nil without a script.
+func formSetup(form simpleForm) (*anvilv1.WarmSetup, error) {
+	return client.LoadSetup(strings.TrimSpace(form.Value("Setup script")), splitList(form.Value("Key files")))
+}
+
+// splitList splits a comma separated field, dropping empty entries.
+func splitList(s string) []string {
+	var out []string
+	for _, v := range strings.Split(s, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // buildRunRequest turns the run form into a request and the path to upload ("" for none).
@@ -455,10 +532,29 @@ func buildRunRequest(form simpleForm) (*anvilv1.RunRequest, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	setup, err := formSetup(form)
+	if err != nil {
+		return nil, "", err
+	}
 	return &anvilv1.RunRequest{
 		Distros: distros, Command: []string{"sh", "-c", command}, Cpus: int32(cpus), MemoryMib: mem,
-		KeepFailed: form.Bool("Keep failed"), Upload: path != "",
+		KeepFailed: form.Bool("Keep failed"), Upload: path != "", Collect: splitList(form.Value("Collect")), Setup: setup,
 	}, path, nil
+}
+
+// runCollector extracts req's collect paths under the form's directory, per distro; nil
+// without any.
+func runCollector(req *anvilv1.RunRequest, form simpleForm) *client.Collector {
+	if len(req.GetCollect()) == 0 {
+		return nil
+	}
+	into := strings.TrimSpace(form.Value("Collect into"))
+	if into == "" {
+		into = "."
+	}
+	return client.NewCollector(req.GetCollect(), func(_ int, distro string) string {
+		return client.CollectDir(client.CollectSpec{Host: into}, distro, true)
+	})
 }
 
 // Update.
@@ -504,6 +600,9 @@ func (m model) updateEphemeral(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.ev != nil {
 			e.run.event(msg.ev)
+		}
+		if msg.collected != nil {
+			e.run.collected(msg.collected)
 		}
 		if msg.done {
 			e.run.done, e.run.err = true, msg.err
@@ -605,7 +704,7 @@ func (m model) updateEphemeralKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		e.form = nil
 		ctx, cancel := context.WithCancel(context.Background())
 		e.run = newRunView(req.GetDistros(), cancel)
-		return m, startRun(ctx, m.client, req, path)
+		return m, startRun(ctx, m.client, req, path, runCollector(req, form))
 	}
 
 	switch msg.String() {
@@ -659,6 +758,12 @@ func (m model) updateEphemeralKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.cloneShell(it.clone.GetId())
 		}
 		return m, nil
+	case "w":
+		if it, ok := e.clones.SelectedItem().(cloneItem); ok && e.showClones {
+			m.setStatus("saving "+it.clone.GetId()+" as a warm snapshot...", false)
+			return m, saveClone(m.client, it.clone.GetId())
+		}
+		return m, nil
 	}
 	var cmd tea.Cmd
 	if e.showClones {
@@ -707,7 +812,7 @@ func (e ephemeralModel) View(width, height int) string {
 	}
 	keys := []string{"tab", other, "n", "run", "a", "gui app", "c", "build warm", "x", "remove", "r", "refresh", "esc", "back"}
 	if e.showClones {
-		keys = append([]string{"s", "shell"}, keys...)
+		keys = append([]string{"s", "shell", "w", "save as warm"}, keys...)
 	} else {
 		keys = append([]string{"p", "pool"}, keys...)
 	}

@@ -1205,6 +1205,8 @@ service EphemeralService {
   rpc WarmCreate(WarmCreateRequest) returns (stream WarmCreateProgress);
   rpc WarmList(WarmListRequest) returns (WarmListReply);
   rpc WarmDelete(WarmDeleteRequest) returns (WarmDeleteReply);
+  // WarmSave turns a running or kept clone into a warm snapshot of its own.
+  rpc WarmSave(WarmSaveRequest) returns (WarmSaveReply);
   // WarmPoolSet keeps a number of clones of a warm snapshot restored ahead of time, so a
   // run takes one instead of restoring; size 0 removes the pool.
   rpc WarmPoolSet(WarmPoolSetRequest) returns (WarmPoolSetReply);
@@ -1239,6 +1241,23 @@ message RunRequest {
   TerminalSize size = 9;
   string cwd = 10;              // /work with an upload, / otherwise
   string arch = 11;
+  // Guest paths or globs (** included) sent back after the command, failed or not, as
+  // RunCollect events. Relative ones are relative to cwd.
+  repeated string collect = 12;
+  WarmSetup setup = 13;         // run once in the warm build, see WarmSetup
+}
+
+// WarmSetup is a script run in a warm build, on top of the distro's plain snapshot. The
+// snapshot's key covers the script and the files, so changing either builds a new one.
+message WarmSetup {
+  string name = 1;                // shown in listings, the script's file name
+  bytes script = 2;               // a shebang picks the interpreter, sh otherwise
+  repeated SetupFile files = 3;   // put in /work for the script, removed after it
+}
+
+message SetupFile {
+  string name = 1; // relative, slash separated
+  bytes data = 2;
 }
 
 message RunInput {
@@ -1280,11 +1299,23 @@ message RunExit {
   string error = 6;      // why the clone failed before or around the command
 }
 
+// RunCollect carries the tar of one collect path from one clone, in chunks, before its
+// RunExit. Entries are relative to the path's parent, or to the directory before a glob.
+message RunCollect {
+  string clone_id = 1;
+  string distro = 2;
+  int32 index = 3;     // which of RunRequest.collect
+  bytes data = 4;      // the next chunk of the tar stream
+  bool done = 5;       // the last message for this index
+  string warning = 6;  // with done: nothing matched, or the tar failed
+}
+
 message RunEvent {
   oneof event {
     RunProgress progress = 1;
     RunOutput output = 2;
     RunExit exit = 3;
+    RunCollect collect = 4;
   }
 }
 
@@ -1303,6 +1334,9 @@ message WarmSnapshot {
   bool x11 = 12;     // with app: Xwayland is installed too
   int32 pool_size = 13;  // clones its pool keeps ready, 0 without a pool
   int32 pool_ready = 14; // clones ready now
+  string base = 15;      // with a setup script or saved: the snapshot it builds on
+  string setup = 16;     // the setup script's name, or "saved from <clone>"
+  bool saved = 17;       // saved from a clone, never built again
 }
 
 message WarmCreateRequest {
@@ -1311,6 +1345,7 @@ message WarmCreateRequest {
   int32 cpus = 3;
   int64 memory_mib = 4;
   bool rebuild = 5; // build it again even when it exists
+  WarmSetup setup = 6;
 }
 
 message WarmCreateProgress {
@@ -1333,6 +1368,14 @@ message WarmDeleteReply {
   repeated string deleted = 1;
 }
 
+message WarmSaveRequest {
+  string clone_id = 1; // or a unique prefix
+}
+
+message WarmSaveReply {
+  WarmSnapshot snapshot = 1;
+}
+
 // WarmPool is a pool of clones restored ahead of time. It is named by distro, arch and
 // size, not by warm key, so it carries over to the new snapshot after an upgrade.
 message WarmPool {
@@ -1347,7 +1390,7 @@ message WarmPool {
 }
 
 message WarmPoolSetRequest {
-  string distro = 1;
+  string distro = 1;  // or "@<key>" for one warm snapshot, a setup or saved one
   string arch = 2;
   int32 cpus = 3;
   int64 memory_mib = 4;
@@ -1455,3 +1498,241 @@ message AppEvent {
     AppStarted app = 5;
   }
 }
+
+// RunnerService takes jobs from Forgejo/Gitea (15+) or GitHub Actions and runs each in
+// its own ephemeral clone, with the forge's runner inside it for that one job.
+service RunnerService {
+  rpc Add(RunnerAddRequest) returns (RunnerAddReply);
+  rpc List(RunnerListRequest) returns (RunnerListReply);
+  rpc Remove(RunnerRemoveRequest) returns (RunnerRemoveReply);
+  // SetPaused stops or resumes taking new jobs; running jobs go on.
+  rpc SetPaused(RunnerSetPausedRequest) returns (RunnerSetPausedReply);
+  // Jobs lists running and recent jobs, newest first.
+  rpc Jobs(RunnerJobsRequest) returns (RunnerJobsReply);
+}
+
+message Runner {
+  string name = 1;
+  string forge = 2;               // "forgejo" or "github"
+  string url = 3;
+  string scope = 4;               // repos/<owner>/<repo>, orgs/<org> or admin (forgejo)
+  map<string, string> labels = 5; // job label -> distro or "@<warm key>"
+  int32 cpus = 6;
+  int64 memory_mib = 7;
+  int32 max_jobs = 8;
+  string version = 9;             // runner release installed in clones, empty for the latest
+  bool paused = 10;
+  int32 running = 11;             // jobs running now
+  int64 last_poll_unix = 12;
+  string last_error = 13;         // of the last poll, empty when it worked
+  int64 created_at_unix = 14;
+}
+
+message RunnerAddRequest {
+  Runner runner = 1;
+  string token = 2; // forge API token, kept by anvild and never sent back
+}
+
+message RunnerAddReply {
+  Runner runner = 1;
+}
+
+message RunnerListRequest {}
+
+message RunnerListReply {
+  repeated Runner runners = 1;
+}
+
+message RunnerRemoveRequest {
+  string name = 1;
+}
+
+message RunnerRemoveReply {}
+
+message RunnerSetPausedRequest {
+  string name = 1;
+  bool paused = 2;
+}
+
+message RunnerSetPausedReply {
+  Runner runner = 1;
+}
+
+message RunnerJobsRequest {
+  string runner = 1; // empty for every runner
+}
+
+message RunnerJob {
+  string id = 1;
+  string runner = 2;
+  int64 job_id = 3;      // the forge's job id
+  string name = 4;
+  repeated string labels = 5;
+  string distro = 6;
+  string clone_id = 7;
+  string state = 8;      // running, succeeded, failed
+  int32 exit_code = 9;
+  string error = 10;
+  int64 started_at_unix = 11;
+  int64 ended_at_unix = 12;
+}
+
+message RunnerJobsReply {
+  repeated RunnerJob jobs = 1;
+}
+
+// PipelineService runs anvil-ci.yaml pipelines: jobs on ephemeral clones, ordered by
+// their needs, by hand or on every new commit of a watched branch.
+service PipelineService {
+  // Run uploads a source tree and runs its pipeline, streaming it to the end. The first
+  // input is the request, upload chunks follow. A dropped stream cancels the run.
+  rpc Run(stream PipelineRunInput) returns (stream PipelineEvent);
+  // Rerun runs an earlier run's source again, streaming the new run.
+  rpc Rerun(PipelineRerunRequest) returns (stream PipelineEvent);
+  rpc Cancel(PipelineCancelRequest) returns (PipelineCancelReply);
+  rpc ListRuns(PipelineListRunsRequest) returns (PipelineListRunsReply);
+  rpc GetRun(PipelineGetRunRequest) returns (PipelineRun);
+  // Logs streams a job's output on one distro, or every log of the run.
+  rpc Logs(PipelineLogsRequest) returns (stream PipelineChunk);
+  // Artifacts streams the run's collected files as a tar, <job>/<distro>/...
+  rpc Artifacts(PipelineArtifactsRequest) returns (stream PipelineChunk);
+
+  rpc AddWatch(PipelineWatchAddRequest) returns (PipelineWatch);
+  rpc ListWatches(PipelineWatchListRequest) returns (PipelineWatchListReply);
+  rpc RemoveWatch(PipelineWatchRemoveRequest) returns (PipelineWatchRemoveReply);
+  rpc SetWatchPaused(PipelineWatchPauseRequest) returns (PipelineWatch);
+  // TriggerWatch runs a watch's pipeline on its branch now, in the background.
+  rpc TriggerWatch(PipelineWatchTriggerRequest) returns (PipelineWatchTriggerReply);
+}
+
+message PipelineRunRequest {
+  string file = 1; // the pipeline file in the source, anvil-ci.yaml when empty
+}
+
+message PipelineRunInput {
+  oneof input {
+    PipelineRunRequest request = 1;
+    bytes upload_chunk = 2; // a tar of the source tree
+    bool upload_done = 3;
+  }
+}
+
+message PipelineJob {
+  string name = 1;
+  string distro = 2;
+  string state = 3; // pending, running, succeeded, failed, skipped
+  int32 exit_code = 4;
+  string error = 5;
+  int64 duration_ms = 6;
+}
+
+message PipelineRun {
+  string id = 1;
+  string source = 2;  // manual, rerun:<id> or watch:<name>
+  string file = 3;
+  string commit = 4;
+  string state = 5;   // running, succeeded, failed, cancelled
+  string error = 6;
+  string applied = 7; // with apply: "applied <file>" or "failed: <why>"
+  repeated PipelineJob jobs = 8;
+  int64 started_at_unix = 9;
+  int64 ended_at_unix = 10;
+}
+
+message PipelineProgress {
+  string job = 1;    // empty for the run itself
+  string distro = 2;
+  string message = 3;
+}
+
+message PipelineOutput {
+  string job = 1;
+  string distro = 2;
+  OutputStream stream = 3;
+  bytes data = 4;
+}
+
+message PipelineEvent {
+  oneof event {
+    PipelineRun run = 1;  // first when the run starts, last when it ends
+    PipelineProgress progress = 2;
+    PipelineOutput output = 3;
+    PipelineJob job = 4;  // a job on one distro changed state
+  }
+}
+
+message PipelineRerunRequest {
+  string id = 1; // or a unique start of one
+}
+
+message PipelineCancelRequest {
+  string id = 1;
+}
+
+message PipelineCancelReply {}
+
+message PipelineListRunsRequest {
+  int32 limit = 1; // 0 for all
+}
+
+message PipelineListRunsReply {
+  repeated PipelineRun runs = 1;
+}
+
+message PipelineGetRunRequest {
+  string id = 1;
+}
+
+message PipelineLogsRequest {
+  string id = 1;
+  string job = 2;    // empty for every log
+  string distro = 3; // empty for every distro of job
+}
+
+message PipelineChunk {
+  bytes data = 1;
+}
+
+message PipelineArtifactsRequest {
+  string id = 1;
+}
+
+message PipelineWatch {
+  string name = 1;
+  string repo = 2;
+  string branch = 3;
+  string file = 4;
+  int64 interval_seconds = 5;
+  bool paused = 6;
+  string last_commit = 7;
+  string last_run = 8;
+  string last_error = 9;
+  int64 last_poll_unix = 10;
+}
+
+message PipelineWatchAddRequest {
+  PipelineWatch watch = 1;
+}
+
+message PipelineWatchListRequest {}
+
+message PipelineWatchListReply {
+  repeated PipelineWatch watches = 1;
+}
+
+message PipelineWatchRemoveRequest {
+  string name = 1;
+}
+
+message PipelineWatchRemoveReply {}
+
+message PipelineWatchPauseRequest {
+  string name = 1;
+  bool paused = 2;
+}
+
+message PipelineWatchTriggerRequest {
+  string name = 1;
+}
+
+message PipelineWatchTriggerReply {}

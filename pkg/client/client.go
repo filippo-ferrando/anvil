@@ -25,6 +25,8 @@ type Client struct {
 	Export    anvilv1.ExportServiceClient
 	Snapshot  anvilv1.SnapshotServiceClient
 	Ephemeral anvilv1.EphemeralServiceClient
+	Runner    anvilv1.RunnerServiceClient
+	Pipeline  anvilv1.PipelineServiceClient
 
 	// Remote is the ssh destination of the daemon's host, empty for a local daemon.
 	Remote string
@@ -56,6 +58,8 @@ func newClient(conn *grpc.ClientConn) *Client {
 		Export:                anvilv1.NewExportServiceClient(conn),
 		Snapshot:              anvilv1.NewSnapshotServiceClient(conn),
 		Ephemeral:             anvilv1.NewEphemeralServiceClient(conn),
+		Runner:                anvilv1.NewRunnerServiceClient(conn),
+		Pipeline:              anvilv1.NewPipelineServiceClient(conn),
 	}
 }
 

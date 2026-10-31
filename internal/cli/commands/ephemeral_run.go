@@ -33,11 +33,17 @@ type ephemeralFlags struct {
 	keepFailed bool
 	logs       string
 	tty        bool
+	collect    []string
+	perDistro  bool // collect into a directory per distro, as matrix does
+	setup      string
+	keyFiles   []string
 }
 
 func (f *ephemeralFlags) addRunFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&f.keepFailed, "keep-failed", false, "keep a clone whose command failed, for `anvil ephemeral shell`")
 	cmd.Flags().StringVar(&f.logs, "logs", "", "write each distro's full output to <dir>/<distro>.log")
+	cmd.Flags().StringArrayVar(&f.collect, "collect", nil, "copy <guest-path>[:<host-dir>] back after the command, failed or not; "+
+		"relative to /work with an upload, globs and ** allowed, host dir default . (repeatable)")
 }
 
 // splitRunArgs splits `<distros> [path] -- <command>`: a path can't follow `--`, where it
@@ -66,6 +72,19 @@ func runEphemeral(cmd *cobra.Command, flags *globalFlags, distros []string, path
 	if f.tty && len(distros) > 1 {
 		return errors.New("--tty is for a run on one distro")
 	}
+	setup, err := client.LoadSetup(f.setup, f.keyFiles)
+	if err != nil {
+		return err
+	}
+	specs := make([]client.CollectSpec, len(f.collect))
+	guestPaths := make([]string, len(f.collect))
+	for i, s := range f.collect {
+		spec, err := client.ParseCollect(s)
+		if err != nil {
+			return err
+		}
+		specs[i], guestPaths[i] = spec, spec.Guest
+	}
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	c, err := dial(flags)
@@ -89,7 +108,7 @@ func runEphemeral(cmd *cobra.Command, flags *globalFlags, distros []string, path
 	}
 	req := &anvilv1.RunRequest{
 		Distros: distros, Command: command, Env: f.env, Cpus: f.cpus, MemoryMib: f.memoryMiB, Arch: f.arch,
-		KeepFailed: f.keepFailed, Upload: path != "", Tty: f.tty,
+		KeepFailed: f.keepFailed, Upload: path != "", Tty: f.tty, Collect: guestPaths, Setup: setup,
 	}
 	if f.tty {
 		if w, h, err := term.GetSize(os.Stdout.Fd()); err == nil {
@@ -101,6 +120,12 @@ func runEphemeral(cmd *cobra.Command, flags *globalFlags, distros []string, path
 	}
 
 	out := newRunPrinter(os.Stdout, os.Stderr, distros, f.tty)
+	if len(specs) > 0 {
+		out.collector = client.NewCollector(guestPaths, func(i int, distro string) string {
+			return client.CollectDir(specs[i], distro, f.perDistro)
+		})
+		defer out.collector.Close()
+	}
 	stopLive := out.live()
 	defer stopLive()
 	if f.logs != "" {
@@ -235,7 +260,9 @@ type runPrinter struct {
 	logs           map[string]*os.File
 	exits          map[string]*anvilv1.RunExit
 	order          []string
-	board          *statusBoard // live steps at the bottom of a terminal, nil elsewhere
+	board          *statusBoard      // live steps at the bottom of a terminal, nil elsewhere
+	collector      *client.Collector // nil without --collect
+	label          string            // the summary's first column, DISTRO by default
 }
 
 var prefixColors = []string{"36", "33", "35", "32", "34", "91", "96", "93"}
@@ -346,6 +373,13 @@ func (p *runPrinter) event(ev *anvilv1.RunEvent) {
 			return
 		}
 		p.print(func() { p.writeLines(o.GetDistro(), o.GetStream(), w, o.GetData()) })
+	case ev.GetCollect() != nil:
+		if p.collector == nil {
+			return
+		}
+		if res := p.collector.Handle(ev.GetCollect()); res != nil {
+			p.collected(res)
+		}
 	case ev.GetExit() != nil:
 		x := ev.GetExit()
 		p.print(func() { p.flush(x.GetDistro()) })
@@ -354,6 +388,22 @@ func (p *runPrinter) event(ev *anvilv1.RunEvent) {
 		}
 		p.exits[x.GetDistro()] = x
 	}
+}
+
+// collected prints where a collect path of one clone went, or why it didn't.
+func (p *runPrinter) collected(res *client.CollectResult) {
+	msg := fmt.Sprintf("collected %s into %s", res.Path, res.Dir)
+	if res.Err != nil {
+		msg = "collect: " + res.Err.Error()
+	}
+	eol := "\n"
+	if p.raw {
+		eol = "\r\n"
+	}
+	p.print(func() {
+		p.flush(res.Distro) // the command's last line, which may lack its newline
+		fmt.Fprintf(p.stderr, "%s%s%s", p.prefix(res.Distro), dim(p.color, msg), eol)
+	})
 }
 
 // writeLines prints every complete line of data with the distro's prefix, and keeps the
@@ -411,7 +461,11 @@ func (p *runPrinter) finish() {
 	}
 	fmt.Fprintln(p.stderr)
 	tw := tabwriter.NewWriter(p.stderr, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "DISTRO\tEXIT\tDURATION\tNOTE")
+	label := p.label
+	if label == "" {
+		label = "DISTRO"
+	}
+	fmt.Fprintln(tw, label+"\tEXIT\tDURATION\tNOTE")
 	for _, d := range p.order {
 		x := p.exits[d]
 		if x == nil {

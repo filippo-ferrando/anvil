@@ -289,7 +289,7 @@ func receiveUpload(conn io.Reader) error {
 	pr, pw := io.Pipe()
 	done := make(chan error, 1)
 	go func() {
-		err := extract(pr, WorkDir)
+		err := Extract(pr, WorkDir)
 		_, _ = io.Copy(io.Discard, pr)
 		done <- err
 	}()

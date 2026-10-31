@@ -64,7 +64,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: opening %s: %w", path, err)
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		for _, bucket := range [][]byte{bucketInstances, bucketInstanceNames, bucketCloudInit, bucketManifests, bucketMirrors, bucketIntents, bucketIntentNames, bucketHosts, bucketEvents, bucketWarm, bucketWarmPools} {
+		for _, bucket := range [][]byte{bucketInstances, bucketInstanceNames, bucketCloudInit, bucketManifests, bucketMirrors, bucketIntents, bucketIntentNames, bucketHosts, bucketEvents, bucketWarm, bucketWarmPools, bucketRunners, bucketRunnerJobs, bucketPipelineRuns, bucketPipelineWatches} {
 			if _, err := tx.CreateBucketIfNotExists(bucket); err != nil {
 				return err
 			}

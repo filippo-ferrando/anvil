@@ -90,3 +90,6 @@ func FreeDir(path string) string {
 		candidate = fmt.Sprintf("%s-%d", path, n)
 	}
 }
+
+// PipelineRunsDir holds each pipeline run's source, logs and collected files.
+func PipelineRunsDir() string { return filepath.Join(StateDir, "pipeline-runs") }

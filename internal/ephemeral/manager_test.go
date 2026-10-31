@@ -28,6 +28,8 @@ type fakeEngine struct {
 	builds   atomic.Int32
 	setups   atomic.Int32 // builds with a setup
 	buildErr error
+	runSetup bool // run a build's setup against a guest server on this host
+	saveErr  error
 	slowDel  chan struct{} // when set, DeleteClone waits for it
 	mu       sync.Mutex
 	deleted  []string
@@ -45,6 +47,16 @@ func (f *fakeEngine) BuildWarm(_ context.Context, s WarmSpec, dir string, setup 
 	f.builds.Add(1)
 	if setup != nil {
 		f.setups.Add(1)
+		if f.runSetup {
+			dial := func(context.Context) (io.ReadWriteCloser, error) {
+				host, guest := net.Pipe()
+				go func() { _ = guestexec.Serve(guest) }()
+				return host, nil
+			}
+			if err := setup(context.Background(), dial, progress); err != nil {
+				return err
+			}
+		}
 	}
 	time.Sleep(50 * time.Millisecond) // long enough for concurrent callers to pile up
 	if f.buildErr != nil {
@@ -79,6 +91,21 @@ func (f *fakeEngine) DeleteClone(_ context.Context, id string) error {
 }
 
 func (f *fakeEngine) SweepClones(context.Context) error { f.swept = true; return nil }
+
+func (f *fakeEngine) SaveClone(_ context.Context, id, baseDir, dir string) error {
+	if f.saveErr != nil {
+		return f.saveErr
+	}
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return err
+	}
+	for _, name := range []string{"vmstate", "mem", "disk.raw"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("saved "+id), 0o640); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 type fakeClone struct {
 	id      string

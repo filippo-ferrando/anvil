@@ -1,336 +1,87 @@
 # Anvil: status and future work
 
-## Current status
+## Done
 
-Working today: QEMU VMs over QMP, Firecracker microVMs, Docker containers over the real HTTP API, intents with
-a shared bridge network and per-intent DNS, SSH-driven migration, export/import bundles,
-snapshots, fork, port forwards, virtiofs mounts, cloud-init library and repo import, VM and
-container mirrors, man pages, shell completions and the TUI.
+QEMU VMs over QMP, Firecracker microVMs, Docker containers over the real HTTP API, intents
+with a shared bridge network and per-intent DNS, `anvil apply`, SSH-driven migration,
+export/import bundles, snapshots, fork, port forwards, virtiofs mounts, cloud-init library
+and repo import, VM and container mirrors, man pages, shell completions and the TUI.
 
-## Container engines
+Ephemeral VMs and matrix runs (`launch --ephemeral`, `anvil matrix`, `anvil warm`,
+`anvil ephemeral`): warm Firecracker snapshots, per-clone netns with NAT, `anvil-guest` over
+vsock, clone pool, netns pool, dm-snapshot disks, admission control, free page reporting,
+VMGenID and the opt-in UFFD memory backend. Docs: `docs/ephemeral.md`, `docs/firecracker.md`.
+Not planned: QEMU ephemeral runs, user cloud-init for ephemeral runs.
+
+CI/CD on ephemeral clones: `--collect`, warm snapshots with a setup script, `anvil warm save`,
+`anvil runner` for Forgejo and GitHub Actions jobs, and `anvil pipeline` with history,
+branch watches and apply on success. Docs: `docs/runner.md`, `docs/pipelines.md`.
+
+## Open
 
 ### Podman backend
 
-Docker is the only container engine right now. `--engine podman` returns a clear
-"not implemented yet" error instead of silently doing nothing, but there's no actual
-Podman code yet.
+Docker is the only engine; `--engine podman` returns a "not implemented yet" error.
 
-A few things are blocked on this landing:
-
-- **Podman engine support.** The `anvil` CLI needs to be able to talk to Podman
-  instead of Docker, and `anvild` needs to be able to run Podman containers.
-- **Cross-kind networking for Podman.** A VM and a container sharing an entire
-  network is done and working for Docker; there's no equivalent design for Podman/
-  netavark yet.
-- **Mixing engines in one intent.** Whether an intent can contain both a Docker
-  container and a Podman container at once is undecided, current plan is "don't
-  allow it" until there's a real reason to.
-
-## Intents
+- Podman engine support in anvild.
+- Cross-kind networking (VM and container on one network) for Podman/netavark; Docker has it.
+- Mixing engines in one intent: not allowed until there's a real reason.
 
 ### GitOps sync
 
-Builds on `anvil apply` (`internal/intent/apply`). The daemon watches a git repo (GitHub or any git remote)
-and keeps the host strictly in line with every `anvil.yaml` found in it, recursively.
+Builds on `anvil apply` (`internal/intent/apply`): anvild keeps the host in line with every
+`anvil.yaml` in a git repo, recursively.
 
-- **Source.** `anvil gitops add <name> --repo <url> [--branch main] [--path infra/]`,
-  saved in bbolt. The daemon shells out to the local `git` binary, as migration does
-  with `ssh`, so existing SSH keys or credential helpers are enough for private repos.
-- **Watch.** Poll the remote on an interval (default 1m) and apply only when the commit
-  changes. The daemon listens on a unix socket only, so push webhooks are out of scope.
-- **Reconcile.** On each new commit, load every `anvil.yaml` under the path and run the
-  same compare-and-apply as `anvil apply`, in one pass over the whole repo.
-- **Strict coherence.** Instances and intents created by a sync are tagged with their
-  source. Anything tagged but no longer in the repo is deleted, and manual changes to
-  tagged instances (stop, delete, edit) are reverted on the next check. Untagged
-  instances are never touched.
-- **Safety.** A repo that fails to parse, or a failed apply, leaves the current state as
-  is and records the error. `--dry-run` on `anvil gitops sync` shows the plan without
-  applying it, and `anvil gitops pause <name>` stops reconciling for manual work.
-- **Surface.** gRPC service plus `anvil gitops add/list/remove/status/sync/pause/resume`.
-  A TUI screen shows each source with its last synced commit, drift and last error.
-- **Tests.** Unit tests for the reconcile diff, including pruning and drift revert,
-  against a local bare repo created in the test.
+- **Source.** `anvil gitops add <name> --repo <url> [--branch main] [--path infra/]`, stored
+  in bbolt. Shells out to local `git`, so existing SSH keys or credential helpers work.
+- **Watch.** Poll the remote (default 1m), apply only when the commit changes. No webhooks.
+- **Reconcile.** Same compare-and-apply as `anvil apply`, one pass over the whole repo.
+- **Strict coherence.** Synced instances and intents are tagged with their source; tagged ones
+  gone from the repo are deleted, manual changes to them are reverted. Untagged are untouched.
+- **Safety.** A parse or apply failure keeps the current state and records the error.
+  `anvil gitops sync --dry-run` shows the plan; `anvil gitops pause <name>` stops reconciling.
+- **Surface.** gRPC plus `anvil gitops add/list/remove/status/sync/pause/resume`, and a TUI
+  screen with last synced commit, drift and last error.
+- **Tests.** Reconcile diff, pruning and drift revert against a local bare repo.
 
-## VMs
+### CI/CD
 
-### Ephemeral VMs and matrix runs
+Built: `--collect`, setup-script warm snapshots, `warm save`, `@<key>` runs, `anvil runner`
+(Forgejo 15+, GitHub) and `anvil pipeline` (run, history, watches, apply on success).
+Docs: `docs/ephemeral.md`, `docs/runner.md`, `docs/pipelines.md`. Still open:
 
-Status: milestones 1 to 6 done; user docs in `docs/ephemeral.md`. Still to check on a
-real install: the jailed path (`--netns`, links into the jail), which tests can't run without root. Each milestone below is one reviewable change with its own
-tests; do them in order.
+- **Real-run checks.** Only fakes cover these: `warm save` on a jailed clone (a dm-snapshot
+  disk is read from its device in the jail), the forge runners against a real Forgejo 15 and
+  GitHub, and the runner install scripts on every catalog distro.
+- **Runner.** GitHub org scopes (no queued-job listing per org), runner groups other than
+  the default, container jobs (`docker://` labels) inside clones.
+- **Pipelines.** Passing collected files from a job to the jobs that need it, secrets for
+  jobs, webhooks instead of polling, reporting commit status back to the forge.
+- **Saved clones with UFFD memory.**
 
-**Commands.**
+### Ephemeral VMs
 
-- `anvil launch --ephemeral <distro> [path] -- <cmd>`: restore a clone from a warm snapshot,
-  run `<cmd>`, stream its output, delete the clone, exit with the command's exit code.
-- `anvil matrix ubuntu,arch,alpine [path] -- <cmd>`: the same, one clone per distro, all in
-  parallel. Exits non-zero if any clone failed.
-- `anvil warm create|list|rm`: manage warm snapshots by hand (runs also build them on demand).
-- `anvil ephemeral list|shell|rm`: clones kept by `--keep-failed`.
-- Shared flags: `--cpus`, `--memory` (part of the warm key), `--logs <dir>`, `--keep-failed`.
+- **Real-install checks.** Need root, so not covered by tests: the jailed path (`--netns`,
+  links into the jail), the dm-snapshot disk in a jail (`TestCloneDiskReal`), and UFFD with a
+  jailed firecracker (`/dev/userfaultfd` in the jail, `TestEphemeralRealRunUffd` needs
+  `vm.unprivileged_userfaultfd=1`).
+- **Inbound networking to clones.** Clones are outbound only. A forwarded port needs a free
+  host port, a host DNAT to the clone's veth end and a DNAT inside the netns to `10.200.0.2`,
+  both removed with the clone. Surface: `--publish <host>:<guest>` on `launch --ephemeral`
+  and kept clones, the mapping in `anvil ephemeral list`, `Run`/`CloneExec` gRPC fields, the
+  TUI Ephemeral screen. Test the nft rules under `unshare -rn`.
 
-`path` is optional, positional, before `--` (after `--` it can't be told apart from the
-command's own arguments). `<distro>` resolves through the catalog like `anvil launch` does.
+### Migration
 
-**Hard requirements, checked up front with a clear error, no fallback:** Firecracker
-hypervisor, and the jailer in use (`jailerExe()` in `internal/vm/fc_jail.go` not empty). The
-packages ship a static firecracker/jailer for this (`scripts/fetch-firecracker.sh`).
+- **Live migration.** QMP `migrate` through an SSH tunnel, a short pause instead of stop,
+  copy and start.
 
-#### Design
-
-**Warm snapshot.** A Firecracker full snapshot (vmstate + memory file) plus a reflink copy of
-the disk taken at the same moment. The pristine base disk does not match: the memory holds
-the guest's page cache.
-
-- Not tied to an instance: own bbolt bucket in `internal/store` (follow `mirrors.go`), files
-  under `StateDir/warm/<key>/` (`vmstate`, `mem`, `disk.raw`, `seed.iso`, `guest.iso`).
-  Same filesystem as `config.JailerDir()`, so `jailFile()` hard-links them into each clone's
-  jail; a copy of the memory file would kill the speed.
-- Key: hash of distro + version + arch, CPUs, memory, the generated cloud-init, Firecracker
-  version, kernel hash, `anvil-guest` hash. A run with no match builds one first (slow once),
-  then reuses it. Never exported or migrated.
-- Build: create a normal Firecracker VM in the clone network layout (below), wait for
-  cloud-init (`ReadyWaiter`), check `anvil-guest` answers, freeze guest filesystems
-  (`guest-fsfreeze-freeze`, `internal/vm/qemu/qga.go`), pause, `PUT /snapshot/create`
-  (`snapshot_type: Full`), reflink the disk, stop and delete the build VM.
-- No virtio-mem: skip `cfg.MemoryHotplug` (`fcHotplugMiB` in `fc_backend.go`) for warm VMs.
-  Default memory small (512 MiB): the memory file is as large as the guest RAM.
-- Every drive of the build VM must exist at the same in-jail path in each clone
-  (`/disk.raw`, `/seed.iso`, `/guest.iso`), the snapshot records them. Same for
-  `vsock.sock` and the tap name.
-
-**Clone restore.** A second spawn path: firecracker started with no `--config-file`
-(`Paths.command()` in `internal/vm/firecracker/process.go` always passes it today), then
-`PUT /snapshot/load` with `mem_backend: {backend_type: File}` and `resume_vm: true`. The
-memory file is mapped private, so clones of one warm snapshot share its pages. After load:
-set the guest clock (`guest-set-time` over the agent; a stale clock breaks TLS and apt),
-then dial `anvil-guest`.
-
-Clone IDs carry an `eph-` prefix. Clones live only in anvild memory, not in bbolt; on start
-anvild removes leftover `eph-` jails and netns. A client disconnect or Ctrl-C deletes the
-run's clones (except kept ones).
-
-**Clone network: NAT, one netns per clone.** Every clone has the same MAC and IP, so each
-gets its own netns with an identical inside layout: tap `tap0` with `10.200.0.1/30`, guest
-`10.200.0.2`. The warm build VM uses the same layout, so the restored guest config is right
-as is.
-
-- A veth pair with a unique /30 per clone links the netns to the host; MASQUERADE inside the
-  netns (guest to veth) and on the host (veth to uplink, like `fcNftRules` in `fcnet.go`).
-  Outbound only, no inbound.
-- Creating a netns and configuring links inside it needs `CAP_SYS_ADMIN`, which anvild
-  doesn't have (`anvild.service` gives it only `CAP_NET_ADMIN`). Add `netns-create` /
-  `netns-delete` requests to the root helper (`internal/hostdev/helper.go`, socket
-  `anvil-devhelper.socket`): it creates `/run/netns/anvil-<id>`, the veth pair, `tap0` owned
-  by the anvil user, addresses and the in-netns nft rule, then returns. Host-side veth
-  address and host NAT stay in anvild.
-- Firecracker joins it through the jailer's `--netns /run/netns/anvil-<id>` (add to
-  `Jail` in `process.go`).
-
-**Guest exec: `anvil-guest`.** A small static Go binary (`cmd/anvil-guest`,
-`CGO_ENABLED=0`), shipped by the anvild package in `/usr/lib/anvil/guest/anvil-guest`. Not
-the `anvil` CLI: the anvild package doesn't depend on the anvil one, and anvild itself is
-not static.
-
-- Delivered like the GUI tools: packed into a read-only ISO drive (see `toolsISO()` in
-  `internal/vm/fc_gui.go`), installed and started by cloud-init as a service, same pattern
-  as `fcAgentUnit` / `fcAgentStartCmd` in `internal/vm/backend.go` (systemd and OpenRC).
-  Listens on vsock port 1025 (qemu-ga is on 1024).
-- Runs as part of the warm snapshot, so every clone restores with it already listening.
-  Each clone has its own vsock socket, so no network is involved.
-- Protocol, one connection per command: a JSON header (argv, env, cwd, tty, has_upload),
-  then the optional upload as a tar stream, then length-prefixed frames both ways: stdin
-  and resize from host, stdout, stderr and exit code from guest. Commands run as root, cwd
-  `/work` when a path was uploaded.
-
-**gRPC.** `rpc Run(stream RunInput) returns (stream RunEvent)`, bidirectional because the
-code path lives on the client (it may be `--remote`). First input: the request (distros,
-command, flags); then tar chunks of the path. anvild resolves warm snapshots, restores
-clones, fans the tar out to every clone, merges output. Events: progress (building warm
-snapshot, restoring), `{clone, distro, stream, data}`, `{clone, distro, exit_code,
-duration}`. `WarmCreate` (streaming progress), `WarmList`, `WarmDelete` for `anvil warm`.
-
-**CLI** (`internal/cli/commands/run.go`, `warm.go`; client only, no logic).
-
-- Tar the path honoring `.gitignore`: `git ls-files --cached --others --exclude-standard`
-  inside a git repo (same trick as `packaging/rpm/build.sh`), every file otherwise.
-- Output: each line prefixed with a colored `[distro]`, split on newlines so lines never mix;
-  then a summary table (distro, exit code, duration). `--logs <dir>` writes one full log
-  per distro. `anvil warm list` has `-o table|json` (`addOutputFlag` in `table.go`).
-
-**TUI.** A warm snapshots section (list, create, delete) and a run view: a form for distros,
-path and command, then one pane per clone with its output and exit code.
-
-#### Milestones
-
-1. **Firecracker snapshot API.** `CreateSnapshot`, `LoadSnapshot` in
-   `internal/vm/firecracker/client.go`; `Paths.command()` without `--config-file`;
-   `Jail.NetNS` (`--netns`). Unit tests against the fake API server in `client_test.go`;
-   integration test in `fc_integration_test.go` style: boot, pause, snapshot, restore in a
-   new firecracker, agent ping.
-2. **Clone netns.** Root helper requests, host-side veth and NAT, cleanup. Test the netns
-   setup under `unshare -rn` (never on the host network). Done: `internal/hostdev/netns*.go`
-   and `internal/vm/fc_clonenet.go`, layout in `docs/networking.md`; the guest's DNS is
-   `10.200.0.1`, forwarded to anvild on the host end. Tests need `unshare -rnm` (mount
-   namespace too, to pin the netns). A real guest in a clone netns is first tested in 4.
-3. **`anvil-guest`.** Binary, protocol, ISO delivery, cloud-init service. Unit tests for the
-   protocol over a `net.Pipe`, upload extraction, exit codes, tty. Done: `cmd/anvil-guest`,
-   `internal/guestexec`, `internal/vm/fc_guest.go`, `VMSpec.AnvilGuest` (internal, for the
-   warm build). The upload is framed like everything else. `Header.SetClock` sets the
-   guest clock, which a clone needs: `clock_realtime` doesn't move it (see below).
-4. **Warm snapshots.** Store bucket, key, build, `WarmCreate/List/Delete`, `anvil warm`,
-   TUI section. Unit test for the key; integration test builds one. Done: `internal/ephemeral`
-   (the Manager, one build per key at a time), `internal/vm/fc_warm.go`, `store/warm.go`. The
-   build doesn't freeze the guest filesystems: the VM is paused before the disk copy, so disk
-   and memory match, and qemu-ga isn't in warm VMs (it needs a network to install); the
-   guest only runs `sync` through anvil-guest first.
-5. **Run.** `Run` RPC, ephemeral and matrix, upload, CLI output, `--logs`, cancel cleanup,
-   `eph-` sweep on start. Unit tests for the line prefixer and summary; integration test
-   runs `uname -a` on two clones of one warm snapshot in parallel. Done:
-   `internal/vm/fc_clone.go`, `daemon/ephemeral_server.go`, `cli/commands/ephemeral_run.go`.
-   The daemon spools the upload to a file each clone reads. `TestEphemeralRealRun` runs the
-   clones unjailed from their own dirs with relative paths (`firecracker.Paths.Chdir`),
-   since the jailer needs root; production refuses clones without the jailer.
-6. **TUI run view, `--keep-failed`, `anvil ephemeral list|shell|rm`** (shell = tty exec
-   over `anvil-guest`), docs (`docs/ephemeral.md`, `docs/firecracker.md`), `make man`. Done:
-   the TUI Ephemeral screen, `CloneExec`. `launch --ephemeral -t` runs on a terminal too.
-
-Real-VM tests need `ANVIL_FC_KERNEL` and `ANVIL_E2E_IMAGE` (`docs/firecracker.md`) and skip
-without them.
-
-#### Check before building on it
-
-- Done: Firecracker 1.17 snapshot/load request bodies, checked against
-  `firecracker_spec-v1.17.0.yaml`. Load also takes `network_overrides`, `vsock_override`
-  and `clock_realtime` (x86_64, moves kvmclock forward by the time since the snapshot).
-- Done: a full snapshot of a VM with vsock, entropy, serial and two read-only drives
-  restores (`TestSnapshotRestore`), and a guest vsock listener started before the snapshot
-  answers in the clone right after (`TestFirecrackerSnapshotRestore`).
-- Done: with virtio-mem on, the memory file covers the whole hotplug region, so warm VMs
-  must leave it off as planned.
-- Snapshot support for the devices a warm VM uses: vsock, entropy, serial console, two
-  read-only drives. Memory hotplug is left off on purpose.
-- Guest RNG after restore: `CONFIG_VMGENID` is not in `scripts/fc-kernel.config`. Check that
-  Firecracker 1.17 exposes VMGenID on x86_64 and aarch64; if so, add it to the kernel config
-  and publish a new `fc-kernel-*` release.
-- qemu-ga's listener survives a restore (Firecracker resets vsock connections on snapshot);
-  if not, restart it through `anvil-guest`. A guest vsock listener (anvil-guest's own)
-  does survive and answers within ~30ms of the load; qemu-ga itself is still unchecked.
-- Done: the clock. With `clock_realtime` the clone is still behind by the time since the
-  snapshot (guest clocksource `tsc`), so the clone sets it with `guestexec.SetClock`
-  instead of `guest-set-time`, which needs qemu-ga.
-
-#### Not in scope
-
-QEMU ephemeral runs, inbound networking to clones, user cloud-init for ephemeral runs. A
-limit on clones starting at once is planned under "AI workloads" (admission control).
-
-## AI workloads
-
-Agents use sandboxes differently from CI: many at once, each one long-lived with many small
-calls, plus checkpoints, rollback and a tight network policy. The ephemeral path (warm
-snapshots, clones, `anvil-guest`) is the base; this section turns it into a sandbox platform.
-Every milestone gets gRPC, CLI and TUI surface where it makes sense, tests, and user docs
-(why it exists, how it works, how to use it) in `docs/ephemeral.md` or a new `docs/sandbox.md`.
-
-### 1. Latency and density
-
-Status: all seven done, user docs in `docs/ephemeral.md` (and `networking.md`,
-`security.md`, `tui.md`, `anvild.8`). Checked on real VMs (`TestEphemeralRealRun`,
-`TestEphemeralRealPool`): balloon and VMGenID bound in clones, a pooled clone handed out
-in under 1ms (a run in ~80ms, against ~350ms restoring). Still to check on a real install,
-since tests can't without root: the dm-snapshot disk in a jail (`TestCloneDiskReal` needs
-root), and UFFD with real firecracker (`TestEphemeralRealRunUffd` needs
-`vm.unprivileged_userfaultfd=1`, and a jailed firecracker needs `/dev/userfaultfd` in its jail).
-
-Before this work a clone restore (`RestoreClone`, `internal/vm/fc_clone.go`) builds a netns through the
-root helper (one process per request), copies the warm disk (`cp --reflink=auto`, a full
-copy on ext4), spawns firecracker, loads the snapshot, then sets the clock and hostname.
-
-1. **Phase timings and admission control.** Each restore reports how long each phase took
-   (netns, disk, spawn, load, setup) in the run's progress events and anvild's log, so the
-   rest is measured, not guessed. A clone starts only when the host's `MemAvailable` covers
-   its memory plus a reserve (`ANVIL_EPH_RESERVE_MIB`, default 1024); otherwise it waits
-   with a "waiting for memory" step instead of all clones of a large matrix starting at once.
-2. **Netns pool.** The helper builds clone netns ahead of time under pool ids; a clone takes
-   one instead of waiting for a helper round trip, and the pool refills in the background.
-3. **dm-snapshot disks.** On a filesystem without reflink, the root helper builds a
-   device-mapper snapshot per clone: the warm disk is the read-only origin (a read-only
-   loop device), a sparse file of the disk's size is the copy-on-write store, and the
-   helper puts the device node in the clone's jail as `disk.raw`. Clone disk setup becomes
-   O(1) whatever the disk size. With reflink (btrfs, xfs) the copy stays, it is already
-   O(1) and cheaper than a helper round trip. The helper opens both files itself, refuses
-   anything not a regular file owned by anvild's user, and makes the node with
-   `RESOLVE_NO_SYMLINKS` under the fixed jail root. Needs `dmsetup` and `dm_snapshot`;
-   without them clones fall back to the copy, with a log line.
-4. **Clone pool.** `anvil warm pool <distro> [--cpus --memory] --size N` keeps N clones of
-   that warm snapshot restored and running, ready to hand out. The pool is stored in
-   bbolt by distro and size, not by warm key, so a kernel or firecracker upgrade refills it
-   from the new snapshot. Handing out a clone sets its clock again and takes milliseconds;
-   a miss falls back to a normal restore. gRPC `WarmPoolSet/List`, `anvil warm pool`,
-   pool sizes in `anvil warm list` and the TUI Ephemeral screen. Pooled clones count for
-   admission control.
-5. **Free page reporting.** Warm VMs get a balloon at 0 MiB with `free_page_reporting`
-   and `deflate_on_oom`, so memory a guest frees goes back to the host. Needs
-   `CONFIG_VIRTIO_BALLOON` and `CONFIG_PAGE_REPORTING`, already in Firecracker's 6.18 base
-   config; pinned in `scripts/fc-kernel.config` so the build checks them. Part of the warm
-   key, so warm snapshots rebuild once.
-6. **VMGenID.** Firecracker always exposes it and writes a new id on every restore, so each
-   clone's kernel reseeds its RNG. `CONFIG_VMGENID` is in the x86_64 base config; pin it in
-   the fragment and check aarch64 (needs the 6.10 DeviceTree binding, fine on 6.18).
-   Userspace state copied from the snapshot (machine-id, cached randomness) still repeats
-   across clones, which `docs/security.md` should say.
-7. **UFFD memory backend, opt-in.** With UFFD, Firecracker maps guest memory anonymously
-   and a handler copies each faulting page in (`UFFDIO_COPY`), so clones no longer share
-   the snapshot's pages as they do with the `File` backend: it trades density for latency.
-   `File` stays the default; `ANVIL_EPH_MEMORY=uffd` turns on a handler in anvild (one
-   goroutine per clone on the socket in its jail). The first clone of a warm snapshot
-   records the pages it touches (its working set) into the warm dir; later clones copy that
-   set in one batch right after the load, then serve the rest on demand. Balloon removals
-   (`UFFD_EVENT_REMOVE`) unregister the range, as Firecracker's example handler does.
-
-### 2. Sandbox sessions
-
-A named, TTL-bound sandbox resource: `SandboxCreate` (warm params, TTL, limits),
-`SandboxExec` (streaming, like `CloneExec`), `SandboxPutFile`/`GetFile`/`ListDir` as
-`anvil-guest` frames without a shell or tar, `SandboxCheckpoint`/`Restore`/`Fork` (a
-snapshot of a running clone becomes a new warm entry: rollback and branching), idle TTL
-with auto-reap, pausing idle sandboxes. Builds on kept clones and `CloneExec`.
-
-### 3. AI-native interface
-
-`anvil mcp`: an MCP server over stdio mapping tools (create, exec, read/write file,
-checkpoint, destroy) onto the gRPC client, a thin client like the CLI. Python and
-TypeScript SDKs generated from `anvil.proto` with a little ergonomics on top.
-
-### 4. Safety for untrusted code
-
-Per-sandbox egress policy (domain allowlist at the clone DNS forwarder plus nft in the
-netns, and a no-network mode), inbound port exposure for dev servers, CPU and IO limits
-(cgroups through the jailer, firecracker drive rate limiters).
-
-### 5. Uploads
-
-A content-addressed upload cache: the client sends file hashes and uploads only missing
-files, instead of a full tar per run; or the project as a read-only drive shared by a
-sandbox's calls.
-
-## Daemon concurrency
-
-Several clients can call one anvild at once (`docs/remote.md`).
-
-Known limits, left on purpose:
-
-- An `apply` recreate deletes then relaunches the same name; a manual launch of that
-  exact name in between wins.
-
-## Migration
-
-- **Live migration.** QMP `migrate` through an SSH tunnel, to move a running VM with a short
-  pause instead of a stop, copy and start.
-
-## Platforms
+### Platforms
 
 - **Apple Virtualization.framework backend** (`internal/vm/vz`) is scaffolding only.
-- **Catalog checksums** are still a work in progress; `scripts/verify-catalog.sh` checks them.
+- **Catalog checksums** are a work in progress; `scripts/verify-catalog.sh` checks them.
+
+### Known limits, left on purpose
+
+- Several clients can call one anvild at once (`docs/remote.md`). An `apply` recreate
+  deletes then relaunches the same name; a manual launch of that name in between wins.

@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"archive/tar"
 	"bytes"
 	"io"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func TestSplitRunArgs(t *testing.T) {
@@ -136,5 +138,36 @@ func TestWriteLinesOneWrite(t *testing.T) {
 	p.writeLines("alpine", anvilv1.OutputStream_OUTPUT_STREAM_STDOUT, &out, []byte("ial\n"))
 	if !strings.HasSuffix(out.String(), "[alpine      ] partial\n") || out.writes != 2 {
 		t.Errorf("the rest of a line came out as %q in %d writes", out.String(), out.writes)
+	}
+}
+
+func TestRunPrinterCollect(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	dir := t.TempDir()
+	p := newRunPrinter(&stdout, &stderr, []string{"ubuntu"}, false)
+	p.collector = client.NewCollector([]string{"dist", "*.xml"}, func(i int, _ string) string { return filepath.Join(dir, "out") })
+	var tb bytes.Buffer
+	tw := tar.NewWriter(&tb)
+	_ = tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: "dist/app", Mode: 0o755, Size: 2})
+	_, _ = tw.Write([]byte("hi"))
+	_ = tw.Close()
+	collect := func(index int32, data []byte, done bool, warning string) *anvilv1.RunEvent {
+		return &anvilv1.RunEvent{Event: &anvilv1.RunEvent_Collect{Collect: &anvilv1.RunCollect{
+			CloneId: "eph-X", Distro: "ubuntu", Index: index, Data: data, Done: done, Warning: warning}}}
+	}
+	p.event(&anvilv1.RunEvent{Event: &anvilv1.RunEvent_Output{Output: &anvilv1.RunOutput{Distro: "ubuntu", Stream: anvilv1.OutputStream_OUTPUT_STREAM_STDOUT, Data: []byte("no newline")}}})
+	p.event(collect(0, tb.Bytes(), false, ""))
+	p.event(collect(0, nil, true, ""))
+	p.event(collect(1, nil, true, "*.xml: no match"))
+	if got, err := os.ReadFile(filepath.Join(dir, "out", "dist", "app")); err != nil || string(got) != "hi" {
+		t.Errorf("collected file = %q, %v", got, err)
+	}
+	for _, want := range []string{"[ubuntu] collected dist into " + filepath.Join(dir, "out"), "[ubuntu] collect: *.xml: no match"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr lacks %q:\n%s", want, stderr.String())
+		}
+	}
+	if stdout.String() != "[ubuntu] no newline\n" {
+		t.Errorf("the command's last line wasn't flushed before the note: %q", stdout.String())
 	}
 }

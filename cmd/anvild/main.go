@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -27,6 +28,8 @@ import (
 	"git.fferrando.cc/rdfilippo/anvil/internal/intent"
 	"git.fferrando.cc/rdfilippo/anvil/internal/intent/dns"
 	"git.fferrando.cc/rdfilippo/anvil/internal/migrate"
+	"git.fferrando.cc/rdfilippo/anvil/internal/pipeline"
+	"git.fferrando.cc/rdfilippo/anvil/internal/runner"
 	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 	"git.fferrando.cc/rdfilippo/anvil/internal/version"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
@@ -162,7 +165,8 @@ func run() error {
 	imageServer := daemon.NewImageServer(db, vault, vmBackend, containerBackend,
 		&image.FCCache{Dir: config.FirecrackerImageDir(), Vault: vault})
 	anvilv1.RegisterImageServiceServer(grpcServer, imageServer)
-	anvilv1.RegisterIntentServiceServer(grpcServer, daemon.NewIntentServer(intentMgr, mgr, instanceServer))
+	intentServer := daemon.NewIntentServer(intentMgr, mgr, instanceServer)
+	anvilv1.RegisterIntentServiceServer(grpcServer, intentServer)
 	hostServer := daemon.NewHostServer(db, migrateMgr)
 	hostServer.Instances = mgr
 	if dh, ok := vmBackend.(instance.DeviceHolder); ok {
@@ -177,6 +181,19 @@ func run() error {
 	ephemeralMgr.Cleanup(ctx)
 	ephemeralMgr.StartPools() // in the background, after the sweep above
 	anvilv1.RegisterEphemeralServiceServer(grpcServer, daemon.NewEphemeralServer(ephemeralMgr, config.EphemeralUploadDir()))
+	// Runners poll their forges in the background; jobs of the previous anvild went with it.
+	runnerMgr := runner.NewManager(db, ephemeralMgr)
+	runnerMgr.MarkInterrupted()
+	if err := runnerMgr.Start(ctx); err != nil {
+		log.Printf("anvild: starting runners: %v", err)
+	}
+	anvilv1.RegisterRunnerServiceServer(grpcServer, daemon.NewRunnerServer(ctx, runnerMgr))
+	// Pipeline runs of the previous anvild lost their clones; watches poll in the background.
+	pipelineExec := pipeline.NewExecutor(db, ephemeralMgr, config.PipelineRunsDir(), daemon.PipelineApply(intentServer.Applier))
+	pipelineExec.MarkInterrupted()
+	pipelineWatcher := pipeline.NewWatcher(pipelineExec, filepath.Join(config.CacheDir, "pipeline-clones"))
+	pipelineWatcher.Start(ctx)
+	anvilv1.RegisterPipelineServiceServer(grpcServer, daemon.NewPipelineServer(ctx, pipelineExec, pipelineWatcher, filepath.Join(config.CacheDir, "pipeline-uploads")))
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- grpcServer.Serve(daemon.CallerListener(lis)) }()

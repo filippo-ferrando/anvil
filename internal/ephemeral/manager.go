@@ -80,9 +80,28 @@ func (m *Manager) Warm(ctx context.Context, p WarmParams, rebuild bool, progress
 	if err != nil {
 		return store.WarmSnapshot{}, WarmSpec{}, err
 	}
+	if key, ok := warmRef(p.Distro); ok {
+		if p.Setup != nil || p.App != "" {
+			return store.WarmSnapshot{}, WarmSpec{}, errors.New("a warm snapshot picked by key takes no setup script or app")
+		}
+		return m.warmByKey(key)
+	}
 	s, err := e.WarmSpec(p)
 	if err == nil && p.App != "" {
 		s, err = withApp(s, p)
+	}
+	if err == nil && p.Setup != nil {
+		if p.App != "" {
+			return store.WarmSnapshot{}, WarmSpec{}, errors.New("a warm snapshot with an app takes no setup script")
+		}
+		// The plain snapshot first: a setup build starts from the same image and size.
+		var base store.WarmSnapshot
+		if base, _, err = m.Warm(ctx, WarmParams{Distro: p.Distro, Arch: p.Arch, CPUs: p.CPUs, MemoryMiB: p.MemoryMiB}, false, progress); err == nil && base.Key != s.Key {
+			err = fmt.Errorf("the %s warm snapshot changed while resolving it", s.Distro)
+		}
+		if err == nil {
+			s, err = withSetup(s, p.Setup)
+		}
 	}
 	if err != nil {
 		return store.WarmSnapshot{}, WarmSpec{}, err
@@ -133,8 +152,11 @@ func (m *Manager) buildWarm(ctx context.Context, e Engine, s WarmSpec, progress 
 	}
 	what := s.Distro
 	var setup Setup
-	if s.App != "" {
+	switch {
+	case s.App != "":
 		what, setup = s.Distro+" + "+s.App, appSetup(s)
+	case s.Setup != nil:
+		what, setup = s.Distro+" + "+s.SetupName, scriptSetup(s)
 	}
 	progress(fmt.Sprintf("building the %s warm snapshot (%s, %d MiB), once", what, cpus, s.MemoryMiB))
 	start := time.Now()
@@ -146,7 +168,7 @@ func (m *Manager) buildWarm(ctx context.Context, e Engine, s WarmSpec, progress 
 	rec := store.WarmSnapshot{
 		Key: s.Key, Distro: s.Distro, Arch: s.Arch, CPUs: s.CPUs, MemoryMiB: s.MemoryMiB, DiskGiB: s.DiskGiB,
 		FirecrackerVersion: s.FirecrackerVersion, SizeBytes: diskUsage(dir), CreatedAt: now, LastUsedAt: now,
-		App: s.App, X11: s.X11,
+		App: s.App, X11: s.X11, User: s.User, Base: s.Base, Setup: s.SetupName,
 	}
 	if err := m.Store.PutWarm(rec); err != nil {
 		return store.WarmSnapshot{}, err
@@ -222,6 +244,10 @@ func (m *Manager) DeleteWarm(prefixes []string, all bool) ([]string, error) {
 		}
 		keys = append(keys, w.Key)
 	}
+	keys, err := m.withDerived(keys)
+	if err != nil {
+		return nil, err
+	}
 	var deleted []string
 	for _, key := range keys {
 		if err := m.dropPoolsOf(key); err != nil {
@@ -236,6 +262,32 @@ func (m *Manager) DeleteWarm(prefixes []string, all bool) ([]string, error) {
 		deleted = append(deleted, key)
 	}
 	return deleted, nil
+}
+
+// withDerived adds to keys every warm snapshot built on one of them, setup and saved
+// ones, which can't outlive their base. Each key appears once.
+func (m *Manager) withDerived(keys []string) ([]string, error) {
+	all, err := m.Store.ListWarm()
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var out []string
+	for len(keys) > 0 {
+		key := keys[0]
+		keys = keys[1:]
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, key)
+		for _, w := range all {
+			if w.Base == key {
+				keys = append(keys, w.Key)
+			}
+		}
+	}
+	return out, nil
 }
 
 // Cleanup runs once at anvild's start: clones and builds of the previous anvild are gone

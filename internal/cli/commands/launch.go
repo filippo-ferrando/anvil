@@ -68,8 +68,8 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 				eph.env = envVars
 				return runEphemeral(cmd, flags, []string{distro}, path, command, eph)
 			}
-			if eph.tty || eph.keepFailed || eph.logs != "" || eph.arch != "" {
-				return fmt.Errorf("--tty, --keep-failed, --logs and --arch only apply with --ephemeral")
+			if eph.tty || eph.keepFailed || eph.logs != "" || eph.arch != "" || len(eph.collect) > 0 || eph.setup != "" || len(eph.keyFiles) > 0 {
+				return fmt.Errorf("--tty, --keep-failed, --logs, --collect, --setup, --key-files and --arch only apply with --ephemeral")
 			}
 			imageRef := args[0]
 			command := args[1:]
@@ -249,6 +249,7 @@ func newLaunchCommand(flags *globalFlags) *cobra.Command {
 	cmd.Flags().BoolVarP(&eph.tty, "tty", "t", false, "with --ephemeral: run the command on a terminal, with stdin")
 	cmd.Flags().StringVar(&eph.arch, "arch", "", "with --ephemeral: image architecture (default: this host's)")
 	eph.addRunFlags(cmd)
+	eph.addSetupFlags(cmd)
 	cmd.Flags().StringVar(&defaultUser, "default-user", "", "override the SSH login user normally read from the image catalog (VM only, kept for migrations from older anvil versions)")
 	// Older migrate sources still pass these, newer ones use migrate-import.
 	_ = cmd.Flags().MarkHidden("from-disk")

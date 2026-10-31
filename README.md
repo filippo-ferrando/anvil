@@ -158,8 +158,19 @@ summary table; `--logs <dir>` keeps one log per distro.
   other, the host or other instances
 - commands run through `anvil-guest`, a small static runner over vsock, no SSH or network
   needed inside the clone
+- `--collect <path>[:<dir>]` copies build outputs and test reports back, failed or not
+- `--setup ci/setup.sh --key-files go.sum` installs a toolchain once into a warm snapshot,
+  rebuilt only when the script or a lockfile changes; `anvil warm save` turns a clone into one
 
 Needs Firecracker with its jailer, see [docs/ephemeral.md](docs/ephemeral.md).
+
+**CI/CD** on the same clones:
+
+- `anvil pipeline run` runs an `anvil-ci.yaml` (jobs, needs, matrix, collect, apply on
+  success); `anvil pipeline watch` runs it on every new commit of a branch, see
+  [docs/pipelines.md](docs/pipelines.md)
+- `anvil runner` takes Forgejo (15+) or GitHub Actions jobs and runs each in its own
+  clone with the forge's runner inside, see [docs/runner.md](docs/runner.md)
 
 **Containers**, talking to Docker's real HTTP API directly (Podman backend is on the
 way, tracked separately, see [limitations](#status--limitations)):
@@ -467,6 +478,8 @@ scripts/         catalog checksum check, release notes and changelog, static GUI
 | Firecracker microVMs (`--hypervisor firecracker`) | [docs/firecracker.md](docs/firecracker.md) |
 | USB and PCI passthrough (`--device`) | [docs/passthrough.md](docs/passthrough.md) |
 | Ephemeral and matrix runs (`--ephemeral`, `anvil matrix`, `anvil warm`) | [docs/ephemeral.md](docs/ephemeral.md) |
+| Pipelines (`anvil pipeline`) | [docs/pipelines.md](docs/pipelines.md) |
+| Forge runners for Forgejo and GitHub Actions (`anvil runner`) | [docs/runner.md](docs/runner.md) |
 | Security model | [docs/security.md](docs/security.md) |
 | Comparison with similar tools | [docs/comparison.md](docs/comparison.md) |
 

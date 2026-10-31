@@ -95,6 +95,9 @@ internal/
   container/      the Backend that picks an engine; Podman is rejected, not implemented (see PLAN.md)
   ephemeral/     warm snapshots and throwaway clones behind `launch --ephemeral`, `anvil matrix`,
                  `anvil warm`, `anvil ephemeral`; vm.FCBackend is its Engine (fc_warm.go, fc_clone.go)
+  runner/        `anvil runner`: polls Forgejo (15+) or GitHub for waiting jobs, runs the forge's
+                 runner for one job in an ephemeral clone
+  pipeline/      `anvil pipeline`: anvil-ci.yaml jobs on ephemeral clones, run history, git watches
   intent/        grouping VMs/containers together, shared per-intent bridge network + IPAM
   intent/dns/    per-intent DNS server on each intent's gateway ("<role>.<intent>.anvil")
   intent/ipam/   subnet and address allocation for intent networks
@@ -108,7 +111,8 @@ internal/
   gui/           `anvil gui`: fd-passing socket relay + xauth (gui/relay), app .desktop/icon lookup (gui/appinfo)
   config/        fixed on-disk paths (run/state/cache dirs, GUI relay and tools dirs)
   intent/apply/  the compare-and-apply engine behind `anvil apply`
-  store/         bbolt-backed registry (instances, intents, mirrors, hosts, cloud-init, events, warm snapshots)
+  store/         bbolt-backed registry (instances, intents, mirrors, hosts, cloud-init, events, warm snapshots,
+                 runners and their jobs, pipeline runs and watches)
   cloudinitrepo/ fetches a cloud-init template repo manifest and its templates
   hostpath/      ACL grants and path checks for host dirs the anvil user must reach (`anvil create-dir`)
   progress/      progress line formatting shared by the CLI and TUI

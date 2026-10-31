@@ -3305,6 +3305,7 @@ const (
 	EphemeralService_WarmCreate_FullMethodName   = "/anvil.v1.EphemeralService/WarmCreate"
 	EphemeralService_WarmList_FullMethodName     = "/anvil.v1.EphemeralService/WarmList"
 	EphemeralService_WarmDelete_FullMethodName   = "/anvil.v1.EphemeralService/WarmDelete"
+	EphemeralService_WarmSave_FullMethodName     = "/anvil.v1.EphemeralService/WarmSave"
 	EphemeralService_WarmPoolSet_FullMethodName  = "/anvil.v1.EphemeralService/WarmPoolSet"
 	EphemeralService_WarmPoolList_FullMethodName = "/anvil.v1.EphemeralService/WarmPoolList"
 	EphemeralService_CloneList_FullMethodName    = "/anvil.v1.EphemeralService/CloneList"
@@ -3327,6 +3328,8 @@ type EphemeralServiceClient interface {
 	WarmCreate(ctx context.Context, in *WarmCreateRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WarmCreateProgress], error)
 	WarmList(ctx context.Context, in *WarmListRequest, opts ...grpc.CallOption) (*WarmListReply, error)
 	WarmDelete(ctx context.Context, in *WarmDeleteRequest, opts ...grpc.CallOption) (*WarmDeleteReply, error)
+	// WarmSave turns a running or kept clone into a warm snapshot of its own.
+	WarmSave(ctx context.Context, in *WarmSaveRequest, opts ...grpc.CallOption) (*WarmSaveReply, error)
 	// WarmPoolSet keeps a number of clones of a warm snapshot restored ahead of time, so a
 	// run takes one instead of restoring; size 0 removes the pool.
 	WarmPoolSet(ctx context.Context, in *WarmPoolSetRequest, opts ...grpc.CallOption) (*WarmPoolSetReply, error)
@@ -3396,6 +3399,16 @@ func (c *ephemeralServiceClient) WarmDelete(ctx context.Context, in *WarmDeleteR
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(WarmDeleteReply)
 	err := c.cc.Invoke(ctx, EphemeralService_WarmDelete_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *ephemeralServiceClient) WarmSave(ctx context.Context, in *WarmSaveRequest, opts ...grpc.CallOption) (*WarmSaveReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WarmSaveReply)
+	err := c.cc.Invoke(ctx, EphemeralService_WarmSave_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -3482,6 +3495,8 @@ type EphemeralServiceServer interface {
 	WarmCreate(*WarmCreateRequest, grpc.ServerStreamingServer[WarmCreateProgress]) error
 	WarmList(context.Context, *WarmListRequest) (*WarmListReply, error)
 	WarmDelete(context.Context, *WarmDeleteRequest) (*WarmDeleteReply, error)
+	// WarmSave turns a running or kept clone into a warm snapshot of its own.
+	WarmSave(context.Context, *WarmSaveRequest) (*WarmSaveReply, error)
 	// WarmPoolSet keeps a number of clones of a warm snapshot restored ahead of time, so a
 	// run takes one instead of restoring; size 0 removes the pool.
 	WarmPoolSet(context.Context, *WarmPoolSetRequest) (*WarmPoolSetReply, error)
@@ -3516,6 +3531,9 @@ func (UnimplementedEphemeralServiceServer) WarmList(context.Context, *WarmListRe
 }
 func (UnimplementedEphemeralServiceServer) WarmDelete(context.Context, *WarmDeleteRequest) (*WarmDeleteReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method WarmDelete not implemented")
+}
+func (UnimplementedEphemeralServiceServer) WarmSave(context.Context, *WarmSaveRequest) (*WarmSaveReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method WarmSave not implemented")
 }
 func (UnimplementedEphemeralServiceServer) WarmPoolSet(context.Context, *WarmPoolSetRequest) (*WarmPoolSetReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method WarmPoolSet not implemented")
@@ -3606,6 +3624,24 @@ func _EphemeralService_WarmDelete_Handler(srv interface{}, ctx context.Context, 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(EphemeralServiceServer).WarmDelete(ctx, req.(*WarmDeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EphemeralService_WarmSave_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WarmSaveRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EphemeralServiceServer).WarmSave(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EphemeralService_WarmSave_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EphemeralServiceServer).WarmSave(ctx, req.(*WarmSaveRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -3712,6 +3748,10 @@ var EphemeralService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _EphemeralService_WarmDelete_Handler,
 		},
 		{
+			MethodName: "WarmSave",
+			Handler:    _EphemeralService_WarmSave_Handler,
+		},
+		{
 			MethodName: "WarmPoolSet",
 			Handler:    _EphemeralService_WarmPoolSet_Handler,
 		},
@@ -3751,6 +3791,812 @@ var EphemeralService_ServiceDesc = grpc.ServiceDesc{
 			Handler:       _EphemeralService_RunApp_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
+		},
+	},
+	Metadata: "anvil/v1/anvil.proto",
+}
+
+const (
+	RunnerService_Add_FullMethodName       = "/anvil.v1.RunnerService/Add"
+	RunnerService_List_FullMethodName      = "/anvil.v1.RunnerService/List"
+	RunnerService_Remove_FullMethodName    = "/anvil.v1.RunnerService/Remove"
+	RunnerService_SetPaused_FullMethodName = "/anvil.v1.RunnerService/SetPaused"
+	RunnerService_Jobs_FullMethodName      = "/anvil.v1.RunnerService/Jobs"
+)
+
+// RunnerServiceClient is the client API for RunnerService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// RunnerService takes jobs from Forgejo/Gitea (15+) or GitHub Actions and runs each in
+// its own ephemeral clone, with the forge's runner inside it for that one job.
+type RunnerServiceClient interface {
+	Add(ctx context.Context, in *RunnerAddRequest, opts ...grpc.CallOption) (*RunnerAddReply, error)
+	List(ctx context.Context, in *RunnerListRequest, opts ...grpc.CallOption) (*RunnerListReply, error)
+	Remove(ctx context.Context, in *RunnerRemoveRequest, opts ...grpc.CallOption) (*RunnerRemoveReply, error)
+	// SetPaused stops or resumes taking new jobs; running jobs go on.
+	SetPaused(ctx context.Context, in *RunnerSetPausedRequest, opts ...grpc.CallOption) (*RunnerSetPausedReply, error)
+	// Jobs lists running and recent jobs, newest first.
+	Jobs(ctx context.Context, in *RunnerJobsRequest, opts ...grpc.CallOption) (*RunnerJobsReply, error)
+}
+
+type runnerServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewRunnerServiceClient(cc grpc.ClientConnInterface) RunnerServiceClient {
+	return &runnerServiceClient{cc}
+}
+
+func (c *runnerServiceClient) Add(ctx context.Context, in *RunnerAddRequest, opts ...grpc.CallOption) (*RunnerAddReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RunnerAddReply)
+	err := c.cc.Invoke(ctx, RunnerService_Add_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runnerServiceClient) List(ctx context.Context, in *RunnerListRequest, opts ...grpc.CallOption) (*RunnerListReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RunnerListReply)
+	err := c.cc.Invoke(ctx, RunnerService_List_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runnerServiceClient) Remove(ctx context.Context, in *RunnerRemoveRequest, opts ...grpc.CallOption) (*RunnerRemoveReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RunnerRemoveReply)
+	err := c.cc.Invoke(ctx, RunnerService_Remove_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runnerServiceClient) SetPaused(ctx context.Context, in *RunnerSetPausedRequest, opts ...grpc.CallOption) (*RunnerSetPausedReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RunnerSetPausedReply)
+	err := c.cc.Invoke(ctx, RunnerService_SetPaused_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runnerServiceClient) Jobs(ctx context.Context, in *RunnerJobsRequest, opts ...grpc.CallOption) (*RunnerJobsReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RunnerJobsReply)
+	err := c.cc.Invoke(ctx, RunnerService_Jobs_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RunnerServiceServer is the server API for RunnerService service.
+// All implementations must embed UnimplementedRunnerServiceServer
+// for forward compatibility.
+//
+// RunnerService takes jobs from Forgejo/Gitea (15+) or GitHub Actions and runs each in
+// its own ephemeral clone, with the forge's runner inside it for that one job.
+type RunnerServiceServer interface {
+	Add(context.Context, *RunnerAddRequest) (*RunnerAddReply, error)
+	List(context.Context, *RunnerListRequest) (*RunnerListReply, error)
+	Remove(context.Context, *RunnerRemoveRequest) (*RunnerRemoveReply, error)
+	// SetPaused stops or resumes taking new jobs; running jobs go on.
+	SetPaused(context.Context, *RunnerSetPausedRequest) (*RunnerSetPausedReply, error)
+	// Jobs lists running and recent jobs, newest first.
+	Jobs(context.Context, *RunnerJobsRequest) (*RunnerJobsReply, error)
+	mustEmbedUnimplementedRunnerServiceServer()
+}
+
+// UnimplementedRunnerServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedRunnerServiceServer struct{}
+
+func (UnimplementedRunnerServiceServer) Add(context.Context, *RunnerAddRequest) (*RunnerAddReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method Add not implemented")
+}
+func (UnimplementedRunnerServiceServer) List(context.Context, *RunnerListRequest) (*RunnerListReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method List not implemented")
+}
+func (UnimplementedRunnerServiceServer) Remove(context.Context, *RunnerRemoveRequest) (*RunnerRemoveReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method Remove not implemented")
+}
+func (UnimplementedRunnerServiceServer) SetPaused(context.Context, *RunnerSetPausedRequest) (*RunnerSetPausedReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetPaused not implemented")
+}
+func (UnimplementedRunnerServiceServer) Jobs(context.Context, *RunnerJobsRequest) (*RunnerJobsReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method Jobs not implemented")
+}
+func (UnimplementedRunnerServiceServer) mustEmbedUnimplementedRunnerServiceServer() {}
+func (UnimplementedRunnerServiceServer) testEmbeddedByValue()                       {}
+
+// UnsafeRunnerServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to RunnerServiceServer will
+// result in compilation errors.
+type UnsafeRunnerServiceServer interface {
+	mustEmbedUnimplementedRunnerServiceServer()
+}
+
+func RegisterRunnerServiceServer(s grpc.ServiceRegistrar, srv RunnerServiceServer) {
+	// If the following call panics, it indicates UnimplementedRunnerServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&RunnerService_ServiceDesc, srv)
+}
+
+func _RunnerService_Add_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunnerAddRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunnerServiceServer).Add(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunnerService_Add_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunnerServiceServer).Add(ctx, req.(*RunnerAddRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RunnerService_List_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunnerListRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunnerServiceServer).List(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunnerService_List_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunnerServiceServer).List(ctx, req.(*RunnerListRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RunnerService_Remove_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunnerRemoveRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunnerServiceServer).Remove(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunnerService_Remove_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunnerServiceServer).Remove(ctx, req.(*RunnerRemoveRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RunnerService_SetPaused_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunnerSetPausedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunnerServiceServer).SetPaused(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunnerService_SetPaused_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunnerServiceServer).SetPaused(ctx, req.(*RunnerSetPausedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RunnerService_Jobs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunnerJobsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunnerServiceServer).Jobs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunnerService_Jobs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunnerServiceServer).Jobs(ctx, req.(*RunnerJobsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// RunnerService_ServiceDesc is the grpc.ServiceDesc for RunnerService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var RunnerService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "anvil.v1.RunnerService",
+	HandlerType: (*RunnerServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Add",
+			Handler:    _RunnerService_Add_Handler,
+		},
+		{
+			MethodName: "List",
+			Handler:    _RunnerService_List_Handler,
+		},
+		{
+			MethodName: "Remove",
+			Handler:    _RunnerService_Remove_Handler,
+		},
+		{
+			MethodName: "SetPaused",
+			Handler:    _RunnerService_SetPaused_Handler,
+		},
+		{
+			MethodName: "Jobs",
+			Handler:    _RunnerService_Jobs_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "anvil/v1/anvil.proto",
+}
+
+const (
+	PipelineService_Run_FullMethodName            = "/anvil.v1.PipelineService/Run"
+	PipelineService_Rerun_FullMethodName          = "/anvil.v1.PipelineService/Rerun"
+	PipelineService_Cancel_FullMethodName         = "/anvil.v1.PipelineService/Cancel"
+	PipelineService_ListRuns_FullMethodName       = "/anvil.v1.PipelineService/ListRuns"
+	PipelineService_GetRun_FullMethodName         = "/anvil.v1.PipelineService/GetRun"
+	PipelineService_Logs_FullMethodName           = "/anvil.v1.PipelineService/Logs"
+	PipelineService_Artifacts_FullMethodName      = "/anvil.v1.PipelineService/Artifacts"
+	PipelineService_AddWatch_FullMethodName       = "/anvil.v1.PipelineService/AddWatch"
+	PipelineService_ListWatches_FullMethodName    = "/anvil.v1.PipelineService/ListWatches"
+	PipelineService_RemoveWatch_FullMethodName    = "/anvil.v1.PipelineService/RemoveWatch"
+	PipelineService_SetWatchPaused_FullMethodName = "/anvil.v1.PipelineService/SetWatchPaused"
+	PipelineService_TriggerWatch_FullMethodName   = "/anvil.v1.PipelineService/TriggerWatch"
+)
+
+// PipelineServiceClient is the client API for PipelineService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// PipelineService runs anvil-ci.yaml pipelines: jobs on ephemeral clones, ordered by
+// their needs, by hand or on every new commit of a watched branch.
+type PipelineServiceClient interface {
+	// Run uploads a source tree and runs its pipeline, streaming it to the end. The first
+	// input is the request, upload chunks follow. A dropped stream cancels the run.
+	Run(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[PipelineRunInput, PipelineEvent], error)
+	// Rerun runs an earlier run's source again, streaming the new run.
+	Rerun(ctx context.Context, in *PipelineRerunRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PipelineEvent], error)
+	Cancel(ctx context.Context, in *PipelineCancelRequest, opts ...grpc.CallOption) (*PipelineCancelReply, error)
+	ListRuns(ctx context.Context, in *PipelineListRunsRequest, opts ...grpc.CallOption) (*PipelineListRunsReply, error)
+	GetRun(ctx context.Context, in *PipelineGetRunRequest, opts ...grpc.CallOption) (*PipelineRun, error)
+	// Logs streams a job's output on one distro, or every log of the run.
+	Logs(ctx context.Context, in *PipelineLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PipelineChunk], error)
+	// Artifacts streams the run's collected files as a tar, <job>/<distro>/...
+	Artifacts(ctx context.Context, in *PipelineArtifactsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PipelineChunk], error)
+	AddWatch(ctx context.Context, in *PipelineWatchAddRequest, opts ...grpc.CallOption) (*PipelineWatch, error)
+	ListWatches(ctx context.Context, in *PipelineWatchListRequest, opts ...grpc.CallOption) (*PipelineWatchListReply, error)
+	RemoveWatch(ctx context.Context, in *PipelineWatchRemoveRequest, opts ...grpc.CallOption) (*PipelineWatchRemoveReply, error)
+	SetWatchPaused(ctx context.Context, in *PipelineWatchPauseRequest, opts ...grpc.CallOption) (*PipelineWatch, error)
+	// TriggerWatch runs a watch's pipeline on its branch now, in the background.
+	TriggerWatch(ctx context.Context, in *PipelineWatchTriggerRequest, opts ...grpc.CallOption) (*PipelineWatchTriggerReply, error)
+}
+
+type pipelineServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewPipelineServiceClient(cc grpc.ClientConnInterface) PipelineServiceClient {
+	return &pipelineServiceClient{cc}
+}
+
+func (c *pipelineServiceClient) Run(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[PipelineRunInput, PipelineEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &PipelineService_ServiceDesc.Streams[0], PipelineService_Run_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[PipelineRunInput, PipelineEvent]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PipelineService_RunClient = grpc.BidiStreamingClient[PipelineRunInput, PipelineEvent]
+
+func (c *pipelineServiceClient) Rerun(ctx context.Context, in *PipelineRerunRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PipelineEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &PipelineService_ServiceDesc.Streams[1], PipelineService_Rerun_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[PipelineRerunRequest, PipelineEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PipelineService_RerunClient = grpc.ServerStreamingClient[PipelineEvent]
+
+func (c *pipelineServiceClient) Cancel(ctx context.Context, in *PipelineCancelRequest, opts ...grpc.CallOption) (*PipelineCancelReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PipelineCancelReply)
+	err := c.cc.Invoke(ctx, PipelineService_Cancel_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pipelineServiceClient) ListRuns(ctx context.Context, in *PipelineListRunsRequest, opts ...grpc.CallOption) (*PipelineListRunsReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PipelineListRunsReply)
+	err := c.cc.Invoke(ctx, PipelineService_ListRuns_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pipelineServiceClient) GetRun(ctx context.Context, in *PipelineGetRunRequest, opts ...grpc.CallOption) (*PipelineRun, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PipelineRun)
+	err := c.cc.Invoke(ctx, PipelineService_GetRun_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pipelineServiceClient) Logs(ctx context.Context, in *PipelineLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PipelineChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &PipelineService_ServiceDesc.Streams[2], PipelineService_Logs_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[PipelineLogsRequest, PipelineChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PipelineService_LogsClient = grpc.ServerStreamingClient[PipelineChunk]
+
+func (c *pipelineServiceClient) Artifacts(ctx context.Context, in *PipelineArtifactsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PipelineChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &PipelineService_ServiceDesc.Streams[3], PipelineService_Artifacts_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[PipelineArtifactsRequest, PipelineChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PipelineService_ArtifactsClient = grpc.ServerStreamingClient[PipelineChunk]
+
+func (c *pipelineServiceClient) AddWatch(ctx context.Context, in *PipelineWatchAddRequest, opts ...grpc.CallOption) (*PipelineWatch, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PipelineWatch)
+	err := c.cc.Invoke(ctx, PipelineService_AddWatch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pipelineServiceClient) ListWatches(ctx context.Context, in *PipelineWatchListRequest, opts ...grpc.CallOption) (*PipelineWatchListReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PipelineWatchListReply)
+	err := c.cc.Invoke(ctx, PipelineService_ListWatches_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pipelineServiceClient) RemoveWatch(ctx context.Context, in *PipelineWatchRemoveRequest, opts ...grpc.CallOption) (*PipelineWatchRemoveReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PipelineWatchRemoveReply)
+	err := c.cc.Invoke(ctx, PipelineService_RemoveWatch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pipelineServiceClient) SetWatchPaused(ctx context.Context, in *PipelineWatchPauseRequest, opts ...grpc.CallOption) (*PipelineWatch, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PipelineWatch)
+	err := c.cc.Invoke(ctx, PipelineService_SetWatchPaused_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pipelineServiceClient) TriggerWatch(ctx context.Context, in *PipelineWatchTriggerRequest, opts ...grpc.CallOption) (*PipelineWatchTriggerReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PipelineWatchTriggerReply)
+	err := c.cc.Invoke(ctx, PipelineService_TriggerWatch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// PipelineServiceServer is the server API for PipelineService service.
+// All implementations must embed UnimplementedPipelineServiceServer
+// for forward compatibility.
+//
+// PipelineService runs anvil-ci.yaml pipelines: jobs on ephemeral clones, ordered by
+// their needs, by hand or on every new commit of a watched branch.
+type PipelineServiceServer interface {
+	// Run uploads a source tree and runs its pipeline, streaming it to the end. The first
+	// input is the request, upload chunks follow. A dropped stream cancels the run.
+	Run(grpc.BidiStreamingServer[PipelineRunInput, PipelineEvent]) error
+	// Rerun runs an earlier run's source again, streaming the new run.
+	Rerun(*PipelineRerunRequest, grpc.ServerStreamingServer[PipelineEvent]) error
+	Cancel(context.Context, *PipelineCancelRequest) (*PipelineCancelReply, error)
+	ListRuns(context.Context, *PipelineListRunsRequest) (*PipelineListRunsReply, error)
+	GetRun(context.Context, *PipelineGetRunRequest) (*PipelineRun, error)
+	// Logs streams a job's output on one distro, or every log of the run.
+	Logs(*PipelineLogsRequest, grpc.ServerStreamingServer[PipelineChunk]) error
+	// Artifacts streams the run's collected files as a tar, <job>/<distro>/...
+	Artifacts(*PipelineArtifactsRequest, grpc.ServerStreamingServer[PipelineChunk]) error
+	AddWatch(context.Context, *PipelineWatchAddRequest) (*PipelineWatch, error)
+	ListWatches(context.Context, *PipelineWatchListRequest) (*PipelineWatchListReply, error)
+	RemoveWatch(context.Context, *PipelineWatchRemoveRequest) (*PipelineWatchRemoveReply, error)
+	SetWatchPaused(context.Context, *PipelineWatchPauseRequest) (*PipelineWatch, error)
+	// TriggerWatch runs a watch's pipeline on its branch now, in the background.
+	TriggerWatch(context.Context, *PipelineWatchTriggerRequest) (*PipelineWatchTriggerReply, error)
+	mustEmbedUnimplementedPipelineServiceServer()
+}
+
+// UnimplementedPipelineServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedPipelineServiceServer struct{}
+
+func (UnimplementedPipelineServiceServer) Run(grpc.BidiStreamingServer[PipelineRunInput, PipelineEvent]) error {
+	return status.Error(codes.Unimplemented, "method Run not implemented")
+}
+func (UnimplementedPipelineServiceServer) Rerun(*PipelineRerunRequest, grpc.ServerStreamingServer[PipelineEvent]) error {
+	return status.Error(codes.Unimplemented, "method Rerun not implemented")
+}
+func (UnimplementedPipelineServiceServer) Cancel(context.Context, *PipelineCancelRequest) (*PipelineCancelReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method Cancel not implemented")
+}
+func (UnimplementedPipelineServiceServer) ListRuns(context.Context, *PipelineListRunsRequest) (*PipelineListRunsReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListRuns not implemented")
+}
+func (UnimplementedPipelineServiceServer) GetRun(context.Context, *PipelineGetRunRequest) (*PipelineRun, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetRun not implemented")
+}
+func (UnimplementedPipelineServiceServer) Logs(*PipelineLogsRequest, grpc.ServerStreamingServer[PipelineChunk]) error {
+	return status.Error(codes.Unimplemented, "method Logs not implemented")
+}
+func (UnimplementedPipelineServiceServer) Artifacts(*PipelineArtifactsRequest, grpc.ServerStreamingServer[PipelineChunk]) error {
+	return status.Error(codes.Unimplemented, "method Artifacts not implemented")
+}
+func (UnimplementedPipelineServiceServer) AddWatch(context.Context, *PipelineWatchAddRequest) (*PipelineWatch, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddWatch not implemented")
+}
+func (UnimplementedPipelineServiceServer) ListWatches(context.Context, *PipelineWatchListRequest) (*PipelineWatchListReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListWatches not implemented")
+}
+func (UnimplementedPipelineServiceServer) RemoveWatch(context.Context, *PipelineWatchRemoveRequest) (*PipelineWatchRemoveReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveWatch not implemented")
+}
+func (UnimplementedPipelineServiceServer) SetWatchPaused(context.Context, *PipelineWatchPauseRequest) (*PipelineWatch, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetWatchPaused not implemented")
+}
+func (UnimplementedPipelineServiceServer) TriggerWatch(context.Context, *PipelineWatchTriggerRequest) (*PipelineWatchTriggerReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method TriggerWatch not implemented")
+}
+func (UnimplementedPipelineServiceServer) mustEmbedUnimplementedPipelineServiceServer() {}
+func (UnimplementedPipelineServiceServer) testEmbeddedByValue()                         {}
+
+// UnsafePipelineServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to PipelineServiceServer will
+// result in compilation errors.
+type UnsafePipelineServiceServer interface {
+	mustEmbedUnimplementedPipelineServiceServer()
+}
+
+func RegisterPipelineServiceServer(s grpc.ServiceRegistrar, srv PipelineServiceServer) {
+	// If the following call panics, it indicates UnimplementedPipelineServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&PipelineService_ServiceDesc, srv)
+}
+
+func _PipelineService_Run_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(PipelineServiceServer).Run(&grpc.GenericServerStream[PipelineRunInput, PipelineEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PipelineService_RunServer = grpc.BidiStreamingServer[PipelineRunInput, PipelineEvent]
+
+func _PipelineService_Rerun_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(PipelineRerunRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(PipelineServiceServer).Rerun(m, &grpc.GenericServerStream[PipelineRerunRequest, PipelineEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PipelineService_RerunServer = grpc.ServerStreamingServer[PipelineEvent]
+
+func _PipelineService_Cancel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PipelineCancelRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PipelineServiceServer).Cancel(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PipelineService_Cancel_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PipelineServiceServer).Cancel(ctx, req.(*PipelineCancelRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PipelineService_ListRuns_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PipelineListRunsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PipelineServiceServer).ListRuns(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PipelineService_ListRuns_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PipelineServiceServer).ListRuns(ctx, req.(*PipelineListRunsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PipelineService_GetRun_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PipelineGetRunRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PipelineServiceServer).GetRun(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PipelineService_GetRun_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PipelineServiceServer).GetRun(ctx, req.(*PipelineGetRunRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PipelineService_Logs_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(PipelineLogsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(PipelineServiceServer).Logs(m, &grpc.GenericServerStream[PipelineLogsRequest, PipelineChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PipelineService_LogsServer = grpc.ServerStreamingServer[PipelineChunk]
+
+func _PipelineService_Artifacts_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(PipelineArtifactsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(PipelineServiceServer).Artifacts(m, &grpc.GenericServerStream[PipelineArtifactsRequest, PipelineChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PipelineService_ArtifactsServer = grpc.ServerStreamingServer[PipelineChunk]
+
+func _PipelineService_AddWatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PipelineWatchAddRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PipelineServiceServer).AddWatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PipelineService_AddWatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PipelineServiceServer).AddWatch(ctx, req.(*PipelineWatchAddRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PipelineService_ListWatches_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PipelineWatchListRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PipelineServiceServer).ListWatches(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PipelineService_ListWatches_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PipelineServiceServer).ListWatches(ctx, req.(*PipelineWatchListRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PipelineService_RemoveWatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PipelineWatchRemoveRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PipelineServiceServer).RemoveWatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PipelineService_RemoveWatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PipelineServiceServer).RemoveWatch(ctx, req.(*PipelineWatchRemoveRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PipelineService_SetWatchPaused_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PipelineWatchPauseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PipelineServiceServer).SetWatchPaused(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PipelineService_SetWatchPaused_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PipelineServiceServer).SetWatchPaused(ctx, req.(*PipelineWatchPauseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PipelineService_TriggerWatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PipelineWatchTriggerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PipelineServiceServer).TriggerWatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PipelineService_TriggerWatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PipelineServiceServer).TriggerWatch(ctx, req.(*PipelineWatchTriggerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// PipelineService_ServiceDesc is the grpc.ServiceDesc for PipelineService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var PipelineService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "anvil.v1.PipelineService",
+	HandlerType: (*PipelineServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Cancel",
+			Handler:    _PipelineService_Cancel_Handler,
+		},
+		{
+			MethodName: "ListRuns",
+			Handler:    _PipelineService_ListRuns_Handler,
+		},
+		{
+			MethodName: "GetRun",
+			Handler:    _PipelineService_GetRun_Handler,
+		},
+		{
+			MethodName: "AddWatch",
+			Handler:    _PipelineService_AddWatch_Handler,
+		},
+		{
+			MethodName: "ListWatches",
+			Handler:    _PipelineService_ListWatches_Handler,
+		},
+		{
+			MethodName: "RemoveWatch",
+			Handler:    _PipelineService_RemoveWatch_Handler,
+		},
+		{
+			MethodName: "SetWatchPaused",
+			Handler:    _PipelineService_SetWatchPaused_Handler,
+		},
+		{
+			MethodName: "TriggerWatch",
+			Handler:    _PipelineService_TriggerWatch_Handler,
+		},
+	},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Run",
+			Handler:       _PipelineService_Run_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "Rerun",
+			Handler:       _PipelineService_Rerun_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "Logs",
+			Handler:       _PipelineService_Logs_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "Artifacts",
+			Handler:       _PipelineService_Artifacts_Handler,
+			ServerStreams: true,
 		},
 	},
 	Metadata: "anvil/v1/anvil.proto",

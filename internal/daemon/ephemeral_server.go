@@ -45,7 +45,20 @@ func warmToPB(w store.WarmSnapshot) *anvilv1.WarmSnapshot {
 		Key: w.Key, Distro: w.Distro, Arch: w.Arch, Cpus: int32(w.CPUs), MemoryMib: w.MemoryMiB, DiskGib: w.DiskGiB,
 		FirecrackerVersion: w.FirecrackerVersion, SizeBytes: w.SizeBytes,
 		CreatedAtUnix: w.CreatedAt.Unix(), LastUsedAtUnix: w.LastUsedAt.Unix(), App: w.App, X11: w.X11,
+		Base: w.Base, Setup: w.Setup, Saved: w.Saved,
 	}
+}
+
+// setupFromPB is a request's setup script, nil when it has none.
+func setupFromPB(s *anvilv1.WarmSetup) *ephemeral.SetupScript {
+	if s == nil {
+		return nil
+	}
+	out := &ephemeral.SetupScript{Name: s.GetName(), Script: s.GetScript()}
+	for _, f := range s.GetFiles() {
+		out.Files = append(out.Files, ephemeral.SetupFile{Name: f.GetName(), Data: f.GetData()})
+	}
+	return out
 }
 
 func sizeFromPB(s *anvilv1.TerminalSize) guestexec.Size {
@@ -92,7 +105,7 @@ func (s *EphemeralServer) Run(stream anvilv1.EphemeralService_RunServer) error {
 	r := ephemeral.RunRequest{
 		Distros: req.GetDistros(), Arch: req.GetArch(), Argv: req.GetCommand(), Env: req.GetEnv(), Cwd: req.GetCwd(),
 		CPUs: int(req.GetCpus()), MemoryMiB: req.GetMemoryMib(), KeepFailed: req.GetKeepFailed(),
-		TTY: req.GetTty(), Size: sizeFromPB(req.GetSize()),
+		TTY: req.GetTty(), Size: sizeFromPB(req.GetSize()), Collect: req.GetCollect(), Setup: setupFromPB(req.GetSetup()),
 	}
 	if len(r.Distros) == 0 || len(r.Argv) == 0 {
 		return status.Error(codes.InvalidArgument, "ephemeral: a run needs at least one distro and a command")
@@ -196,6 +209,10 @@ func runEventToPB(ev ephemeral.Event) *anvilv1.RunEvent {
 		}
 		return &anvilv1.RunEvent{Event: &anvilv1.RunEvent_Output{Output: &anvilv1.RunOutput{
 			CloneId: o.CloneID, Distro: o.Distro, Stream: st, Data: o.Data}}}
+	case ev.Collect != nil:
+		c := ev.Collect
+		return &anvilv1.RunEvent{Event: &anvilv1.RunEvent_Collect{Collect: &anvilv1.RunCollect{
+			CloneId: c.CloneID, Distro: c.Distro, Index: int32(c.Index), Data: c.Data, Done: c.Done, Warning: c.Warning}}}
 	default:
 		x := ev.Exit
 		return &anvilv1.RunEvent{Event: &anvilv1.RunEvent_Exit{Exit: &anvilv1.RunExit{
@@ -208,7 +225,8 @@ func (s *EphemeralServer) WarmCreate(req *anvilv1.WarmCreateRequest, stream anvi
 	if req.GetDistro() == "" {
 		return status.Error(codes.InvalidArgument, "ephemeral: a warm snapshot needs a distro")
 	}
-	p := ephemeral.WarmParams{Distro: req.GetDistro(), Arch: req.GetArch(), CPUs: int(req.GetCpus()), MemoryMiB: req.GetMemoryMib()}
+	p := ephemeral.WarmParams{Distro: req.GetDistro(), Arch: req.GetArch(), CPUs: int(req.GetCpus()), MemoryMiB: req.GetMemoryMib(),
+		Setup: setupFromPB(req.GetSetup())}
 	rec, _, err := s.Manager.Warm(stream.Context(), p, req.GetRebuild(), func(msg string) {
 		_ = stream.Send(&anvilv1.WarmCreateProgress{Status: msg})
 	})
@@ -216,6 +234,17 @@ func (s *EphemeralServer) WarmCreate(req *anvilv1.WarmCreateRequest, stream anvi
 		return ephemeralErr(err)
 	}
 	return stream.Send(&anvilv1.WarmCreateProgress{Status: "ready", Snapshot: warmToPB(rec)})
+}
+
+func (s *EphemeralServer) WarmSave(ctx context.Context, req *anvilv1.WarmSaveRequest) (*anvilv1.WarmSaveReply, error) {
+	if req.GetCloneId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "ephemeral: save needs a clone id")
+	}
+	rec, err := s.Manager.SaveClone(ctx, req.GetCloneId())
+	if err != nil {
+		return nil, ephemeralErr(err)
+	}
+	return &anvilv1.WarmSaveReply{Snapshot: warmToPB(rec)}, nil
 }
 
 func (s *EphemeralServer) WarmList(context.Context, *anvilv1.WarmListRequest) (*anvilv1.WarmListReply, error) {

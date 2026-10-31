@@ -22,7 +22,8 @@ type Event struct {
 	Progress *Progress
 	Output   *Output
 	Exit     *Exit
-	App      *App // RunApp only, before the app starts
+	Collect  *Collect // after the command, before its Exit
+	App      *App     // RunApp only, before the app starts
 }
 
 type Progress struct{ CloneID, Distro, Message string }
@@ -51,6 +52,8 @@ type RunRequest struct {
 	CPUs       int
 	MemoryMiB  int64
 	KeepFailed bool
+	Collect    []string // guest paths or globs sent back after the command, failed or not
+	Setup      *SetupScript
 	Upload     string // a tar file extracted into /work in every clone, "" for none
 	// WaitUpload, when set, waits until Upload is complete; the clones restore meanwhile.
 	WaitUpload func(ctx context.Context) error
@@ -119,7 +122,7 @@ func (m *Manager) runOne(ctx context.Context, e Engine, r RunRequest, distro str
 	fail := func(err error) {
 		emit(Event{Exit: &Exit{CloneID: id, Distro: distro, Code: -1, Err: err.Error()}})
 	}
-	_, spec, err := m.Warm(ctx, WarmParams{Distro: distro, Arch: r.Arch, CPUs: r.CPUs, MemoryMiB: r.MemoryMiB}, false, progress)
+	_, spec, err := m.Warm(ctx, WarmParams{Distro: distro, Arch: r.Arch, CPUs: r.CPUs, MemoryMiB: r.MemoryMiB, Setup: r.Setup}, false, progress)
 	if err != nil {
 		fail(err)
 		return
@@ -148,6 +151,10 @@ func (m *Manager) runOne(ctx context.Context, e Engine, r RunRequest, distro str
 	exit := &Exit{CloneID: id, Distro: distro, Code: code, Duration: time.Since(start), Kept: keep}
 	if runErr != nil {
 		exit.Code, exit.Err = -1, runErr.Error()
+	}
+	if len(r.Collect) > 0 && ctx.Err() == nil {
+		progress("collecting files")
+		m.collect(ctx, clone, distro, runCwd(r), r.Collect, func(c Collect) { emit(Event{Collect: &c}) })
 	}
 	// The result doesn't wait for the teardown; the clone counts as running until it's gone.
 	if !keep && m.claimDelete(id) {
@@ -178,6 +185,20 @@ func (m *Manager) runCommand(ctx context.Context, clone Clone, r RunRequest, out
 	}
 	return m.guestRun(ctx, clone, req)
 }
+
+// runCwd is the directory the command runs in, the same default anvil-guest picks.
+func runCwd(r RunRequest) string {
+	switch {
+	case r.Cwd != "":
+		return r.Cwd
+	case r.Upload != "":
+		return workDir
+	}
+	return "/"
+}
+
+// workDir is where anvil-guest extracts an upload (guestexec.WorkDir, linux only).
+var workDir = "/work"
 
 // runInClone runs r in clone through a new connection to its anvil-guest.
 func runInClone(ctx context.Context, clone Clone, r guestexec.Request) (int, error) {

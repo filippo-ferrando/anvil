@@ -48,11 +48,21 @@ func (m *Manager) SetPool(p WarmParams, size int) (PoolInfo, error) {
 	if err != nil {
 		return PoolInfo{}, err
 	}
-	s, err := e.WarmSpec(p)
-	if err != nil {
-		return PoolInfo{}, err
+	var cfg store.WarmPool
+	if key, ok := warmRef(p.Distro); ok {
+		// One snapshot by key: its pool follows that snapshot only, never a rebuild.
+		w, err := m.resolveWarm(key)
+		if err != nil {
+			return PoolInfo{}, err
+		}
+		cfg = store.WarmPool{Distro: "@" + w.Key, Arch: w.Arch, CPUs: w.CPUs, MemoryMiB: w.MemoryMiB, Size: size}
+	} else {
+		s, err := e.WarmSpec(p)
+		if err != nil {
+			return PoolInfo{}, err
+		}
+		cfg = store.WarmPool{Distro: s.Distro, Arch: s.Arch, CPUs: s.CPUs, MemoryMiB: s.MemoryMiB, Size: size}
 	}
-	cfg := store.WarmPool{Distro: s.Distro, Arch: s.Arch, CPUs: s.CPUs, MemoryMiB: s.MemoryMiB, Size: size}
 	if size == 0 {
 		if err := m.Store.DeleteWarmPool(cfg.ID()); err != nil {
 			return PoolInfo{}, err
