@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oklog/ulid/v2"
+
 	"git.fferrando.cc/rdfilippo/anvil/internal/guestexec"
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/store"
@@ -139,6 +141,36 @@ func scriptSetup(s WarmSpec) Setup {
 		}
 		return nil
 	}
+}
+
+// layerWarm runs s's setup script in a clone of warm snapshot base, then saves that clone
+// as warm snapshot s. It is how a setup script goes on top of a snapshot picked by key.
+func (m *Manager) layerWarm(ctx context.Context, e Engine, s WarmSpec, base store.WarmSnapshot, progress func(string)) (store.WarmSnapshot, error) {
+	progress(fmt.Sprintf("building the %s + %s warm snapshot on %s, once", s.Distro, s.SetupName, base.Key))
+	start := time.Now()
+	id := "eph-" + ulid.Make().String()
+	clone, err := m.restoreFresh(ctx, e, id, specOf(base), progress, true)
+	if err != nil {
+		return store.WarmSnapshot{}, err
+	}
+	defer func() { _ = e.DeleteClone(context.WithoutCancel(ctx), clone.ID()) }()
+	if err := scriptSetup(s)(ctx, clone.Dial, progress); err != nil {
+		return store.WarmSnapshot{}, err
+	}
+	progress("taking the snapshot")
+	dir := m.Dir(s.Key)
+	if err := e.SaveClone(ctx, clone.ID(), m.Dir(base.Key), dir); err != nil {
+		return store.WarmSnapshot{}, fmt.Errorf("saving the %s warm snapshot: %w", s.SetupName, err)
+	}
+	now := time.Now()
+	rec := base
+	rec.Key, rec.Base, rec.Setup, rec.Saved = s.Key, base.Key, s.SetupName, false
+	rec.SizeBytes, rec.CreatedAt, rec.LastUsedAt = diskUsage(dir), now, now
+	if err := m.Store.PutWarm(rec); err != nil {
+		return store.WarmSnapshot{}, err
+	}
+	progress(fmt.Sprintf("built the %s + %s warm snapshot in %s", s.Distro, s.SetupName, time.Since(start).Round(time.Second)))
+	return rec, nil
 }
 
 // tailBuffer keeps the last setupTailBytes written to it.

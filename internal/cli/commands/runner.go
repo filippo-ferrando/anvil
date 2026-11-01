@@ -80,7 +80,7 @@ func newRunnerAddCommand(flags *globalFlags) *cobra.Command {
 		Use:   "add <name>",
 		Short: "Add a runner and start taking jobs",
 		Example: "  anvil runner add ci --forge forgejo --url https://code.example.com --scope orgs/acme \\\n" +
-			"      --label debian=debian-13 --label ubuntu=ubuntu-24.04 --token-file ~/.forgejo-token\n" +
+			"      --label debian=debian-13 --label ubuntu=ubuntu-24.04 --deps go,python --token-file ~/.forgejo-token\n" +
 			"  ANVIL_FORGE_TOKEN=ghp_... anvil runner add gh --forge github --scope repos/acme/app --label anvil=ubuntu-24.04",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -111,6 +111,7 @@ func newRunnerAddCommand(flags *globalFlags) *cobra.Command {
 	cmd.Flags().Int32Var(&r.Cpus, "cpus", 0, "vCPUs of each job's clone (default 2)")
 	cmd.Flags().Int64Var(&r.MemoryMib, "memory", 0, "memory of each job's clone in MiB (default 2048)")
 	cmd.Flags().Int32Var(&r.MaxJobs, "max-jobs", 0, "jobs at once (default 2)")
+	cmd.Flags().StringSliceVar(&r.Deps, "deps", nil, "packages installed in every job's clone with the runner, e.g. go,python,curl,git")
 	cmd.Flags().StringVar(&r.Version, "version", "", "runner release to install in the clones (default the latest)")
 	cmd.Flags().BoolVar(&r.Paused, "paused", false, "add it paused, see anvil runner resume")
 	_ = cmd.MarkFlagRequired("scope")
@@ -137,10 +138,10 @@ func newRunnerListCommand(flags *globalFlags) *cobra.Command {
 					return printJSON(os.Stdout, reply)
 				}
 				tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-				fmt.Fprintln(tw, "NAME\tFORGE\tSCOPE\tLABELS\tJOBS\tSTATE")
+				fmt.Fprintln(tw, "NAME\tFORGE\tSCOPE\tLABELS\tDEPS\tJOBS\tSTATE")
 				for _, r := range reply.GetRunners() {
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d/%d\t%s\n", r.GetName(), r.GetForge(), r.GetScope(), runnerLabels(r.GetLabels()),
-						r.GetRunning(), r.GetMaxJobs(), runnerState(r))
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d/%d\t%s\n", r.GetName(), r.GetForge(), r.GetScope(), runnerLabels(r.GetLabels()),
+						runnerDeps(r.GetDeps()), r.GetRunning(), r.GetMaxJobs(), runnerState(r))
 				}
 				return tw.Flush()
 			})
@@ -158,6 +159,14 @@ func runnerLabels(m map[string]string) string {
 	}
 	sort.Strings(out)
 	return strings.Join(out, ",")
+}
+
+// runnerDeps is the DEPS column, "-" for none.
+func runnerDeps(deps []string) string {
+	if len(deps) == 0 {
+		return "-"
+	}
+	return strings.Join(deps, ",")
 }
 
 // runnerState is the STATE column: paused, the last poll's error, or when it last polled.

@@ -8,7 +8,7 @@ inside it for that one job. The runner handles the workflow file and actions
 
 ```
 anvil runner add ci --forge forgejo --url https://code.example.com --scope orgs/acme \
-    --label debian=debian-13 --label ubuntu=ubuntu-24.04 --token-file ~/.forgejo-token
+    --label debian=debian-13 --label ubuntu=ubuntu-24.04 --deps go,python --token-file ~/.forgejo-token
 ANVIL_FORGE_TOKEN=ghp_... anvil runner add gh --forge github --scope repos/acme/app --label anvil=ubuntu-24.04
 anvil runner list
 anvil runner jobs ci
@@ -35,8 +35,32 @@ snapshot with a setup script (shown as `forgejo-runner latest` or `actions-runne
 in `anvil warm list`). The script also installs `curl`, `git` and `node`, which JavaScript
 actions need. `--version` pins a runner release; without it the latest one at build time is
 used, and stays until that warm snapshot is removed. For a label mapped to `@<warm key>`
-nothing is installed: that snapshot must already have the runner (`forgejo-runner` on
-`PATH`, or GitHub's runner in `/opt/actions-runner`).
+the same script runs once in a clone of that snapshot, saved as a new snapshot built on it
+([ephemeral.md](ephemeral.md#picking-a-warm-snapshot-by-key)), so a snapshot made with a
+prepare script needs no runner of its own.
+
+## Dependencies
+
+`--deps go,python,curl,git` adds packages to that same setup script, so every snapshot the
+runner uses has them: one per distro or `@<warm key>` its labels map to. They are installed
+with the distro's own package manager (`apt-get`, `dnf`, `apk`, `pacman` or `zypper`); an
+image with none of them fails the setup. On Arch, `pacman -Syu` also upgrades the image, as
+partial upgrades aren't supported there. A few common names are mapped to that manager's
+package:
+
+| Name | apt | dnf | apk | pacman | zypper |
+|------|-----|-----|-----|--------|--------|
+| `go`, `golang` | `golang-go` | `golang` | `go` | `go` | `go` |
+| `python` | `python3` | `python3` | `python3` | `python` | `python3` |
+| `pip` | `python3-pip` | `python3-pip` | `py3-pip` | `python-pip` | `python3-pip` |
+| `node`, `nodejs` | `nodejs` | `nodejs` | `nodejs` | `nodejs` | `nodejs-default` |
+| `npm` | `npm` | `npm` | `npm` | `npm` | `npm-default` |
+| `gcc` | `build-essential` | `gcc` | `build-base` | `base-devel` | `gcc` |
+
+Any other name is passed as it is. The deps are part of the setup snapshot's key: runners
+with the same deps share snapshots, and different deps build their own. The setup shows in
+`anvil warm list` as `forgejo-runner latest + go,python`. In the TUI the add form has a
+Dependencies box, one package per line.
 
 ## Forgejo and Gitea
 

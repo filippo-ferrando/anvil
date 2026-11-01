@@ -28,8 +28,9 @@ type Runner struct {
 	Labels    map[string]string // job label -> distro or "@<warm key>"
 	CPUs      int
 	MemoryMiB int64
-	MaxJobs   int    // jobs at once
-	Version   string // runner release to install in clones, "" for the latest
+	MaxJobs   int      // jobs at once
+	Version   string   // runner release to install in clones, "" for the latest
+	Deps      []string // packages installed with the runner, e.g. go, python, git
 	Paused    bool
 	CreatedAt time.Time
 }

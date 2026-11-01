@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -37,8 +39,8 @@ type Forge interface {
 	Waiting(ctx context.Context, labels []string) ([]Job, error)
 	// Register makes single-use runner credentials for job, named name.
 	Register(ctx context.Context, name string, job Job) (Launch, error)
-	// Install is the setup script that puts the forge's runner in a warm snapshot.
-	Install(version string) (name, script string)
+	// Install is the setup script that puts the forge's runner and deps in a warm snapshot.
+	Install(version string, deps []string) (name, script string)
 }
 
 // newForge returns the client for r's forge.
@@ -132,16 +134,80 @@ func (e *httpError) Error() string {
 // shellQuote quotes s for sh.
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-// toolsScript installs what jobs on the clone itself need: curl, git, and node for
-// JavaScript actions like actions/checkout.
-const toolsScript = `set -eu
+// toolsScript installs what jobs on the clone itself need: curl, git, node for
+// JavaScript actions like actions/checkout, and the runner's deps.
+func toolsScript(deps []string) string {
+	return `set -eu
 if command -v apt-get >/dev/null 2>&1; then
 	export DEBIAN_FRONTEND=noninteractive
-	apt-get update -q && apt-get install -yq curl ca-certificates git nodejs tar
+	apt-get update -q && apt-get install -yq curl ca-certificates git nodejs tar` + depArgs(deps, "apt") + `
 elif command -v dnf >/dev/null 2>&1; then
-	dnf install -yq curl git nodejs tar
+	dnf install -yq curl git nodejs tar` + depArgs(deps, "dnf") + `
 elif command -v apk >/dev/null 2>&1; then
-	apk add --no-cache curl git nodejs bash tar
+	apk add --no-cache curl git nodejs bash tar` + depArgs(deps, "apk") + `
+elif command -v pacman >/dev/null 2>&1; then
+	pacman -Syu --noconfirm --needed curl git nodejs tar` + depArgs(deps, "pacman") + `
+elif command -v zypper >/dev/null 2>&1; then
+	zypper --non-interactive --gpg-auto-import-keys install curl git nodejs-default tar` + depArgs(deps, "zypper") + `
+else
+	echo "no supported package manager (apt-get, dnf, apk, pacman, zypper) in this image" >&2
+	exit 1
 fi
 case "$(uname -m)" in x86_64) arch=x64; goarch=amd64 ;; aarch64) arch=arm64; goarch=arm64 ;; *) echo "unsupported arch $(uname -m)" >&2; exit 1 ;; esac
 `
+}
+
+// depAliases maps a common name to each package manager's package for it.
+var depAliases = map[string]map[string]string{
+	"go":     {"apt": "golang-go", "dnf": "golang", "apk": "go", "pacman": "go", "zypper": "go"},
+	"golang": {"apt": "golang-go", "dnf": "golang", "apk": "go", "pacman": "go", "zypper": "go"},
+	"python": {"apt": "python3", "dnf": "python3", "apk": "python3", "pacman": "python", "zypper": "python3"},
+	"pip":    {"apt": "python3-pip", "dnf": "python3-pip", "apk": "py3-pip", "pacman": "python-pip", "zypper": "python3-pip"},
+	"node":   {"apt": "nodejs", "dnf": "nodejs", "apk": "nodejs", "pacman": "nodejs", "zypper": "nodejs-default"},
+	"nodejs": {"zypper": "nodejs-default"},
+	"npm":    {"apt": "npm", "dnf": "npm", "apk": "npm", "pacman": "npm", "zypper": "npm-default"},
+	"gcc":    {"apt": "build-essential", "dnf": "gcc", "apk": "build-base", "pacman": "base-devel", "zypper": "gcc"},
+}
+
+// depArgs is " pkg1 pkg2..." for package manager pm, deps' aliases resolved and quoted.
+func depArgs(deps []string, pm string) string {
+	var b strings.Builder
+	for _, d := range deps {
+		if a, ok := depAliases[d][pm]; ok {
+			d = a
+		}
+		b.WriteString(" " + shellQuote(d))
+	}
+	return b.String()
+}
+
+// validDep is a package name the supported package managers could take.
+var validDep = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.+_-]{0,127}$`)
+
+// normalizeDeps trims, checks and sorts deps, dropping blanks and repeats, so the same
+// set always makes the same setup snapshot.
+func normalizeDeps(deps []string) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	for _, d := range deps {
+		d = strings.TrimSpace(d)
+		if d == "" || seen[d] {
+			continue
+		}
+		if !validDep.MatchString(d) {
+			return nil, fmt.Errorf("dependency %q: want a package name", d)
+		}
+		seen[d] = true
+		out = append(out, d)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// setupName is the listed name of an install setup: the runner, plus its deps.
+func setupName(runner string, deps []string) string {
+	if len(deps) == 0 {
+		return runner
+	}
+	return runner + " + " + strings.Join(deps, ",")
+}

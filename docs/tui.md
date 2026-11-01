@@ -327,7 +327,7 @@ next one. See [runner.md](runner.md) and [pipelines.md](pipelines.md).
 | Key | Action |
 |-----|--------|
 | `tab` `shift+tab` | Switch between runners, runner jobs, pipeline runs and watches. |
-| `a` | On the runners list: add a runner (`anvil runner add`). The token is typed (hidden), read from a token file, or taken from `$ANVIL_FORGE_TOKEN`, in that order. On the watches list: watch a branch (`anvil pipeline watch add`). |
+| `a` | On the runners list: add a runner (`anvil runner add`). In its Dependencies box `enter` adds a line, `tab` leaves it and `ctrl+s` submits. The token is typed (hidden), read from a token file, or taken from `$ANVIL_FORGE_TOKEN`, in that order. On the watches list: watch a branch (`anvil pipeline watch add`). |
 | `n` | On the runs list: upload a local directory and run its pipeline (`anvil pipeline run`), with one pane per job and distro. `esc` cancels a running run and deletes its clones, or closes a finished one. An optional directory gets the run's files when it ends. |
 | `enter` | On a pipeline run: its jobs, with state, exit code and duration. `↑` `↓` pick a job. `esc` goes back. |
 | `l` / `L` | On a run: its logs (`anvil pipeline logs`); in a run's jobs, `l` shows only the picked job and `L` every job. |

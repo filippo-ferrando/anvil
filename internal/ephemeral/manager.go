@@ -81,10 +81,20 @@ func (m *Manager) Warm(ctx context.Context, p WarmParams, rebuild bool, progress
 		return store.WarmSnapshot{}, WarmSpec{}, err
 	}
 	if key, ok := warmRef(p.Distro); ok {
-		if p.Setup != nil || p.App != "" {
-			return store.WarmSnapshot{}, WarmSpec{}, errors.New("a warm snapshot picked by key takes no setup script or app")
+		if p.App != "" {
+			return store.WarmSnapshot{}, WarmSpec{}, errors.New("a warm snapshot picked by key takes no app")
 		}
-		return m.warmByKey(key)
+		rec, s, err := m.warmByKey(key)
+		if err != nil || p.Setup == nil {
+			return rec, s, err
+		}
+		// A setup script on a picked snapshot runs in a clone of it, saved as a new snapshot.
+		if s, err = withSetup(s, p.Setup); err != nil {
+			return store.WarmSnapshot{}, WarmSpec{}, err
+		}
+		return m.ensureWarm(ctx, s, rebuild, progress, func() (store.WarmSnapshot, error) {
+			return m.layerWarm(ctx, e, s, rec, progress)
+		})
 	}
 	s, err := e.WarmSpec(p)
 	if err == nil && p.App != "" {
@@ -106,6 +116,14 @@ func (m *Manager) Warm(ctx context.Context, p WarmParams, rebuild bool, progress
 	if err != nil {
 		return store.WarmSnapshot{}, WarmSpec{}, err
 	}
+	return m.ensureWarm(ctx, s, rebuild, progress, func() (store.WarmSnapshot, error) {
+		return m.buildWarm(ctx, e, s, progress)
+	})
+}
+
+// ensureWarm returns the recorded warm snapshot s, or makes it with buildFn. Callers asking
+// for one that is being built wait for that build.
+func (m *Manager) ensureWarm(ctx context.Context, s WarmSpec, rebuild bool, progress func(string), buildFn func() (store.WarmSnapshot, error)) (store.WarmSnapshot, WarmSpec, error) {
 	for {
 		if !rebuild {
 			if rec, err := m.Store.GetWarm(s.Key); err == nil && m.complete(s.Key) {
@@ -136,7 +154,7 @@ func (m *Manager) Warm(ctx context.Context, p WarmParams, rebuild bool, progress
 		m.building[s.Key] = b
 		m.mu.Unlock()
 
-		b.rec, b.err = m.buildWarm(ctx, e, s, progress)
+		b.rec, b.err = buildFn()
 		m.mu.Lock()
 		delete(m.building, s.Key)
 		m.mu.Unlock()

@@ -1526,6 +1526,7 @@ message Runner {
   int64 last_poll_unix = 12;
   string last_error = 13;         // of the last poll, empty when it worked
   int64 created_at_unix = 14;
+  repeated string deps = 15;      // packages installed in every clone, with the runner
 }
 
 message RunnerAddRequest {

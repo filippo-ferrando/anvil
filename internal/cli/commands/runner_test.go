@@ -20,6 +20,12 @@ func TestParseLabels(t *testing.T) {
 			t.Errorf("%q accepted", bad)
 		}
 	}
+	if got := runnerDeps(nil); got != "-" {
+		t.Errorf("runnerDeps(nil) = %q", got)
+	}
+	if got := runnerDeps([]string{"go", "python"}); got != "go,python" {
+		t.Errorf("runnerDeps = %q", got)
+	}
 	if got := runnerLabels(map[string]string{"b": "2", "a": "1"}); got != "a=1,b=2" {
 		t.Errorf("runnerLabels = %q", got)
 	}

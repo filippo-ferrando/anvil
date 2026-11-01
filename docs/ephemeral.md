@@ -140,6 +140,15 @@ anvil warm pool set @3f9a2c --size 4
 A pool set this way stays with that snapshot. It doesn't follow upgrades, unlike a pool
 set by distro.
 
+`--setup` on `@<key>` builds a new snapshot on top of that one, once: the script runs in a
+clone of it, and the clone is saved. The new snapshot is keyed by the base and the script,
+and is removed with its base. `anvil runner` uses this to add the forge's runner to a
+snapshot picked by key.
+
+```
+anvil warm create @3f9a2c --setup ci/extra.sh
+```
+
 ## Saving a clone
 
 `anvil warm save <clone-id>` turns a running or kept clone into a warm snapshot of its

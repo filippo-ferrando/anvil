@@ -12479,6 +12479,7 @@ type Runner struct {
 	LastPollUnix  int64                  `protobuf:"varint,12,opt,name=last_poll_unix,json=lastPollUnix,proto3" json:"last_poll_unix,omitempty"`
 	LastError     string                 `protobuf:"bytes,13,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"` // of the last poll, empty when it worked
 	CreatedAtUnix int64                  `protobuf:"varint,14,opt,name=created_at_unix,json=createdAtUnix,proto3" json:"created_at_unix,omitempty"`
+	Deps          []string               `protobuf:"bytes,15,rep,name=deps,proto3" json:"deps,omitempty"` // packages installed in every clone, with the runner
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -12609,6 +12610,13 @@ func (x *Runner) GetCreatedAtUnix() int64 {
 		return x.CreatedAtUnix
 	}
 	return 0
+}
+
+func (x *Runner) GetDeps() []string {
+	if x != nil {
+		return x.Deps
+	}
+	return nil
 }
 
 type RunnerAddRequest struct {
@@ -15467,7 +15475,7 @@ const file_anvil_v1_anvil_proto_rawDesc = "" +
 	"\x04exit\x18\x03 \x01(\v2\x11.anvil.v1.RunExitH\x00R\x04exit\x120\n" +
 	"\asession\x18\x04 \x01(\v2\x14.anvil.v1.AppSessionH\x00R\asession\x12(\n" +
 	"\x03app\x18\x05 \x01(\v2\x14.anvil.v1.AppStartedH\x00R\x03appB\a\n" +
-	"\x05event\"\xd2\x03\n" +
+	"\x05event\"\xe6\x03\n" +
 	"\x06Runner\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05forge\x18\x02 \x01(\tR\x05forge\x12\x10\n" +
@@ -15485,7 +15493,8 @@ const file_anvil_v1_anvil_proto_rawDesc = "" +
 	"\x0elast_poll_unix\x18\f \x01(\x03R\flastPollUnix\x12\x1d\n" +
 	"\n" +
 	"last_error\x18\r \x01(\tR\tlastError\x12&\n" +
-	"\x0fcreated_at_unix\x18\x0e \x01(\x03R\rcreatedAtUnix\x1a9\n" +
+	"\x0fcreated_at_unix\x18\x0e \x01(\x03R\rcreatedAtUnix\x12\x12\n" +
+	"\x04deps\x18\x0f \x03(\tR\x04deps\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"R\n" +

@@ -103,13 +103,13 @@ exec ./run.sh --jitconfig "$cfg"`,
 	}, nil
 }
 
-func (g *github) Install(version string) (string, string) {
+func (g *github) Install(version string, deps []string) (string, string) {
 	v := strings.TrimPrefix(version, "v")
 	name := "actions-runner " + v
 	if v == "" {
 		name = "actions-runner latest"
 	}
-	return name, toolsScript + `v=` + shellQuote(v) + `
+	return setupName(name, deps), toolsScript(deps) + `v=` + shellQuote(v) + `
 if [ -z "$v" ]; then
 	v=$(curl -fsSL https://api.github.com/repos/actions/runner/releases/latest | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' | head -n1)
 fi

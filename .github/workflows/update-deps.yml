@@ -1,0 +1,33 @@
+name: Update deps version
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-deps:
+    runs-on: archlinux
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.LOCAL_TOKEN || github.token }}
+
+      - name: Install deps
+        run: pacman -Syu && pacman -S git curl
+
+      - name: Run updater script
+        run: ./scripts/update-tools.sh
+
+      - name: Update tools.version
+        run: |
+          git fetch --tags --force
+          git diff --quiet -- tools.versions && exit 0
+          git config user.name "anvil-tools"
+          git config user.email "ferrandodfilippo+anvil@ik.me"
+          git add scripts/tools.versions
+          git commit -m "chore(update): update tools version [skip ci]"
+          git push origin HEAD:main

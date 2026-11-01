@@ -55,7 +55,11 @@ func (i runnerItem) Description() string {
 		labels = append(labels, l+"="+d)
 	}
 	sort.Strings(labels)
-	return fmt.Sprintf("%d/%d jobs  •  %s  •  %s", i.r.GetRunning(), i.r.GetMaxJobs(), strings.Join(labels, ","), state)
+	deps := ""
+	if d := i.r.GetDeps(); len(d) > 0 {
+		deps = "  •  deps " + strings.Join(d, ",")
+	}
+	return fmt.Sprintf("%d/%d jobs  •  %s%s  •  %s", i.r.GetRunning(), i.r.GetMaxJobs(), strings.Join(labels, ","), deps, state)
 }
 
 type runnerJobItem struct{ j *anvilv1.RunnerJob }
@@ -746,6 +750,7 @@ func newRunnerForm() simpleForm {
 		textField("CPUs", "of each job's clone, default 2", ""),
 		textField("Memory (MiB)", "of each job's clone, default 2048", ""),
 		textField("Max jobs", "jobs at once, default 2", ""),
+		areaField("Dependencies", "packages for every job's clone, one per line (e.g. go, python, git)", ""),
 		textField("Version", "runner release installed in the clones (default the latest)", ""),
 		toggleField("Paused", "add it paused", false),
 	})
@@ -761,6 +766,7 @@ func buildRunnerRequest(form simpleForm, envToken string) (*anvilv1.RunnerAddReq
 		Version: strings.TrimSpace(form.Value("Version")),
 		Paused:  form.Bool("Paused"),
 		Labels:  map[string]string{},
+		Deps:    form.Lines("Dependencies"),
 	}
 	if r.Name == "" || r.Scope == "" {
 		return nil, errors.New("name and scope are required")

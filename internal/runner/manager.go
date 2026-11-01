@@ -126,6 +126,11 @@ func normalize(r *store.Runner) error {
 			return fmt.Errorf("runner %s: label %q -> %q, want <label>=<distro>", r.Name, l, d)
 		}
 	}
+	deps, err := normalizeDeps(r.Deps)
+	if err != nil {
+		return fmt.Errorf("runner %s: %w", r.Name, err)
+	}
+	r.Deps = deps
 	if r.MaxJobs <= 0 {
 		r.MaxJobs = DefaultMaxJobs
 	}
@@ -380,11 +385,10 @@ func (m *Manager) runJob(ctx context.Context, r store.Runner, forge Forge, job J
 		Distros: []string{distro}, Argv: []string{"sh", "-c", launch.Script}, Env: launch.Env,
 		CPUs: r.CPUs, MemoryMiB: r.MemoryMiB,
 	}
-	// A distro by name gets the runner installed through a setup snapshot, built once.
-	if !strings.HasPrefix(distro, "@") {
-		setupName, script := forge.Install(r.Version)
-		req.Setup = &ephemeral.SetupScript{Name: setupName, Script: []byte("#!/bin/sh\n" + script)}
-	}
+	// The runner goes in through a setup snapshot built once, on the distro or on the
+	// picked warm snapshot.
+	installName, script := forge.Install(r.Version, r.Deps)
+	req.Setup = &ephemeral.SetupScript{Name: installName, Script: []byte("#!/bin/sh\n" + script)}
 	runCtx, cancel := context.WithTimeout(ctx, jobTimeout)
 	defer cancel()
 	var out tail

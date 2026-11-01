@@ -91,13 +91,13 @@ exec forgejo-runner one-job --url "$ANVIL_FORGE_URL" --uuid "$ANVIL_RUNNER_UUID"
 	}, nil
 }
 
-func (f *forgejo) Install(version string) (string, string) {
+func (f *forgejo) Install(version string, deps []string) (string, string) {
 	v := strings.TrimPrefix(version, "v")
 	name := "forgejo-runner " + v
 	if v == "" {
 		name = "forgejo-runner latest"
 	}
-	return name, toolsScript + `v=` + shellQuote(v) + `
+	return setupName(name, deps), toolsScript(deps) + `v=` + shellQuote(v) + `
 if [ -z "$v" ]; then
 	v=$(curl -fsSL https://code.forgejo.org/api/v1/repos/forgejo/runner/releases/latest | sed -n 's/.*"tag_name":"v\{0,1\}\([^"]*\)".*/\1/p')
 fi

@@ -116,6 +116,41 @@ func TestBuildRunnerRequest(t *testing.T) {
 	}
 }
 
+// TestRunnerFormDeps types deps line by line: Enter adds a line in the box, Tab leaves it.
+func TestRunnerFormDeps(t *testing.T) {
+	f := newRunnerForm()
+	setField(&f, "Name", "ci")
+	setField(&f, "Scope", "orgs/acme")
+	setField(&f, "Labels", "debian=debian-13")
+	for i, field := range f.fields {
+		if field.Label == "Dependencies" {
+			f.blurCurrent()
+			f.focus = i
+			f.focusCurrent()
+		}
+	}
+	for _, k := range []string{"go", "enter", "python", "enter", "enter", " git ", "down"} {
+		var submitted bool
+		if f, submitted, _ = f.update(ciKey(k)); submitted {
+			t.Fatalf("%q submitted the form", k)
+		}
+	}
+	if f.fields[f.focus].Label != "Dependencies" {
+		t.Fatalf("a key inside the box moved focus to %s", f.fields[f.focus].Label)
+	}
+	f, _, _ = f.update(tea.KeyMsg{Type: tea.KeyTab})
+	if f.fields[f.focus].Label == "Dependencies" {
+		t.Error("tab didn't leave the box")
+	}
+	req, err := buildRunnerRequest(f, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := req.GetRunner().GetDeps(); !slices.Equal(got, []string{"go", "python", "git"}) {
+		t.Errorf("deps = %q", got)
+	}
+}
+
 func TestBuildWatch(t *testing.T) {
 	f := newWatchForm()
 	setField(&f, "Name", "app")

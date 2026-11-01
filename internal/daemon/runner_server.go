@@ -28,7 +28,7 @@ func runnerToPB(in runner.Info) *anvilv1.Runner {
 	out := &anvilv1.Runner{
 		Name: r.Name, Forge: r.Forge, Url: r.URL, Scope: r.Scope, Labels: r.Labels, Cpus: int32(r.CPUs), MemoryMib: r.MemoryMiB,
 		MaxJobs: int32(r.MaxJobs), Version: r.Version, Paused: r.Paused, Running: int32(in.Running), LastError: in.LastErr,
-		CreatedAtUnix: r.CreatedAt.Unix(),
+		CreatedAtUnix: r.CreatedAt.Unix(), Deps: r.Deps,
 	}
 	if !in.LastPoll.IsZero() {
 		out.LastPollUnix = in.LastPoll.Unix()
@@ -55,6 +55,7 @@ func (s *RunnerServer) Add(_ context.Context, req *anvilv1.RunnerAddRequest) (*a
 	info, err := s.Manager.Add(s.Base, store.Runner{
 		Name: r.GetName(), Forge: r.GetForge(), URL: r.GetUrl(), Scope: r.GetScope(), Token: req.GetToken(), Labels: r.GetLabels(),
 		CPUs: int(r.GetCpus()), MemoryMiB: r.GetMemoryMib(), MaxJobs: int(r.GetMaxJobs()), Version: r.GetVersion(), Paused: r.GetPaused(),
+		Deps: r.GetDeps(),
 	})
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())

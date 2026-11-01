@@ -133,8 +133,8 @@ func TestWarmByKeyAndDerivedDelete(t *testing.T) {
 	if _, _, err := m.Warm(ctx, WarmParams{Distro: "@nope"}, false, nil); err == nil {
 		t.Error("an unknown key was accepted")
 	}
-	if _, _, err := m.Warm(ctx, WarmParams{Distro: "@" + rec.Key, Setup: setup}, false, nil); err == nil {
-		t.Error("a key with a setup script was accepted")
+	if _, _, err := m.Warm(ctx, WarmParams{Distro: "@" + rec.Key, App: "gedit"}, false, nil); err == nil {
+		t.Error("a key with an app was accepted")
 	}
 
 	// A run on "@key" restores from that snapshot.
@@ -197,5 +197,52 @@ func TestSaveClone(t *testing.T) {
 	}
 	if list, _ := m.ListWarm(); len(list) != 2 {
 		t.Errorf("records = %d, want the base and one saved", len(list))
+	}
+}
+
+// TestSetupOnWarmKey layers a setup script on a snapshot picked by key: it runs in a clone
+// of that snapshot, which is saved as a new one built on it.
+func TestSetupOnWarmKey(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh")
+	}
+	m, e := newTestManager(t)
+	ctx := context.Background()
+	setWorkDir(t, filepath.Join(t.TempDir(), "work"))
+	base, _, err := m.Warm(ctx, WarmParams{Distro: "ubuntu", CPUs: 2, Setup: &SetupScript{Name: "prepare.sh", Script: []byte("true")}}, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "runner-installed")
+	install := &SetupScript{Name: "forgejo-runner latest", Script: []byte("#!/bin/sh\necho ok > " + out + "\n")}
+	rec, spec, err := m.Warm(ctx, WarmParams{Distro: "@" + base.Key[:6], Setup: install}, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(out); string(got) != "ok\n" {
+		t.Errorf("the script wrote %q", got)
+	}
+	if rec.Key == base.Key || rec.Key != spec.Key || rec.Base != base.Key || rec.Setup != "forgejo-runner latest" || rec.Saved || rec.Distro != "ubuntu" {
+		t.Errorf("record = %+v", rec)
+	}
+	builds := e.builds.Load()
+	e.mu.Lock()
+	deleted := len(e.deleted)
+	e.mu.Unlock()
+	if deleted != 1 {
+		t.Errorf("%d clones deleted after the layer build, want 1", deleted)
+	}
+	// The same script on the same snapshot reuses it.
+	os.Remove(out)
+	if again, _, err := m.Warm(ctx, WarmParams{Distro: "@" + base.Key, Setup: install}, false, nil); err != nil || again.Key != rec.Key {
+		t.Errorf("reuse = %+v, %v", again, err)
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) || e.builds.Load() != builds {
+		t.Error("the layer was built again")
+	}
+	// Removing the base removes the layer too.
+	deletedKeys, err := m.DeleteWarm([]string{base.Key}, false)
+	if err != nil || !slices.Contains(deletedKeys, rec.Key) {
+		t.Errorf("DeleteWarm = %v, %v", deletedKeys, err)
 	}
 }

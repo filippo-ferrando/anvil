@@ -96,10 +96,10 @@ func TestForgejoClient(t *testing.T) {
 	if !slices.Equal(ff.deleted, []string{"31"}) {
 		t.Errorf("deleted = %v", ff.deleted)
 	}
-	if name, script := f.Install(""); name != "forgejo-runner latest" || !strings.Contains(script, "releases/latest") {
+	if name, script := f.Install("", nil); name != "forgejo-runner latest" || !strings.Contains(script, "releases/latest") {
 		t.Errorf("install = %q", name)
 	}
-	if name, script := f.Install("v12.6.0"); name != "forgejo-runner 12.6.0" || !strings.Contains(script, "v='12.6.0'") {
+	if name, script := f.Install("v12.6.0", nil); name != "forgejo-runner 12.6.0" || !strings.Contains(script, "v='12.6.0'") {
 		t.Errorf("install pinned = %q\n%s", name, script)
 	}
 }
@@ -225,7 +225,9 @@ func (f *fakeForge) Register(_ context.Context, name string, job Job) (Launch, e
 	return Launch{Script: "run " + name, Env: []string{"TOKEN=x"}, Cleanup: func(context.Context) { f.cleaned.Add(1) }}, nil
 }
 
-func (f *fakeForge) Install(string) (string, string) { return "fake-runner", "install it" }
+func (f *fakeForge) Install(_ string, deps []string) (string, string) {
+	return setupName("fake-runner", deps), "install it" + depArgs(deps, "apt")
+}
 
 // fakeRuns records requests and exits with code, after release is closed.
 type fakeRuns struct {
@@ -358,8 +360,8 @@ func TestManagerFailures(t *testing.T) {
 		t.Errorf("failed job = %+v", jobs[0])
 	}
 	runs.mu.Lock()
-	if runs.reqs[0].Setup != nil {
-		t.Error("a warm snapshot by key got the install setup")
+	if runs.reqs[0].Setup == nil || runs.reqs[0].Distros[0] != "@k1" {
+		t.Error("a warm snapshot by key got no install setup on top of it")
 	}
 	runs.mu.Unlock()
 	if _, err := m.Add(ctx, store.Runner{Name: "ci", Forge: "github", Scope: "repos/a/b", Token: "t", Labels: map[string]string{"big": "@k1"}}); err == nil {
@@ -388,5 +390,76 @@ func TestManagerFailures(t *testing.T) {
 	m2.MarkInterrupted()
 	if jobs, _ := m2.Jobs("r2"); jobs[0].State != "failed" || !strings.Contains(jobs[0].Error, "restarted") {
 		t.Errorf("interrupted job = %+v", jobs[0])
+	}
+}
+
+func TestDeps(t *testing.T) {
+	got, err := normalizeDeps([]string{" python", "go", "", "git", "go"})
+	if err != nil || !slices.Equal(got, []string{"git", "go", "python"}) {
+		t.Errorf("normalizeDeps = %v, %v", got, err)
+	}
+	for _, bad := range []string{"go;rm -rf /", "-y", "a b", "$(x)"} {
+		if _, err := normalizeDeps([]string{bad}); err == nil {
+			t.Errorf("normalizeDeps accepted %q", bad)
+		}
+	}
+	if a := depArgs([]string{"go", "jq"}, "apt"); a != " 'golang-go' 'jq'" {
+		t.Errorf("apt args = %q", a)
+	}
+	if a := depArgs([]string{"go", "pip"}, "apk"); a != " 'go' 'py3-pip'" {
+		t.Errorf("apk args = %q", a)
+	}
+	f := &forgejo{}
+	name, script := f.Install("", []string{"go", "python"})
+	if name != "forgejo-runner latest + go,python" || !strings.Contains(script, "nodejs tar 'golang-go' 'python3'") || !strings.Contains(script, "dnf install -yq curl git nodejs tar 'golang' 'python3'") {
+		t.Errorf("install with deps = %q\n%s", name, script)
+	}
+	if !strings.Contains(script, "pacman -Syu --noconfirm --needed curl git nodejs tar 'go' 'python'") ||
+		!strings.Contains(script, "install curl git nodejs-default tar 'go' 'python3'") {
+		t.Errorf("no pacman or zypper line with the deps:\n%s", script)
+	}
+	if !strings.Contains(script, "no supported package manager") {
+		t.Error("an image with no known package manager doesn't fail")
+	}
+	if gname, gscript := (&github{}).Install("", []string{"go", "python"}); gname != "actions-runner latest + go,python" || !strings.Contains(gscript, toolsScript([]string{"go", "python"})) {
+		t.Errorf("github install with deps = %q\n%s", gname, gscript)
+	}
+	if _, plain := f.Install("", nil); plain == script {
+		t.Error("deps don't change the setup script, so they'd share a snapshot")
+	}
+}
+
+// TestManagerDepsOnEveryDistro checks that each distro a runner maps gets its deps.
+func TestManagerDepsOnEveryDistro(t *testing.T) {
+	forge := &fakeForge{jobs: []Job{{ID: 1, Labels: []string{"debian"}}, {ID: 2, Labels: []string{"ubuntu"}}, {ID: 3, Labels: []string{"big"}}}}
+	runs := &fakeRuns{release: make(chan struct{})}
+	close(runs.release)
+	m := newTestManager(t, forge, runs)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	info, err := m.Add(ctx, store.Runner{Name: "ci", Forge: "forgejo", URL: "https://x", Scope: "repos/a/b", Token: "t", MaxJobs: 3,
+		Labels: map[string]string{"debian": "debian-13", "ubuntu": "ubuntu-24.04", "big": "@k1"}, Deps: []string{"python", "go", "go"}})
+	if err != nil || !slices.Equal(info.Deps, []string{"go", "python"}) {
+		t.Fatalf("Add = %+v, %v", info, err)
+	}
+	if _, err := m.Add(ctx, store.Runner{Name: "bad", Forge: "forgejo", URL: "https://x", Scope: "repos/a/b", Token: "t",
+		Labels: map[string]string{"debian": "debian-13"}, Deps: []string{"go && reboot"}}); err == nil {
+		t.Error("a bad dependency was accepted")
+	}
+	waitFor(t, "three jobs", func() bool { runs.mu.Lock(); defer runs.mu.Unlock(); return len(runs.reqs) == 3 })
+	cancel()
+	m.Wait()
+	runs.mu.Lock()
+	defer runs.mu.Unlock()
+	var distros []string
+	for _, r := range runs.reqs {
+		distros = append(distros, r.Distros[0])
+		if r.Setup == nil || r.Setup.Name != "fake-runner + go,python" || !strings.Contains(string(r.Setup.Script), "'golang-go' 'python3'") {
+			t.Errorf("setup on %s = %+v", r.Distros[0], r.Setup)
+		}
+	}
+	slices.Sort(distros)
+	if !slices.Equal(distros, []string{"@k1", "debian-13", "ubuntu-24.04"}) {
+		t.Errorf("distros = %v", distros)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -34,6 +35,7 @@ const (
 	fieldText fieldKind = iota
 	fieldToggle
 	fieldPicker // drop-down list of checkable options
+	fieldArea   // multi-line text, one entry per line
 )
 
 // pickOption is one entry of a fieldPicker. A non-empty Note marks it as not pickable and says why.
@@ -47,6 +49,7 @@ type formField struct {
 	Kind  fieldKind
 
 	input       textinput.Model // fieldText
+	area        textarea.Model  // fieldArea
 	on          bool            // fieldToggle
 	Suggestions []string        // candidate values Tab can cycle through; nil disables it
 
@@ -104,6 +107,36 @@ func (m model) remote() string {
 	return m.client.Remote
 }
 
+// areaField is a multi-line text box: Enter adds a line, Tab and Shift+Tab leave it.
+func areaField(label, hint, value string) formField {
+	ta := textarea.New()
+	ta.Placeholder = hint
+	ta.ShowLineNumbers = false
+	ta.Prompt = ""
+	ta.CharLimit = 4096
+	ta.SetWidth(48)
+	ta.SetHeight(4)
+	ta.SetValue(value)
+	ta.Blur()
+	return formField{Label: label, Hint: hint, Kind: fieldArea, area: ta}
+}
+
+// Lines returns the non-blank, trimmed lines of the area field with the given label.
+func (f simpleForm) Lines(label string) []string {
+	var out []string
+	for _, field := range f.fields {
+		if field.Label != label || field.Kind != fieldArea {
+			continue
+		}
+		for _, l := range strings.Split(field.area.Value(), "\n") {
+			if l = strings.TrimSpace(l); l != "" {
+				out = append(out, l)
+			}
+		}
+	}
+	return out
+}
+
 func toggleField(label, hint string, on bool) formField {
 	return formField{Label: label, Hint: hint, Kind: fieldToggle, on: on}
 }
@@ -158,6 +191,9 @@ func (f *simpleForm) SetHeight(h int) { f.maxHeight = h }
 func (f simpleForm) Value(label string) string {
 	for _, field := range f.fields {
 		if field.Label == label {
+			if field.Kind == fieldArea {
+				return strings.TrimSpace(field.area.Value())
+			}
 			return strings.TrimSpace(field.input.Value())
 		}
 	}
@@ -232,6 +268,16 @@ func (f simpleForm) update(msg tea.Msg) (simpleForm, bool, bool) {
 		}
 		if k := keyMsg.String(); (k == " " || k == "enter") && len(field.options) > 0 {
 			field.open = true
+			return f, false, false
+		}
+	}
+
+	// An area keeps Enter and the arrows for itself; Tab, Shift+Tab, Ctrl+S and Esc still work.
+	if field := &f.fields[f.focus]; field.Kind == fieldArea {
+		switch keyMsg.String() {
+		case "esc", "tab", "shift+tab", "ctrl+s":
+		default:
+			field.area, _ = field.area.Update(msg)
 			return f, false, false
 		}
 	}
@@ -348,14 +394,20 @@ func suggestionHint(field formField) string {
 }
 
 func (f *simpleForm) blurCurrent() {
-	if f.fields[f.focus].Kind == fieldText {
+	switch f.fields[f.focus].Kind {
+	case fieldText:
 		f.fields[f.focus].input.Blur()
+	case fieldArea:
+		f.fields[f.focus].area.Blur()
 	}
 }
 
 func (f *simpleForm) focusCurrent() {
-	if f.fields[f.focus].Kind == fieldText {
+	switch f.fields[f.focus].Kind {
+	case fieldText:
 		f.fields[f.focus].input.Focus()
+	case fieldArea:
+		f.fields[f.focus].area.Focus()
 	}
 }
 
@@ -409,6 +461,13 @@ func (f simpleForm) View() string {
 					lines = append(lines, "        "+lipgloss.NewStyle().Foreground(colorBad).Render(o.Note))
 				}
 			}
+		case fieldArea:
+			for _, l := range strings.Split(field.area.View(), "\n") {
+				lines = append(lines, bar+l)
+			}
+			if focused && field.Hint != "" {
+				lines = append(lines, "  "+styleSubtitle.Render(field.Hint+" (enter adds a line, tab leaves)"))
+			}
 		default:
 			lines = append(lines, bar+field.input.View())
 			if focused && field.Hint != "" {
@@ -431,7 +490,11 @@ func (f simpleForm) View() string {
 		content = windowLines(lines, focusLine, f.maxHeight)
 	}
 
-	return strings.Join(content, "\n") + "\n\n" + helpBar("tab", "next field / complete", "enter", "submit", "esc", "cancel")
+	help := helpBar("tab", "next field / complete", "enter", "submit", "esc", "cancel")
+	if f.fields[f.focus].Kind == fieldArea {
+		help = helpBar("tab", "next field", "enter", "new line", "ctrl+s", "submit", "esc", "cancel")
+	}
+	return strings.Join(content, "\n") + "\n\n" + help
 }
 
 // pickerSummary is a picker's one-line collapsed view: what is checked, or how to open it.
