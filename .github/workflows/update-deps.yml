@@ -17,7 +17,7 @@ jobs:
           token: ${{ secrets.LOCAL_TOKEN || github.token }}
 
       - name: Install deps
-        run: pacman -Syu && pacman -S git curl
+        run: pacman -Syu git curl --noconfirm
 
       - name: Run updater script
         run: ./scripts/update-tools.sh
