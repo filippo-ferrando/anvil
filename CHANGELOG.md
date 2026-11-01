@@ -2,6 +2,16 @@
 
 Built from commit subjects by `scripts/changelog.sh`.
 
+## v1.3.2 (2026-11-01)
+
+### Features
+
+- fixed graphics with new features (871df88)
+
+### Other changes
+
+- keep the ticker off the broken watch in TestWatcher (359fe58)
+
 ## v1.3.1 (2026-10-31)
 
 ### Features
