@@ -8,8 +8,13 @@ Built from commit subjects by `scripts/changelog.sh`.
 
 - fixed graphics with new features (871df88)
 
+### Fixes
+
+- race problem in the CI (cd2ea58)
+
 ### Other changes
 
+- added jobs to update dependencies version (7bf3d0a)
 - keep the ticker off the broken watch in TestWatcher (359fe58)
 
 ## v1.3.1 (2026-10-31)
