@@ -2,7 +2,7 @@
 
 Built from commit subjects by `scripts/changelog.sh`.
 
-## v1.3.3 (2026-11-01)
+## v1.3.3 (2026-11-02)
 
 ### Fixes
 
@@ -10,6 +10,7 @@ Built from commit subjects by `scripts/changelog.sh`.
 
 ### Other changes
 
+- various fixes (6d43c0e)
 - improved pipelines (96d700d)
 
 ## v1.3.2 (2026-11-01)
