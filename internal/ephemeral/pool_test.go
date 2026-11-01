@@ -170,3 +170,30 @@ func TestStartPools(t *testing.T) {
 	m2.StartPools()
 	waitPool(t, m2, "ubuntu", 2)
 }
+
+func TestRemovingLastPoolDrainsNetworks(t *testing.T) {
+	m, e, _ := newPoolManager(t)
+	for _, d := range []string{"ubuntu", "debian"} {
+		if _, err := m.SetPool(WarmParams{Distro: d}, 1); err != nil {
+			t.Fatal(err)
+		}
+		waitPool(t, m, d, 1)
+	}
+	if _, err := m.SetPool(WarmParams{Distro: "ubuntu"}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.drained.Load(); n != 0 {
+		t.Fatalf("drained %d times with a pool left", n)
+	}
+	info := waitPool(t, m, "debian", 1)
+	if _, err := m.DeleteWarm([]string{info.WarmKey}, false); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.drained.Load(); n != 1 {
+		t.Errorf("drained %d times after the last pool went, want 1", n)
+	}
+	m.Shutdown(context.Background())
+	if n := e.drained.Load(); n != 2 {
+		t.Errorf("drained %d times after Shutdown, want 2", n)
+	}
+}

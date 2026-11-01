@@ -74,6 +74,7 @@ func (m *Manager) SetPool(p WarmParams, size int) (PoolInfo, error) {
 		if pl != nil {
 			m.drain(pl, 0, true)
 		}
+		m.releaseIdle()
 		return PoolInfo{WarmPool: cfg}, nil
 	}
 	if err := m.Store.PutWarmPool(cfg); err != nil {
@@ -222,6 +223,7 @@ func (m *Manager) fill(pl *pool) error {
 		m.mu.Unlock()
 		if !keep {
 			m.dropPooled(clone)
+			m.releaseIdle() // its restore may have refilled the clone networks
 		}
 	}
 }
@@ -279,6 +281,29 @@ func (m *Manager) evictPooled() bool {
 	// Later, so the run that needs the memory gets it first.
 	time.AfterFunc(poolRetry, func() { m.refill(pl) })
 	return true
+}
+
+// releaseIdle drops the clone networks built ahead of time once no pool is left.
+func (m *Manager) releaseIdle() {
+	m.mu.Lock()
+	idle := len(m.pools) == 0
+	m.mu.Unlock()
+	if !idle || m.Engine == nil {
+		return
+	}
+	if err := m.Engine.DrainNetworks(context.Background()); err != nil {
+		log.Printf("ephemeral: dropping spare clone networks: %v", err)
+	}
+}
+
+// Shutdown runs as anvild stops: nothing is left built ahead of time on the host.
+func (m *Manager) Shutdown(ctx context.Context) {
+	if m.Engine == nil {
+		return
+	}
+	if err := m.Engine.DrainNetworks(ctx); err != nil {
+		log.Printf("ephemeral: dropping spare clone networks: %v", err)
+	}
 }
 
 // dropPoolsOf removes the pools of warm snapshot key, which is being deleted.

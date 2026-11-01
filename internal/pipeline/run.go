@@ -305,7 +305,7 @@ func (r *run) execute(ctx context.Context) error {
 				state[name] = "running"
 				running++
 				go func() {
-					ok := r.runJob(ctx, srcDir, name, p.Jobs[name])
+					ok := r.runJob(ctx, srcDir, name, p.Jobs)
 					if ok {
 						done <- name + "\x00succeeded"
 					} else {
@@ -331,7 +331,8 @@ func (r *run) execute(ctx context.Context) error {
 }
 
 // runJob runs job on all its distros at once and reports whether every one passed.
-func (r *run) runJob(ctx context.Context, srcDir, name string, j *Job) bool {
+func (r *run) runJob(ctx context.Context, srcDir, name string, jobs map[string]*Job) bool {
+	j := jobs[name]
 	fail := func(err error) bool {
 		for _, d := range j.Distros {
 			r.setJob(name, d, func(pj *store.PipelineJob) { pj.State, pj.Error, pj.ExitCode = "failed", err.Error(), -1 })
@@ -345,6 +346,13 @@ func (r *run) runJob(ctx context.Context, srcDir, name string, j *Job) bool {
 			return fail(err)
 		}
 		setup = s
+	}
+	upload, err := r.upload(name, j, jobs)
+	if err != nil {
+		return fail(err)
+	}
+	if upload != r.tar {
+		defer os.Remove(upload)
 	}
 	var env []string
 	for k, v := range j.Env {
@@ -369,9 +377,9 @@ func (r *run) runJob(ctx context.Context, srcDir, name string, j *Job) bool {
 	ctx, cancel := context.WithTimeout(ctx, j.timeout)
 	defer cancel()
 	ok := true
-	err := r.e.Runs.Run(ctx, ephemeral.RunRequest{
+	err = r.e.Runs.Run(ctx, ephemeral.RunRequest{
 		Distros: j.Distros, Argv: []string{"sh", "-c", j.Run}, Env: env, CPUs: j.CPUs, MemoryMiB: j.Memory,
-		Upload: r.tar, Collect: j.Collect, Setup: setup,
+		Upload: upload, Collect: j.Collect, Setup: setup,
 	}, func(ev ephemeral.Event) {
 		switch {
 		case ev.Progress != nil:

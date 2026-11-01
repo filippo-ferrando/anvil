@@ -37,7 +37,23 @@ apply: deploy/anvil.yaml         # applied once every job passed
   the script or a key file changes ([ephemeral.md](ephemeral.md#setup-scripts)). Paths are
   relative to the source.
 - `collect` takes the same paths and globs as `--collect` and keeps the files under the
-  run, as `<job>/<distro>/...`. Jobs don't see each other's collected files.
+  run, as `<job>/<distro>/...`.
+- `retrieve` lists `<job>[:<dir>]` entries: that job's collected files are put in `/work`
+  (or `/work/<dir>`) before the command runs. Retrieving from a job also needs it. When
+  that job runs on more than one distro, each distro's files go in a `<distro>/` directory.
+  Retrieved files replace source files with the same name.
+
+```yaml
+jobs:
+  gui-tools:
+    distro: alpine-3.24.1
+    run: scripts/build-gui-tools.sh build/gui-tools
+    collect: [build/gui-tools]   # kept as gui-tools/waypipe, ...
+  package:
+    distro: ubuntu-24.04
+    retrieve: [gui-tools:build]  # in /work/build/gui-tools/waypipe, ...
+    run: packaging/deb/build.sh 1.0.0
+```
 - A job's clone is deleted when it ends, whether it passed or failed.
 
 ## Running by hand

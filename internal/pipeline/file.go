@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -36,12 +37,17 @@ type Job struct {
 	Env      map[string]string `yaml:"env"`
 	Setup    string            `yaml:"setup"` // a setup script in the repo, see anvil warm create --setup
 	KeyFiles []string          `yaml:"key-files"`
-	Collect  []string          `yaml:"collect"` // guest paths or globs kept with the run
+	Collect  []string          `yaml:"collect"`  // guest paths or globs kept with the run
+	Retrieve []string          `yaml:"retrieve"` // <job>[:<dir>], that job's collected files put in /work
 	Timeout  string            `yaml:"timeout"`
 	CPUs     int               `yaml:"cpus"`
 	Memory   int64             `yaml:"memory"` // MiB
 	timeout  time.Duration
+	retrieve []retrieveSpec
 }
+
+// retrieveSpec is one `retrieve` entry: Job's collected files go under Dir in /work.
+type retrieveSpec struct{ Job, Dir string }
 
 // Parse reads and checks a pipeline file.
 func Parse(data []byte) (*Pipeline, error) {
@@ -64,6 +70,11 @@ func Parse(data []byte) (*Pipeline, error) {
 		for _, n := range j.Needs {
 			if _, ok := p.Jobs[n]; !ok {
 				return nil, fmt.Errorf("pipeline: job %s needs %s, which isn't a job", name, n)
+			}
+		}
+		for _, r := range j.retrieve {
+			if from := p.Jobs[r.Job]; from != nil && len(from.Collect) == 0 {
+				return nil, fmt.Errorf("pipeline: job %s retrieves from %s, which collects nothing", name, r.Job)
 			}
 		}
 	}
@@ -113,6 +124,25 @@ func (j *Job) check(name string) error {
 	for _, f := range j.KeyFiles {
 		if err := relPath(f); err != nil {
 			return fmt.Errorf("pipeline: job %s: key file: %w", name, err)
+		}
+	}
+	for _, r := range j.Retrieve {
+		job, dir, _ := strings.Cut(r, ":")
+		if dir == "" {
+			dir = "."
+		}
+		if c := path.Clean(dir); c != "." {
+			if err := relPath(dir); err != nil {
+				return fmt.Errorf("pipeline: job %s: retrieve: %w", name, err)
+			}
+		}
+		if job == "" || job == name {
+			return fmt.Errorf("pipeline: job %s: retrieve %q: want <job>[:<dir>] of another job", name, r)
+		}
+		j.retrieve = append(j.retrieve, retrieveSpec{Job: job, Dir: path.Clean(dir)})
+		// A job's files exist only once it passed, so retrieving from it needs it.
+		if !slices.Contains(j.Needs, job) {
+			j.Needs = append(j.Needs, job)
 		}
 	}
 	for k := range j.Env {

@@ -219,6 +219,9 @@ func run() error {
 			log.Print("anvild: graceful shutdown timed out (an RPC, e.g. `logs --follow`, was still in flight), forcing stop")
 			grpcServer.Stop()
 		}
+		drainCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ephemeralMgr.Shutdown(drainCtx)
+		cancel()
 		return nil
 	case err := <-errCh:
 		return err

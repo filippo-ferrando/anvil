@@ -279,6 +279,9 @@ func (m *Manager) DeleteWarm(prefixes []string, all bool) ([]string, error) {
 		}
 		deleted = append(deleted, key)
 	}
+	if len(deleted) > 0 {
+		m.releaseIdle()
+	}
 	return deleted, nil
 }
 

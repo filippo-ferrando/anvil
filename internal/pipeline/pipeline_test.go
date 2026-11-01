@@ -63,6 +63,11 @@ apply: deploy/anvil.yaml
 		"timeout":       "jobs:\n  a: {distro: x, run: y, timeout: soon}",
 		"apply abs":     "jobs:\n  a: {distro: x, run: y}\napply: /etc/anvil.yaml",
 		"job name":      "jobs:\n  a/b: {distro: x, run: y}",
+		"retrieve self": "jobs:\n  a: {distro: x, run: y, collect: [d], retrieve: [a]}",
+		"retrieve none": "jobs:\n  a: {distro: x, run: y, retrieve: [b]}",
+		"retrieve bare": "jobs:\n  a: {distro: x, run: y, retrieve: [b]}\n  b: {distro: x, run: y}",
+		"retrieve abs":  "jobs:\n  a: {distro: x, run: y, retrieve: [b:/opt]}\n  b: {distro: x, run: y, collect: [d]}",
+		"retrieve out":  "jobs:\n  a: {distro: x, run: y, retrieve: [b:../x]}\n  b: {distro: x, run: y, collect: [d]}",
 	} {
 		if _, err := Parse([]byte(bad)); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -76,12 +81,39 @@ type fakeRuns struct {
 	reqs  []ephemeral.RunRequest
 	order []string // the command of each run, as it started
 	block chan struct{}
+	files map[string]map[string]string // the files of each run's upload, by command
+}
+
+// tarFiles reads the regular files of a tar file.
+func tarFiles(name string) map[string]string {
+	files := map[string]string{}
+	f, err := os.Open(name)
+	if err != nil {
+		return files
+	}
+	defer f.Close()
+	tr := tar.NewReader(f)
+	for {
+		h, err := tr.Next()
+		if err != nil {
+			return files
+		}
+		if h.Typeflag == tar.TypeReg {
+			var b bytes.Buffer
+			_, _ = b.ReadFrom(tr)
+			files[h.Name] = b.String()
+		}
+	}
 }
 
 func (f *fakeRuns) Run(ctx context.Context, r ephemeral.RunRequest, emit func(ephemeral.Event)) error {
 	f.mu.Lock()
 	f.reqs = append(f.reqs, r)
 	f.order = append(f.order, r.Argv[2])
+	if f.files == nil {
+		f.files = map[string]map[string]string{}
+	}
+	f.files[r.Argv[2]] = tarFiles(r.Upload)
 	f.mu.Unlock()
 	if f.block != nil {
 		select {
@@ -209,6 +241,57 @@ apply: deploy/anvil.yaml
 	}
 	if got, _ := e.Store.GetPipelineRun(rec.ID); got.State != "succeeded" || got.Owner != 1000 {
 		t.Errorf("stored = %+v", got)
+	}
+}
+
+func TestExecutorRetrieve(t *testing.T) {
+	runs := &fakeRuns{}
+	e := newTestExecutor(t, runs, nil)
+	src := sourceTar(t, map[string]string{
+		"anvil-ci.yaml": `
+jobs:
+  tools:
+    distro: alpine
+    run: tools
+    collect: [out]
+  build:
+    distros: [ubuntu, debian]
+    run: build
+    collect: [dist]
+  package:
+    distro: ubuntu
+    run: package
+    retrieve: [tools:build/gui-tools, build]
+`,
+		"build/gui-tools/result.txt": "from the source",
+	})
+	rec, err := e.Run(context.Background(), Source{Tar: src}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.State != "succeeded" || runs.order[2] != "package" {
+		t.Fatalf("run = %+v, order %v", rec, runs.order)
+	}
+	got := runs.files["package"]
+	want := map[string]string{
+		"anvil-ci.yaml":              got["anvil-ci.yaml"],
+		"build/gui-tools/result.txt": "alpine", // the source's copy comes first, then this one
+		"ubuntu/result.txt":          "ubuntu",
+		"debian/result.txt":          "debian",
+	}
+	if len(got) != len(want) {
+		t.Errorf("package upload = %v", got)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("package upload %s = %q, want %q", k, got[k], v)
+		}
+	}
+	if _, ok := runs.files["build"]["ubuntu/result.txt"]; ok {
+		t.Error("a job without retrieve got another job's files")
+	}
+	if _, err := os.Stat(filepath.Join(e.RunDir(rec.ID), "upload-package.tar")); !os.IsNotExist(err) {
+		t.Error("the job's upload stayed")
 	}
 }
 

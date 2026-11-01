@@ -34,6 +34,7 @@ type fakeEngine struct {
 	mu       sync.Mutex
 	deleted  []string
 	swept    bool
+	drained  atomic.Int32 // DrainNetworks calls
 }
 
 func (f *fakeEngine) WarmSpec(p WarmParams) (WarmSpec, error) {
@@ -91,6 +92,8 @@ func (f *fakeEngine) DeleteClone(_ context.Context, id string) error {
 }
 
 func (f *fakeEngine) SweepClones(context.Context) error { f.swept = true; return nil }
+
+func (f *fakeEngine) DrainNetworks(context.Context) error { f.drained.Add(1); return nil }
 
 func (f *fakeEngine) SaveClone(_ context.Context, id, baseDir, dir string) error {
 	if f.saveErr != nil {

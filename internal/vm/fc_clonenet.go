@@ -59,6 +59,7 @@ type CloneNetworks struct {
 	owner   map[string]string       // clone ID -> the netns ID it took, when not its own
 	ready   []string                // pooled netns IDs no clone holds yet
 	filling bool
+	gen     int // bumped by Drain: a refill started before it removes what it builds
 
 	// hostSide sets up the host end of a netns; tests replace it.
 	hostSide func(pool, host netip.Prefix, veth string) error
@@ -200,6 +201,7 @@ func (c *CloneNetworks) refill() {
 		return
 	}
 	c.filling = true
+	gen := c.gen
 	c.mu.Unlock()
 	go func() {
 		defer func() {
@@ -209,9 +211,9 @@ func (c *CloneNetworks) refill() {
 		}()
 		for {
 			c.mu.Lock()
-			full := len(c.ready) >= size
+			stop := len(c.ready) >= size || c.gen != gen
 			c.mu.Unlock()
-			if full {
+			if stop {
 				return
 			}
 			ns := "eph-N" + ulid.Make().String()
@@ -220,10 +222,47 @@ func (c *CloneNetworks) refill() {
 				return
 			}
 			c.mu.Lock()
-			c.ready = append(c.ready, ns)
+			drained := c.gen != gen
+			if !drained {
+				c.ready = append(c.ready, ns)
+			}
 			c.mu.Unlock()
+			if drained {
+				if err := c.remove(context.Background(), ns); err != nil {
+					log.Printf("vm: %v", err)
+				}
+				return
+			}
 		}
 	}()
+}
+
+// Drain removes the netns built ahead of time and stops a refill in progress.
+// The pool fills again with the next clone.
+func (c *CloneNetworks) Drain(ctx context.Context) error {
+	c.mu.Lock()
+	ready := c.ready
+	c.ready = nil
+	c.gen++
+	c.mu.Unlock()
+	var errs []error
+	for _, ns := range ready {
+		if err := c.remove(ctx, ns); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// remove deletes netns ns and frees its link.
+func (c *CloneNetworks) remove(ctx context.Context, ns string) error {
+	err := c.Helper.DeleteNetns(ctx, ns)
+	c.free(ns)
+	c.changed()
+	if err != nil {
+		return fmt.Errorf("vm: removing clone network %s: %w", ns, err)
+	}
+	return nil
 }
 
 // Teardown removes clone id's network, once its firecracker is gone.

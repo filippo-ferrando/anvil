@@ -72,6 +72,8 @@ type Engine interface {
 	DeleteClone(ctx context.Context, id string) error
 	// SweepClones removes clones an earlier anvild left behind.
 	SweepClones(ctx context.Context) error
+	// DrainNetworks removes what is kept built ahead of time for the next clones.
+	DrainNetworks(ctx context.Context) error
 }
 
 // Clone is a running clone, reached through anvil-guest.

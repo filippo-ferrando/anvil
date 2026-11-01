@@ -54,6 +54,7 @@ func (stackEngine) RestoreClone(_ context.Context, id string, s ephemeral.WarmSp
 
 func (stackEngine) DeleteClone(context.Context, string) error { return nil }
 func (stackEngine) SweepClones(context.Context) error         { return nil }
+func (stackEngine) DrainNetworks(context.Context) error       { return nil }
 
 type stackClone string
 

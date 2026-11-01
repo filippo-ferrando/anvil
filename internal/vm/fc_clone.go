@@ -203,6 +203,14 @@ func (b *FCBackend) DeleteClone(ctx context.Context, id string) error {
 	return errors.Join(errs...)
 }
 
+// DrainNetworks removes the clone networks built ahead of time.
+func (b *FCBackend) DrainNetworks(ctx context.Context) error {
+	if b.Clones == nil {
+		return nil
+	}
+	return b.Clones.Drain(ctx)
+}
+
 // SweepClones removes what clones and warm builds of an earlier anvild left: their
 // firecracker processes, jails, instance dirs and netns.
 func (b *FCBackend) SweepClones(ctx context.Context) error {

@@ -19,13 +19,25 @@ import (
 type fakeNetnsHelper struct {
 	mu               sync.Mutex
 	created, deleted []string
+	// When set, building a pooled netns signals started and waits for block.
+	started, block chan struct{}
 }
 
 func (f *fakeNetnsHelper) CreateNetns(_ context.Context, n hostdev.Netns) error {
+	if f.block != nil && strings.HasPrefix(n.ID, "eph-N") {
+		f.started <- struct{}{}
+		<-f.block
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.created = append(f.created, n.ID)
 	return nil
+}
+
+func (f *fakeNetnsHelper) deletedIDs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.deleted)
 }
 
 func (f *fakeNetnsHelper) DeleteNetns(_ context.Context, id string) error {
@@ -175,5 +187,67 @@ func TestCloneNetnsPool(t *testing.T) {
 	}
 	if len(c.DNSZones()) != 2 {
 		t.Errorf("%d DNS zones, want the 2 pooled netns", len(c.DNSZones()))
+	}
+}
+
+// waitIdle waits until c's pool has want netns ready and no refill running.
+func waitIdle(t *testing.T, c *CloneNetworks, want int) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		c.mu.Lock()
+		done := !c.filling && len(c.ready) == want
+		c.mu.Unlock()
+		if done {
+			return
+		}
+	}
+	t.Fatalf("the netns pool never settled at %d ready", want)
+}
+
+func TestCloneNetnsPoolDrain(t *testing.T) {
+	t.Setenv(netnsPoolEnv, "2")
+	helper := &fakeNetnsHelper{}
+	c := &CloneNetworks{Helper: helper, hostSide: func(netip.Prefix, netip.Prefix, string) error { return nil }}
+	if _, err := c.Setup(context.Background(), "eph-A"); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, c, 2)
+	c.mu.Lock()
+	pooled := slices.Clone(c.ready)
+	c.mu.Unlock()
+	if err := c.Drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := helper.deletedIDs(); !slices.Equal(got, pooled) {
+		t.Errorf("Drain deleted %v, want the pooled %v", got, pooled)
+	}
+	if zones := c.DNSZones(); len(zones) != 1 {
+		t.Errorf("after Drain %d links left, want only eph-A's", len(zones))
+	}
+	// The next clone starts the pool again.
+	if _, err := c.Setup(context.Background(), "eph-B"); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, c, 2)
+}
+
+func TestCloneNetnsDrainDuringRefill(t *testing.T) {
+	t.Setenv(netnsPoolEnv, "1")
+	helper := &fakeNetnsHelper{started: make(chan struct{}), block: make(chan struct{})}
+	c := &CloneNetworks{Helper: helper, hostSide: func(netip.Prefix, netip.Prefix, string) error { return nil }}
+	if _, err := c.Setup(context.Background(), "eph-A"); err != nil {
+		t.Fatal(err)
+	}
+	<-helper.started // the refill is building its netns
+	if err := c.Drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	close(helper.block)
+	waitIdle(t, c, 0)
+	if got := helper.deletedIDs(); len(got) != 1 || !strings.HasPrefix(got[0], "eph-N") {
+		t.Errorf("deleted %v, want the netns the drained refill built", got)
+	}
+	if zones := c.DNSZones(); len(zones) != 1 {
+		t.Errorf("%d links left, want only eph-A's", len(zones))
 	}
 }
