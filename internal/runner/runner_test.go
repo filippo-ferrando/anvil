@@ -316,9 +316,8 @@ func TestManagerRunsJobs(t *testing.T) {
 	if jobs[0].CloneID != "eph-1" || jobs[0].Distro != "debian-13" {
 		t.Errorf("job record = %+v", jobs[0])
 	}
-	if forge.cleaned.Load() != 3 {
-		t.Errorf("%d cleanups for 3 jobs", forge.cleaned.Load())
-	}
+	// A job's record is final before its deferred cleanup runs.
+	waitFor(t, "3 cleanups", func() bool { return forge.cleaned.Load() == 3 })
 
 	// Paused: nothing new starts.
 	if _, err := m.SetPaused("ci", true); err != nil {

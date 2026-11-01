@@ -395,6 +395,7 @@ func TestWatcher(t *testing.T) {
 		t.Fatal(err)
 	}
 	list = waitRuns(2)
+	w.Wait() // the watch gets LastRun only after the run's record is final
 	if list[0].Commit == list[1].Commit || runs.order[len(runs.order)-1] != "second" {
 		t.Errorf("second run = %+v, commands %v", list[0], runs.order)
 	}
