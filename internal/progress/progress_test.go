@@ -33,3 +33,18 @@ func TestLiveAndDone(t *testing.T) {
 		t.Error("Key should cut at the first \": \"")
 	}
 }
+
+func TestOneLine(t *testing.T) {
+	for in, want := range map[string]string{
+		"running: make": "running: make",
+		"running: sh -c set -e\nmake\n\n  go vet ./...\n": "running: sh -c set -e ↵ make ↵ go vet ./...",
+		"a\r\nb": "a ↵ b",
+	} {
+		if got := OneLine(in); got != want {
+			t.Errorf("OneLine(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := Live("running: a\nb", 2*time.Second, 0); strings.Contains(got, "\n") {
+		t.Errorf("Live kept a newline: %q", got)
+	}
+}

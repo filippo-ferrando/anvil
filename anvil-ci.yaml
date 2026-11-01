@@ -1,0 +1,53 @@
+# anvil building anvil: `anvil pipeline run` from the repo root.
+jobs:
+  lint:
+    distro: ubuntu-26.04
+    setup: ci/setup.sh
+    key-files: [go.mod, go.sum]
+    env: { GOMODCACHE: /opt/go/mod, GOTOOLCHAIN: local }
+    cpus: 2
+    memory: 2048
+    timeout: 10m
+    run: |
+      set -e
+      out=$(gofmt -l -s .)
+      [ -z "$out" ] || { echo "needs gofmt -s:"; echo "$out"; exit 1; }
+      go vet ./...
+
+  build:
+    distro: ubuntu-26.04
+    setup: ci/setup.sh
+    key-files: [go.mod, go.sum]
+    env: { GOMODCACHE: /opt/go/mod, GOTOOLCHAIN: local }
+    cpus: 4
+    memory: 4096
+    timeout: 15m
+    run: |
+      set -e
+      mkdir -p dist
+      CGO_ENABLED=0 go build -o dist/ ./cmd/anvil ./cmd/anvil-guest
+      go build -o dist/ ./cmd/anvild
+      ./dist/anvil --help >/dev/null
+    collect: [dist]
+
+  test:
+    needs: [lint]
+    distro: ubuntu-26.04
+    setup: ci/setup.sh
+    key-files: [go.mod, go.sum]
+    env: { GOMODCACHE: /opt/go/mod, GOTOOLCHAIN: local }
+    cpus: 4
+    memory: 4096
+    timeout: 30m
+    run: go test ./...
+
+  race:
+    needs: [test]
+    distro: ubuntu-26.04
+    setup: ci/setup.sh
+    key-files: [go.mod, go.sum]
+    env: { GOMODCACHE: /opt/go/mod, GOTOOLCHAIN: local }
+    cpus: 4
+    memory: 6144
+    timeout: 45m
+    run: go test -race ./...

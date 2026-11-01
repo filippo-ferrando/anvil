@@ -25,6 +25,21 @@ func Key(status string) string {
 	return status
 }
 
+// OneLine joins the lines of status with " ↵ ", since a status line drawn over itself
+// must stay one line, and a multi-line `run` script would break that.
+func OneLine(status string) string {
+	if !strings.ContainsAny(status, "\r\n") {
+		return status
+	}
+	var parts []string
+	for _, l := range strings.FieldsFunc(status, func(r rune) bool { return r == '\n' || r == '\r' }) {
+		if l = strings.TrimSpace(l); l != "" {
+			parts = append(parts, l)
+		}
+	}
+	return strings.Join(parts, " ↵ ")
+}
+
 // Bar puts a progress bar in front of the first percentage in status, if it has one.
 func Bar(status string) string {
 	loc := percent.FindStringSubmatchIndex(status)
@@ -40,7 +55,7 @@ func Bar(status string) string {
 // Live is Bar for the step still running: after a second without news it also shows a
 // spinner frame and the time spent on the step, so a long wait still looks alive.
 func Live(status string, elapsed time.Duration, frame int) string {
-	s := Bar(status)
+	s := Bar(OneLine(status))
 	if elapsed < time.Second {
 		return s
 	}
@@ -50,7 +65,7 @@ func Live(status string, elapsed time.Duration, frame int) string {
 // Done is how a finished step stays on screen: its bar, and how long it took when that
 // was long enough to notice.
 func Done(status string, elapsed time.Duration) string {
-	s := Bar(status)
+	s := Bar(OneLine(status))
 	if elapsed < time.Second {
 		return s
 	}
