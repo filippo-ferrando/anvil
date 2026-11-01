@@ -2,6 +2,16 @@
 
 Built from commit subjects by `scripts/changelog.sh`.
 
+## v1.3.3 (2026-11-01)
+
+### Fixes
+
+- missing noconfirm flag (2bd1c5d)
+
+### Other changes
+
+- improved pipelines (96d700d)
+
 ## v1.3.2 (2026-11-01)
 
 ### Features
@@ -22,6 +32,12 @@ Built from commit subjects by `scripts/changelog.sh`.
 ### Features
 
 - CI/CD on ephemeral clones (7200a30)
+- faster ephemeral clones and a speed pass across anvil (ca44017)
+
+### Other changes
+
+- fix (620e6e8)
+- fix ci (548444a)
 
 ## v1.3.0 (2026-10-30)
 
