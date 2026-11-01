@@ -37,8 +37,8 @@ A terminal that never answers costs 5 seconds there; `ANVIL_THEME=dark` or
   MENU            │  ┌──────────────────────┐  ┌──────────────────────────────┐
                   │  │ list                 │  │ detail / second panel        │
  ▸ 1 Instances    │  │                      │  │                              │
-   2 Snapshots    │  └──────────────────────┘  └──────────────────────────────┘
-   3 Images       │  help bar
+   2 Ephemeral    │  └──────────────────────┘  └──────────────────────────────┘
+   3 Snapshots    │  help bar
    ...
  ✓ status line (transient)
 ```
@@ -46,8 +46,12 @@ A terminal that never answers costs 5 seconds there; `ANVIL_THEME=dark` or
 - **Header**: the TUI's own version, local `user@hostname`, the socket (or `host:socket` with `--remote`), the
   daemon state (`connecting…`, `daemon connected` with the daemon's version,
   `daemon unreachable`, taken from the last instance list request), the running/total instance count and a clock.
-- **Sidebar**: the ten screens of `screenOrder` in `internal/tui/app.go`. The entry with
-  the arrow is the active screen; it is highlighted when the sidebar itself has focus.
+- **Sidebar**: the thirteen screens of `screenOrder` in `internal/tui/app.go`, in four
+  sections: workloads (Instances, Ephemeral, Snapshots), automation (Intents, Manifests, CI,
+  GUI Apps), library (Images, Cloud-Init, Mirrors) and host (Migration, Devices, Events).
+  Each entry shows its jump key: `1` to `9`, `0`, then `a` `b` `c`. The entry with the arrow
+  is the active screen; it is highlighted when the sidebar itself has focus. On a short
+  terminal the section headers and the key help are left out, never the entries.
 - **Status line**: the result of the last action. A success stays 4 s, an error 10 s; known
   errors get a `hint:` line under them (`friendlyError`).
 
@@ -65,7 +69,7 @@ and **Logs** (`l` on Instances).
 | Key | Action |
 |-----|--------|
 | `ctrl+c` | Quit, from any screen, even during a launch. |
-| `alt+1` … `alt+9`, `alt+0` | Jump to that sidebar entry (`0` is the tenth), focused on its content. Not in the Launch and Logs takeovers. This is checked before any form, so it also leaves a half-filled form. |
+| `alt+1` … `alt+9`, `alt+0`, `alt+a` … `alt+c` | Jump to that sidebar entry (`0` is the tenth, `a` `b` `c` the last three), focused on its content. Not in the Launch and Logs takeovers. This is checked before any form, so it also leaves a half-filled form. |
 
 ### Sidebar (when it has focus)
 
@@ -75,7 +79,7 @@ and **Logs** (`l` on Instances).
 | `↓` `j` `tab` | Next screen (wraps around). |
 | `home` `g` / `end` `G` | First / last screen. |
 | `enter` `→` `l` | Move focus into the screen's content. |
-| `1` … `9`, `0` | Jump to that screen (`0` is the tenth), focused on its content. |
+| `1` … `9`, `0`, `a` … `c` | Jump to that screen (`0` is the tenth, `a` `b` `c` the last three), focused on its content. |
 | `q` | Quit. |
 
 Inside a screen, `esc` or `q` gives focus back to the sidebar when no form, confirmation
@@ -232,7 +236,27 @@ the serial console for a VM, the container's output for a container. At most the
 | `u` `ctrl+u` / `d` `ctrl+d` | Scroll half a page. |
 | `esc` `q` | Stop the stream and return to Instances. |
 
-## 2. Snapshots
+## 2. Ephemeral
+
+Warm snapshots and the clones of ephemeral runs (`anvil warm list`, `anvil ephemeral
+list`): `tab` switches between the two lists. A run started here shows one pane per clone
+with its last lines of output, its progress and then its exit code. See
+[ephemeral.md](ephemeral.md).
+
+| Key | Action |
+|-----|--------|
+| `tab` | Switch between warm snapshots and clones. |
+| `n` | Start a run: distros, a path to upload, a command (run with `sh -c`), size, Keep failed, a setup script and key files, and paths to collect back into `<Collect into>/<distro>/` (`--collect`). `esc` in the run view cancels it and deletes its clones, or closes it once done. |
+| `c` | Build a warm snapshot for a distro and size, with an optional setup script and key files (`anvil warm create`). |
+| `a` | Start a GUI app in a throwaway clone: distro and package, optionally added to this desktop's launcher (`anvil gui --ephemeral`). |
+| `p` | On a warm snapshot: set how many clones its pool keeps ready, 0 removes it (`anvil warm pool set`). The list shows each pool as `pool <ready>/<size>`. |
+| `s` `enter` | On a clone: a root shell in it (`anvil ephemeral shell`). |
+| `w` | On a clone: save it as a warm snapshot (`anvil warm save`). |
+| `x` | Remove the selected warm snapshot or clone, after a confirmation. |
+| `r` | Reload. |
+| `esc` `q` | Back to the sidebar. |
+
+## 3. Snapshots
 
 Two panels: the VMs on the left, the selected VM's snapshots on the right, headed by its
 snapshot schedule. Each snapshot shows its creation time and whether it holds only the
@@ -246,27 +270,6 @@ disk or the disk plus the VM state. `tab` moves focus between the panels.
 | `a` `enter` | Snapshots panel: restore the selected snapshot, after a confirmation. This discards disk changes made since. |
 | `d` | Snapshots panel: delete the selected snapshot, after a confirmation. |
 | `r` | Reload the snapshots of the selected VM. |
-| `esc` `q` | Back to the sidebar. |
-
-## 3. Images
-
-Two modes, shown as tabs at the top.
-
-- **VM images**: cached (downloaded) images on the left, with arch, size, how many
-  instances use them and, once computed, the sha256. Firecracker's raw copies of a base
-  image and its guest kernel are listed too, marked by kind; the catalog on the right, with
-  distro, version, arch, minimum disk and default user.
-- **Container images**: the engine's local images, with engine, size and how many
-  containers use them.
-
-| Key | Action |
-|-----|--------|
-| `v` / `c` | Switch to VM images / container images. |
-| `tab` | VM mode: switch focus between cached images and the catalog. |
-| `/` | VM mode: filter the catalog by id, distro, version or name, case-insensitive, like `anvil find <term>`. The list updates while typing; `enter` keeps the filter, `esc` clears it. |
-| `h` | VM mode, cached panel: compute a base image's sha256 (not offered for raw copies or the kernel). |
-| `x` | Delete the selected cached VM image (only the download, not the catalog entry; deleting a base also deletes its Firecracker raw copy) or container image, after a confirmation. There `f` deletes even if an instance still uses it (`--force`, this breaks that instance). |
-| `r` | Reload. |
 | `esc` `q` | Back to the sidebar. |
 
 ## 4. Intents
@@ -316,7 +319,62 @@ an editor on the right. Manifests are stored by anvild, so they are the same ove
 Variables are filled as for `anvil apply`, with `.env` read from the directory the TUI
 was started in. See [apply.md](apply.md).
 
-## 6. Cloud-Init
+## 6. CI
+
+Runners, their jobs, pipeline runs and pipeline watches, one list each: `tab` moves to the
+next one. See [runner.md](runner.md) and [pipelines.md](pipelines.md).
+
+| Key | Action |
+|-----|--------|
+| `tab` `shift+tab` | Switch between runners, runner jobs, pipeline runs and watches. |
+| `a` | On the runners list: add a runner (`anvil runner add`). The token is typed (hidden), read from a token file, or taken from `$ANVIL_FORGE_TOKEN`, in that order. On the watches list: watch a branch (`anvil pipeline watch add`). |
+| `n` | On the runs list: upload a local directory and run its pipeline (`anvil pipeline run`), with one pane per job and distro. `esc` cancels a running run and deletes its clones, or closes a finished one. An optional directory gets the run's files when it ends. |
+| `enter` | On a pipeline run: its jobs, with state, exit code and duration. `↑` `↓` pick a job. `esc` goes back. |
+| `l` / `L` | On a run: its logs (`anvil pipeline logs`); in a run's jobs, `l` shows only the picked job and `L` every job. |
+| `R` | On a run: run its source again (`anvil pipeline rerun`), streamed like `n`. |
+| `d` | On a run: download its collected files into a directory (`anvil pipeline artifacts`). |
+| `p` | On a runner or a watch: pause it, or resume it. |
+| `t` | On a watch: run its pipeline now. |
+| `x` | On a runner or a watch: remove it, after a confirmation. On a running pipeline run: cancel it. |
+| `r` | Reload. |
+| `esc` `q` | Back to the sidebar. |
+
+## 7. GUI Apps
+
+The desktop entries added with `anvil gui export` (or the "Add to desktop" toggle of `g`),
+like `anvil gui exports`: the app's launcher name and instance, then the app id, its
+command and the entry's file. These are files of the machine running the TUI, so the
+screen shows the same list with or without `--remote`. See [gui.md](gui.md).
+
+| Key | Action |
+|-----|--------|
+| `enter` | Start the app with the entry's own command line, as the app launcher does (`anvil gui --detach`). |
+| `x` | Remove the entry and its icon, after a confirmation (`anvil gui unexport`). |
+| `r` | Reload. |
+| `esc` `q` | Back to the sidebar. |
+
+## 8. Images
+
+Two modes, shown as tabs at the top.
+
+- **VM images**: cached (downloaded) images on the left, with arch, size, how many
+  instances use them and, once computed, the sha256. Firecracker's raw copies of a base
+  image and its guest kernel are listed too, marked by kind; the catalog on the right, with
+  distro, version, arch, minimum disk and default user.
+- **Container images**: the engine's local images, with engine, size and how many
+  containers use them.
+
+| Key | Action |
+|-----|--------|
+| `v` / `c` | Switch to VM images / container images. |
+| `tab` | VM mode: switch focus between cached images and the catalog. |
+| `/` | VM mode: filter the catalog by id, distro, version or name, case-insensitive, like `anvil find <term>`. The list updates while typing; `enter` keeps the filter, `esc` clears it. |
+| `h` | VM mode, cached panel: compute a base image's sha256 (not offered for raw copies or the kernel). |
+| `x` | Delete the selected cached VM image (only the download, not the catalog entry; deleting a base also deletes its Firecracker raw copy) or container image, after a confirmation. There `f` deletes even if an instance still uses it (`--force`, this breaks that instance). |
+| `r` | Reload. |
+| `esc` `q` | Back to the sidebar. |
+
+## 9. Cloud-Init
 
 The saved cloud-init library: names on the left, an editor on the right. The editor title
 shows the loaded config, with `*` after unsaved changes.
@@ -335,7 +393,7 @@ shows the loaded config, with `*` after unsaved changes.
 | `d` | Delete the loaded config, after a confirmation. |
 | `esc` `q` | Back to the sidebar. |
 
-## 7. Mirrors
+## 10. Mirrors (key `0`)
 
 The configured mirrors, each with kind, source (manifest URL, or registry and the registry
 it mirrors) and whether it is enabled. See [mirrors.md](mirrors.md).
@@ -348,7 +406,7 @@ it mirrors) and whether it is enabled. See [mirrors.md](mirrors.md).
 | `r` | Reload. |
 | `esc` `q` | Back to the sidebar. |
 
-## 8. Migration
+## 11. Migration (key `a`)
 
 Known hosts on the left, a migrate form on the right (Name of an instance or intent, To a
 host alias or `user@host[:port]`, an optional Dest name to rename a single instance on the
@@ -370,21 +428,7 @@ target, and the Copy, Best-effort and Dry run toggles).
 During a migration keys are ignored. When it ends, `tab` returns to the host list and
 `esc` or `q` returns to the sidebar.
 
-## 9. Events
-
-The event log (`anvil events`), newest first: time, instance, action, the user who caused
-it (or `anvild`) and the message or error. A failed operation is marked `✕`. The newest
-500 events are loaded when the screen opens and again after instance changes; `f` changes
-the instance and the number of events loaded. With the
-cursor on the newest event it follows new ones; elsewhere it stays on the same event.
-
-| Key | Action |
-|-----|--------|
-| `f` | Filter: only one instance's events (blank for all) and how many of the newest to load (0 for all), like `anvil events <name> -n`. |
-| `r` | Reload. |
-| `esc` `q` | Back to the sidebar. |
-
-## 10. Devices
+## 12. Devices (key `b`)
 
 The host's USB and PCI devices (`anvil host devices`): id and name, then vendor:product,
 driver and status (free, in use by an instance, or blocked and why). A PCI device also
@@ -395,50 +439,16 @@ shows the other IOMMU group members it brings along. See [passthrough.md](passth
 | `r` | Reload. |
 | `esc` `q` | Back to the sidebar. |
 
-## 11. GUI Apps
+## 13. Events (key `c`)
 
-The desktop entries added with `anvil gui export` (or the "Add to desktop" toggle of `g`),
-like `anvil gui exports`: the app's launcher name and instance, then the app id, its
-command and the entry's file. These are files of the machine running the TUI, so the
-screen shows the same list with or without `--remote`. See [gui.md](gui.md).
-
-| Key | Action |
-|-----|--------|
-| `enter` | Start the app with the entry's own command line, as the app launcher does (`anvil gui --detach`). |
-| `x` | Remove the entry and its icon, after a confirmation (`anvil gui unexport`). |
-| `r` | Reload. |
-| `esc` `q` | Back to the sidebar. |
-
-## 12. Ephemeral
-
-Warm snapshots and the clones of ephemeral runs (`anvil warm list`, `anvil ephemeral
-list`): `tab` switches between the two lists. A run started here shows one pane per clone
-with its last lines of output, its progress and then its exit code. See
-[ephemeral.md](ephemeral.md).
+The event log (`anvil events`), newest first: time, instance, action, the user who caused
+it (or `anvild`) and the message or error. A failed operation is marked `✕`. The newest
+500 events are loaded when the screen opens and again after instance changes; `f` changes
+the instance and the number of events loaded. With the
+cursor on the newest event it follows new ones; elsewhere it stays on the same event.
 
 | Key | Action |
 |-----|--------|
-| `tab` | Switch between warm snapshots and clones. |
-| `n` | Start a run: distros, a path to upload, a command (run with `sh -c`), size, Keep failed, a setup script and key files, and paths to collect back into `<Collect into>/<distro>/` (`--collect`). `esc` in the run view cancels it and deletes its clones, or closes it once done. |
-| `c` | Build a warm snapshot for a distro and size, with an optional setup script and key files (`anvil warm create`). |
-| `p` | On a warm snapshot: set how many clones its pool keeps ready, 0 removes it (`anvil warm pool set`). The list shows each pool as `pool <ready>/<size>`. |
-| `s` `enter` | On a clone: a root shell in it (`anvil ephemeral shell`). |
-| `w` | On a clone: save it as a warm snapshot (`anvil warm save`). |
-| `x` | Remove the selected warm snapshot or clone, after a confirmation. |
-| `r` | Reload. |
-| `esc` `q` | Back to the sidebar. |
-
-## 13. CI
-
-Runners, their jobs, pipeline runs and pipeline watches, one list each: `tab` moves to the
-next one. See [runner.md](runner.md) and [pipelines.md](pipelines.md).
-
-| Key | Action |
-|-----|--------|
-| `tab` `shift+tab` | Switch between runners, runner jobs, pipeline runs and watches. |
-| `p` | On a runner or a watch: pause it, or resume it. |
-| `enter` | On a pipeline run: its jobs, with state, exit code and duration. `esc` goes back. |
-| `x` | On a running pipeline run: cancel it. |
-| `t` | On a watch: run its pipeline now. |
+| `f` | Filter: only one instance's events (blank for all) and how many of the newest to load (0 for all), like `anvil events <name> -n`. |
 | `r` | Reload. |
 | `esc` `q` | Back to the sidebar. |

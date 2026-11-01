@@ -57,16 +57,14 @@ func TestFriendlyError(t *testing.T) {
 }
 
 func TestScreenForDigit(t *testing.T) {
-	if s, ok := screenForDigit("1"); !ok || s != screenOrder[0] {
-		t.Errorf("1 -> %v, %v", s, ok)
+	want := map[string]screen{"1": screenInstances, "2": screenEphemeral, "5": screenManifests, "6": screenCI,
+		"9": screenCloudInit, "0": screenMirrors, "a": screenMigration, "b": screenDevices, "c": screenEvents}
+	for k, s := range want {
+		if got, ok := screenForDigit(k); !ok || got != s {
+			t.Errorf("%s -> %v, %v, want %v", k, got, ok, s)
+		}
 	}
-	if s, ok := screenForDigit("5"); !ok || s != screenManifests {
-		t.Errorf("5 -> %v, %v", s, ok)
-	}
-	if s, ok := screenForDigit("0"); !ok || s != screenDevices {
-		t.Errorf("0 -> %v, %v", s, ok)
-	}
-	for _, k := range []string{"a", "12", "-"} {
+	for _, k := range []string{"d", "12", "-", ""} {
 		if _, ok := screenForDigit(k); ok {
 			t.Errorf("%q should not map to a screen", k)
 		}

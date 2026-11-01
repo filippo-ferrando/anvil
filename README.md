@@ -382,8 +382,8 @@ Less visible commands and flags, all listed in `anvil <command> --help` and the 
 
 ## The TUI
 
-`anvil tui` is a sidebar-driven view over Instances, Snapshots, Images, Intents, Manifests,
-Cloud-Init, Mirrors, Migration, Events, Devices, GUI Apps, and Ephemeral, over the exact same gRPC API the CLI uses
+`anvil tui` is a sidebar-driven view over Instances, Ephemeral, Snapshots, Intents, Manifests, CI,
+GUI Apps, Images, Cloud-Init, Mirrors, Migration, Devices, and Events, over the exact same gRPC API the CLI uses
 (`anvil stats <name>` is the CLI's own window into the same data). Shell/exec sessions
 hand the real terminal off to `ssh`/`docker exec` and back, logs stream live, and launch progress redraws in place
 instead of scrolling the terminal into oblivion.

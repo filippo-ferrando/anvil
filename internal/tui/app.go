@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/user"
-	"strconv"
 	"strings"
 	"time"
 
@@ -51,7 +50,23 @@ const (
 )
 
 // screenOrder is the sidebar's own list, top to bottom.
-var screenOrder = []screen{screenInstances, screenSnapshots, screenImages, screenIntents, screenManifests, screenCloudInit, screenMirrors, screenMigration, screenEvents, screenDevices, screenGUIApps, screenEphemeral, screenCI}
+var screenOrder = []screen{
+	screenInstances, screenEphemeral, screenSnapshots,
+	screenIntents, screenManifests, screenCI, screenGUIApps,
+	screenImages, screenCloudInit, screenMirrors,
+	screenMigration, screenDevices, screenEvents,
+}
+
+// screenGroups heads the sidebar's sections, keyed by the screen each one starts at.
+var screenGroups = map[screen]string{
+	screenInstances: "WORKLOADS",
+	screenIntents:   "AUTOMATION",
+	screenImages:    "LIBRARY",
+	screenMigration: "HOST",
+}
+
+// screenKeys are the jump keys of the sidebar entries, in screenOrder's order.
+const screenKeys = "1234567890abc"
 
 var screenLabels = map[screen]string{
 	screenInstances: "Instances",
@@ -269,7 +284,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
-		// alt+0..9 jumps to a screen from anywhere except the full-screen takeovers.
+		// alt+<jump key> jumps to a screen from anywhere except the full-screen takeovers.
 		if k := msg.String(); m.screen != screenLaunch && m.screen != screenLogs && strings.HasPrefix(k, "alt+") {
 			if s, ok := screenForDigit(strings.TrimPrefix(k, "alt+")); ok {
 				return m.jumpTo(s)
@@ -301,7 +316,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateManifests(msg)
 	case warmLoadedMsg, clonesLoadedMsg, warmBuildMsg, runEventMsg:
 		return m.updateEphemeral(msg) // streams keep going while another screen shows
-	case ciLoadedMsg:
+	case ciLoadedMsg, pipelineEventMsg, ciLogsMsg:
 		return m.updateCI(msg)
 	}
 
@@ -399,28 +414,22 @@ func (m model) updateSidebar(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// screenForDigit maps "1".."9" to the sidebar entry at that position, and "0" to the tenth.
+// screenForDigit maps a jump key of screenKeys to the sidebar entry at its position.
 func screenForDigit(k string) (screen, bool) {
-	if len(k) != 1 || k[0] < '0' || k[0] > '9' {
+	if len(k) != 1 {
 		return 0, false
 	}
-	i := int(k[0]-'0') - 1
-	if k[0] == '0' {
-		i = 9
-	}
-	if i >= len(screenOrder) {
+	i := strings.IndexByte(screenKeys, k[0])
+	if i < 0 || i >= len(screenOrder) {
 		return 0, false
 	}
 	return screenOrder[i], true
 }
 
-// screenDigit is the key that jumps to the sidebar entry at index i, blank past the tenth.
+// screenDigit is the key that jumps to the sidebar entry at index i, blank past the last key.
 func screenDigit(i int) string {
-	switch {
-	case i < 9:
-		return strconv.Itoa(i + 1)
-	case i == 9:
-		return "0"
+	if i < len(screenKeys) {
+		return screenKeys[i : i+1]
 	}
 	return " "
 }
@@ -592,34 +601,48 @@ func (m model) screenView() string {
 }
 
 func (m model) sidebarView() string {
-	var b strings.Builder
-	b.WriteString(styleSubtitle.Render(" MENU") + "\n\n")
+	h := contentHeight(m.height)
+	// On a short terminal the gaps go first, then the section headers, so every entry stays.
+	n := len(screenOrder)
+	headers, gaps := n+len(screenGroups) <= h, n+2*len(screenGroups)-1 <= h
+	var lines []string
 	for i, s := range screenOrder {
+		if g, ok := screenGroups[s]; ok && headers {
+			if i > 0 && gaps {
+				lines = append(lines, "")
+			}
+			lines = append(lines, styleSubtitle.Render(" "+g))
+		}
 		label := screenDigit(i) + " " + screenLabels[s]
 		switch {
 		case s == m.screen && m.sidebarFocused:
-			b.WriteString(styleMenuItemSelected.Render("▸ " + label))
+			lines = append(lines, styleMenuItemSelected.Render("▸ "+label))
 		case s == m.screen:
-			b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Padding(0, 1).Render("▸ " + label))
+			lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Padding(0, 1).Render("▸ "+label))
 		default:
-			b.WriteString(styleMenuItem.Render("  " + label))
+			lines = append(lines, styleMenuItem.Render("  "+label))
 		}
-		b.WriteString("\n")
 	}
-	b.WriteString("\n")
 	var keys []string
 	if m.sidebarFocused {
-		keys = helpItems("↑↓", "move", "0-9", "jump", "enter", "open", "q", "quit")
+		keys = helpItems("↑↓", "move", "1-9 0 a-c", "jump", "enter", "open", "q", "quit")
 	} else {
-		keys = helpItems("esc", "menu", "alt+0-9", "jump")
+		keys = helpItems("esc", "menu", "alt+key", "jump")
 	}
-	for _, k := range keys {
-		b.WriteString(" " + k + "\n")
+	// The key help goes under the entries only when it fits; the entries always come first.
+	if len(lines)+1+len(keys) <= h {
+		lines = append(lines, "")
+		for _, k := range keys {
+			lines = append(lines, " "+k)
+		}
+	}
+	if len(lines) > h {
+		lines = lines[:h]
 	}
 	return lipgloss.NewStyle().
-		Width(sidebarWidth - 1).Height(contentHeight(m.height)).
+		Width(sidebarWidth - 1).Height(h).
 		BorderStyle(lipgloss.NormalBorder()).BorderRight(true).BorderForeground(colorAccentDim).
-		Render(b.String())
+		Render(strings.Join(lines, "\n"))
 }
 
 // contentHeight leaves room for the header, spacing, and a two-line status area.

@@ -99,6 +99,8 @@ type runView struct {
 	cancel context.CancelFunc
 	done   bool
 	err    error
+	title  string // "Run" when empty
+	note   string // a line under the title, e.g. the run's own progress
 }
 
 // runPane keeps the last lines of one clone's output.
@@ -118,6 +120,14 @@ func newRunView(distros []string, cancel context.CancelFunc) *runView {
 		v.panes[d] = &runPane{status: "waiting", since: time.Now()}
 	}
 	return v
+}
+
+// setPanes replaces the panes with one per key, for runs whose clones are known late.
+func (v *runView) setPanes(keys []string) {
+	v.order, v.panes = keys, map[string]*runPane{}
+	for _, k := range keys {
+		v.panes[k] = &runPane{status: "waiting", since: time.Now()}
+	}
 }
 
 func (p *runPane) write(data []byte) {
@@ -180,15 +190,21 @@ func (v *runView) collected(res *client.CollectResult) {
 
 func (v *runView) view(width, height int) string {
 	var b strings.Builder
-	title := "Run"
+	title := v.title
+	if title == "" {
+		title = "Run"
+	}
 	if v.done {
-		title = "Run finished"
+		title += " finished"
 	}
 	b.WriteString(styleTitle.Render(" "+title+" ") + "\n")
 	if v.err != nil {
 		b.WriteString(styleError.Render(v.err.Error()) + "\n")
 	}
-	paneH := max(3, (height-3)/max(1, len(v.order)))
+	if v.note != "" {
+		b.WriteString(styleSubtitle.Render(v.note) + "\n")
+	}
+	paneH := max(3, (height-4)/max(1, len(v.order)))
 	for _, d := range v.order {
 		p := v.panes[d]
 		// The app's one-second tick moves the spinner on.

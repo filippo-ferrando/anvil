@@ -73,11 +73,29 @@ func TestRelaunchGUIAppRunsExec(t *testing.T) {
 	}
 }
 
-func TestScreenDigitTenth(t *testing.T) {
-	if s, ok := screenForDigit("0"); !ok || s != screenOrder[9] {
-		t.Errorf("0 -> %v, %v", s, ok)
+func TestScreenDigitEveryEntry(t *testing.T) {
+	if len(screenKeys) < len(screenOrder) {
+		t.Fatalf("%d jump keys for %d sidebar entries", len(screenKeys), len(screenOrder))
 	}
-	if screenDigit(9) != "0" || screenDigit(0) != "1" || screenDigit(10) != " " {
-		t.Error("unexpected sidebar digits")
+	if screenDigit(9) != "0" || screenDigit(0) != "1" || screenDigit(12) != "c" || screenDigit(len(screenKeys)) != " " {
+		t.Error("unexpected sidebar keys")
+	}
+	if screenOrder[len(screenOrder)-1] != screenEvents {
+		t.Errorf("last sidebar entry %v, want Events", screenOrder[len(screenOrder)-1])
+	}
+}
+
+func TestSidebarFitsShortTerminal(t *testing.T) {
+	for _, h := range []int{24, 50} {
+		m := model{height: h, screen: screenInstances, sidebarFocused: true}
+		v := m.sidebarView()
+		for _, s := range screenOrder {
+			if !strings.Contains(v, screenLabels[s]) {
+				t.Errorf("height %d: %s missing from the sidebar", h, screenLabels[s])
+			}
+		}
+		if h == 50 && !strings.Contains(v, "AUTOMATION") {
+			t.Errorf("height %d: no section headers:\n%s", h, v)
+		}
 	}
 }

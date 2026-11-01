@@ -16,7 +16,6 @@ import (
 	"google.golang.org/grpc/status"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
-	"git.fferrando.cc/rdfilippo/anvil/internal/guestexec"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
@@ -180,37 +179,7 @@ func printPipeline(ctx context.Context, recv func() (*anvilv1.PipelineEvent, err
 
 // downloadArtifacts extracts a run's collected files into dir.
 func downloadArtifacts(ctx context.Context, c *client.Client, id, dir string) error {
-	stream, err := c.Pipeline.Artifacts(ctx, &anvilv1.PipelineArtifactsRequest{Id: id})
-	if err != nil {
-		return err
-	}
-	pr, pw := io.Pipe()
-	done := make(chan error, 1)
-	go func() {
-		err := os.MkdirAll(dir, 0o755)
-		if err == nil {
-			err = guestexec.Extract(pr, dir)
-		}
-		pr.CloseWithError(err)
-		_, _ = io.Copy(io.Discard, pr)
-		done <- err
-	}()
-	for {
-		ch, err := stream.Recv()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			pw.CloseWithError(err)
-			<-done
-			return err
-		}
-		if _, err := pw.Write(ch.GetData()); err != nil {
-			break
-		}
-	}
-	pw.Close()
-	if err := <-done; err != nil {
+	if err := client.DownloadArtifacts(ctx, c.Pipeline, id, dir); err != nil {
 		return err
 	}
 	fmt.Fprintln(os.Stderr, "anvil: collected files in", dir)

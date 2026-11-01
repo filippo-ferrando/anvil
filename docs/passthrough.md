@@ -7,7 +7,7 @@ anvil host devices                       # what the host has, and what is free
 anvil launch ubuntu --kind vm --device usb:046d:c52b --device pci:0000:04:00.0
 ```
 
-The same list is on the TUI's Devices screen (alt+9), and the launch form offers every
+The same list is on the TUI's Devices screen (alt+b), and the launch form offers every
 free device as a toggle for a qemu VM. An instance's devices show in `anvil info` and on
 its detail page. In `anvil.yaml` a VM member takes `devices: [usb:3-2]`.
 
