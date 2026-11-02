@@ -1,0 +1,6 @@
+. "$(dirname "$0")/../lib.sh"
+say "one command on a throwaway VM, restored from a warm snapshot"
+run "time $ANVIL launch --ephemeral debian-13 -- cat /etc/debian_version"
+say "the same check on three distros at once"
+run "$ANVIL matrix ubuntu-24.04,debian-13,alpine-3.24.1 docs/demo/ci -- ./check.sh"
+run "$ANVIL warm list"

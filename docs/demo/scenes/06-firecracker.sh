@@ -1,0 +1,5 @@
+. "$(dirname "$0")/../lib.sh"
+say "a Firecracker microVM, same commands as a QEMU one"
+run "$ANVIL launch --kind vm debian-13 --hypervisor firecracker --name micro --wait"
+run "$ANVIL list"
+run "$ANVIL exec micro -- uname -r"

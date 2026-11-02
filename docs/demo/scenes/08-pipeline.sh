@@ -1,0 +1,5 @@
+. "$(dirname "$0")/../lib.sh"
+say "CI on the same clones: jobs, needs and a distro matrix"
+run "cat docs/demo/ci/anvil-ci.yaml"
+run "$ANVIL pipeline run docs/demo/ci"
+run "$ANVIL pipeline runs -n 3"

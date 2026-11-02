@@ -11,15 +11,18 @@ same recording can be embedded as a GIF (README, forge) or as a live, copyable p
   system's monospace font (falling back through fontconfig for missing glyphs) and encodes
   them with ffmpeg
 - a running `anvild` and the caller in the `anvil` group
-- a terminal of about 110x30, set before recording (the cast keeps the size it was
-  recorded at)
+- for `06-firecracker`, `07-ephemeral` and `08-pipeline`: Firecracker with its jailer
+  (see [../firecracker.md](../firecracker.md) and [../ephemeral.md](../ephemeral.md))
+- any terminal of at least 110x30: `record.sh` records every cast at 110x30 whatever the
+  terminal size is (`DEMO_SIZE=120x34` picks another); a smaller terminal still records
+  correct casts, but live progress lines wrap and pile up on screen while a scene runs
 
 ## Recording
 
 ```
 docs/demo/record.sh                  # every CLI scene
 docs/demo/record.sh 02-snapshot      # one scene
-TARGET=user@host docs/demo/record.sh 06-migrate
+TARGET=user@host docs/demo/record.sh 10-migrate
 bash docs/demo/scenes/99-cleanup.sh  # remove what the scenes created
 ```
 
@@ -28,26 +31,14 @@ Scenes run in order and build on each other (`02-snapshot` uses the `box` VM fro
 real, so the output is genuine. `-i 2` caps idle time at 2 seconds, so image pulls and
 cloud-init waits do not make the cast long.
 
+A scene can have a `<scene>.prep.sh` next to it, run before recording and kept off the
+cast: `05-export.prep.sh` makes the export directory with `anvil create-dir` (anvild only
+writes into a directory the caller owns and the `anvil` user can reach, so not straight
+into `/tmp`), `07-ephemeral.prep.sh` builds the warm snapshots, so the cast shows warm starts and
+not a first boot. `ci/` is the small project that `07-ephemeral` and `08-pipeline` upload,
+with its own `anvil-ci.yaml`.
+
 Output: `casts/<scene>.cast` and `gifs/<scene>.gif`.
-
-## The TUI
-
-The TUI is recorded by hand, since it needs key presses:
-
-```
-asciinema rec -i 2 docs/demo/casts/tui.cast -c "anvil tui"
-python3 docs/demo/cast2gif.py docs/demo/casts/tui.cast docs/demo/gifs/tui.gif
-```
-
-Suggested path through it, about 40 seconds:
-
-1. Instances: move over a running VM so the detail panel shows the live gauges.
-2. `l` on it for the live log view, then back.
-3. `n` to open the launch form, launch a container, watch the progress redraw.
-4. Snapshots screen: create one and restore it.
-5. Intents screen: open an intent and show its members and DNS names.
-6. Instances: `E` to export the selected VM.
-7. Migration screen: `d` to scan the network for other hosts.
 
 ## Reuse outside the repo
 

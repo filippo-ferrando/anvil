@@ -1,0 +1,10 @@
+# Demo pipeline for 08-pipeline.sh: a quick lint, then the check on three distros.
+jobs:
+  lint:
+    distro: alpine-3.24.1
+    run: sh -n check.sh
+  test:
+    needs: [lint]
+    distros: [ubuntu-24.04, debian-13, alpine-3.24.1]
+    run: ./check.sh
+    collect: [report.txt]

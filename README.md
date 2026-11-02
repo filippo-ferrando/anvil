@@ -67,10 +67,8 @@ on macOS (basic support in progress, see [Status](#status--limitations)).
 | --- | --- |
 | **Snapshots**, taken live, restored in seconds<br><img src="docs/demo/gifs/02-snapshot.gif" width="400"> | **Fork** a running VM, sharing its base image<br><img src="docs/demo/gifs/03-fork.gif" width="400"> |
 | **Intents**: a VM and a container as one app, with DNS<br><img src="docs/demo/gifs/04-intent.gif" width="400"> | **Export / import** a whole intent as one file<br><img src="docs/demo/gifs/05-export.gif" width="400"> |
-
-The TUI, end to end:
-
-<img src="docs/demo/gifs/tui.gif" alt="anvil tui" width="820">
+| **Firecracker** microVMs, same commands as QEMU<br><img src="docs/demo/gifs/06-firecracker.gif" width="400"> | **Ephemeral and matrix runs** from warm snapshots<br><img src="docs/demo/gifs/07-ephemeral.gif" width="400"> |
+| **Pipelines**: `anvil-ci.yaml` jobs on throwaway clones<br><img src="docs/demo/gifs/08-pipeline.gif" width="400"> | **Event log**: every operation, and who ran it<br><img src="docs/demo/gifs/09-events.gif" width="400"> |
 
 All recordings are [asciinema](https://asciinema.org) casts rendered to GIF, reproducible
 with [`docs/demo/record.sh`](docs/demo/README.md).

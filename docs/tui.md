@@ -1,7 +1,5 @@
 # The TUI
 
-![anvil tui](demo/gifs/tui.gif)
-
 `anvil tui` opens a full-screen terminal UI built with Bubble Tea (`internal/tui`). It is
 a client like the CLI: every action is a gRPC call to anvild through the same
 `pkg/client` wrapper, so the TUI and the CLI always see the same state and the same
