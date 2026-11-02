@@ -2,6 +2,17 @@
 
 Built from commit subjects by `scripts/changelog.sh`.
 
+## v1.3.4 (2026-11-02)
+
+### Features
+
+- async operations tui (9e35498)
+
+### Fixes
+
+- race condition on uffd ram allocation (2a3d633)
+- updated local anvil ci (67eca14)
+
 ## v1.3.3 (2026-11-02)
 
 ### Fixes
