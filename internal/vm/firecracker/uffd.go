@@ -305,7 +305,7 @@ func (s *pageServer) serve(stop int, fault func(page uint32)) error {
 		}
 		retry := pending[:0]
 		for _, addr := range pending {
-			page, err := s.fault(addr)
+			err := s.fault(addr, fault)
 			if errors.Is(err, unix.EAGAIN) {
 				retry = append(retry, addr)
 				continue
@@ -313,27 +313,26 @@ func (s *pageServer) serve(stop int, fault func(page uint32)) error {
 			if err != nil {
 				return fmt.Errorf("serving a fault at %#x: %w", addr, err)
 			}
-			if page >= 0 {
-				fault(uint32(page))
-			}
 		}
 		pending = retry
 	}
 }
 
-// fault copies the page holding addr and returns its file page, -1 when addr is in no region.
-func (s *pageServer) fault(addr uint64) (int64, error) {
+// fault records the file page holding addr, then copies it in; the copy wakes the faulting
+// thread, so recording first keeps the working set ahead of the guest. Addresses in no region are ignored.
+func (s *pageServer) fault(addr uint64, record func(page uint32)) error {
 	page := addr &^ (s.pageSize - 1)
 	for _, m := range s.maps {
 		if page >= m.BaseHostVirtAddr && page < m.BaseHostVirtAddr+m.Size {
 			off := m.Offset + page - m.BaseHostVirtAddr
 			if off+s.pageSize > uint64(len(s.mem)) {
-				return -1, fmt.Errorf("page at %#x is past the memory file", off)
+				return fmt.Errorf("page at %#x is past the memory file", off)
 			}
-			return int64(off / s.pageSize), s.copy(page, off, s.pageSize)
+			record(uint32(off / s.pageSize))
+			return s.copy(page, off, s.pageSize)
 		}
 	}
-	return -1, nil
+	return nil
 }
 
 func (s *pageServer) unregister(start, length uint64) {
