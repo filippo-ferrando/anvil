@@ -65,5 +65,5 @@ fmt:
 	gofmt -l -s .
 
 clean:
-	rm -f anvil anvild
+	rm -f anvil anvild anvil-guest
 	rm -rf man build

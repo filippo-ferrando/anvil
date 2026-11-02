@@ -5,8 +5,8 @@ jobs:
     setup: ci/setup.sh
     key-files: [go.mod, go.sum]
     env: { GOMODCACHE: /opt/go/mod, GOTOOLCHAIN: local }
-    cpus: 2
-    memory: 2048
+    cpus: 4
+    memory: 4096
     timeout: 10m
     run: |
       set -e
@@ -38,7 +38,7 @@ jobs:
     env: { GOMODCACHE: /opt/go/mod, GOTOOLCHAIN: local }
     cpus: 4
     memory: 4096
-    timeout: 30m
+    timeout: 15m
     run: go test ./...
 
   race:
@@ -48,6 +48,6 @@ jobs:
     key-files: [go.mod, go.sum]
     env: { GOMODCACHE: /opt/go/mod, GOTOOLCHAIN: local }
     cpus: 4
-    memory: 6144
+    memory: 4096
     timeout: 45m
     run: go test -race ./...
