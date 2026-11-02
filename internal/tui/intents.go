@@ -37,11 +37,9 @@ type intentsModel struct {
 
 	exportTarget *anvilv1.Intent // non-nil while the export output-path form is up
 	exportForm   simpleForm
-	export       transcript // export progress; a running one blocks other keys
 
 	importPrompting bool // the import bundle-path form is up
 	importForm      simpleForm
-	imp             transcript // import progress; a running one blocks other keys
 
 	applyPrompting bool // the apply manifest form is up
 	applyForm      simpleForm
@@ -52,7 +50,6 @@ type intentsModel struct {
 	membersCreate    bool
 	membersOf        string // the intent a gets members for
 	membersForm      simpleForm
-	members          transcript // launch progress; a running one blocks other keys
 }
 
 func newIntentsModel() intentsModel {
@@ -106,20 +103,6 @@ func (m model) updateIntents(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, loadIntents(m.client)
 
-	case exportStreamMsg:
-		return m, follow(&m.intents.export, msg.lineStep, nil)
-
-	case importStreamMsg:
-		return m, follow(&m.intents.imp, msg.lineStep, loadIntents(m.client))
-
-	case intentMembersStreamMsg:
-		// Reload on failure too, since members launched before it are kept.
-		cmd := follow(&m.intents.members, msg.lineStep, loadIntents(m.client))
-		if msg.err != nil {
-			cmd = loadIntents(m.client)
-		}
-		return m, cmd
-
 	case applyStreamMsg:
 		cmd, applied := m.intents.apply.handle(msg)
 		if applied {
@@ -136,13 +119,6 @@ func (m model) updateIntents(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	in := &m.intents
 
-	if in.export.running || in.imp.running || in.members.running {
-		return m, nil // block input until the stream finishes
-	}
-	// A finished export/import/members transcript stays on screen until dismissed here.
-	if in.export.dismiss(msg.String()) || in.imp.dismiss(msg.String()) || in.members.dismiss(msg.String()) {
-		return m, nil
-	}
 	if in.membersPrompting {
 		var submitted, cancelled bool
 		in.membersForm, submitted, cancelled = in.membersForm.update(msg)
@@ -156,8 +132,7 @@ func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil // the form stays up to fix it
 		}
 		in.membersPrompting = false
-		in.members.start()
-		return m, startIntentMembersStream(m.client, req)
+		return m, m.intentMembersTask(req)
 	}
 	if in.apply.active() {
 		return m, in.apply.key(msg, m.client)
@@ -193,8 +168,7 @@ func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if bundlePath == "" {
 			return m, nil
 		}
-		in.imp.start()
-		return m, startImportStream(m.client, bundlePath, renameTo)
+		return m, m.importTask(bundlePath, renameTo, screenIntents)
 	}
 	if in.exportTarget != nil {
 		var submitted, cancelled bool
@@ -212,8 +186,7 @@ func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if outputPath == "" {
 			return m, nil
 		}
-		in.export.start()
-		return m, startExportStream(m.client, target.GetName(), outputPath, true)
+		return m, m.exportTask(target.GetName(), outputPath, true, screenIntents)
 	}
 
 	if in.removeMemberOf != nil {
@@ -230,7 +203,7 @@ func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if member == "" {
 			return m, nil
 		}
-		return m, removeIntentMember(m.client, name, member)
+		return m, m.track("removing "+member+" from "+name, screenIntents, removeIntentMember(m.client, name, member))
 	}
 
 	if in.confirmDelete != nil {
@@ -238,11 +211,11 @@ func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "y", "enter":
 			name := in.confirmDelete.GetName()
 			in.confirmDelete = nil
-			return m, deleteIntent(m.client, name, false)
+			return m, m.track("removing intent "+name, screenIntents, deleteIntent(m.client, name, false))
 		case "p":
 			name := in.confirmDelete.GetName()
 			in.confirmDelete = nil
-			return m, deleteIntent(m.client, name, true)
+			return m, m.track("removing intent "+name+" and its members", screenIntents, deleteIntent(m.client, name, true))
 		default:
 			in.confirmDelete = nil
 			return m, nil
@@ -318,17 +291,8 @@ func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m intentsModel) View() string {
-	if m.export.active() {
-		return m.export.view("Exporting…")
-	}
 	if m.exportTarget != nil {
 		return m.exportForm.View()
-	}
-	if m.imp.active() {
-		return m.imp.view("Importing…")
-	}
-	if m.members.active() {
-		return m.members.view("Launching members…")
 	}
 	if m.membersPrompting {
 		return m.membersForm.View()

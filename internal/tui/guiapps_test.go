@@ -80,8 +80,8 @@ func TestScreenDigitEveryEntry(t *testing.T) {
 	if screenDigit(9) != "0" || screenDigit(0) != "1" || screenDigit(12) != "c" || screenDigit(len(screenKeys)) != " " {
 		t.Error("unexpected sidebar keys")
 	}
-	if screenOrder[len(screenOrder)-1] != screenEvents {
-		t.Errorf("last sidebar entry %v, want Events", screenOrder[len(screenOrder)-1])
+	if screenOrder[len(screenOrder)-1] != screenTasks {
+		t.Errorf("last sidebar entry %v, want Tasks", screenOrder[len(screenOrder)-1])
 	}
 }
 

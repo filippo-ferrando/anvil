@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -30,11 +29,8 @@ const (
 )
 
 type launchModel struct {
-	kind          string // "vm" | "container"
-	form          simpleForm
-	launching     bool
-	progressLines []string
-	stepSince     time.Time // when the last progress line's step began
+	kind string // "vm" | "container"
+	form simpleForm
 
 	// Ad hoc cloud-init editing (VM only, ctrl+e): distinguishes "never
 	// opened the editor" from "opened it and saved empty content", since an empty override is still a deliberate choice.
@@ -169,7 +165,7 @@ func launchFields(kind string, values map[string]string) []formField {
 		textField("Image", "e.g. ubuntu:24.04, or nginx:alpine", v("Image", "")),
 	}
 
-	waitHint := "keep the progress view open until the container is ready"
+	waitHint := "the task runs until the container is ready"
 	if kind == "vm" {
 		hypervisor := textField(hypervisorField, "qemu or firecracker", v(hypervisorField, "qemu"))
 		hypervisor.Suggestions = []string{"qemu", "firecracker"}
@@ -182,7 +178,7 @@ func launchFields(kind string, values map[string]string) []formField {
 			textField(sshKeysField, "on top of anvil's own key: literal keys or .pub file paths, comma-separated", v(sshKeysField, "")),
 			toggleField(guestAgentField, "install qemu-guest-agent: guest IPs, clean shutdown, cloud-init status", true),
 		)
-		waitHint = "keep the progress view open until cloud-init finished"
+		waitHint = "the task runs, following the console, until cloud-init finished"
 	} else {
 		fields = append(fields,
 			textField("Env", "K=V,K2=V2", v("Env", "")),
@@ -194,7 +190,7 @@ func launchFields(kind string, values map[string]string) []formField {
 
 	fields = append(fields,
 		toggleField(startField, "start it right after creating it", true),
-		toggleField(waitField, waitHint, false),
+		toggleField(waitField, waitHint, true),
 		textField(waitTimeoutField, "how long the wait may take, e.g. 15m", v(waitTimeoutField, "15m")),
 	)
 
@@ -274,27 +270,6 @@ func formValues(f simpleForm) map[string]string {
 
 func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case launchStreamMsg:
-		if msg.status != "" {
-			m.launch.stepSince = stepStart(m.launch.progressLines, msg.status, m.launch.stepSince)
-			m.launch.progressLines = appendProgressLine(m.launch.progressLines, msg.status)
-		}
-		if msg.err != nil {
-			m.launch.launching = false
-			m.setStatus("launch: "+msg.err.Error(), true)
-			return m, nil
-		}
-		if msg.done {
-			m.launch.launching = false
-			if msg.result != nil {
-				m.setStatus("launched "+msg.result.GetName(), false)
-				m.screen = screenInstances
-				return m, tea.Batch(tea.ClearScreen, loadInstances(m.client))
-			}
-			return m, nil
-		}
-		return m, msg.next
-
 	case cloudInitContentLoadedMsg:
 		if !m.launch.loadingCloudInit {
 			return m, nil // stale: the editor was closed before this arrived
@@ -382,10 +357,6 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		if m.launch.launching {
-			return m, nil // one thing at a time: ignore input mid-launch
-		}
-
 		if m.launch.editingCloudInit {
 			return m.updateLaunchCloudInitEditor(msg)
 		}
@@ -428,9 +399,10 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.launch.form.errMsg = err.Error()
 				return m, nil
 			}
-			m.launch.launching = true
-			m.launch.progressLines = nil
-			return m, startLaunchStream(m.client, req)
+			cmd := m.launchTask(req)
+			m.screen = screenInstances
+			m.setStatus(inBackground("launching "+launchTarget(req))+" and console", false)
+			return m, tea.Batch(tea.ClearScreen, cmd)
 		}
 		return m, nil
 	}
@@ -480,9 +452,6 @@ func (m model) updateLaunchCloudInitEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 }
 
 func (m launchModel) View() string {
-	if m.launching {
-		return styleTitle.Render(" Launching… ") + "\n\n" + progressView(m.progressLines, true, m.stepSince)
-	}
 	if m.editingCloudInit {
 		body := m.cloudInitEditor.View()
 		if m.loadingCloudInit {
@@ -523,10 +492,9 @@ func buildLaunchRequest(m launchModel) (*anvilv1.LaunchRequest, error) {
 	if err != nil {
 		return nil, err
 	}
-	start, wait := form.Bool(startField), form.Bool(waitField)
-	if wait && !start {
-		return nil, errors.New("wait needs Start on")
-	}
+	// Wait defaults on, so it is dropped rather than refused for an instance left stopped.
+	start := form.Bool(startField)
+	wait := start && form.Bool(waitField)
 	waitTimeout, err := parseDurationField(form.Value(waitTimeoutField), waitTimeoutField)
 	if err != nil {
 		return nil, err
@@ -618,13 +586,40 @@ func parseHypervisorField(s string) (anvilv1.VmHypervisor, error) {
 	}
 }
 
-// startLaunchStream opens the Launch RPC and receives its first event.
-func startLaunchStream(c *client.Client, req *anvilv1.LaunchRequest) tea.Cmd {
+// launchTarget names what req launches: its name, else its image.
+func launchTarget(req *anvilv1.LaunchRequest) string {
+	if req.GetName() != "" {
+		return req.GetName()
+	}
+	if req.GetContainer() != nil {
+		return req.GetContainer().GetImageRef()
+	}
+	return req.GetVm().GetImageRef()
+}
+
+// launchTask runs req in the background, following the new instance's console as it boots.
+func (m *model) launchTask(req *anvilv1.LaunchRequest) tea.Cmd {
+	what := launchTarget(req)
+	t, cmd := m.streamTask("launching "+what, "launched "+what, screenInstances, func(ctx context.Context, id int) tea.Cmd {
+		return startLaunchStream(ctx, m.client, id, req)
+	})
+	t.cancelNote = "The daemon removes what the launch created so far."
+	if req.GetName() == "" {
+		return cmd // the daemon's name event starts the console
+	}
+	// A named launch follows at once, also with a daemon that sends no name event.
+	t.instance = req.GetName()
+	return tea.Batch(cmd, m.followTaskLog(t))
+}
+
+// startLaunchStream opens the Launch RPC on ctx and receives its first event.
+func startLaunchStream(ctx context.Context, c *client.Client, id int, req *anvilv1.LaunchRequest) tea.Cmd {
+	wrap := launchTaskStep(id, "launched")
 	return func() tea.Msg {
-		stream, err := c.Launch(context.Background(), req)
+		stream, err := c.Launch(ctx, req)
 		if err != nil {
-			return launchStreamMsg{failed[*anvilv1.Instance](err)}
+			return wrap(failed[*anvilv1.Instance](err))
 		}
-		return recvStream(stream.Recv, parseLaunchProgress, func(s instanceStep) tea.Msg { return launchStreamMsg{s} })()
+		return recvStream(stream.Recv, parseLaunchProgress, wrap)()
 	}
 }

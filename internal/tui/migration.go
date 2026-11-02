@@ -44,10 +44,8 @@ type migrationModel struct {
 	discovering  bool // the discover timeout form is up
 	discoverForm simpleForm
 
-	focusForm     bool // false: hosts list has focus; true: the migrate form does
-	migrateForm   simpleForm
-	migrating     bool
-	progressLines []string
+	focusForm   bool // false: hosts list has focus; true: the migrate form does
+	migrateForm simpleForm
 
 	panelHeight int // height the hosts list is pinned to
 
@@ -199,21 +197,6 @@ func (m model) updateMigration(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.migration.migrateKey = msg.key
 		return m, nil
 
-	case migrateStreamMsg:
-		if msg.status != "" {
-			m.migration.progressLines = appendProgressLine(m.migration.progressLines, msg.status)
-		}
-		if msg.err != nil {
-			m.migration.migrating = false
-			m.migration.progressLines = append(m.migration.progressLines, errLine(msg.err))
-			return m, nil
-		}
-		if msg.done {
-			m.migration.migrating = false
-			return m, nil
-		}
-		return m, msg.next
-
 	case tea.KeyMsg:
 		return m.updateMigrationKey(msg)
 	}
@@ -222,23 +205,6 @@ func (m model) updateMigration(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) updateMigrationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	mg := &m.migration
-
-	if mg.migrating {
-		return m, nil
-	}
-
-	// A finished migration's transcript stays on screen until dismissed here.
-	if len(mg.progressLines) > 0 {
-		switch msg.String() {
-		case "tab", "esc", "q":
-			mg.progressLines = nil
-			mg.focusForm = false
-			if msg.String() != "tab" {
-				m.sidebarFocused = true
-			}
-		}
-		return m, nil
-	}
 
 	if mg.migrateKey != "" {
 		mg.migrateKey = ""
@@ -250,7 +216,7 @@ func (m model) updateMigrationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "y", "enter":
 			alias := mg.confirmRemove.GetAlias()
 			mg.confirmRemove = nil
-			return m, removeHost(m.client, alias)
+			return m, m.track("removing host "+alias, screenMigration, removeHost(m.client, alias))
 		default:
 			mg.confirmRemove = nil
 			return m, nil
@@ -273,7 +239,7 @@ func (m model) updateMigrationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		mg.discovering = false
 		m.setStatus("looking for anvil hosts on this network...", false)
-		return m, discoverHosts(m.client, timeout)
+		return m, m.track("looking for hosts on the network", screenMigration, discoverHosts(m.client, timeout))
 	}
 
 	if mg.adding {
@@ -310,9 +276,9 @@ func (m model) updateMigrationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				mg.migrateForm.errMsg = err.Error()
 				return m, nil
 			}
-			mg.migrating = true
-			mg.progressLines = nil
-			return m, startMigrateStream(m.client, req)
+			mg.focusForm = false
+			m.setStatus(inBackground("migrating "+req.GetName()+" to "+req.GetTo()), false)
+			return m, m.migrateTask(req)
 		}
 		return m, nil
 	}
@@ -341,7 +307,7 @@ func (m model) updateMigrationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "d":
 		m.setStatus("looking for anvil hosts on this network...", false)
-		return m, discoverHosts(m.client, 0)
+		return m, m.track("looking for hosts on the network", screenMigration, discoverHosts(m.client, 0))
 	case "D":
 		mg.discovering = true
 		mg.discoverForm = newSimpleForm("Discover hosts", []formField{
@@ -363,7 +329,7 @@ func (m model) updateMigrationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "t":
 		if h := m.selectedHost(); h != nil {
-			return m, testHost(m.client, h.GetAlias())
+			return m, m.track("testing SSH to "+h.GetAlias(), screenMigration, testHost(m.client, h.GetAlias()))
 		}
 		return m, nil
 	case "r":
@@ -416,16 +382,6 @@ func (m migrationModel) View() string {
 			"Add this to the target user's ~/.ssh/authorized_keys on each host to migrate to:\n\n" +
 			m.migrateKey + "\n\n" + helpBar("any key", "back")
 	}
-	if m.migrating || len(m.progressLines) > 0 {
-		s := styleTitle.Render(" Migrating… ") + "\n\n"
-		for _, line := range m.progressLines {
-			s += line + "\n"
-		}
-		if !m.migrating {
-			s += "\n" + helpBar("tab", "back to hosts", "esc", "back")
-		}
-		return s
-	}
 
 	hostsBox, formBox := styleBox, styleBox
 	if m.focusForm {
@@ -464,24 +420,36 @@ func buildMigrateRequest(form simpleForm) (*anvilv1.MigrateRequest, error) {
 	}, nil
 }
 
-func startMigrateStream(c *client.Client, req *anvilv1.MigrateRequest) tea.Cmd {
+// migrateTask runs req in the background.
+func (m *model) migrateTask(req *anvilv1.MigrateRequest) tea.Cmd {
+	title, done := "migrating "+req.GetName()+" to "+req.GetTo(), "migrated "+req.GetName()+" to "+req.GetTo()
+	if req.GetDryRun() {
+		title, done = "checking the migration of "+req.GetName()+" to "+req.GetTo(), "migration of "+req.GetName()+" checked"
+	}
+	_, cmd := m.streamTask(title, done, screenMigration, func(ctx context.Context, id int) tea.Cmd {
+		return startMigrateStream(ctx, m.client, req, lineTaskStep(id))
+	})
+	return cmd
+}
+
+func startMigrateStream(ctx context.Context, c *client.Client, req *anvilv1.MigrateRequest, wrap func(lineStep) tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		// Skip guest-key injection for a dry run.
 		var warning string
 		if !req.GetDryRun() {
-			warnings, err := c.InjectGuestKeys(context.Background(), req.GetName(), req.GetTo())
+			warnings, err := c.InjectGuestKeys(ctx, req.GetName(), req.GetTo())
 			if err != nil {
-				return migrateStreamMsg{failed[struct{}](fmt.Errorf("preparing guest SSH access on the target: %w", err))}
+				return wrap(failed[struct{}](fmt.Errorf("preparing guest SSH access on the target: %w", err)))
 			}
 			warning = strings.Join(warnings, "; ")
 		}
-		stream, err := c.Migrate.Migrate(context.Background(), req)
+		stream, err := c.Migrate.Migrate(ctx, req)
 		if err != nil {
-			return migrateStreamMsg{failed[struct{}](err)}
+			return wrap(failed[struct{}](err))
 		}
-		next := recvStream(stream.Recv, parseMigrateProgress, func(s lineStep) tea.Msg { return migrateStreamMsg{s} })
+		next := recvStream(stream.Recv, parseMigrateProgress, wrap)
 		if warning != "" {
-			return migrateStreamMsg{lineStep{status: styleWarn.Render("warning: " + warning), next: next}}
+			return wrap(lineStep{status: styleWarn.Render("warning: " + warning), next: next})
 		}
 		return next()
 	}

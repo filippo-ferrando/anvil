@@ -71,6 +71,8 @@ func (s *Server) launch(ctx context.Context, req *anvilv1.LaunchRequest, stream 
 		sendLaunchEvent(stream, instance.LaunchEvent{Err: err})
 		return err
 	}
+	// Lets a client follow the console log of a launch it didn't name.
+	_ = stream.Send(&anvilv1.LaunchProgress{Event: &anvilv1.LaunchProgress_Name{Name: params.Name}})
 	if err := checkCallerOwns(ctx, sharedPaths(params)...); err != nil {
 		sendLaunchEvent(stream, instance.LaunchEvent{Err: err})
 		return err

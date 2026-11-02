@@ -46,14 +46,18 @@ A terminal that never answers costs 5 seconds there; `ANVIL_THEME=dark` or
 - **Header**: the TUI's own version, local `user@hostname`, the socket (or `host:socket` with `--remote`), the
   daemon state (`connecting…`, `daemon connected` with the daemon's version,
   `daemon unreachable`, taken from the last instance list request), the running/total instance count and a clock.
-- **Sidebar**: the thirteen screens of `screenOrder` in `internal/tui/app.go`, in four
+- **Sidebar**: the fourteen screens of `screenOrder` in `internal/tui/app.go`, in four
   sections: workloads (Instances, Ephemeral, Snapshots), automation (Intents, Manifests, CI,
-  GUI Apps), library (Images, Cloud-Init, Mirrors) and host (Migration, Devices, Events).
-  Each entry shows its jump key: `1` to `9`, `0`, then `a` `b` `c`. The entry with the arrow
+  GUI Apps), library (Images, Cloud-Init, Mirrors) and host (Migration, Devices, Events, Tasks).
+  Each entry shows its jump key: `1` to `9`, `0`, then `a` `b` `c` `d`. The Tasks entry
+  also shows how many tasks run, e.g. `Tasks ⟳2`. The entry with the arrow
   is the active screen; it is highlighted when the sidebar itself has focus. On a short
   terminal the section headers and the key help are left out, never the entries.
 - **Status line**: the result of the last action. A success stays 4 s, an error 10 s; known
   errors get a `hint:` line under them (`friendlyError`).
+- **Task strip**: while tasks run, one line under the status line lists each with its
+  latest step, a spinner and its time, e.g. `⟳ launching web: waiting for cloud-init  ⠼ 41s`
+  (see [Tasks](#14-tasks-key-d)).
 
 The TUI subscribes to the daemon's `Watch` stream. Any instance change (a launch, a stop,
 a VM that powered itself off, a guest agent report) reloads the Instances, Snapshots and
@@ -68,8 +72,8 @@ and **Logs** (`l` on Instances).
 
 | Key | Action |
 |-----|--------|
-| `ctrl+c` | Quit, from any screen, even during a launch. |
-| `alt+1` … `alt+9`, `alt+0`, `alt+a` … `alt+c` | Jump to that sidebar entry (`0` is the tenth, `a` `b` `c` the last three), focused on its content. Not in the Launch and Logs takeovers. This is checked before any form, so it also leaves a half-filled form. |
+| `ctrl+c` | Quit, from any screen. While tasks run, the first press only warns that quitting cancels them (a launch is rolled back); a second press within 3 s quits. |
+| `alt+1` … `alt+9`, `alt+0`, `alt+a` … `alt+d` | Jump to that sidebar entry (`0` is the tenth, `a` to `d` the last four), focused on its content. `alt+d` opens Tasks. Not in the Launch and Logs takeovers. This is checked before any form, so it also leaves a half-filled form. |
 
 ### Sidebar (when it has focus)
 
@@ -79,8 +83,8 @@ and **Logs** (`l` on Instances).
 | `↓` `j` `tab` | Next screen (wraps around). |
 | `home` `g` / `end` `G` | First / last screen. |
 | `enter` `→` `l` | Move focus into the screen's content. |
-| `1` … `9`, `0`, `a` … `c` | Jump to that screen (`0` is the tenth, `a` `b` `c` the last three), focused on its content. |
-| `q` | Quit. |
+| `1` … `9`, `0`, `a` … `d` | Jump to that screen (`0` is the tenth, `a` to `d` the last four), focused on its content. |
+| `q` | Quit, with the same warning as `ctrl+c` while tasks run. |
 
 Inside a screen, `esc` or `q` gives focus back to the sidebar when no form, confirmation
 or progress view is open.
@@ -152,11 +156,14 @@ while the Instances screen is open: address, uptime, the guest agent state, clou
 guest IPs (VM), and gauges for CPU, memory, disk usage (VM) or disk read/write rate
 (container), and network rate (shown as "not available" for a SLIRP VM).
 Under that, as many of the instance's recent events as fit, newest first, with the user
-who caused each one and any error (see `anvil events`).
+who caused each one and any error (see `anvil events`). While a task runs on the
+instance (a wait, a delete, the end of a launch), its latest step and the last lines of
+the instance's console show there instead.
 
 | Key | Action |
 |-----|--------|
 | `n` | Open the Launch takeover. |
+| `T` | Open the Tasks screen. |
 | `space` | Mark or unmark the selected instance (a `✓` in front of its name) and move down. While any instance is marked, `s`, `S` and `d` act on the marked ones instead of the selected one. |
 | `s` | Stop the selected instance if it is running, otherwise start it. Stop uses the daemon's default 30 s graceful timeout. With marks: stop the marked ones that run, or start them all when none runs. |
 | `S` | Stop a running instance with options: Force (skip the graceful shutdown) and Timeout seconds (`anvil stop --force --timeout`). With marks: the same for every marked instance that runs. |
@@ -167,9 +174,9 @@ who caused each one and any error (see `anvil events`).
 | `l` | Open the Logs takeover. |
 | `L` | Open the Logs takeover from the last N lines only (`anvil logs --tail`). |
 | `d` | Delete, after a confirmation that names the instance, or the count and names of the marked ones: `y`/`enter` deletes, `p` also removes the base image if no other VM uses it, any other key cancels. |
-| `f` | Fork the selected VM: new name, and whether to start it at once. Shows the progress until dismissed. |
+| `f` | Fork the selected VM: new name, and whether to start it at once. Runs as a task; a started fork's console is followed. |
 | `u` | Settings: vCPUs, memory, disk (VM), autostart and restart policy, pre-filled with the current values. Only changed fields are sent (`anvil set`). |
-| `w` | Wait for first-boot setup (cloud-init) of a running instance, streaming progress. `esc` stops waiting. |
+| `w` | Wait for first-boot setup (cloud-init) of a running instance, as a task that follows the console. Cancelling it only stops the waiting. |
 | `m` | Mount a host directory into a VM: host path, guest path, read-only toggle. Without `--remote` a "Create and grant access" toggle first creates the host directory and grants the `anvil` user access to it, like `anvil create-dir`. |
 | `M` | Unmount from a VM; the guest path field suggests the current mounts. |
 | `p` | Add a port forward: host port, guest port, UDP toggle. |
@@ -180,8 +187,10 @@ who caused each one and any error (see `anvil events`).
 | `esc` `q` | Clear the marks if any, otherwise back to the sidebar. |
 
 Marks are cleared once `s`, `S` or `d` runs, and dropped for instances that disappear.
-While an export, import or fork runs, every key is ignored; when it ends, its transcript
-stays on screen until `esc`, `enter` or `q`. The same keys dismiss a finished wait.
+Every action runs as a task, so the screen stays usable while it goes on: start, stop,
+delete, mount, ports and settings show in the task strip until the daemon answers;
+export, import, fork and wait also keep their progress lines in the Tasks screen. A
+delete of one instance follows its console from the last 30 lines until it is gone.
 
 Either choice removes the instance and its disk. See [lifecycle.md](lifecycle.md#delete).
 
@@ -202,7 +211,8 @@ fields depend on it:
 - Container: Env (`K=V,K2=V2`), Volumes (`host:guest[:ro],...`), Entrypoint, Command
   (split on spaces, overrides the image's command like `anvil launch image -- cmd`).
 - Both: Start toggle (on by default; off is `--no-start`), Wait until ready toggle
-  (cloud-init for a VM, `--wait`), Wait timeout (default `15m`).
+  (cloud-init for a VM, `--wait`, on by default; ignored with Start off), Wait timeout
+  (default `15m`).
 - Both, at the end: Autostart toggle, Restart policy (suggestions `no`, `on-failure`,
   `on-failure:5`, `always`), Intent name, Role, Ports (`host:guest[/tcp|udp],...`).
 
@@ -216,10 +226,12 @@ In the cloud-init editor, `ctrl+s` keeps the text for this launch only (it is no
 to the library, and it takes priority over the name field), and `esc` closes the editor
 without keeping it.
 
-During the launch the progress lines redraw in place and all keys except `ctrl+c` are
-ignored. On success the TUI returns to Instances; on failure the form stays open with the
-error in the status line. With the Wait toggle on, the launch view stays open until
-the instance finished its first-boot setup (`launch --wait`). Wait needs Start on.
+Submitting returns to Instances at once: the launch runs as a task in the background,
+in the task strip and the Tasks screen, and several launches can run side by side. The
+daemon names the instance first (`LaunchProgress.name`), so the task follows the new
+instance's console (boot and cloud-init output) as soon as it exists. With the Wait toggle
+on, the task runs until the first-boot setup finished (`launch --wait`). The result, or the
+error, shows in the status line wherever the TUI is.
 
 ## Logs (takeover)
 
@@ -248,7 +260,7 @@ with its last lines of output, its progress and then its exit code. See
 | `tab` | Switch between warm snapshots and clones. |
 | `n` | Start a run: distros, a path to upload, a command (run with `sh -c`), size, Keep failed, a setup script and key files, and paths to collect back into `<Collect into>/<distro>/` (`--collect`). `esc` in the run view cancels it and deletes its clones, or closes it once done. |
 | `c` | Build a warm snapshot for a distro and size, with an optional setup script and key files (`anvil warm create`). |
-| `a` | Start a GUI app in a throwaway clone: distro and package, optionally added to this desktop's launcher (`anvil gui --ephemeral`). |
+| `a` | Start a GUI app in a throwaway clone: distro and package, optionally added to this desktop's launcher (`anvil gui --ephemeral`). The progress (warm build, clone restore, app start) shows on screen until the app runs; `esc` stops watching, the app keeps starting. |
 | `p` | On a warm snapshot: set how many clones its pool keeps ready, 0 removes it (`anvil warm pool set`). The list shows each pool as `pool <ready>/<size>`. |
 | `s` `enter` | On a clone: a root shell in it (`anvil ephemeral shell`). |
 | `w` | On a clone: save it as a warm snapshot (`anvil warm save`). |
@@ -293,8 +305,9 @@ The list of intents, each with its member count and subnet.
 showing each member's progress prefixed with its role. The first failure stops the rest;
 members launched before it are kept, as with the CLI.
 
-While an export, import, apply or member launch runs, keys are ignored; the finished
-transcript stays until `esc`, `enter` or `q`.
+Export, import, member launches (`n`, `a`), removals (`x`, `U`) run as tasks, so the
+screen stays usable meanwhile. An apply keeps its plan and transcript on this screen, since
+it waits for a confirmation; keys are ignored while it runs.
 
 ## 5. Manifests
 
@@ -425,8 +438,9 @@ target, and the Copy, Best-effort and Dry run toggles).
 | `r` | Reload the saved hosts. |
 | `esc` `q` | Leave the discovery results; from the saved hosts, back to the sidebar. |
 
-During a migration keys are ignored. When it ends, `tab` returns to the host list and
-`esc` or `q` returns to the sidebar.
+A migration runs as a task: submitting the form returns to the host list, and the
+progress shows in the task strip and the Tasks screen. Testing (`t`) and discovering
+(`d`, `D`) hosts show as tasks too, until the answer comes.
 
 ## 12. Devices (key `b`)
 
@@ -452,3 +466,35 @@ cursor on the newest event it follows new ones; elsewhere it stays on the same e
 | `f` | Filter: only one instance's events (blank for all) and how many of the newest to load (0 for all), like `anvil events <name> -n`. |
 | `r` | Reload. |
 | `esc` `q` | Back to the sidebar. |
+
+## 14. Tasks (key `d`)
+
+Everything started from this TUI that talks to the daemon: launches, forks, deletes,
+starts and stops, exports and imports, migrations, member launches and the other actions
+of every screen except Ephemeral. Each one runs in the background, so the TUI stays usable
+and several can run at once. The list shows the newest first: `⟳` running (with its latest
+step), `✓` done or `✕` failed (with the error), and the time taken. The last 50 finished
+tasks are kept.
+
+The task view shows the task's progress lines and, for a task about one instance (launch,
+fork, wait, a single delete), that instance's console: the serial console of a VM, the
+output of a container. It is followed live while the task runs, and kept once it ends.
+Before the instance exists (a launch still downloading or provisioning) the view waits and
+asks again every second.
+
+| Key | Action |
+|-----|--------|
+| `↑` `k` / `↓` `j`, `home` `g` / `end` `G` | Move the selection. |
+| `enter` `l` | Open the task view. |
+| `x` | Cancel a running streamed task (launch, fork, export, import, migration, wait), after a confirmation. A cancelled launch is rolled back by the daemon; a cancelled wait leaves the instance running. |
+| `c` | Clear the finished tasks. |
+| `esc` `q` | Back to the sidebar. |
+
+In the task view:
+
+| Key | Action |
+|-----|--------|
+| `↑` `↓` `pgup` `pgdn` | Scroll the console; scrolling up stops following. |
+| `f` | Toggle following the console. |
+| `x` | Cancel the task, after a confirmation. |
+| `esc` `q` | Back to the list. |

@@ -110,3 +110,19 @@ func TestLaunchWithoutWaitSendsInstanceRightAway(t *testing.T) {
 		t.Errorf("expected the stream to end with the instance, got %v", stream.events)
 	}
 }
+
+func TestLaunchSendsTheNameFirst(t *testing.T) {
+	s := newTestServer(t, readyBackend{})
+	stream := &recordingStream{}
+	req := &anvilv1.LaunchRequest{Kind: anvilv1.Kind_KIND_VM, Vm: &anvilv1.VMSpec{ImageRef: "ubuntu:24.04"}}
+	if err := s.Launch(req, stream); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	name := stream.events[0].GetName()
+	if name == "" {
+		t.Fatalf("expected the derived name as the first event, got %v", stream.events[0])
+	}
+	if got := stream.events[len(stream.events)-1].GetInstance().GetName(); got != name {
+		t.Errorf("name event %q, launched %q", name, got)
+	}
+}

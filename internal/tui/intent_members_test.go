@@ -61,25 +61,32 @@ func TestIntentMembersKeysAndProgress(t *testing.T) {
 		t.Fatal("expected n to open the create form")
 	}
 
-	m.intents.members.start()
+	_ = m.intentMembersTask(&anvilv1.IntentAddMembersRequest{Name: "shop"})
+	task := m.tasks.items[len(m.tasks.items)-1]
+	if task.title != "adding members to shop" || !task.running {
+		t.Fatalf("task %q running %v", task.title, task.running)
+	}
 	for _, ev := range []*anvilv1.IntentAddMembersProgress{
 		{Event: &anvilv1.IntentAddMembersProgress_Member{Member: &anvilv1.IntentMemberProgress{
 			Role: "db", Launch: &anvilv1.LaunchProgress{Event: &anvilv1.LaunchProgress_Status{Status: "booting"}}}}},
 		{Event: &anvilv1.IntentAddMembersProgress_Member{Member: &anvilv1.IntentMemberProgress{
 			Role: "db", Launch: &anvilv1.LaunchProgress{Event: &anvilv1.LaunchProgress_Instance{Instance: &anvilv1.Instance{Name: "shop-db"}}}}}},
 	} {
-		next, _ = m.Update(intentMembersStreamMsg{parseIntentMembersProgress(ev)})
+		next, _ = m.Update(lineTaskStep(task.id)(parseIntentMembersProgress(ev)))
 		m = next.(model)
 	}
-	next, cmd := m.Update(intentMembersStreamMsg{failed[struct{}](errors.New("image bad is broken"))})
+	next, cmd := m.Update(lineTaskStep(task.id)(failed[struct{}](errors.New("image bad is broken"))))
 	m = next.(model)
-	view := m.intents.View()
+	view := m.tasks.taskView(task)
 	for _, want := range []string{"[db] booting", "[db] launched shop-db", "image bad is broken"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("expected %q in:\n%s", want, view)
 		}
 	}
-	if m.intents.members.running || cmd == nil {
-		t.Error("expected a failure to end the transcript and reload the intents")
+	if task.running || cmd == nil {
+		t.Error("expected a failure to end the task and reload the intents")
+	}
+	if m.intents.View() == view {
+		t.Error("the Intents screen should stay usable, not show the task")
 	}
 }

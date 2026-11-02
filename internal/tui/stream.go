@@ -15,6 +15,7 @@ type streamStep[R any] struct {
 	next   tea.Cmd // receives the following event, nil once the stream ended
 	status string  // a progress or result line, "" for none
 	result R       // the value some events carry, e.g. the launched instance
+	name   string  // the instance the stream is about, once the daemon named it
 	err    error
 	done   bool
 }
@@ -85,24 +86,6 @@ func (t *transcript) dismiss(key string) bool {
 	return true
 }
 
-// follow applies s to t and returns the Cmd for the next event; onDone runs once the
-// stream ends without an error.
-func follow[R any](t *transcript, s streamStep[R], onDone tea.Cmd) tea.Cmd {
-	if s.status != "" {
-		t.add(s.status)
-	}
-	switch {
-	case s.err != nil:
-		t.running = false
-		t.lines = append(t.lines, errLine(s.err))
-		return nil
-	case s.done:
-		t.running = false
-		return onDone
-	}
-	return s.next
-}
-
 // parseLaunchProgress maps the LaunchProgress events shared by Launch, Fork and WaitReady.
 func parseLaunchProgress(ev *anvilv1.LaunchProgress) instanceStep {
 	switch e := ev.GetEvent().(type) {
@@ -112,6 +95,8 @@ func parseLaunchProgress(ev *anvilv1.LaunchProgress) instanceStep {
 		return failed[*anvilv1.Instance](errors.New(e.Error))
 	case *anvilv1.LaunchProgress_Instance:
 		return instanceStep{result: e.Instance, done: true}
+	case *anvilv1.LaunchProgress_Name:
+		return instanceStep{name: e.Name}
 	}
 	return instanceStep{}
 }

@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -59,57 +58,53 @@ func TestDetailShowsMounts(t *testing.T) {
 	m := instancesModelWith(&anvilv1.Instance{Name: "web", Kind: anvilv1.Kind_KIND_VM, Vm: &anvilv1.VMSpec{
 		Mounts: []*anvilv1.Mount{{GuestPath: "/mnt/a", HostPath: "/home/me/a", ReadOnly: true}},
 	}})
-	if view := m.instances.detailView(); !strings.Contains(view, "/mnt/a ← /home/me/a (ro)") {
+	if view := m.instances.detailView(tasksModel{}); !strings.Contains(view, "/mnt/a ← /home/me/a (ro)") {
 		t.Errorf("expected the mount in the detail panel, got:\n%s", view)
 	}
 }
 
-func TestWaitKeyAndCancel(t *testing.T) {
+func TestWaitKeyStartsATask(t *testing.T) {
 	stopped := instancesModelWith(&anvilv1.Instance{Name: "off", Kind: anvilv1.Kind_KIND_VM, State: anvilv1.State_STATE_STOPPED})
 	next, cmd := stopped.updateInstancesKey(key("w"))
-	if next.(model).instances.waiting || cmd != nil {
+	if len(next.(model).tasks.items) != 0 || cmd != nil {
 		t.Error("expected w to do nothing on a stopped instance")
 	}
 
 	m := instancesModelWith(&anvilv1.Instance{Name: "web", Kind: anvilv1.Kind_KIND_VM, State: anvilv1.State_STATE_RUNNING})
 	next, cmd = m.updateInstancesKey(key("w"))
 	m = next.(model)
-	if !m.instances.waiting || cmd == nil || m.instances.waitCancel == nil {
-		t.Fatal("expected w to start waiting")
+	if len(m.tasks.items) != 1 || cmd == nil {
+		t.Fatal("expected w to start a wait task")
+	}
+	task := m.tasks.items[0]
+	if !task.running || task.instance != "web" || task.cancel == nil {
+		t.Fatalf("wait task %+v", task)
+	}
+	if m.tasks.forInstance("web") != task {
+		t.Error("expected the task to show on its instance")
 	}
 
-	next, _ = m.updateInstances(waitStreamMsg{status: "waiting for cloud-init: running"})
+	next, _ = m.Update(taskStepMsg{id: task.id, lineStep: lineStep{status: "waiting for cloud-init: running"}})
 	m = next.(model)
-	if len(m.instances.waitLines) != 1 {
-		t.Errorf("expected the progress line, got %v", m.instances.waitLines)
+	if task.last() != "waiting for cloud-init: running" {
+		t.Errorf("expected the progress line, got %q", task.last())
 	}
-
-	// esc cancels the request's context; the stream then ends with Canceled.
-	var cancelled bool
-	ctx, cancel := context.WithCancel(context.Background())
-	m.instances.waitCancel = func() { cancelled = true; cancel() }
-	next, _ = m.updateInstancesKey(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ = m.Update(taskStepMsg{id: task.id, lineStep: lineStep{err: status.Error(codes.Canceled, "context canceled"), done: true}})
 	m = next.(model)
-	if !cancelled || ctx.Err() == nil {
-		t.Fatal("expected esc to cancel the wait")
-	}
-	next, _ = m.updateInstances(waitStreamMsg{err: status.Error(codes.Canceled, "context canceled"), done: true})
-	m = next.(model)
-	if m.instances.waiting {
-		t.Error("expected waiting to end")
-	}
-	if last := m.instances.waitLines[len(m.instances.waitLines)-1]; !strings.Contains(last, "stopped waiting") {
-		t.Errorf("expected a cancel note, got %q", last)
+	if task.running || !strings.Contains(task.last(), "cancelled") {
+		t.Errorf("expected a cancelled task, got running %v, %q", task.running, task.last())
 	}
 }
 
 func TestWaitFailureIsShown(t *testing.T) {
-	m := instancesModelWith()
-	m.instances.waiting = true
-	next, _ := m.updateInstances(waitStreamMsg{err: errors.New("cloud-init finished with errors"), done: true})
+	m := instancesModelWith(&anvilv1.Instance{Name: "web", Kind: anvilv1.Kind_KIND_VM, State: anvilv1.State_STATE_RUNNING})
+	next, _ := m.updateInstancesKey(key("w"))
 	m = next.(model)
-	if last := m.instances.waitLines[len(m.instances.waitLines)-1]; !strings.Contains(last, "cloud-init finished with errors") {
-		t.Errorf("expected the error line, got %q", last)
+	task := m.tasks.items[0]
+	next, _ = m.Update(taskStepMsg{id: task.id, lineStep: lineStep{err: errors.New("cloud-init finished with errors"), done: true}})
+	m = next.(model)
+	if !strings.Contains(task.last(), "cloud-init finished with errors") || !m.statusBad {
+		t.Errorf("expected the error line and status, got %q", task.last())
 	}
 }
 

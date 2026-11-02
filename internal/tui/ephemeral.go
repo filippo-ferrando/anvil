@@ -69,12 +69,15 @@ type ephemeralModel struct {
 	warm       list.Model
 	clones     list.Model
 
-	form     *simpleForm           // the open form, nil for none
-	formKind string                // "warm" | "run" | "app" | "pool"
-	poolSnap *anvilv1.WarmSnapshot // the snapshot the pool form is for
-	confirm  string                // the warm key or clone id waiting for a yes
-	building transcript            // a warm snapshot build in progress
-	run      *runView
+	form      *simpleForm           // the open form, nil for none
+	formKind  string                // "warm" | "run" | "app" | "pool"
+	poolSnap  *anvilv1.WarmSnapshot // the snapshot the pool form is for
+	confirm   string                // the warm key or clone id waiting for a yes
+	building  transcript            // a warm snapshot build in progress
+	launching transcript            // a GUI app launch: its export, then the detached run's log
+	stopWatch context.CancelFunc    // stops following the launch, which goes on
+	launchID  int                   // tells the current launch's messages from a stopped one's
+	run       *runView
 }
 
 func newEphemeralModel() ephemeralModel {
@@ -625,9 +628,22 @@ func (m model) updateEphemeral(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, loadEphemeral(m.client)
 		}
 		return m, msg.next
-	case guiLaunchedMsg:
-		m.showGUILaunched(msg)
-		return m, loadEphemeral(m.client)
+	case appLaunchMsg:
+		if msg.id != e.launchID || !e.launching.running {
+			return m, nil
+		}
+		if msg.line != "" {
+			e.launching.add(msg.line)
+		}
+		if msg.done {
+			e.launching.running = false
+			e.stopWatch()
+			if msg.err != nil {
+				e.launching.lines = append(e.launching.lines, errLine(msg.err))
+			}
+			return m, loadEphemeral(m.client)
+		}
+		return m, msg.next
 	case actionDoneMsg:
 		m.setStatus(msg.verb, msg.err != nil)
 		if msg.err != nil {
@@ -655,6 +671,18 @@ func (m model) updateEphemeralKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if e.building.active() {
 		e.building.dismiss(msg.String())
+		return m, nil
+	}
+	if e.launching.active() {
+		if e.launching.running {
+			if k := msg.String(); k == "esc" || k == "q" {
+				e.stopWatch()
+				e.launching = transcript{}
+				m.setStatus("the app keeps starting in the background", false)
+			}
+			return m, nil
+		}
+		e.launching.dismiss(msg.String())
 		return m, nil
 	}
 	if e.confirm != "" {
@@ -688,10 +716,11 @@ func (m model) updateEphemeralKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			e.form = nil
-			if a.export {
-				m.setStatus("building the warm snapshot for "+a.pkg+", then starting it", false)
-			}
-			return m, launchEphemeralApp(m.socketPath, a)
+			ctx, cancel := context.WithCancel(context.Background())
+			e.launching.start()
+			e.stopWatch = cancel
+			e.launchID++
+			return m, launchEphemeralApp(ctx, e.launchID, m.socketPath, a)
 		}
 		if e.formKind == "pool" {
 			req, err := buildPoolRequest(form, e.poolSnap)
@@ -813,6 +842,12 @@ func (e ephemeralModel) View(width, height int) string {
 		return e.run.view(width, height)
 	case e.building.active():
 		return e.building.view("Building a warm snapshot")
+	case e.launching.active():
+		s := e.launching.view("Starting a GUI app in a throwaway clone")
+		if e.launching.running {
+			s += "\n" + helpBar("esc", "stop watching (the app keeps starting)")
+		}
+		return s
 	case e.confirm != "":
 		what := "warm snapshot"
 		if e.showClones {

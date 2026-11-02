@@ -270,16 +270,16 @@ func (m model) updateManifestsPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case manifestPromptDelete:
 		mf.prompt = manifestPromptNone
 		if k := msg.String(); k == "y" || k == "enter" {
-			return m, deleteManifest(m.client, mf.current)
+			return m, m.track("deleting manifest "+mf.current, screenManifests, deleteManifest(m.client, mf.current))
 		}
 		return m, nil
 	case manifestPromptTeardown:
 		mf.prompt = manifestPromptNone
 		switch msg.String() {
 		case "y", "enter":
-			return m, deleteIntent(m.client, mf.intent, true)
+			return m, m.track("removing intent "+mf.intent+" and its members", screenManifests, deleteIntent(m.client, mf.intent, true))
 		case "u":
-			return m, deleteIntent(m.client, mf.intent, false)
+			return m, m.track("removing intent "+mf.intent, screenManifests, deleteIntent(m.client, mf.intent, false))
 		}
 		return m, nil
 	}

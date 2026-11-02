@@ -268,7 +268,7 @@ func (m model) updateCloudInitPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "y", "enter":
 			name := ci.current
 			ci.prompt = cloudInitPromptNone
-			return m, deleteCloudInit(m.client, name)
+			return m, m.track("deleting cloud-init "+name, screenCloudInit, deleteCloudInit(m.client, name))
 		default:
 			ci.prompt = cloudInitPromptNone
 			return m, nil

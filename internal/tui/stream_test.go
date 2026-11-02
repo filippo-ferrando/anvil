@@ -5,8 +5,6 @@ import (
 	"io"
 	"strings"
 	"testing"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestRecvStreamChainsUntilEOF(t *testing.T) {
@@ -20,11 +18,11 @@ func TestRecvStreamChainsUntilEOF(t *testing.T) {
 		return ev, nil
 	}
 	cmd := recvStream(recv, func(ev string) lineStep { return lineStep{status: ev} },
-		func(s lineStep) tea.Msg { return exportStreamMsg{s} })
+		lineTaskStep(1))
 
 	var got []string
 	for cmd != nil {
-		msg := cmd().(exportStreamMsg)
+		msg := cmd().(taskStepMsg)
 		if msg.status != "" {
 			got = append(got, msg.status)
 		}
@@ -44,40 +42,26 @@ func TestRecvStreamChainsUntilEOF(t *testing.T) {
 func TestRecvStreamError(t *testing.T) {
 	cmd := recvStream(func() (string, error) { return "", errors.New("broken") },
 		func(string) lineStep { return lineStep{} },
-		func(s lineStep) tea.Msg { return importStreamMsg{s} })
-	msg := cmd().(importStreamMsg)
+		lineTaskStep(1))
+	msg := cmd().(taskStepMsg)
 	if !msg.done || msg.err == nil || msg.next != nil {
 		t.Errorf("want a failed, finished step, got %+v", msg)
 	}
 }
 
-func TestTranscriptFollow(t *testing.T) {
+func TestTranscriptAddAndDismiss(t *testing.T) {
 	var tr transcript
 	tr.start()
-	next := func() tea.Msg { return nil }
-	if cmd := follow(&tr, lineStep{status: "copying: 10%", next: next}, nil); cmd == nil {
-		t.Fatal("a running stream should chain its next receive")
-	}
-	follow(&tr, lineStep{status: "copying: 60%", next: next}, nil)
+	tr.add("copying: 10%")
+	tr.add("copying: 60%")
 	if len(tr.lines) != 1 || !strings.Contains(tr.view("Exporting…"), "] 60%") {
 		t.Errorf("updates with one key should redraw one barred line, got %q", tr.lines)
 	}
-	reload := func() tea.Msg { return nil }
-	if cmd := follow(&tr, lineStep{done: true}, reload); cmd == nil || tr.running {
-		t.Error("a clean end should stop running and return onDone")
-	}
+	tr.running = false
 	if !strings.Contains(tr.view("Exporting…"), "dismiss") {
 		t.Error("a finished transcript should offer to dismiss it")
 	}
 	if !tr.dismiss("esc") || tr.active() {
 		t.Error("esc should clear a finished transcript")
-	}
-
-	tr.start()
-	if cmd := follow(&tr, failed[struct{}](errors.New("disk full")), reload); cmd != nil || tr.running {
-		t.Error("an error should end the stream without onDone")
-	}
-	if !strings.Contains(tr.lines[len(tr.lines)-1], "disk full") {
-		t.Errorf("expected the error line, got %q", tr.lines)
 	}
 }

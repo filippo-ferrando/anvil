@@ -2774,6 +2774,7 @@ type LaunchProgress struct {
 	//	*LaunchProgress_Percent
 	//	*LaunchProgress_Instance
 	//	*LaunchProgress_Error
+	//	*LaunchProgress_Name
 	Event         isLaunchProgress_Event `protobuf_oneof:"event"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2852,6 +2853,15 @@ func (x *LaunchProgress) GetError() string {
 	return ""
 }
 
+func (x *LaunchProgress) GetName() string {
+	if x != nil {
+		if x, ok := x.Event.(*LaunchProgress_Name); ok {
+			return x.Name
+		}
+	}
+	return ""
+}
+
 type isLaunchProgress_Event interface {
 	isLaunchProgress_Event()
 }
@@ -2872,6 +2882,10 @@ type LaunchProgress_Error struct {
 	Error string `protobuf:"bytes,4,opt,name=error,proto3,oneof"`
 }
 
+type LaunchProgress_Name struct {
+	Name string `protobuf:"bytes,5,opt,name=name,proto3,oneof"` // the instance's name, sent once it is known, before provisioning
+}
+
 func (*LaunchProgress_Status) isLaunchProgress_Event() {}
 
 func (*LaunchProgress_Percent) isLaunchProgress_Event() {}
@@ -2879,6 +2893,8 @@ func (*LaunchProgress_Percent) isLaunchProgress_Event() {}
 func (*LaunchProgress_Instance) isLaunchProgress_Event() {}
 
 func (*LaunchProgress_Error) isLaunchProgress_Event() {}
+
+func (*LaunchProgress_Name) isLaunchProgress_Event() {}
 
 type ForkRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -14855,12 +14871,13 @@ const file_anvil_v1_anvil_proto_rawDesc = "" +
 	"\x04wait\x18\f \x01(\bR\x04wait\x120\n" +
 	"\x14wait_timeout_seconds\x18\r \x01(\x05R\x12waitTimeoutSeconds\x12\x1c\n" +
 	"\tautostart\x18\x0e \x01(\bR\tautostart\x12>\n" +
-	"\x0erestart_policy\x18\x0f \x01(\v2\x17.anvil.v1.RestartPolicyR\rrestartPolicy\"\x99\x01\n" +
+	"\x0erestart_policy\x18\x0f \x01(\v2\x17.anvil.v1.RestartPolicyR\rrestartPolicy\"\xaf\x01\n" +
 	"\x0eLaunchProgress\x12\x18\n" +
 	"\x06status\x18\x01 \x01(\tH\x00R\x06status\x12\x1a\n" +
 	"\apercent\x18\x02 \x01(\x05H\x00R\apercent\x120\n" +
 	"\binstance\x18\x03 \x01(\v2\x12.anvil.v1.InstanceH\x00R\binstance\x12\x16\n" +
-	"\x05error\x18\x04 \x01(\tH\x00R\x05errorB\a\n" +
+	"\x05error\x18\x04 \x01(\tH\x00R\x05error\x12\x14\n" +
+	"\x04name\x18\x05 \x01(\tH\x00R\x04nameB\a\n" +
 	"\x05event\"R\n" +
 	"\vForkRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
@@ -16369,6 +16386,7 @@ func file_anvil_v1_anvil_proto_init() {
 		(*LaunchProgress_Percent)(nil),
 		(*LaunchProgress_Instance)(nil),
 		(*LaunchProgress_Error)(nil),
+		(*LaunchProgress_Name)(nil),
 	}
 	file_anvil_v1_anvil_proto_msgTypes[56].OneofWrappers = []any{
 		(*CloudInitImportRepoProgress_Status)(nil),

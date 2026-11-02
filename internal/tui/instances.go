@@ -103,14 +103,6 @@ type instancesModel struct {
 	lastLogsTail     string // remembered across logs calls
 	lastTransferFrom bool   // remembered transfer direction
 
-	// Export, import and fork progress; a running one blocks other keys.
-	export, imp, fork transcript
-
-	waiting    bool               // a WaitReady stream is in flight; only esc (cancel) works
-	waitLines  []string           // the finished (or in-flight) wait's progress transcript
-	waitSince  time.Time          // when the last wait line's step began
-	waitCancel context.CancelFunc // ends the in-flight wait
-
 	detailWidth  int // width of the detail panel next to the list
 	panelHeight  int // shared height for both side-by-side panels
 	contentWidth int // full width given to this screen, for wrapping the help bar
@@ -387,45 +379,6 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.showGUILaunched(msg)
 		return m, nil
 
-	case exportStreamMsg:
-		return m, follow(&m.instances.export, msg.lineStep, nil)
-
-	case importStreamMsg:
-		return m, follow(&m.instances.imp, msg.lineStep, loadInstances(m.client))
-
-	case forkStreamMsg:
-		if msg.done && msg.result != nil {
-			msg.status = styleGood.Render("forked: " + msg.result.GetName())
-		}
-		return m, follow(&m.instances.fork, msg.instanceStep, loadInstances(m.client))
-
-	case waitStreamMsg:
-		if msg.status != "" {
-			m.instances.waitSince = stepStart(m.instances.waitLines, msg.status, m.instances.waitSince)
-			m.instances.waitLines = appendProgressLine(m.instances.waitLines, msg.status)
-		}
-		if msg.done {
-			m.instances.waiting = false
-			if m.instances.waitCancel != nil {
-				m.instances.waitCancel()
-				m.instances.waitCancel = nil
-			}
-			switch {
-			case msg.err != nil && status.Code(msg.err) == codes.Canceled:
-				m.instances.waitLines = append(m.instances.waitLines, styleSubtitle.Render("stopped waiting (the VM keeps running)"))
-			case msg.err != nil:
-				m.instances.waitLines = append(m.instances.waitLines, errLine(msg.err))
-			case msg.result != nil:
-				line := "ready: " + msg.result.GetName()
-				if ips := msg.result.GetGuest().GetIpAddresses(); len(ips) > 0 {
-					line += " (" + strings.Join(ips, ", ") + ")"
-				}
-				m.instances.waitLines = append(m.instances.waitLines, styleGood.Render(line))
-			}
-			return m, loadInstances(m.client)
-		}
-		return m, msg.next
-
 	case tea.KeyMsg:
 		return m.updateInstancesKey(msg)
 	}
@@ -433,29 +386,6 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.instances.waiting {
-		if msg.String() == "esc" && m.instances.waitCancel != nil {
-			m.instances.waitCancel()
-		}
-		return m, nil
-	}
-	if len(m.instances.waitLines) > 0 {
-		switch msg.String() {
-		case "esc", "enter", "q":
-			m.instances.waitLines = nil
-		}
-		return m, nil
-	}
-	if m.instances.export.running || m.instances.imp.running || m.instances.fork.running {
-		return m, nil // block input until the stream finishes
-	}
-	// A finished export/import/fork's transcript stays on screen until dismissed here.
-	for _, t := range []*transcript{&m.instances.export, &m.instances.imp, &m.instances.fork} {
-		if t.dismiss(msg.String()) {
-			return m, nil
-		}
-	}
-
 	// The delete confirmation overlay eats every key: y=delete, p=delete with base image, else cancel.
 	if len(m.instances.confirmDelete) > 0 {
 		names := instanceNames(m.instances.confirmDelete)
@@ -463,7 +393,7 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "y", "enter", "p":
 			m.instances.confirmDelete = nil
 			m.instances.clearMarks()
-			return m, deleteInstances(m.client, names, msg.String() == "p")
+			return m, m.deleteTask(names, msg.String() == "p")
 		default:
 			m.instances.confirmDelete = nil
 			return m, nil
@@ -524,9 +454,10 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.instances.clearMarks()
 		// With any target running, s stops the running ones; otherwise it starts them all.
 		if running := runningNames(targets); len(running) > 0 {
-			return m, stopInstance(m.client, &anvilv1.StopRequest{Names: running})
+			return m, m.track("stopping "+strings.Join(running, ", "), screenInstances, stopInstance(m.client, &anvilv1.StopRequest{Names: running}))
 		}
-		return m, startInstances(m.client, instanceNames(targets))
+		names := instanceNames(targets)
+		return m, m.track("starting "+strings.Join(names, ", "), screenInstances, startInstances(m.client, names))
 	case "S":
 		if running := runningNames(m.instances.targets()); len(running) > 0 {
 			m.instances.stopNames = running
@@ -539,6 +470,8 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "d":
 		m.instances.confirmDelete = m.instances.targets()
 		return m, nil
+	case "T":
+		return m.jumpTo(screenTasks)
 	case "f":
 		if inst := m.selectedInstance(); inst != nil && inst.GetVm() != nil {
 			m.instances.startPrompt(instancesPromptFork, inst, newSimpleForm("Fork "+inst.GetName(), []formField{
@@ -608,11 +541,7 @@ func (m model) updateInstancesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "w":
 		if inst := m.selectedInstance(); inst != nil && inst.GetState() == anvilv1.State_STATE_RUNNING {
-			ctx, cancel := context.WithCancel(context.Background())
-			m.instances.waiting = true
-			m.instances.waitLines = nil
-			m.instances.waitCancel = cancel
-			return m, startWaitStream(ctx, m.client, inst.GetName())
+			return m, m.waitTask(inst.GetName())
 		}
 		return m, nil
 	case "p":
@@ -695,7 +624,7 @@ func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setStatus("nothing changed", false)
 			return m, nil
 		}
-		return m, updateInstance(m.client, req)
+		return m, m.track("updating "+target.GetName(), screenInstances, updateInstance(m.client, req))
 	case instancesPromptMount:
 		hostPath, guestPath := ins.promptForm.Value("Host path"), ins.promptForm.Value("Guest path")
 		if hostPath == "" || guestPath == "" {
@@ -708,14 +637,15 @@ func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		createDir := m.remote() == "" && ins.promptForm.Bool(createDirField)
-		return m, mountInstance(m.client, target.GetName(), absHostPath, guestPath, ins.promptForm.Bool("Read-only"), createDir)
+		return m, m.track("mounting "+hostPath+" in "+target.GetName(), screenInstances,
+			mountInstance(m.client, target.GetName(), absHostPath, guestPath, ins.promptForm.Bool("Read-only"), createDir))
 
 	case instancesPromptUmount:
 		guestPath := ins.promptForm.Value("Guest path")
 		if guestPath == "" {
 			return m, nil
 		}
-		return m, umountInstance(m.client, target.GetName(), guestPath)
+		return m, m.track("unmounting "+guestPath+" in "+target.GetName(), screenInstances, umountInstance(m.client, target.GetName(), guestPath))
 
 	case instancesPromptExec:
 		command := ins.promptForm.Value("Command")
@@ -765,7 +695,7 @@ func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		ins.clearMarks()
-		return m, stopInstance(m.client, req)
+		return m, m.track("stopping "+strings.Join(req.GetNames(), ", "), screenInstances, stopInstance(m.client, req))
 
 	case instancesPromptLogs:
 		tail, err := parseInt32(ins.promptForm.Value(logsTailField), logsTailField)
@@ -781,16 +711,14 @@ func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if outputPath == "" {
 			return m, nil
 		}
-		ins.export.start()
-		return m, startExportStream(m.client, target.GetName(), outputPath, false)
+		return m, m.exportTask(target.GetName(), outputPath, false, screenInstances)
 
 	case instancesPromptImport:
 		bundlePath := ins.promptForm.Value("Bundle path")
 		if bundlePath == "" {
 			return m, nil
 		}
-		ins.imp.start()
-		return m, startImportStream(m.client, bundlePath, ins.promptForm.Value("Rename (optional)"))
+		return m, m.importTask(bundlePath, ins.promptForm.Value("Rename (optional)"), screenInstances)
 
 	case instancesPromptAddPort:
 		hostPort, err := strconv.Atoi(ins.promptForm.Value("Host port"))
@@ -807,15 +735,15 @@ func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if ins.promptForm.Bool("UDP") {
 			protocol = "udp"
 		}
-		return m, addPort(m.client, target.GetName(), hostPort, guestPort, protocol)
+		return m, m.track(fmt.Sprintf("forwarding port %d to %s", hostPort, target.GetName()), screenInstances,
+			addPort(m.client, target.GetName(), hostPort, guestPort, protocol))
 
 	case instancesPromptFork:
 		newName := ins.promptForm.Value("New name")
 		if newName == "" {
 			return m, nil
 		}
-		ins.fork.start()
-		return m, startForkStream(m.client, target.GetName(), newName, ins.promptForm.Bool("Start immediately"))
+		return m, m.forkTask(target.GetName(), newName, ins.promptForm.Bool("Start immediately"))
 
 	case instancesPromptRemovePort:
 		hostPort, err := strconv.Atoi(ins.promptForm.Value("Host port"))
@@ -827,7 +755,8 @@ func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if ins.promptForm.Bool("UDP") {
 			protocol = "udp"
 		}
-		return m, removePort(m.client, target.GetName(), hostPort, protocol)
+		return m, m.track(fmt.Sprintf("removing port %d of %s", hostPort, target.GetName()), screenInstances,
+			removePort(m.client, target.GetName(), hostPort, protocol))
 	}
 	return m, nil
 }
@@ -836,25 +765,32 @@ func (m model) selectedInstance() *anvilv1.Instance {
 	return m.instances.selected()
 }
 
-func (m instancesModel) View() string {
-	if m.export.active() {
-		return m.export.view("Exporting…")
+// waitTask waits in the background for name's first-boot setup, following its console.
+// Cancelling it only stops the waiting, the instance keeps running.
+func (m *model) waitTask(name string) tea.Cmd {
+	t, cmd := m.streamTask("waiting for "+name+" to be ready", name+" is ready", screenInstances, func(ctx context.Context, id int) tea.Cmd {
+		return startWaitStream(ctx, m.client, id, name)
+	})
+	t.instance, t.cancelNote = name, "Only the waiting stops, the instance keeps running."
+	return tea.Batch(cmd, m.followTaskLog(t))
+}
+
+// deleteTask deletes names in the background. With one instance, its console is followed
+// from its last lines until it is gone.
+func (m *model) deleteTask(names []string, purge bool) tea.Cmd {
+	cmd := m.track("deleting "+strings.Join(names, ", "), screenInstances, deleteInstances(m.client, names, purge))
+	if len(names) != 1 {
+		return cmd
 	}
-	if m.imp.active() {
-		return m.imp.view("Importing…")
-	}
-	if m.waiting || len(m.waitLines) > 0 {
-		s := styleTitle.Render(" Waiting for first-boot setup… ") + "\n\n" + progressView(m.waitLines, m.waiting, m.waitSince)
-		if m.waiting {
-			s += "\n" + helpBar("esc", "stop waiting")
-		} else {
-			s += "\n" + helpBar("esc", "dismiss")
-		}
-		return s
-	}
-	if m.fork.active() {
-		return m.fork.view("Forking…")
-	}
+	t := m.tasks.items[len(m.tasks.items)-1]
+	t.instance, t.logTail = names[0], deleteLogTail
+	return tea.Batch(cmd, m.followTaskLog(t))
+}
+
+func (m instancesModel) View() string { return m.viewWith(tasksModel{}) }
+
+// viewWith is View with the running tasks, shown in the detail panel of their instance.
+func (m instancesModel) viewWith(tasks tasksModel) string {
 	if len(m.confirmDelete) > 0 {
 		return styleBox.BorderForeground(colorWarn).Render(
 			styleWarn.Bold(true).Render("⚠  Delete "+namesSummary(instanceNames(m.confirmDelete))+"?")+"\n\n"+
@@ -870,7 +806,7 @@ func (m instancesModel) View() string {
 		listBody = styleSubtitle.Render("loading instances…")
 	}
 	left := styleBoxFocused.Render(lipgloss.NewStyle().Height(m.panelHeight).Width(m.list.Width()).Render(listBody))
-	right := styleBox.Render(lipgloss.NewStyle().Height(m.panelHeight).Width(m.detailWidth).Render(m.detailView()))
+	right := styleBox.Render(lipgloss.NewStyle().Height(m.panelHeight).Width(m.detailWidth).Render(m.detailView(tasks)))
 
 	help := helpBarWrap(m.contentWidth, instancesHelp...)
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right) + "\n" + help
@@ -899,15 +835,23 @@ func namesSummary(names []string) string {
 var instancesHelp = []string{
 	"n", "launch", "space", "mark", "s", "start/stop", "S", "stop options", "x", "shell", "e", "exec", "t", "transfer", "g", "gui app", "l/L", "logs/tail", "d", "delete",
 	"f", "fork", "u", "settings", "w", "wait cloud-init", "m/M", "mount/umount", "p/P", "add/rm port",
-	"E/i", "export/import", "r", "refresh", "esc", "menu",
+	"E/i", "export/import", "T", "tasks", "r", "refresh", "esc", "menu",
 }
 
 // detailView renders the right-hand panel: detailInfo, then as many of the selected
 // instance's recent events as fit below it, newest first.
-func (m instancesModel) detailView() string {
+func (m instancesModel) detailView(tasks tasksModel) string {
 	info := m.detailInfo()
 	inst := m.selected()
-	if inst == nil || m.eventsFor != inst.GetName() || len(m.events) == 0 {
+	if inst == nil {
+		return info
+	}
+	if t := tasks.forInstance(inst.GetName()); t != nil {
+		// What the running task is doing replaces the events until it ends.
+		room := m.panelHeight - lipgloss.Height(lipgloss.NewStyle().Width(m.detailWidth).Render(info)) - 4
+		return lipgloss.JoinVertical(lipgloss.Left, info, "", t.activityView(m.detailWidth, room))
+	}
+	if m.eventsFor != inst.GetName() || len(m.events) == 0 {
 		return info
 	}
 	room := m.panelHeight - lipgloss.Height(lipgloss.NewStyle().Width(m.detailWidth).Render(info)) - 2

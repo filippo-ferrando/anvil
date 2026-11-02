@@ -206,7 +206,9 @@ Step by step:
    (`internal/instance/events.go`), which publishes an `EventUpdated` to every `Watch`
    subscriber.
 7. **Reply**. Progress travels back as `LaunchProgress` messages, each carrying exactly
-   one of `status`, `instance` or `error`. With `--wait`, the final `instance` message is
+   one of `name`, `status`, `instance` or `error`. `name` comes first, once the name is
+   resolved, so a client can follow the console of a launch it didn't name (the TUI does,
+   retrying until the registry record exists). With `--wait`, the final `instance` message is
    held back until `WaitReady` reports that cloud-init finished (default limit 15
    minutes). The CLI prints the stream with `streamProgress`, redrawing lines in place
    on a terminal.

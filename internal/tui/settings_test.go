@@ -77,7 +77,7 @@ func TestDetailShowsPolicies(t *testing.T) {
 	m := instancesModelWith(&anvilv1.Instance{Name: "web", Kind: anvilv1.Kind_KIND_VM, Autostart: true,
 		RestartPolicy: &anvilv1.RestartPolicy{Mode: "always"},
 		Vm:            &anvilv1.VMSpec{Cpus: 2, MemoryMib: 2048, DiskGib: 20, SnapshotSchedule: &anvilv1.SnapshotSchedule{EverySeconds: 3600, Keep: 4}}})
-	view := m.instances.detailView()
+	view := m.instances.detailView(tasksModel{})
 	for _, want := range []string{"2 vCPU", "2048 MiB", "20 GiB", "autostart", "restart always", "every 1h0m0s, keep 4"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("expected %q in the detail panel:\n%s", want, view)

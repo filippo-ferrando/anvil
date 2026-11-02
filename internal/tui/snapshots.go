@@ -171,7 +171,7 @@ func (m model) updateSnapshotsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "y", "enter":
 			inst, snap := sn.selectedInstance(), sn.confirmRestore
 			sn.confirmRestore = nil
-			return m, restoreSnapshot(m.client, inst.GetName(), snap.GetName())
+			return m, m.track("restoring "+inst.GetName()+" to "+snap.GetName(), screenSnapshots, restoreSnapshot(m.client, inst.GetName(), snap.GetName()))
 		default:
 			sn.confirmRestore = nil
 		}
@@ -182,7 +182,7 @@ func (m model) updateSnapshotsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "y", "enter":
 			inst, snap := sn.selectedInstance(), sn.confirmDelete
 			sn.confirmDelete = nil
-			return m, deleteSnapshot(m.client, inst.GetName(), snap.GetName())
+			return m, m.track("deleting snapshot "+snap.GetName()+" of "+inst.GetName(), screenSnapshots, deleteSnapshot(m.client, inst.GetName(), snap.GetName()))
 		default:
 			sn.confirmDelete = nil
 		}
@@ -209,7 +209,7 @@ func (m model) updateSnapshotsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.setStatus(err.Error(), true)
 				return m, nil
 			}
-			return m, setSnapshotSchedule(m.client, req)
+			return m, m.track("setting the snapshot schedule of "+inst.GetName(), screenSnapshots, setSnapshotSchedule(m.client, req))
 		}
 		name := sn.promptForm.Value("Snapshot name")
 		sn.prompt = snapshotsPromptNone
@@ -220,7 +220,7 @@ func (m model) updateSnapshotsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if inst == nil {
 			return m, nil
 		}
-		return m, createSnapshot(m.client, inst.GetName(), name)
+		return m, m.track("creating snapshot "+name+" of "+inst.GetName(), screenSnapshots, createSnapshot(m.client, inst.GetName(), name))
 	}
 
 	switch msg.String() {

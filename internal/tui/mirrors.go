@@ -108,7 +108,7 @@ func (m model) updateMirrorsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "y", "enter":
 			name := mm.confirmRemove.GetName()
 			mm.confirmRemove = nil
-			return m, removeMirror(m.client, name)
+			return m, m.track("removing mirror "+name, screenMirrors, removeMirror(m.client, name))
 		default:
 			mm.confirmRemove = nil
 			return m, nil
@@ -143,7 +143,7 @@ func (m model) updateMirrorsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			mm.adding = false
-			return m, addMirror(m.client, mirror)
+			return m, m.track("adding mirror "+mirror.GetName(), screenMirrors, addMirror(m.client, mirror))
 		}
 		return m, nil
 	}
@@ -162,7 +162,7 @@ func (m model) updateMirrorsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, loadMirrors(m.client)
 	case "e":
 		if mi := m.selectedMirror(); mi != nil {
-			return m, setMirrorEnabled(m.client, mi.GetName(), !mi.GetEnabled())
+			return m, m.track("updating mirror "+mi.GetName(), screenMirrors, setMirrorEnabled(m.client, mi.GetName(), !mi.GetEnabled()))
 		}
 		return m, nil
 	case "x":

@@ -256,7 +256,7 @@ func (m model) updateImagesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "y", "enter", "f":
 			img := im.confirmDelete
 			im.confirmDelete = nil
-			return m, deleteCachedImage(m.client, img.GetId(), img.GetArch(), img.GetKind(), k == "f")
+			return m, m.track("deleting image "+img.GetId(), screenImages, deleteCachedImage(m.client, img.GetId(), img.GetArch(), img.GetKind(), k == "f"))
 		default:
 			im.confirmDelete = nil
 			return m, nil
@@ -267,7 +267,7 @@ func (m model) updateImagesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "y", "enter", "f":
 			img := im.confirmDeleteContainer
 			im.confirmDeleteContainer = nil
-			return m, deleteContainerImage(m.client, img.GetId(), img.GetEngine(), k == "f")
+			return m, m.track("deleting container image "+format.ShortImageID(img.GetId()), screenImages, deleteContainerImage(m.client, img.GetId(), img.GetEngine(), k == "f"))
 		default:
 			im.confirmDeleteContainer = nil
 			return m, nil

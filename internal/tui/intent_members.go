@@ -19,9 +19,6 @@ const (
 	containerMembersField = "Container members"
 )
 
-// intentMembersStreamMsg carries events off an IntentService.AddMembers stream.
-type intentMembersStreamMsg struct{ lineStep }
-
 // newIntentMembersForm is the form behind `anvil intent create` (create) or `anvil intent add`.
 func newIntentMembersForm(create bool, intentName string) simpleForm {
 	hypervisor := textField(hypervisorField, "qemu or firecracker, for the VM members", "qemu")
@@ -70,18 +67,25 @@ func newIntentMembersRequest(form simpleForm, create bool, intentName string) (*
 	return client.NewAddMembersRequest(intentName, create, members, hv)
 }
 
-func startIntentMembersStream(c *client.Client, req *anvilv1.IntentAddMembersRequest) tea.Cmd {
-	return func() tea.Msg {
-		stream, err := c.Intent.AddMembers(context.Background(), req)
-		if err != nil {
-			return intentMembersStreamMsg{failed[struct{}](err)}
-		}
-		return recvIntentMembers(stream)()
+// intentMembersTask launches req's members in the background. A failure still reloads
+// the intents, since members launched before it are kept.
+func (m *model) intentMembersTask(req *anvilv1.IntentAddMembersRequest) tea.Cmd {
+	c, what := m.client, req.GetName()
+	title, done := "adding members to "+what, "added members to "+what
+	if req.GetCreate() {
+		title, done = "creating intent "+what, "created intent "+what
 	}
-}
-
-func recvIntentMembers(stream anvilv1.IntentService_AddMembersClient) tea.Cmd {
-	return recvStream(stream.Recv, parseIntentMembersProgress, func(s lineStep) tea.Msg { return intentMembersStreamMsg{s} })
+	_, cmd := m.streamTask(title, done, screenIntents, func(ctx context.Context, id int) tea.Cmd {
+		wrap := lineTaskStep(id)
+		return func() tea.Msg {
+			stream, err := c.Intent.AddMembers(ctx, req)
+			if err != nil {
+				return wrap(failed[struct{}](err))
+			}
+			return recvStream(stream.Recv, parseIntentMembersProgress, wrap)()
+		}
+	})
+	return cmd
 }
 
 // parseIntentMembersProgress turns one AddMembers event into a line, prefixed with "[role]"

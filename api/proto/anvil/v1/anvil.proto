@@ -421,6 +421,7 @@ message LaunchProgress {
     int32 percent = 2;   // 0-100 for the current phase, when known
     Instance instance = 3; // final event on success
     string error = 4;
+    string name = 5;     // the instance's name, sent once it is known, before provisioning
   }
 }
 

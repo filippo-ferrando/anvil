@@ -378,9 +378,9 @@ func (m model) updateCIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if ci.tab == ciWatches {
-			return m, removeWatch(m.client, name)
+			return m, m.track("removing watch "+name, screenCI, removeWatch(m.client, name))
 		}
-		return m, removeRunner(m.client, name)
+		return m, m.track("removing runner "+name, screenCI, removeRunner(m.client, name))
 	case ci.form != nil:
 		return m.updateCIForm(msg)
 	case ci.detail != nil:
@@ -421,14 +421,14 @@ func (m model) updateCIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "p":
 		switch it := l.SelectedItem().(type) {
 		case runnerItem:
-			return m, pauseRunner(m.client, it.r.GetName(), !it.r.GetPaused())
+			return m, m.track(pauseTitle(!it.r.GetPaused(), "runner "+it.r.GetName()), screenCI, pauseRunner(m.client, it.r.GetName(), !it.r.GetPaused()))
 		case watchItem:
-			return m, pauseWatch(m.client, it.w.GetName(), !it.w.GetPaused())
+			return m, m.track(pauseTitle(!it.w.GetPaused(), "watch "+it.w.GetName()), screenCI, pauseWatch(m.client, it.w.GetName(), !it.w.GetPaused()))
 		}
 		return m, nil
 	case "t":
 		if it, ok := l.SelectedItem().(watchItem); ok {
-			return m, triggerWatch(m.client, it.w.GetName())
+			return m, m.track("triggering watch "+it.w.GetName(), screenCI, triggerWatch(m.client, it.w.GetName()))
 		}
 		return m, nil
 	case "x":
@@ -439,7 +439,7 @@ func (m model) updateCIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			ci.confirm = it.w.GetName()
 		case pipelineRunItem:
 			if it.r.GetState() == "running" {
-				return m, cancelPipelineRun(m.client, it.r.GetId())
+				return m, m.track("cancelling run "+it.r.GetId(), screenCI, cancelPipelineRun(m.client, it.r.GetId()))
 			}
 		}
 		return m, nil
@@ -468,7 +468,7 @@ func (m model) updateCIDetailKey(key string) (tea.Model, tea.Cmd) {
 	case "r":
 		return m, loadCI(m.client)
 	case "x":
-		return m, cancelPipelineRun(m.client, r.GetId())
+		return m, m.track("cancelling run "+r.GetId(), screenCI, cancelPipelineRun(m.client, r.GetId()))
 	default:
 		var job *anvilv1.PipelineJob
 		if ci.jobCursor < len(r.GetJobs()) {
@@ -538,14 +538,14 @@ func (m model) updateCIForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return fail(err)
 		}
 		ci.form = nil
-		return m, addRunner(m.client, req)
+		return m, m.track("adding runner "+req.GetRunner().GetName(), screenCI, addRunner(m.client, req))
 	case "watch":
 		w, err := buildWatch(form)
 		if err != nil {
 			return fail(err)
 		}
 		ci.form = nil
-		return m, addWatch(m.client, w)
+		return m, m.track("adding watch "+w.GetName(), screenCI, addWatch(m.client, w))
 	case "artifacts":
 		dir := strings.TrimSpace(form.Value("Directory"))
 		if dir == "" {
@@ -929,4 +929,12 @@ func (c ciModel) detailView() string {
 	}
 	b.WriteString("\n" + helpBarWrap(c.width, "↑↓", "job", "l", "job logs", "L", "all logs", "R", "rerun", "d", "files", "x", "cancel", "r", "refresh", "esc", "back"))
 	return b.String()
+}
+
+// pauseTitle is the task title of pausing (or resuming) what.
+func pauseTitle(pause bool, what string) string {
+	if pause {
+		return "pausing " + what
+	}
+	return "resuming " + what
 }

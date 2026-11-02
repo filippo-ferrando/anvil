@@ -16,8 +16,8 @@ func TestLaunchFieldsGuestToggles(t *testing.T) {
 	if !vm.Bool(guestAgentField) {
 		t.Error("expected the guest agent toggle to default to on")
 	}
-	if vm.Bool(waitField) {
-		t.Error("expected the wait toggle to default to off")
+	if !vm.Bool(waitField) {
+		t.Error("expected the wait toggle to default to on: the launch runs in the background")
 	}
 	if got := vm.Value(hypervisorField); got != "qemu" {
 		t.Errorf("hypervisor defaults to %q, want qemu", got)
@@ -35,8 +35,8 @@ func TestLaunchFieldsGuestToggles(t *testing.T) {
 			t.Errorf("expected no %q field for a container", f.Label)
 		}
 	}
-	if !container.Bool(startField) || container.Bool(waitField) {
-		t.Error("expected Start on and Wait off for a container too")
+	if !container.Bool(startField) || !container.Bool(waitField) {
+		t.Error("expected Start and Wait on for a container too")
 	}
 }
 
@@ -55,7 +55,7 @@ func TestBuildLaunchRequestContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := req.GetContainer()
-	if req.GetKind() != anvilv1.Kind_KIND_CONTAINER || !req.GetNoStart() || req.GetWaitTimeoutSeconds() != 90 {
+	if req.GetKind() != anvilv1.Kind_KIND_CONTAINER || !req.GetNoStart() || req.GetWait() || req.GetWaitTimeoutSeconds() != 90 {
 		t.Errorf("unexpected request %+v", req)
 	}
 	if strings.Join(c.GetEntrypoint(), "|") != "/bin/sh" || strings.Join(c.GetCmd(), "|") != "-c|'sleep|1'" {
@@ -65,10 +65,6 @@ func TestBuildLaunchRequestContainer(t *testing.T) {
 		t.Error("expected no VM spec for a container")
 	}
 
-	toggle(&m.form, waitField)
-	if _, err := buildLaunchRequest(m); err == nil {
-		t.Error("expected wait without start to fail")
-	}
 	toggle(&m.form, startField)
 	if req, err = buildLaunchRequest(m); err != nil || !req.GetWait() || req.GetNoStart() {
 		t.Errorf("expected a waiting started launch, got %+v, %v", req, err)

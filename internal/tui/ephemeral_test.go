@@ -179,3 +179,31 @@ func TestEphemeralPoolForm(t *testing.T) {
 		t.Error("a negative size was accepted")
 	}
 }
+
+func TestEphemeralAppLaunchTranscript(t *testing.T) {
+	m := model{screen: screenEphemeral, ephemeral: newEphemeralModel()}
+	stopped := false
+	m.ephemeral.launching.start()
+	m.ephemeral.launchID, m.ephemeral.stopWatch = 2, func() { stopped = true }
+	for _, msg := range []appLaunchMsg{
+		{id: 1, line: "from a launch no longer watched"},
+		{id: 2, line: "building the warm snapshot"},
+		{id: 2, line: "app runs in c1, deleted when it exits"},
+		{id: 2, done: true, err: errors.New("lost")},
+	} {
+		next, _ := m.Update(msg)
+		m = next.(model)
+	}
+	l := m.ephemeral.launching
+	if l.running || !stopped {
+		t.Fatalf("running %v, stopped %v after the end", l.running, stopped)
+	}
+	view := strings.Join(l.lines, "\n")
+	if strings.Contains(view, "no longer watched") || !strings.Contains(view, "building the warm snapshot") || !strings.Contains(view, "lost") {
+		t.Fatalf("lines %q", l.lines)
+	}
+	next, _ := m.Update(key("esc"))
+	if next.(model).ephemeral.launching.active() {
+		t.Fatal("esc doesn't dismiss a finished launch")
+	}
+}

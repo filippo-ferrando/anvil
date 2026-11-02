@@ -45,6 +45,7 @@ const (
 	screenGUIApps
 	screenEphemeral
 	screenCI
+	screenTasks
 	screenLaunch // full-screen takeover reached via Instances' "n"
 	screenLogs   // full-screen takeover reached via Instances' "l"
 )
@@ -54,7 +55,7 @@ var screenOrder = []screen{
 	screenInstances, screenEphemeral, screenSnapshots,
 	screenIntents, screenManifests, screenCI, screenGUIApps,
 	screenImages, screenCloudInit, screenMirrors,
-	screenMigration, screenDevices, screenEvents,
+	screenMigration, screenDevices, screenEvents, screenTasks,
 }
 
 // screenGroups heads the sidebar's sections, keyed by the screen each one starts at.
@@ -66,7 +67,7 @@ var screenGroups = map[screen]string{
 }
 
 // screenKeys are the jump keys of the sidebar entries, in screenOrder's order.
-const screenKeys = "1234567890abc"
+const screenKeys = "1234567890abcd"
 
 var screenLabels = map[screen]string{
 	screenInstances: "Instances",
@@ -82,6 +83,7 @@ var screenLabels = map[screen]string{
 	screenGUIApps:   "GUI Apps",
 	screenEphemeral: "Ephemeral",
 	screenCI:        "CI",
+	screenTasks:     "Tasks",
 }
 
 const (
@@ -124,6 +126,9 @@ type model struct {
 	guiApps   guiAppsModel
 	ephemeral ephemeralModel
 	ci        ciModel
+	tasks     tasksModel
+
+	quitAsked time.Time // when q was pressed with tasks running; a second press quits
 
 	watchReloadPending bool // a reload triggered by a Watch event is already scheduled
 	watchFullReload    bool // a pending Watch event couldn't be patched into the Instances list
@@ -263,6 +268,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mirrors.list.SetSize(contentWidth-2, h)
 		m.ephemeral.setSize(contentWidth, h)
 		m.ci.setSize(contentWidth-2, h-1)
+		m.tasks.setSize(contentWidth-2, h)
 		m.events.list.SetSize(contentWidth-2, h-1) // -1: the help bar under the list
 		m.devices.list.SetSize(contentWidth-2, h-1)
 		m.guiApps.list.SetSize(contentWidth-2, h-1)
@@ -282,7 +288,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
-			return m, tea.Quit
+			return m.quit()
 		}
 		// alt+<jump key> jumps to a screen from anywhere except the full-screen takeovers.
 		if k := msg.String(); m.screen != screenLaunch && m.screen != screenLogs && strings.HasPrefix(k, "alt+") {
@@ -297,7 +303,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Replies to long-running requests go to the screen that made them, even after the user moved on.
 	switch msg.(type) {
-	case waitStreamMsg, statsStreamMsg, instanceEventsLoadedMsg, selectionSettledMsg:
+	case statsStreamMsg, instanceEventsLoadedMsg, selectionSettledMsg:
 		return m.updateInstances(msg)
 	case snapshotsSettledMsg:
 		return m.updateSnapshots(msg)
@@ -310,14 +316,18 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateManifests(msg)
 		}
 		return m.updateIntents(msg)
-	case intentMembersStreamMsg:
-		return m.updateIntents(msg)
 	case manifestSavedMsg, manifestContentLoadedMsg:
 		return m.updateManifests(msg)
 	case warmLoadedMsg, clonesLoadedMsg, warmBuildMsg, runEventMsg:
 		return m.updateEphemeral(msg) // streams keep going while another screen shows
 	case ciLoadedMsg, pipelineEventMsg, ciLogsMsg:
 		return m.updateCI(msg)
+	case hostTestedMsg, hostsDiscoveredMsg:
+		return m.updateMigration(msg)
+	case cloudInitImportStreamMsg, cloudInitSavedMsg:
+		return m.updateCloudInit(msg)
+	case taskDoneMsg, taskStepMsg, taskLogMsg, taskLogRetryMsg, taskLogRenderMsg:
+		return m.updateTasks(msg) // tasks run on whatever screen shows
 	}
 
 	// Dispatch actionDoneMsg to the screen that originated the action, not necessarily m.screen.
@@ -378,7 +388,23 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateEphemeral(msg)
 	case screenCI:
 		return m.updateCI(msg)
+	case screenTasks:
+		return m.updateTasks(msg)
 	}
+	return m, nil
+}
+
+// quitWindow is how long a first quit with tasks running waits for the second one.
+const quitWindow = 3 * time.Second
+
+// quit leaves the TUI, asking first while tasks run: leaving ends their requests.
+func (m model) quit() (tea.Model, tea.Cmd) {
+	n := len(m.tasks.running())
+	if n == 0 || time.Since(m.quitAsked) < quitWindow {
+		return m, tea.Quit
+	}
+	m.quitAsked = time.Now()
+	m.setStatus(fmt.Sprintf("%d task(s) still running, quitting cancels them (a launch is rolled back): press again to quit", n), true)
 	return m, nil
 }
 
@@ -405,7 +431,7 @@ func (m model) updateSidebar(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "enter", "right", "l":
 		m.sidebarFocused = false
 	case "q":
-		return m, tea.Quit
+		return m.quit()
 	default:
 		if s, ok := screenForDigit(k); ok {
 			return m.jumpTo(s)
@@ -546,6 +572,9 @@ func (m model) headerView() string {
 // statusView renders the transient status line: a colored badge, the message on one line, and a hint for known errors.
 func (m model) statusView() string {
 	if m.status == "" {
+		if strip := m.tasks.stripView(m.width - 1); strip != "" {
+			return "\n" + strip
+		}
 		return ""
 	}
 	badge := lipgloss.NewStyle().Bold(true).Foreground(colorDark).Padding(0, 1)
@@ -564,6 +593,8 @@ func (m model) statusView() string {
 	s := "\n" + b + " " + style.Render(msg)
 	if hint != "" {
 		s += "\n" + strings.Repeat(" ", lipgloss.Width(b)+1) + styleSubtitle.Render("hint: "+hint)
+	} else if strip := m.tasks.stripView(m.width - 1); strip != "" {
+		s += "\n" + strip // the status line doesn't hide what is still running
 	}
 	return s
 }
@@ -571,7 +602,7 @@ func (m model) statusView() string {
 func (m model) screenView() string {
 	switch m.screen {
 	case screenInstances:
-		return m.instances.View()
+		return m.instances.viewWith(m.tasks)
 	case screenSnapshots:
 		return m.snapshots.View()
 	case screenImages:
@@ -588,6 +619,8 @@ func (m model) screenView() string {
 		return m.ephemeral.View(m.width-sidebarWidth-sidebarGutter, contentHeight(m.height))
 	case screenCI:
 		return m.ci.View()
+	case screenTasks:
+		return m.tasks.View()
 	case screenMigration:
 		return m.migration.View()
 	case screenEvents:
@@ -614,6 +647,9 @@ func (m model) sidebarView() string {
 			lines = append(lines, styleSubtitle.Render(" "+g))
 		}
 		label := screenDigit(i) + " " + screenLabels[s]
+		if n := len(m.tasks.running()); s == screenTasks && n > 0 {
+			label += fmt.Sprintf(" ⟳%d", n)
+		}
 		switch {
 		case s == m.screen && m.sidebarFocused:
 			lines = append(lines, styleMenuItemSelected.Render("▸ "+label))
@@ -625,7 +661,7 @@ func (m model) sidebarView() string {
 	}
 	var keys []string
 	if m.sidebarFocused {
-		keys = helpItems("↑↓", "move", "1-9 0 a-c", "jump", "enter", "open", "q", "quit")
+		keys = helpItems("↑↓", "move", "1-9 0 a-d", "jump", "enter", "open", "q", "quit")
 	} else {
 		keys = helpItems("esc", "menu", "alt+key", "jump")
 	}

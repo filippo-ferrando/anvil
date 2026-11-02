@@ -115,24 +115,12 @@ type hostTestedMsg struct {
 	err           error
 }
 
-// launchStreamMsg carries one event off the Launch streaming RPC.
-type launchStreamMsg struct{ instanceStep }
-
-// forkStreamMsg carries one event off the Fork streaming RPC.
-type forkStreamMsg struct{ instanceStep }
-
-// waitStreamMsg carries one event off the WaitReady streaming RPC.
-type waitStreamMsg struct{ instanceStep }
-
 // imageChecksumMsg is the reply to a checksum request for one cached VM image.
 type imageChecksumMsg struct {
 	id, arch string
 	sum      string
 	err      error
 }
-
-// migrateStreamMsg carries one event off a MigrateService.Migrate stream.
-type migrateStreamMsg struct{ lineStep }
 
 // snapshotsLoadedMsg carries one instance's snapshot list back from a
 // SnapshotService.List call. instanceName lets the handler ignore a stale reply after the user selects a different instance.
@@ -141,13 +129,6 @@ type snapshotsLoadedMsg struct {
 	snapshots    []*anvilv1.SnapshotInfo
 	err          error
 }
-
-// exportStreamMsg carries one event off an ExportService.Export stream,
-// shared by the Instances and Intents screens, whichever started it.
-type exportStreamMsg struct{ lineStep }
-
-// importStreamMsg carries one event off an ExportService.Import stream.
-type importStreamMsg struct{ lineStep }
 
 // logsStreamMsg carries one chunk off an InstanceService.Logs stream.
 type logsStreamMsg struct{ streamStep[[]byte] }
@@ -363,46 +344,56 @@ func umountInstance(c *client.Client, name, guestPath string) tea.Cmd {
 	}
 }
 
-// startExportStream begins `anvil export name -o outputPath`. isIntent
-// skips instance resolution and looks name up as an intent only, for a caller (the Intents page) that already knows name is an intent.
-func startExportStream(c *client.Client, name, outputPath string, isIntent bool) tea.Cmd {
-	return func() tea.Msg {
-		absOutput, err := c.HostPath(outputPath)
-		if err != nil {
-			return exportStreamMsg{failed[struct{}](err)}
+// exportTask runs `anvil export name -o outputPath` in the background. isIntent skips
+// instance resolution, for a caller (the Intents page) that knows name is an intent.
+func (m *model) exportTask(name, outputPath string, isIntent bool, origin screen) tea.Cmd {
+	c := m.client
+	_, cmd := m.streamTask("exporting "+name, "exported "+name, origin, func(ctx context.Context, id int) tea.Cmd {
+		wrap := lineTaskStep(id)
+		return func() tea.Msg {
+			absOutput, err := c.HostPath(outputPath)
+			if err != nil {
+				return wrap(failed[struct{}](err))
+			}
+			stream, err := c.Export.Export(ctx, &anvilv1.ExportRequest{Name: name, OutputPath: absOutput, IsIntent: isIntent})
+			if err != nil {
+				return wrap(failed[struct{}](err))
+			}
+			return recvExport(stream, wrap)()
 		}
-		stream, err := c.Export.Export(context.Background(), &anvilv1.ExportRequest{Name: name, OutputPath: absOutput, IsIntent: isIntent})
-		if err != nil {
-			return exportStreamMsg{failed[struct{}](err)}
-		}
-		return recvExport(stream)()
-	}
+	})
+	return cmd
 }
 
-// startImportStream begins `anvil import bundlePath [--name renameTo]` and
-// streams its progress back.
-func startImportStream(c *client.Client, bundlePath, renameTo string) tea.Cmd {
-	return func() tea.Msg {
-		absBundle, err := c.HostPath(bundlePath)
-		if err != nil {
-			return importStreamMsg{failed[struct{}](err)}
+// importTask runs `anvil import bundlePath [--name renameTo]` in the background.
+func (m *model) importTask(bundlePath, renameTo string, origin screen) tea.Cmd {
+	c := m.client
+	_, cmd := m.streamTask("importing "+bundlePath, "imported "+bundlePath, origin, func(ctx context.Context, id int) tea.Cmd {
+		wrap := lineTaskStep(id)
+		return func() tea.Msg {
+			absBundle, err := c.HostPath(bundlePath)
+			if err != nil {
+				return wrap(failed[struct{}](err))
+			}
+			stream, err := c.Export.Import(ctx, &anvilv1.ImportRequest{BundlePath: absBundle, Name: renameTo})
+			if err != nil {
+				return wrap(failed[struct{}](err))
+			}
+			return recvImport(stream, wrap)()
 		}
-		stream, err := c.Export.Import(context.Background(), &anvilv1.ImportRequest{BundlePath: absBundle, Name: renameTo})
-		if err != nil {
-			return importStreamMsg{failed[struct{}](err)}
-		}
-		return recvImport(stream)()
-	}
+	})
+	return cmd
 }
 
-// startWaitStream begins `anvil wait name`; ctx lets the user give up with esc.
-func startWaitStream(ctx context.Context, c *client.Client, name string) tea.Cmd {
+// startWaitStream begins `anvil wait name` for task id; cancelling ctx gives up.
+func startWaitStream(ctx context.Context, c *client.Client, id int, name string) tea.Cmd {
+	wrap := launchTaskStep(id, "ready:")
 	return func() tea.Msg {
 		stream, err := c.WaitReady(ctx, &anvilv1.WaitReadyRequest{Name: name})
 		if err != nil {
-			return waitStreamMsg{failed[*anvilv1.Instance](err)}
+			return wrap(failed[*anvilv1.Instance](err))
 		}
-		return recvWait(stream)()
+		return recvStream(stream.Recv, parseLaunchProgress, wrap)()
 	}
 }
 
@@ -416,16 +407,25 @@ func loadImageChecksum(c *client.Client, id, arch string) tea.Cmd {
 	}
 }
 
-// startForkStream begins `anvil fork sourceName newName [--start]` and
-// streams its progress back.
-func startForkStream(c *client.Client, sourceName, newName string, start bool) tea.Cmd {
-	return func() tea.Msg {
-		stream, err := c.Fork(context.Background(), &anvilv1.ForkRequest{Name: sourceName, NewName: newName, Start: start})
-		if err != nil {
-			return forkStreamMsg{failed[*anvilv1.Instance](err)}
+// forkTask runs `anvil fork sourceName newName [--start]` in the background, following
+// the fork's console once it starts.
+func (m *model) forkTask(sourceName, newName string, start bool) tea.Cmd {
+	c := m.client
+	t, cmd := m.streamTask("forking "+sourceName+" into "+newName, "forked "+newName, screenInstances, func(ctx context.Context, id int) tea.Cmd {
+		wrap := launchTaskStep(id, "forked")
+		return func() tea.Msg {
+			stream, err := c.Fork(ctx, &anvilv1.ForkRequest{Name: sourceName, NewName: newName, Start: start})
+			if err != nil {
+				return wrap(failed[*anvilv1.Instance](err))
+			}
+			return recvStream(stream.Recv, parseLaunchProgress, wrap)()
 		}
-		return recvFork(stream)()
+	})
+	if !start {
+		return cmd
 	}
+	t.instance = newName
+	return tea.Batch(cmd, m.followTaskLog(t))
 }
 
 func addPort(c *client.Client, name string, hostPort, guestPort int, protocol string) tea.Cmd {
@@ -646,7 +646,7 @@ func removeIntentMember(c *client.Client, name, member string) tea.Cmd {
 	}
 }
 
-func recvExport(stream anvilv1.ExportService_ExportClient) tea.Cmd {
+func recvExport(stream anvilv1.ExportService_ExportClient, wrap func(lineStep) tea.Msg) tea.Cmd {
 	return recvStream(stream.Recv, func(ev *anvilv1.ExportProgress) lineStep {
 		switch e := ev.GetEvent().(type) {
 		case *anvilv1.ExportProgress_Status:
@@ -657,10 +657,10 @@ func recvExport(stream anvilv1.ExportService_ExportClient) tea.Cmd {
 			return lineStep{status: styleGood.Render("exported: " + e.Done)}
 		}
 		return lineStep{}
-	}, func(s lineStep) tea.Msg { return exportStreamMsg{s} })
+	}, wrap)
 }
 
-func recvImport(stream anvilv1.ExportService_ImportClient) tea.Cmd {
+func recvImport(stream anvilv1.ExportService_ImportClient, wrap func(lineStep) tea.Msg) tea.Cmd {
 	return recvStream(stream.Recv, func(ev *anvilv1.ImportProgress) lineStep {
 		switch e := ev.GetEvent().(type) {
 		case *anvilv1.ImportProgress_Status:
@@ -681,15 +681,7 @@ func recvImport(stream anvilv1.ExportService_ImportClient) tea.Cmd {
 			return lineStep{status: b.String()}
 		}
 		return lineStep{}
-	}, func(s lineStep) tea.Msg { return importStreamMsg{s} })
-}
-
-func recvWait(stream anvilv1.InstanceService_WaitReadyClient) tea.Cmd {
-	return recvStream(stream.Recv, parseLaunchProgress, func(s instanceStep) tea.Msg { return waitStreamMsg{s} })
-}
-
-func recvFork(stream anvilv1.InstanceService_ForkClient) tea.Cmd {
-	return recvStream(stream.Recv, parseLaunchProgress, func(s instanceStep) tea.Msg { return forkStreamMsg{s} })
+	}, wrap)
 }
 
 func recvCloudInitImport(stream anvilv1.CloudInitService_ImportRepoClient) tea.Cmd {
