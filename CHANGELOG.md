@@ -2,7 +2,7 @@
 
 Built from commit subjects by `scripts/changelog.sh`.
 
-## v1.3.4 (2026-11-02)
+## v1.3.4 (2026-11-03)
 
 ### Features
 
@@ -10,8 +10,13 @@ Built from commit subjects by `scripts/changelog.sh`.
 
 ### Fixes
 
+- NoDisplay entry choosen (7762bc7)
 - race condition on uffd ram allocation (2a3d633)
 - updated local anvil ci (67eca14)
+
+### Other changes
+
+- rebuild docs gifs (5973c1a)
 
 ## v1.3.3 (2026-11-02)
 
