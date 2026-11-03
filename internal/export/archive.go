@@ -34,12 +34,24 @@ func writeTarZst(ctx context.Context, destPath string, build func(tw *tar.Writer
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
 		return fmt.Errorf("export: creating output dir: %w", err)
 	}
-	// O_NOFOLLOW: a symlink swapped in after the caller check must not redirect the write.
-	out, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o640)
+	if info, err := os.Lstat(destPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("export: creating %s: %w", destPath, syscall.ELOOP)
+	}
+	// Written next to destPath and renamed on success, so a failed export keeps an older bundle.
+	out, err := os.CreateTemp(filepath.Dir(destPath), "."+filepath.Base(destPath)+".tmp-*")
 	if err != nil {
 		return fmt.Errorf("export: creating %s: %w", destPath, err)
 	}
-	defer out.Close()
+	tmpPath := out.Name()
+	defer func() {
+		if out != nil {
+			out.Close()
+			os.Remove(tmpPath)
+		}
+	}()
+	if err := out.Chmod(0o640); err != nil {
+		return fmt.Errorf("export: creating %s: %w", destPath, err)
+	}
 
 	pr, pw := io.Pipe()
 	cmd := exec.CommandContext(ctx, zstdPath, "-q", "-c", "-T0") // every core; the output is the same format
@@ -69,7 +81,22 @@ func writeTarZst(ctx context.Context, destPath string, build func(tw *tar.Writer
 	if runErr != nil {
 		return fmt.Errorf("export: compressing bundle: %w", runErr)
 	}
-	return tarErr
+	if tarErr != nil {
+		return tarErr
+	}
+	if err := out.Sync(); err != nil {
+		return fmt.Errorf("export: writing %s: %w", destPath, err)
+	}
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("export: writing %s: %w", destPath, err)
+	}
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		os.Remove(tmpPath)
+		out = nil
+		return fmt.Errorf("export: moving the bundle to %s: %w", destPath, err)
+	}
+	out = nil
+	return nil
 }
 
 // extractTarZst decompresses and unpacks bundlePath into destDir.

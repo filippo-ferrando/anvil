@@ -4,6 +4,7 @@ package intent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/netip"
@@ -28,6 +29,15 @@ type Store interface {
 	ListIntents() ([]store.Intent, error)
 	DeleteIntentByID(id string) error
 }
+
+// LabelEditor is an optional Store capability: Remove uses it to strip
+// the intent and role labels off an instance leaving its intent.
+type LabelEditor interface {
+	UpdateInstance(id string, fn func(*instance.Spec) error) error
+}
+
+// ErrLaunchInFlight is returned by Delete while a member of the intent is still launching.
+var ErrLaunchInFlight = errors.New("intent: a member launch is still running")
 
 // Instances is the subset of *instance.Manager's methods Manager needs.
 type Instances interface {
@@ -210,10 +220,27 @@ func (m *Manager) networkUsers(n *store.IntentNetwork) []string {
 	return users
 }
 
+// attachedVMIPs returns the static addresses of VMs on n's bridge, members or not
+// (an ungrouped VM keeps its address). A listing error is logged and gives none.
+func (m *Manager) attachedVMIPs(n *store.IntentNetwork) []string {
+	specs, err := m.Instances.List("")
+	if err != nil {
+		log.Printf("intent: listing instances on %q: %v", n.EngineNetworkName, err)
+		return nil
+	}
+	var ips []string
+	for _, spec := range specs {
+		if spec.VM != nil && spec.VM.BridgeInterface == n.BridgeInterface && spec.VM.StaticIP != "" {
+			ips = append(ips, ipam.StripCIDR(spec.VM.StaticIP))
+		}
+	}
+	return ips
+}
+
 // nextVMAddress picks the lowest free static address in subnet's reserved
-// low range, skipping addresses already used by members.
-func nextVMAddress(subnet string, members []store.IntentMember) (string, error) {
-	ips := make([]string, 0, len(members))
+// low range, skipping addresses used by members and the extra ones.
+func nextVMAddress(subnet string, members []store.IntentMember, extra []string) (string, error) {
+	ips := slices.Clone(extra)
 	for _, mem := range members {
 		if mem.Kind == instance.KindVM && mem.IP != "" {
 			ips = append(ips, mem.IP)
@@ -302,18 +329,50 @@ func (m *Manager) Launch(ctx context.Context, params instance.LaunchParams, prog
 
 	release := m.lock(it.Name)
 	// Other members may have been saved meanwhile: add to the latest record.
-	if saved, err := m.Store.GetIntentByName(it.Name); err == nil {
+	saved, getErr := m.Store.GetIntentByName(it.Name)
+	switch {
+	case getErr == nil:
 		it.Members = saved.Members
+	case m.wasSaved(it.Name):
+		// Deleted meanwhile: saving now would bring the intent back.
+		err = fmt.Errorf("intent: %q was deleted while %s was launching", it.Name, launched.Name)
 	}
-	it.Members = append(it.Members, store.IntentMember{InstanceID: launched.ID, Role: role, Kind: launched.Kind, IP: memberIP})
-	err = m.Store.PutIntent(it)
-	persisted = err == nil
+	if err == nil {
+		it.Members = append(it.Members, store.IntentMember{InstanceID: launched.ID, Role: role, Kind: launched.Kind, IP: memberIP})
+		if err = m.Store.PutIntent(it); err == nil {
+			persisted = true
+			m.markSaved(it.Name)
+		}
+	}
 	release()
 	if err != nil {
+		// Not recorded as a member: delete it, so its network can go too.
+		m.deleteLaunched(ctx, launched.Name)
 		return err
 	}
 	m.refreshDNS(ctx)
 	return nil
+}
+
+// deleteLaunched removes an instance a member launch made but couldn't record.
+func (m *Manager) deleteLaunched(ctx context.Context, name string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer cancel()
+	if err := m.Instances.Delete(ctx, []string{name}); err != nil {
+		log.Printf("intent: deleting unrecorded member %s: %v", name, err)
+	}
+}
+
+// wasSaved reports whether name's intent existed in the store during its current launches.
+func (m *Manager) wasSaved(name string) bool {
+	fl := m.inflightOf(name)
+	return fl != nil && fl.saved
+}
+
+func (m *Manager) markSaved(name string) {
+	if fl := m.inflightOf(name); fl != nil {
+		fl.saved = true
+	}
 }
 
 // inflight is an intent with member launches still running: the intent as they see it
@@ -322,6 +381,7 @@ type inflight struct {
 	it          store.Intent
 	launches    []store.IntentMember
 	madeNetwork bool // created for these launches and not saved with a member yet
+	saved       bool // the intent was in the store at some point during these launches
 }
 
 // beginLaunch checks role is free, makes sure the intent's network exists, picks a VM's
@@ -331,8 +391,9 @@ func (m *Manager) beginLaunch(ctx context.Context, params instance.LaunchParams,
 
 	fl := m.inflightOf(params.IntentName)
 	it, err := m.Store.GetIntentByName(params.IntentName)
+	inStore := err == nil
 	switch {
-	case err == nil:
+	case inStore:
 	case fl != nil:
 		it = fl.it // not saved yet: the ID and network the running launches use
 	default:
@@ -362,6 +423,7 @@ func (m *Manager) beginLaunch(ctx context.Context, params instance.LaunchParams,
 		m.inflightMu.Unlock()
 	}
 	fl.it = it
+	fl.saved = fl.saved || inStore
 	fl.madeNetwork = fl.madeNetwork || (!hadNetwork && it.Network != nil && m.Networker != nil)
 
 	labels := make(map[string]string, len(params.Labels)+2)
@@ -391,7 +453,7 @@ func (m *Manager) beginLaunch(ctx context.Context, params instance.LaunchParams,
 			ip := params.PinnedStaticIP
 			if ip == "" {
 				// Addresses held by launches still running count as used.
-				ip, err = nextVMAddress(it.Network.Subnet, slices.Concat(it.Members, running))
+				ip, err = nextVMAddress(it.Network.Subnet, slices.Concat(it.Members, running), m.attachedVMIPs(it.Network))
 				if err != nil {
 					m.dropIfIdle(ctx, it.Name)
 					return params, it, err
@@ -453,6 +515,10 @@ func (m *Manager) dropIfIdle(ctx context.Context, name string) {
 	if _, err := m.Store.GetIntentByName(name); err == nil {
 		return // saved since, with the network
 	}
+	if users := m.networkUsers(fl.it.Network); len(users) > 0 {
+		log.Printf("intent: keeping %q's network, still used by %s", name, strings.Join(users, ", "))
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 	defer cancel()
 	if err := m.Networker.RemoveNetwork(ctx, fl.it.Network.EngineNetworkName); err != nil {
@@ -479,21 +545,23 @@ func (m *Manager) Remove(ctx context.Context, name, member string) (store.Intent
 	}
 
 	kept := it.Members[:0]
-	found := false
+	var removed *store.IntentMember
 	for _, mem := range it.Members {
 		if mem.InstanceID == member || mem.Role == member {
-			found = true
+			removed = &mem
 			continue
 		}
 		kept = append(kept, mem)
 	}
-	if !found {
+	if removed == nil {
 		return store.Intent{}, fmt.Errorf("intent: %q has no member %q", name, member)
 	}
 	it.Members = kept
 
 	if len(it.Members) == 0 && m.Networker != nil && it.Network != nil {
-		if users := m.networkUsers(it.Network); len(users) > 0 {
+		if m.inflightOf(name) != nil {
+			log.Printf("intent: keeping now-empty %q's network, a member is still launching on it", name)
+		} else if users := m.networkUsers(it.Network); len(users) > 0 {
 			// Kept on the record, so it's removed once they're gone and the intent is deleted.
 			log.Printf("intent: keeping now-empty %q's network, still used by %s", name, strings.Join(users, ", "))
 		} else if err := m.Networker.RemoveNetwork(ctx, it.Network.EngineNetworkName); err != nil {
@@ -508,8 +576,28 @@ func (m *Manager) Remove(ctx context.Context, name, member string) (store.Intent
 	if err := m.Store.PutIntent(it); err != nil {
 		return store.Intent{}, err
 	}
+	m.stripLabels(removed.InstanceID, name)
 	m.refreshDNS(ctx)
 	return it, nil
+}
+
+// stripLabels drops the intent and role labels from an instance that left intent name,
+// so it is handled as a standalone instance (e.g. by migrate and export).
+func (m *Manager) stripLabels(id, name string) {
+	le, ok := m.Store.(LabelEditor)
+	if !ok {
+		return
+	}
+	err := le.UpdateInstance(id, func(s *instance.Spec) error {
+		if s.Labels[instance.IntentLabel] == name {
+			delete(s.Labels, instance.IntentLabel)
+			delete(s.Labels, instance.RoleLabel)
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, instance.ErrNotFound) {
+		log.Printf("intent: clearing %s's intent labels: %v", id, err)
+	}
 }
 
 // Delete removes the intent record and its shared network (best-effort).
@@ -517,6 +605,9 @@ func (m *Manager) Remove(ctx context.Context, name, member string) (store.Intent
 func (m *Manager) Delete(ctx context.Context, name string, purgeMembers bool) (store.Intent, error) {
 	defer m.lock(name)()
 
+	if m.inflightOf(name) != nil {
+		return store.Intent{}, fmt.Errorf("%w on %q, delete it once the launch ends", ErrLaunchInFlight, name)
+	}
 	it, err := m.Store.GetIntentByName(name)
 	if err != nil {
 		return store.Intent{}, err

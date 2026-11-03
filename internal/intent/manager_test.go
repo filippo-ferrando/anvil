@@ -8,13 +8,15 @@ import (
 	"time"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
+	"git.fferrando.cc/rdfilippo/anvil/internal/intent/ipam"
 	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 )
 
 // fakeStore is a minimal in-memory Store for testing Manager without bbolt.
 type fakeStore struct {
-	mu   sync.Mutex
-	byID map[string]store.Intent
+	mu      sync.Mutex
+	byID    map[string]store.Intent
+	failPut bool
 }
 
 func newFakeStore() *fakeStore { return &fakeStore{byID: map[string]store.Intent{}} }
@@ -22,6 +24,9 @@ func newFakeStore() *fakeStore { return &fakeStore{byID: map[string]store.Intent
 func (s *fakeStore) PutIntent(it store.Intent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failPut {
+		return errors.New("simulated store failure")
+	}
 	s.byID[it.ID] = it
 	return nil
 }
@@ -62,8 +67,10 @@ func (s *fakeStore) DeleteIntentByID(id string) error {
 
 // fakeInstances is a minimal Instances fake; Launch fails unless launch is set.
 type fakeInstances struct {
-	specs  map[string]*instance.Spec
-	launch func(params instance.LaunchParams, progress func(instance.LaunchEvent)) error
+	specs   map[string]*instance.Spec
+	launch  func(params instance.LaunchParams, progress func(instance.LaunchEvent)) error
+	mu      sync.Mutex
+	deleted []string
 }
 
 func (f *fakeInstances) Launch(ctx context.Context, params instance.LaunchParams, progress func(instance.LaunchEvent)) error {
@@ -87,6 +94,9 @@ func (f *fakeInstances) List(instance.Kind) ([]*instance.Spec, error) {
 	return out, nil
 }
 func (f *fakeInstances) Delete(ctx context.Context, names []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleted = append(f.deleted, names...)
 	return nil
 }
 
@@ -493,5 +503,152 @@ func TestLaunchParallelAllFailRemovesNetworkOnce(t *testing.T) {
 	}
 	if its, _ := s.ListIntents(); len(its) != 0 {
 		t.Errorf("intent saved after every launch failed: %+v", its)
+	}
+}
+
+// labelStore adds UpdateInstance to fakeStore, over instance specs.
+type labelStore struct {
+	*fakeStore
+	specs map[string]*instance.Spec
+}
+
+func (s labelStore) UpdateInstance(id string, fn func(*instance.Spec) error) error {
+	spec, ok := s.specs[id]
+	if !ok {
+		return instance.ErrNotFound
+	}
+	return fn(spec)
+}
+
+// An ungrouped VM keeps its address on the bridge, so it must not be handed out again.
+func TestNextVMAddressSkipsExtraAddresses(t *testing.T) {
+	first, err := nextVMAddress("10.0.0.0/24", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := nextVMAddress("10.0.0.0/24", nil, []string{ipam.StripCIDR(first)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ipam.StripCIDR(next) == ipam.StripCIDR(first) {
+		t.Errorf("got %s again, it is still in use", next)
+	}
+}
+
+func TestLaunchSkipsAddressOfUngroupedVM(t *testing.T) {
+	s := newFakeStore()
+	nw := &store.IntentNetwork{EngineNetworkName: "anvil-intent1", BridgeInterface: "anvilintent1", Subnet: "10.0.0.0/24", Gateway: "10.0.0.1"}
+	_ = s.PutIntent(store.Intent{ID: "intent1", Name: "myapp", Network: nw})
+	taken, _ := nextVMAddress(nw.Subnet, nil, nil)
+	var got string
+	insts := &fakeInstances{
+		specs: map[string]*instance.Spec{"old": {ID: "old", Name: "old", VM: &instance.VMSpec{BridgeInterface: "anvilintent1", StaticIP: taken}}},
+		launch: func(p instance.LaunchParams, progress func(instance.LaunchEvent)) error {
+			got = p.VM.StaticIP
+			progress(instance.LaunchEvent{Instance: &instance.Spec{ID: "new", Name: p.Name, Kind: instance.KindVM, VM: p.VM}})
+			return nil
+		},
+	}
+	m := NewManager(s, insts, newFakeNetworker("anvil-intent1"))
+	if err := m.Launch(t.Context(), instance.LaunchParams{Name: "web", IntentName: "myapp", VM: &instance.VMSpec{}}, func(instance.LaunchEvent) {}); err != nil {
+		t.Fatal(err)
+	}
+	if ipam.StripCIDR(got) == ipam.StripCIDR(taken) {
+		t.Errorf("new member got %s, still used by an ungrouped VM", got)
+	}
+}
+
+func TestRemoveStripsIntentLabels(t *testing.T) {
+	specs := map[string]*instance.Spec{
+		"inst1": {ID: "inst1", Name: "web", Labels: map[string]string{"intent": "myapp", "role": "web", "keep": "x"}},
+	}
+	s := labelStore{newFakeStore(), specs}
+	_ = s.PutIntent(store.Intent{ID: "intent1", Name: "myapp", Members: []store.IntentMember{{InstanceID: "inst1", Role: "web"}}})
+	m := NewManager(s, &fakeInstances{}, nil)
+	if _, err := m.Remove(t.Context(), "myapp", "web"); err != nil {
+		t.Fatal(err)
+	}
+	labels := specs["inst1"].Labels
+	if labels["intent"] != "" || labels["role"] != "" || labels["keep"] != "x" {
+		t.Errorf("labels after Remove: %v", labels)
+	}
+}
+
+// blockedLaunch starts a member launch that waits on release, and returns its result channel.
+func blockedLaunch(t *testing.T, m *Manager, insts *fakeInstances, release chan struct{}) chan error {
+	t.Helper()
+	entered := make(chan struct{})
+	insts.launch = func(p instance.LaunchParams, progress func(instance.LaunchEvent)) error {
+		close(entered)
+		<-release
+		progress(instance.LaunchEvent{Instance: &instance.Spec{ID: "id-" + p.Name, Name: p.Name, Kind: instance.KindContainer}})
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- m.Launch(t.Context(), instance.LaunchParams{Name: "web", IntentName: "myapp", Container: &instance.ContainerSpec{ImageRef: "nginx"}}, func(instance.LaunchEvent) {})
+	}()
+	<-entered
+	return done
+}
+
+func TestDeleteRefusedWhileLaunching(t *testing.T) {
+	s := newFakeStore()
+	_ = s.PutIntent(store.Intent{ID: "intent1", Name: "myapp", Members: []store.IntentMember{{InstanceID: "inst1", Role: "db"}}})
+	insts := &fakeInstances{}
+	m := NewManager(s, insts, nil)
+	release := make(chan struct{})
+	done := blockedLaunch(t, m, insts, release)
+	if _, err := m.Delete(t.Context(), "myapp", false); !errors.Is(err, ErrLaunchInFlight) {
+		t.Errorf("Delete during a launch: got %v, want ErrLaunchInFlight", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Delete(t.Context(), "myapp", false); err != nil {
+		t.Errorf("Delete after the launch: %v", err)
+	}
+}
+
+// A record gone during the launch must not be saved back with the new member.
+func TestLaunchDoesNotRecreateDeletedIntent(t *testing.T) {
+	s := newFakeStore()
+	_ = s.PutIntent(store.Intent{ID: "intent1", Name: "myapp", Members: []store.IntentMember{{InstanceID: "inst1", Role: "db"}}})
+	insts := &fakeInstances{}
+	m := NewManager(s, insts, nil)
+	release := make(chan struct{})
+	done := blockedLaunch(t, m, insts, release)
+	_ = s.DeleteIntentByID("intent1")
+	close(release)
+	if err := <-done; err == nil {
+		t.Error("expected the launch to fail once its intent is gone")
+	}
+	if its, _ := s.ListIntents(); len(its) != 0 {
+		t.Errorf("deleted intent came back: %+v", its)
+	}
+	if len(insts.deleted) != 1 || insts.deleted[0] != "web" {
+		t.Errorf("deleted %v, want the launched member", insts.deleted)
+	}
+}
+
+func TestLaunchDeletesInstanceWhenSaveFails(t *testing.T) {
+	s := newFakeStore()
+	s.failPut = true
+	net := newFakeNetworker()
+	insts := &fakeInstances{launch: func(p instance.LaunchParams, progress func(instance.LaunchEvent)) error {
+		progress(instance.LaunchEvent{Instance: &instance.Spec{ID: "id-web", Name: p.Name, Kind: instance.KindContainer}})
+		return nil
+	}}
+	m := NewManager(s, insts, net)
+	err := m.Launch(t.Context(), instance.LaunchParams{Name: "web", IntentName: "myapp", Container: &instance.ContainerSpec{ImageRef: "nginx"}}, func(instance.LaunchEvent) {})
+	if err == nil {
+		t.Fatal("expected the save failure to be returned")
+	}
+	if len(insts.deleted) != 1 || insts.deleted[0] != "web" {
+		t.Errorf("deleted %v, want the unrecorded member", insts.deleted)
+	}
+	if len(net.networks) != 0 {
+		t.Errorf("networks left behind: %v", net.networks)
 	}
 }

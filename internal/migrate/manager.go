@@ -33,6 +33,7 @@ type Store interface {
 // Instances is the subset of *instance.Manager's methods Manager needs.
 type Instances interface {
 	Info(names []string) ([]*instance.Spec, error)
+	Start(ctx context.Context, names []string) error
 	Stop(ctx context.Context, names []string, force bool, timeout time.Duration) error
 	Delete(ctx context.Context, names []string) error
 	// Hold locks names' instances until release; calls made with the returned ctx pass the lock.
@@ -272,11 +273,17 @@ func (m *Manager) migrateInstance(ctx context.Context, t target, spec *instance.
 	// The instance must be stopped before its disk can be safely flattened.
 	progress("stopping source instance")
 	if err := m.Instances.Stop(ctx, []string{spec.Name}, false, 30*time.Second); err != nil {
+		m.restartSources(ctx, []*instance.Spec{spec}, progress)
 		return "", fmt.Errorf("migrate: stopping %q: %w", spec.Name, err)
 	}
 
 	newID, err := m.migrateSpec(ctx, t, spec, destName, nil, caps, progress)
 	if err != nil {
+		if targetMayHave(err) {
+			// The target may have made it before the call failed.
+			rollbackUncertain(ctx, t, []string{destName})
+		}
+		m.restartSources(ctx, []*instance.Spec{spec}, progress)
 		return "", err
 	}
 
@@ -377,8 +384,13 @@ func (m *Manager) migrateIntent(ctx context.Context, t target, it store.Intent, 
 		}
 	}
 
+	specs := make([]*instance.Spec, len(members))
+	for i, mem := range members {
+		specs[i] = mem.spec
+	}
 	progress(fmt.Sprintf("stopping %d source instance(s)", len(names)))
 	if err := m.Instances.Stop(ctx, names, false, 30*time.Second); err != nil {
+		m.restartSources(ctx, specs, progress)
 		return Result{}, fmt.Errorf("migrate: stopping intent %q's members: %w", it.Name, err)
 	}
 
@@ -390,13 +402,17 @@ func (m *Manager) migrateIntent(ctx context.Context, t target, it store.Intent, 
 	}
 	results := preflightFailed
 	var succeeded []succeededMember
-	failed := false
+	var failedSpecs []*instance.Spec
+	var uncertain []string // failed members the target may have made anyway
 	for _, mem := range members {
 		progress(fmt.Sprintf("migrating %q (role %q)", mem.spec.Name, mem.role))
 		im := &intentMigration{name: it.Name, role: mem.role, network: netPayload, staticIP: mem.staticIP}
 		newID, err := m.migrateSpec(ctx, t, mem.spec, mem.spec.Name, im, mem.caps, progress)
 		if err != nil {
-			failed = true
+			failedSpecs = append(failedSpecs, mem.spec)
+			if targetMayHave(err) {
+				uncertain = append(uncertain, mem.spec.Name)
+			}
 			results = append(results, MemberResult{Role: mem.role, Err: err})
 			progress(fmt.Sprintf("member %q failed: %v", mem.role, err))
 			if !p.BestEffort {
@@ -406,6 +422,10 @@ func (m *Manager) migrateIntent(ctx context.Context, t target, it store.Intent, 
 		}
 		results = append(results, MemberResult{Role: mem.role, NewID: newID})
 		succeeded = append(succeeded, succeededMember{name: mem.spec.Name, id: mem.spec.ID, idx: len(results) - 1})
+	}
+	failed := len(failedSpecs) > 0
+	if len(uncertain) > 0 {
+		rollbackUncertain(ctx, t, uncertain)
 	}
 
 	rolledBack := false
@@ -422,6 +442,13 @@ func (m *Manager) migrateIntent(ctx context.Context, t target, it store.Intent, 
 			}
 		}
 		rolledBack = true
+		// Nothing moved: every member stopped for the migration runs again.
+		m.restartSources(ctx, specs, progress)
+	case failed:
+		m.restartSources(ctx, failedSpecs, progress)
+	}
+	switch {
+	case rolledBack:
 	case len(succeeded) > 0 && !p.Copy:
 		progress(fmt.Sprintf("deleting %d migrated source instance(s)", len(succeeded)))
 		// Deleted one at a time so a failure on one member doesn't stop
@@ -444,6 +471,47 @@ func (m *Manager) migrateIntent(ctx context.Context, t target, it store.Intent, 
 	return Result{IntentName: it.Name, Members: results, RolledBack: rolledBack}, nil
 }
 
+// restartSources starts again the specs that were running before the migration stopped them.
+// Best-effort: a failure is reported through progress.
+func (m *Manager) restartSources(ctx context.Context, specs []*instance.Spec, progress func(status string)) {
+	var names []string
+	for _, spec := range specs {
+		if spec.State == instance.StateRunning {
+			names = append(names, spec.Name)
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	progress(fmt.Sprintf("restarting %d source instance(s)", len(names)))
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+	defer cancel()
+	if err := m.Instances.Start(ctx, names); err != nil {
+		progress(fmt.Sprintf("warning: restarting source instance(s): %v", err))
+	}
+}
+
+// targetLaunchError marks a failure of the migrate-import call itself, after which the
+// target may still have made the instance (e.g. the connection dropped once it was up).
+type targetLaunchError struct{ err error }
+
+func (e *targetLaunchError) Error() string { return e.err.Error() }
+func (e *targetLaunchError) Unwrap() error { return e.err }
+
+func targetMayHave(err error) bool {
+	var tl *targetLaunchError
+	return errors.As(err, &tl)
+}
+
+// rollbackUncertain deletes names on t one by one, since some may not exist there.
+func rollbackUncertain(ctx context.Context, t target, names []string) {
+	for _, name := range names {
+		if err := rollbackRemote(ctx, t, []string{name}); err != nil {
+			log.Printf("migrate: removing %q from the target after its failed import: %v", name, err)
+		}
+	}
+}
+
 // reportWarnings sends each preflight warning for name through progress.
 func reportWarnings(name string, warnings []string, progress func(status string)) {
 	for _, w := range warnings {
@@ -462,7 +530,15 @@ type intentMigration struct {
 
 // migrateSpec transfers spec's data and relaunches it on t as destName.
 // im is nil for a standalone migration.
-func (m *Manager) migrateSpec(ctx context.Context, t target, spec *instance.Spec, destName string, im *intentMigration, caps remoteCaps, progress func(status string)) (string, error) {
+func (m *Manager) migrateSpec(ctx context.Context, t target, spec *instance.Spec, destName string, im *intentMigration, caps remoteCaps, progress func(status string)) (_ string, err error) {
+	// Files staged on the target are moved into place by a successful import only.
+	var staged []string
+	defer func() {
+		if err != nil {
+			removeRemote(ctx, t, staged)
+		}
+	}()
+
 	pl := payload.Payload{Name: destName, Kind: string(spec.Kind)}
 	if im != nil {
 		pl.IntentName = im.name
@@ -476,11 +552,11 @@ func (m *Manager) migrateSpec(ctx context.Context, t target, spec *instance.Spec
 		if m.Exporter == nil {
 			return "", fmt.Errorf("migrate: no VM exporter configured")
 		}
-		if err := m.buildVMPayload(ctx, spec, t, caps, &pl, progress); err != nil {
+		if staged, err = m.buildVMPayload(ctx, spec, t, caps, &pl, progress); err != nil {
 			return "", err
 		}
 	case instance.KindContainer:
-		if err := buildContainerPayload(ctx, spec, t, caps, &pl, progress); err != nil {
+		if staged, err = buildContainerPayload(ctx, spec, t, caps, &pl, progress); err != nil {
 			return "", err
 		}
 	default:
@@ -501,12 +577,12 @@ func (m *Manager) migrateSpec(ctx context.Context, t target, spec *instance.Spec
 		progress("target: " + line)
 	}
 	if runErr != nil {
-		return "", fmt.Errorf("migrate: launching on target: %w", runErr)
+		return "", &targetLaunchError{fmt.Errorf("migrate: launching on target: %w", runErr)}
 	}
 
 	newID, importErr := parseMigrateResult(out)
 	if importErr != nil {
-		return "", fmt.Errorf("migrate: target reported failure: %w", importErr)
+		return "", &targetLaunchError{fmt.Errorf("migrate: target reported failure: %w", importErr)}
 	}
 	return newID, nil
 }
@@ -528,58 +604,52 @@ func rollbackRemote(ctx context.Context, t target, names []string) error {
 // buildVMPayload ships spec's disk to t and fills in pl.VM with everything
 // anvil migrate-import needs to relaunch it. If t already caches the same base
 // image, only the delta on top of it is sent; otherwise the disk is flattened.
-func (m *Manager) buildVMPayload(ctx context.Context, spec *instance.Spec, t target, caps remoteCaps, pl *payload.Payload, progress func(status string)) (err error) {
+// staged lists what it put on the target, even on error, for the caller to remove.
+func (m *Manager) buildVMPayload(ctx context.Context, spec *instance.Spec, t target, caps remoteCaps, pl *payload.Payload, progress func(status string)) (staged []string, err error) {
 	stagingDir := config.MigrateStagingDir()
 	if err := os.MkdirAll(stagingDir, 0o750); err != nil {
-		return fmt.Errorf("migrate: creating staging dir: %w", err)
+		return nil, fmt.Errorf("migrate: creating staging dir: %w", err)
 	}
 	localPath := filepath.Join(stagingDir, spec.ID+".qcow2")
 	defer os.Remove(localPath)
-
-	// Nothing uploaded so far is of any use to the target if a later step fails.
-	var staged []string
-	defer func() {
-		if err != nil {
-			removeRemote(ctx, t, staged)
-		}
-	}()
 
 	baseSHA, basePath := m.exportDiskDelta(ctx, spec, t, caps, localPath, progress)
 	if baseSHA == "" {
 		progress("flattening disk")
 		if err := m.Exporter.ExportDisk(ctx, spec, localPath); err != nil {
-			return fmt.Errorf("migrate: exporting disk: %w", err)
+			return nil, fmt.Errorf("migrate: exporting disk: %w", err)
 		}
 	}
 
 	// The exported size is only known now, so re-check it against the target
 	// before spending the upload.
 	if short := caps.spaceShortfall(fileSize(localPath) + fileSize(basePath)); len(short) > 0 {
-		return fmt.Errorf("migrate: not enough room on the target: %s", strings.Join(short, "; "))
+		return nil, fmt.Errorf("migrate: not enough room on the target: %s", strings.Join(short, "; "))
 	}
 
+	// Each path is listed before its upload, so a partial one is removed too.
 	remoteBase := ""
 	if basePath != "" {
 		// Named per instance: two migrations to one target must not share the file.
 		remoteBase = remoteStagingDir + "/anvil-migrate-base-" + baseSHA + "-" + spec.ID + ".qcow2"
 		progress("sending the base image too, the target has no copy of it")
-		if err := uploadDisk(ctx, t, basePath, remoteBase, caps, progress); err != nil {
-			return err
-		}
 		staged = append(staged, remoteBase)
+		if err := uploadDisk(ctx, t, basePath, remoteBase, caps, progress); err != nil {
+			return staged, err
+		}
 	}
 
 	remotePath := remoteStagingDir + "/anvil-migrate-" + spec.ID + ".qcow2"
-	if err := uploadDisk(ctx, t, localPath, remotePath, caps, progress); err != nil {
-		return err
-	}
 	staged = append(staged, remotePath)
+	if err := uploadDisk(ctx, t, localPath, remotePath, caps, progress); err != nil {
+		return staged, err
+	}
 
 	mounts, mountPaths, err := uploadMountData(ctx, t, spec, caps, progress)
-	if err != nil {
-		return err
-	}
 	staged = append(staged, mountPaths...)
+	if err != nil {
+		return staged, err
+	}
 
 	pl.VM = &payload.VM{
 		ImageRef:            spec.VM.ImageRef,
@@ -597,7 +667,7 @@ func (m *Manager) buildVMPayload(ctx context.Context, spec *instance.Spec, t tar
 	if spec.VM.HypervisorOf() == instance.VMHypervisorFirecracker && spec.VM.NetworkMode != "bridge" {
 		pl.VM.StaticIP = spec.VM.StaticIP
 	}
-	return nil
+	return staged, nil
 }
 
 // uploadMountData sends every folder shared into spec's guest, and returns the
@@ -612,10 +682,10 @@ func uploadMountData(ctx context.Context, t target, spec *instance.Spec, caps re
 		}
 		pm := payload.Mount{GuestPath: mnt.GuestPath, Tag: mnt.Tag, ReadOnly: mnt.ReadOnly}
 		pm.RemoteDataPath = remoteDataPath(spec.ID, i)
+		staged = append(staged, pm.RemoteDataPath) // before the upload, so a partial one is listed too
 		if err := uploadDir(ctx, t, mnt.HostPath, pm.RemoteDataPath, caps, progress); err != nil {
 			return nil, staged, err
 		}
-		staged = append(staged, pm.RemoteDataPath)
 		mounts = append(mounts, pm)
 	}
 	return mounts, staged, nil
@@ -660,7 +730,8 @@ func (m *Manager) exportDiskDelta(ctx context.Context, spec *instance.Spec, t ta
 
 // buildContainerPayload fills in pl.Container from spec. The target re-pulls
 // ImageRef itself, so only the bind-mounted directories are transferred.
-func buildContainerPayload(ctx context.Context, spec *instance.Spec, t target, caps remoteCaps, pl *payload.Payload, progress func(status string)) (err error) {
+// staged lists what it put on the target, even on error, for the caller to remove.
+func buildContainerPayload(ctx context.Context, spec *instance.Spec, t target, caps remoteCaps, pl *payload.Payload, progress func(status string)) (staged []string, err error) {
 	c := spec.Container
 	pc := &payload.Container{
 		ImageRef:   c.ImageRef,
@@ -672,12 +743,6 @@ func buildContainerPayload(ctx context.Context, spec *instance.Spec, t target, c
 		Engine:      string(c.Engine),
 	}
 
-	var staged []string
-	defer func() {
-		if err != nil {
-			removeRemote(ctx, t, staged)
-		}
-	}()
 	for i, v := range c.Volumes {
 		pv := payload.VolumeMount{HostPath: v.HostPath, ContainerPath: v.ContainerPath, ReadOnly: v.ReadOnly}
 		if info, statErr := os.Stat(v.HostPath); statErr != nil || !info.IsDir() {
@@ -686,10 +751,10 @@ func buildContainerPayload(ctx context.Context, spec *instance.Spec, t target, c
 			continue
 		}
 		pv.RemoteDataPath = remoteDataPath(spec.ID, i)
-		if err := uploadDir(ctx, t, v.HostPath, pv.RemoteDataPath, caps, progress); err != nil {
-			return err
-		}
 		staged = append(staged, pv.RemoteDataPath)
+		if err := uploadDir(ctx, t, v.HostPath, pv.RemoteDataPath, caps, progress); err != nil {
+			return staged, err
+		}
 		pc.Volumes = append(pc.Volumes, pv)
 	}
 	for _, port := range c.Ports {
@@ -698,7 +763,7 @@ func buildContainerPayload(ctx context.Context, spec *instance.Spec, t target, c
 		})
 	}
 	pl.Container = pc
-	return nil
+	return staged, nil
 }
 
 // parseMigrateResult scans anvil migrate-import's captured stdout for its

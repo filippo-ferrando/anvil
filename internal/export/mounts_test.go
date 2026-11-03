@@ -25,6 +25,7 @@ type fakeInstances struct {
 	started  bool
 	launched int
 	stopErr  error
+	deleted  []string
 }
 
 func (f *fakeInstances) Info(names []string) ([]*instance.Spec, error) {
@@ -54,6 +55,10 @@ func (f *fakeInstances) Stop(context.Context, []string, bool, time.Duration) err
 }
 func (f *fakeInstances) Launch(context.Context, instance.LaunchParams, func(instance.LaunchEvent)) error {
 	f.launched++
+	return nil
+}
+func (f *fakeInstances) Delete(_ context.Context, names []string) error {
+	f.deleted = append(f.deleted, names...)
 	return nil
 }
 

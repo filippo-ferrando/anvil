@@ -35,7 +35,7 @@ func TestBuildVMPayloadFirecracker(t *testing.T) {
 	spec.VM.Hypervisor = instance.VMHypervisorFirecracker
 	spec.VM.StaticIP = "10.254.254.9/24"
 	var pl payload.Payload
-	if err := m.buildVMPayload(context.Background(), spec, target{}, remoteCaps{sha256sum: true}, &pl, func(string) {}); err != nil {
+	if _, err := m.buildVMPayload(context.Background(), spec, target{}, remoteCaps{sha256sum: true}, &pl, func(string) {}); err != nil {
 		t.Fatal(err)
 	}
 	if pl.VM.Hypervisor != "firecracker" || pl.VM.StaticIP != "10.254.254.9/24" {
@@ -44,7 +44,7 @@ func TestBuildVMPayloadFirecracker(t *testing.T) {
 
 	spec.VM.NetworkMode = "bridge"
 	pl = payload.Payload{}
-	if err := m.buildVMPayload(context.Background(), spec, target{}, remoteCaps{sha256sum: true}, &pl, func(string) {}); err != nil {
+	if _, err := m.buildVMPayload(context.Background(), spec, target{}, remoteCaps{sha256sum: true}, &pl, func(string) {}); err != nil {
 		t.Fatal(err)
 	}
 	if pl.VM.Hypervisor != "firecracker" || pl.VM.StaticIP != "" {

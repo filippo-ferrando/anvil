@@ -30,6 +30,7 @@ type Instances interface {
 	Start(ctx context.Context, names []string) error
 	Stop(ctx context.Context, names []string, force bool, timeout time.Duration) error
 	Launch(ctx context.Context, params instance.LaunchParams, progress func(instance.LaunchEvent)) error
+	Delete(ctx context.Context, names []string) error
 	// Hold locks names' instances until release; calls made with the returned ctx pass the lock.
 	Hold(ctx context.Context, names []string) (context.Context, func(), error)
 	// ReserveNames holds names for new instances until release; Launch with the returned ctx uses them.
@@ -39,6 +40,13 @@ type Instances interface {
 // Intents is the subset of *intent.Manager's methods Manager needs.
 type Intents interface {
 	Launch(ctx context.Context, params instance.LaunchParams, progress func(instance.LaunchEvent)) error
+}
+
+// IntentUndoer is an optional Intents capability, used to take back the members
+// of a failed intent import: Delete for an intent the import made, Remove otherwise.
+type IntentUndoer interface {
+	Remove(ctx context.Context, name, member string) (store.Intent, error)
+	Delete(ctx context.Context, name string, purgeMembers bool) (store.Intent, error)
 }
 
 // VMImporter handles a VM's diff disk at both ends: naming the base image it sits on
@@ -337,7 +345,7 @@ type MemberResult struct {
 }
 
 // Import extracts p.BundlePath and relaunches every member it contains.
-func (m *Manager) Import(ctx context.Context, p ImportParams, progress func(status string)) (Result, error) {
+func (m *Manager) Import(ctx context.Context, p ImportParams, progress func(status string)) (_ Result, err error) {
 	if p.BundlePath == "" {
 		return Result{}, fmt.Errorf("import: a bundle path is required")
 	}
@@ -403,7 +411,20 @@ func (m *Manager) Import(ctx context.Context, p ImportParams, progress func(stat
 	}
 	defer release()
 
+	intentExisted := false
+	if intentName != "" {
+		_, err := m.Store.GetIntentByName(intentName)
+		intentExisted = err == nil
+	}
 	result := Result{IntentName: intentName}
+	// A later member failing takes back the ones already launched, with their restored folders.
+	var done []*instance.Spec
+	var doneDirs []string
+	defer func() {
+		if err != nil {
+			m.undoImport(ctx, intentName, intentExisted, done, doneDirs, progress)
+		}
+	}()
 	for _, mem := range manifest.Members {
 		destName := destName(mem)
 		progress(fmt.Sprintf("importing %q", destName))
@@ -456,11 +477,49 @@ func (m *Manager) Import(ctx context.Context, p ImportParams, progress func(stat
 			removeAdopted()
 			return Result{}, fmt.Errorf("import: launching %q: no instance was created", destName)
 		}
+		done = append(done, launched)
+		doneDirs = append(doneDirs, adopted...)
 		result.Members = append(result.Members, MemberResult{Role: mem.Role, NewID: launched.ID})
 	}
 
 	progress("done")
 	return result, nil
+}
+
+// undoImport deletes the instances a failed import launched and the folders it restored,
+// then takes them out of intentName, deleting the intent too when the import made it.
+func (m *Manager) undoImport(ctx context.Context, intentName string, intentExisted bool, launched []*instance.Spec, dirs []string, progress func(string)) {
+	if len(launched) == 0 {
+		return
+	}
+	progress(fmt.Sprintf("rolling back %d imported instance(s)", len(launched)))
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+	defer cancel()
+	names := make([]string, len(launched))
+	for i, spec := range launched {
+		names[i] = spec.Name
+	}
+	if err := m.Instances.Delete(ctx, names); err != nil {
+		progress(fmt.Sprintf("warning: deleting imported instance(s): %v", err))
+	}
+	for _, dir := range dirs {
+		_ = os.RemoveAll(dir)
+	}
+	undo, ok := m.Intents.(IntentUndoer)
+	if intentName == "" || !ok {
+		return
+	}
+	if !intentExisted {
+		if _, err := undo.Delete(ctx, intentName, false); err != nil {
+			progress(fmt.Sprintf("warning: deleting intent %q: %v", intentName, err))
+		}
+		return
+	}
+	for _, spec := range launched {
+		if _, err := undo.Remove(ctx, intentName, spec.ID); err != nil {
+			progress(fmt.Sprintf("warning: removing %q from intent %q: %v", spec.Name, intentName, err))
+		}
+	}
 }
 
 // fillLaunchParams resolves mem's disk/volumes out of stagingDir and fills
