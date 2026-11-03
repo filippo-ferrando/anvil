@@ -10,6 +10,7 @@ Built from commit subjects by `scripts/changelog.sh`.
 
 ### Fixes
 
+- gui and task (0db8fc4)
 - NoDisplay entry choosen (7762bc7)
 - race condition on uffd ram allocation (2a3d633)
 - updated local anvil ci (67eca14)
