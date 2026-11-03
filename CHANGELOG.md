@@ -2,6 +2,27 @@
 
 Built from commit subjects by `scripts/changelog.sh`.
 
+## v1.3.5 (2026-11-03)
+
+### Features
+
+- validate RPCs, apply plan hash, remote container GUI, status codes (d285746)
+- wired tasks were it make more sense (4455feb)
+
+### Fixes
+
+- wrong doc in editors, stale stream replies, gui events (ab3d5a4)
+- exit codes, gui --json and remote containers, validate via daemon (1598aa3)
+- symlink-safe relay files, display claim race, json events (f8274d4)
+- ip reuse, deleted intents coming back, cleanup on failure (98ccb3e)
+- symlink escape, github watchdog, leaks on failure (16b55e3)
+- fork thaw, stop/delete on a live qemu, logs -f after restart, gpt bounds, download stalls (3b06f0c)
+
+### Other changes
+
+- improved code structure (e0ccd53)
+- networking, gui json events and remote containers, apply, runner (53a7892)
+
 ## v1.3.4 (2026-11-03)
 
 ### Features
