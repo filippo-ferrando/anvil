@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -94,6 +95,8 @@ func runGUI(ctx context.Context, flags *globalFlags, opts guiOptions, name strin
 		return err
 	}
 	inst := session.GetInstance()
+	// A detached run's log ends its setup with this line; the TUI waits for it.
+	fmt.Fprintf(progress, "anvil: %s runs in %s\n", strings.Join(command, " "), name)
 	if inst.GetContainer() != nil {
 		if c.Remote != "" {
 			return errors.New("anvil gui with --remote only works for VMs for now")

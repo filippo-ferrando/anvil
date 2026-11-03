@@ -526,9 +526,9 @@ func deleteCloudInit(c *client.Client, name string) tea.Cmd {
 	}
 }
 
-func startCloudInitImportRepo(c *client.Client, manifestURL string, force bool) tea.Cmd {
+func startCloudInitImportRepo(ctx context.Context, c *client.Client, manifestURL string, force bool) tea.Cmd {
 	return func() tea.Msg {
-		stream, err := c.CloudInit.ImportRepo(context.Background(), &anvilv1.CloudInitImportRepoRequest{
+		stream, err := c.CloudInit.ImportRepo(ctx, &anvilv1.CloudInitImportRepoRequest{
 			ManifestUrl: manifestURL, Force: force,
 		})
 		if err != nil {

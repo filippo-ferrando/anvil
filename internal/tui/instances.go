@@ -375,10 +375,6 @@ func (m model) updateInstances(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case guiLaunchedMsg:
-		m.showGUILaunched(msg)
-		return m, nil
-
 	case tea.KeyMsg:
 		return m.updateInstancesKey(msg)
 	}
@@ -667,8 +663,9 @@ func (m model) updateInstancesPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if target.GetVm() != nil {
 			ins.lastIdentity = g.identity
 		}
-		m.setStatus("starting "+g.command+" in "+target.GetName()+"…", false)
-		return m, launchGUIApp(m.socketPath, m.client.Remote, target.GetName(), g)
+		t, cmd := m.guiTask(target.GetName(), g)
+		m.setStatus(inBackground(t.title), false)
+		return m, cmd
 
 	case instancesPromptTransfer:
 		t, err := transferFrom(ins.promptForm, target.GetName())

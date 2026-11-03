@@ -53,9 +53,9 @@ func newApplyRequest(form simpleForm) (*anvilv1.IntentApplyRequest, error) {
 	})
 }
 
-func startApplyStream(c *client.Client, req *anvilv1.IntentApplyRequest, owner screen) tea.Cmd {
+func startApplyStream(ctx context.Context, c *client.Client, req *anvilv1.IntentApplyRequest, owner screen) tea.Cmd {
 	return func() tea.Msg {
-		stream, err := c.Intent.Apply(context.Background(), req)
+		stream, err := c.Intent.Apply(ctx, req)
 		if err != nil {
 			return applyStreamMsg{owner, failed[[]string](err)}
 		}
@@ -95,7 +95,10 @@ func applyPlanLines(plan *anvilv1.IntentApplyPlan) []string {
 // applyRun is an apply's on-screen state: a dry run's plan waiting for confirmation, then the real run.
 type applyRun struct {
 	owner   screen
+	what    string                      // the manifest it applies, for the task title
 	req     *anvilv1.IntentApplyRequest // the request whose plan is shown, sent again for real on confirm
+	task    int                         // the task of the real run, 0 before it starts
+	cancel  context.CancelFunc
 	running bool
 	confirm bool // a dry run finished cleanly and waits for enter to apply
 	lines   []string
@@ -104,10 +107,10 @@ type applyRun struct {
 func (a *applyRun) active() bool { return a.running || len(a.lines) > 0 }
 
 // start sends req as a dry run first, so the plan is shown before anything changes.
-func (a *applyRun) start(c *client.Client, req *anvilv1.IntentApplyRequest) tea.Cmd {
+func (a *applyRun) start(c *client.Client, what string, req *anvilv1.IntentApplyRequest) tea.Cmd {
 	req.DryRun = true
-	a.req, a.running, a.confirm, a.lines = req, true, false, nil
-	return startApplyStream(c, req, a.owner)
+	a.what, a.req, a.running, a.confirm, a.lines, a.task = what, req, true, false, nil, 0
+	return startApplyStream(context.Background(), c, req, a.owner)
 }
 
 // handle records one stream event; applied is true once a real (not dry) run has ended.
@@ -142,13 +145,44 @@ func (a *applyRun) key(msg tea.KeyMsg, c *client.Client) tea.Cmd {
 		if a.confirm {
 			a.req.DryRun = false
 			a.confirm, a.running, a.lines = false, true, nil
-			return startApplyStream(c, a.req, a.owner)
+			ctx, cancel := context.WithCancel(context.Background())
+			a.cancel = cancel
+			return startApplyStream(ctx, c, a.req, a.owner)
 		}
 		a.lines = nil
 	case "esc", "q", "n":
 		a.lines, a.confirm = nil, false
 	}
 	return nil
+}
+
+// applyKey handles a key on a's transcript and runs a confirmed plan as a task.
+func (m *model) applyKey(a *applyRun, msg tea.KeyMsg) tea.Cmd {
+	cmd := a.key(msg, m.client)
+	if a.running && !a.req.GetDryRun() && a.task == 0 {
+		t := m.startTask("applying "+a.what, "applied "+a.what, a.owner)
+		t.steps.start()
+		t.cancel = a.cancel
+		t.cancelNote = "Stops the apply where it is. Members already changed stay as they are."
+		a.task = t.id
+	}
+	return cmd
+}
+
+// applyEvent records one stream event on a and on the task of a real run.
+func (m *model) applyEvent(a *applyRun, msg applyStreamMsg) (cmd tea.Cmd, applied bool) {
+	cmd, applied = a.handle(msg)
+	t := m.tasks.get(a.task)
+	if t == nil || !t.running || a.req.GetDryRun() {
+		return cmd, applied
+	}
+	if msg.status != "" {
+		t.steps.add(msg.status)
+	}
+	if msg.err != nil || msg.done {
+		return tea.Batch(cmd, m.finishTask(t, msg.err)), applied
+	}
+	return cmd, applied
 }
 
 func (a applyRun) view() string {

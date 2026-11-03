@@ -1,7 +1,7 @@
 # anvil building anvil: `anvil pipeline run` from the repo root.
 jobs:
   lint:
-    distro: ubuntu-26.04
+    distro: archlinux
     setup: ci/setup.sh
     key-files: [go.mod, go.sum]
     env: { GOMODCACHE: /opt/go/mod, GOTOOLCHAIN: local }
@@ -15,7 +15,7 @@ jobs:
       go vet ./...
 
   build:
-    distro: ubuntu-26.04
+    distro: archlinux
     setup: ci/setup.sh
     key-files: [go.mod, go.sum]
     env: { GOMODCACHE: /opt/go/mod, GOTOOLCHAIN: local }
@@ -32,7 +32,7 @@ jobs:
 
   test:
     needs: [lint]
-    distro: ubuntu-26.04
+    distro: archlinux
     setup: ci/setup.sh
     key-files: [go.mod, go.sum]
     env: { GOMODCACHE: /opt/go/mod, GOTOOLCHAIN: local }
@@ -43,7 +43,7 @@ jobs:
 
   race:
     needs: [test]
-    distro: ubuntu-26.04
+    distro: archlinux
     setup: ci/setup.sh
     key-files: [go.mod, go.sum]
     env: { GOMODCACHE: /opt/go/mod, GOTOOLCHAIN: local }

@@ -101,6 +101,7 @@ type runView struct {
 	err    error
 	title  string // "Run" when empty
 	note   string // a line under the title, e.g. the run's own progress
+	task   int    // the task that mirrors it on the Tasks screen
 }
 
 // runPane keeps the last lines of one clone's output.
@@ -150,6 +151,17 @@ func (p *runPane) setStatus(status string) {
 		p.since = time.Now()
 	}
 	p.status = status
+}
+
+// failures counts the clones that ended with an error or a non-zero exit code.
+func (v *runView) failures() int {
+	n := 0
+	for _, p := range v.panes {
+		if x := p.exit; x != nil && (x.GetExitCode() != 0 || x.GetError() != "") {
+			n++
+		}
+	}
+	return n
 }
 
 func (v *runView) event(ev *anvilv1.RunEvent) {
@@ -626,13 +638,20 @@ func (m model) updateEphemeral(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.ev != nil {
 			e.run.event(msg.ev)
+			if p := msg.ev.GetProgress(); p != nil {
+				m.runTaskStep(e.run, p.GetDistro()+": "+p.GetMessage())
+			}
 		}
 		if msg.collected != nil {
 			e.run.collected(msg.collected)
 		}
 		if msg.done {
 			e.run.done, e.run.err = true, msg.err
-			return m, loadEphemeral(m.client)
+			err := msg.err
+			if n := e.run.failures(); err == nil && n > 0 {
+				err = fmt.Errorf("%d of %d clones failed", n, len(e.run.order))
+			}
+			return m, tea.Batch(loadEphemeral(m.client), m.endRunTask(e.run, err))
 		}
 		return m, msg.next
 	case actionDoneMsg:
@@ -682,9 +701,9 @@ func (m model) updateEphemeralKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		e.confirm = ""
 		if msg.String() == "y" || msg.String() == "enter" {
 			if e.showClones {
-				return m, deleteClone(m.client, target)
+				return m, m.track("deleting clone "+target, screenEphemeral, deleteClone(m.client, target))
 			}
-			return m, deleteWarm(m.client, target)
+			return m, m.track("removing warm snapshot "+target, screenEphemeral, deleteWarm(m.client, target))
 		}
 		return m, nil
 	}
@@ -719,7 +738,7 @@ func (m model) updateEphemeralKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			e.form = nil
-			return m, setWarmPool(m.client, req)
+			return m, m.track("setting the "+req.GetDistro()+" warm pool", screenEphemeral, setWarmPool(m.client, req))
 		}
 		if e.formKind == "warm" {
 			req, err := buildWarmRequest(form)
@@ -740,6 +759,7 @@ func (m model) updateEphemeralKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		e.form = nil
 		ctx, cancel := context.WithCancel(context.Background())
 		e.run = newRunView(req.GetDistros(), cancel)
+		m.runTask(e.run, "running on "+strings.Join(req.GetDistros(), ", "), "ran on "+strings.Join(req.GetDistros(), ", "), screenEphemeral)
 		return m, startRun(ctx, m.client, req, path, runCollector(req, form))
 	}
 
@@ -796,8 +816,9 @@ func (m model) updateEphemeralKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "w":
 		if it, ok := e.clones.SelectedItem().(cloneItem); ok && e.showClones {
-			m.setStatus("saving "+it.clone.GetId()+" as a warm snapshot...", false)
-			return m, saveClone(m.client, it.clone.GetId())
+			title := "saving " + it.clone.GetId() + " as a warm snapshot"
+			m.setStatus(inBackground(title), false)
+			return m, m.track(title, screenEphemeral, saveClone(m.client, it.clone.GetId()))
 		}
 		return m, nil
 	}

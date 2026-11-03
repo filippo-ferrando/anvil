@@ -1,10 +1,9 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"os"
-	"os/exec"
-	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -51,19 +50,23 @@ func removeGUIApp(e desktop.Export) tea.Cmd {
 	}
 }
 
-// relaunchGUIApp runs the entry's own command line, as the app launcher does.
-func relaunchGUIApp(e desktop.Export) tea.Cmd {
-	return func() tea.Msg {
-		if len(e.Exec) == 0 {
-			return guiLaunchedMsg{err: errors.New(e.File + " has no Exec line")}
-		}
-		out, err := exec.Command(e.Exec[0], e.Exec[1:]...).CombinedOutput()
-		text := strings.TrimSpace(string(out))
-		if err != nil && text != "" {
-			err = errors.New(strings.TrimPrefix(text, "anvil: "))
-		}
-		return guiLaunchedMsg{output: text, err: err}
+// relaunchGUIApp runs the entry's own command line, as the app launcher does, following
+// its progress until ctx ends.
+func relaunchGUIApp(ctx context.Context, e desktop.Export, wrap func(lineStep) tea.Msg) tea.Cmd {
+	if len(e.Exec) == 0 {
+		err := errors.New(e.File + " has no Exec line")
+		return func() tea.Msg { return wrap(failed[struct{}](err)) }
 	}
+	return followCalls(ctx, e.Exec[0], [][]string{e.Exec[1:]}, wrap)
+}
+
+// relaunchTask starts an exported app as a task.
+func (m *model) relaunchTask(e desktop.Export) (*task, tea.Cmd) {
+	t, cmd := m.streamTask("starting "+e.Name+" in "+e.Instance, "started "+e.Name+" in "+e.Instance, screenGUIApps, func(ctx context.Context, id int) tea.Cmd {
+		return relaunchGUIApp(ctx, e, lineTaskStep(id))
+	})
+	t.cancelNote = "Stops following the launch. The app keeps starting in " + e.Instance + "."
+	return t, cmd
 }
 
 type guiAppItem struct{ e desktop.Export }
@@ -117,10 +120,6 @@ func (m model) updateGUIApps(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setStatus("removed "+msg.path, false)
 		return m, loadGUIApps()
 
-	case guiLaunchedMsg:
-		m.showGUILaunched(msg)
-		return m, nil
-
 	case tea.KeyMsg:
 		if ga.confirmRemove != nil {
 			e := *ga.confirmRemove
@@ -141,8 +140,9 @@ func (m model) updateGUIApps(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "enter":
 			if e := ga.selected(); e != nil {
-				m.setStatus("starting "+e.Command+" in "+e.Instance+"…", false)
-				return m, relaunchGUIApp(*e)
+				t, cmd := m.relaunchTask(*e)
+				m.setStatus(inBackground(t.title), false)
+				return m, cmd
 			}
 			return m, nil
 		}

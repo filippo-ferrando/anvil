@@ -2,9 +2,6 @@ package tui
 
 import (
 	"context"
-	"errors"
-	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 
@@ -12,21 +9,6 @@ import (
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 )
-
-// guiLaunchedMsg reports how starting a detached `anvil gui` went.
-type guiLaunchedMsg struct {
-	output string
-	err    error
-}
-
-// showGUILaunched puts the outcome of starting a GUI app on the status line.
-func (m *model) showGUILaunched(msg guiLaunchedMsg) {
-	if msg.err != nil {
-		m.setStatus("gui: "+msg.err.Error(), true)
-	} else {
-		m.setStatus(msg.output, false)
-	}
-}
 
 // guiRequest is what the GUI app form asks for.
 type guiRequest struct {
@@ -147,39 +129,27 @@ func launchEphemeralApp(ctx context.Context, socketPath string, a appRequest, wr
 	return followGUICalls(ctx, calls, wrap)
 }
 
-// launchGUIApp starts the app through the anvil CLI, which keeps running after the TUI quits.
-// With export it first adds the app to the desktop's launcher, the same as `anvil gui export`.
-func launchGUIApp(socketPath, remote, name string, g guiRequest) tea.Cmd {
+// launchGUIApp starts the app through the anvil CLI, which keeps running after the TUI quits,
+// following its progress until ctx ends. With export it first runs `anvil gui export`.
+func launchGUIApp(ctx context.Context, socketPath, remote, name string, g guiRequest, wrap func(lineStep) tea.Msg) tea.Cmd {
 	calls := [][]string{guiArgs(socketPath, remote, name, g)}
 	if g.export {
 		calls = append([][]string{guiExportArgs(socketPath, remote, name, g)}, calls...)
 	}
-	return runGUICalls(calls)
+	return followGUICalls(ctx, calls, wrap)
 }
 
-// runGUICalls runs the anvil CLI once per call, in order, stopping at the first failure.
-func runGUICalls(calls [][]string) tea.Cmd {
-	return func() tea.Msg {
-		exe, err := os.Executable()
-		if err != nil {
-			return guiLaunchedMsg{err: err}
-		}
-		var lines []string
-		for _, args := range calls {
-			out, err := exec.Command(exe, args...).CombinedOutput()
-			text := lastLine(string(out)) // an export's progress lines come first
-			if err != nil {
-				if text != "" {
-					err = errors.New(strings.TrimPrefix(text, "anvil: "))
-				}
-				return guiLaunchedMsg{err: err}
-			}
-			if text != "" {
-				lines = append(lines, text)
-			}
-		}
-		return guiLaunchedMsg{output: strings.Join(lines, "; ")}
+// guiTask starts g's app in instance name as a task.
+func (m *model) guiTask(name string, g guiRequest) (*task, tea.Cmd) {
+	what := g.command
+	if f := strings.Fields(g.command); len(f) > 0 {
+		what = f[0]
 	}
+	t, cmd := m.streamTask("starting "+what+" in "+name, "started "+what+" in "+name, screenInstances, func(ctx context.Context, id int) tea.Cmd {
+		return launchGUIApp(ctx, m.socketPath, m.client.Remote, name, g, lineTaskStep(id))
+	})
+	t.cancelNote = "Stops following the launch. The app keeps starting in " + name + "."
+	return t, cmd
 }
 
 func lastLine(s string) string {

@@ -255,10 +255,10 @@ func (m model) updateMigrationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if alias == "" || target == "" {
 				return m, nil
 			}
-			return m, addHost(m.client, &anvilv1.Host{
+			return m, m.track("adding host "+alias, screenMigration, addHost(m.client, &anvilv1.Host{
 				Alias: alias, Target: target, Identity: mg.addForm.Value("Identity path (optional)"),
 				StrictHostKey: mg.addForm.Bool("Strict host key"),
-			})
+			}))
 		}
 		return m, nil
 	}

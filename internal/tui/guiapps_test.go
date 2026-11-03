@@ -1,9 +1,12 @@
 package tui
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/bubbles/list"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/internal/gui/desktop"
@@ -64,12 +67,44 @@ func TestGUIAppsListAndUnexport(t *testing.T) {
 }
 
 func TestRelaunchGUIAppRunsExec(t *testing.T) {
-	msg := relaunchGUIApp(desktop.Export{Exec: []string{"sh", "-c", "echo started"}})().(guiLaunchedMsg)
-	if msg.err != nil || msg.output != "started" {
-		t.Errorf("got %+v", msg)
+	next := relaunchGUIApp(context.Background(), desktop.Export{Exec: []string{"sh", "-c", "echo building; echo started"}}, lineTaskStep(3))
+	var lines []string
+	for {
+		msg := next().(taskStepMsg)
+		if msg.done {
+			if msg.err != nil {
+				t.Fatal(msg.err)
+			}
+			break
+		}
+		lines, next = append(lines, msg.status), msg.next
 	}
-	if msg := relaunchGUIApp(desktop.Export{File: "x.desktop"})().(guiLaunchedMsg); msg.err == nil {
+	if strings.Join(lines, ",") != "building,started" {
+		t.Errorf("got %q", lines)
+	}
+	msg := relaunchGUIApp(context.Background(), desktop.Export{File: "x.desktop"}, lineTaskStep(3))().(taskStepMsg)
+	if msg.err == nil {
 		t.Error("expected an entry without Exec to fail")
+	}
+}
+
+func TestGUIAppsEnterStartsTask(t *testing.T) {
+	m := model{screen: screenGUIApps, guiApps: newGUIAppsModel()}
+	m.guiApps.list.SetItems([]list.Item{guiAppItem{e: desktop.Export{
+		Instance: "ephemeral-archlinux-firefox", App: "firefox", Name: "Firefox", Exec: []string{"sh", "-c", "echo restoring"},
+	}}})
+	next, cmd := m.Update(key("enter"))
+	m = next.(model)
+	run := m.tasks.running()
+	if cmd == nil || len(run) != 1 || run[0].title != "starting Firefox in ephemeral-archlinux-firefox" || run[0].cancel == nil {
+		t.Fatalf("tasks %+v", run)
+	}
+	for cmd != nil {
+		next, cmd = m.Update(cmd())
+		m = next.(model)
+	}
+	if len(m.tasks.running()) != 0 || m.tasks.items[0].err != nil || m.tasks.items[0].last() != "restoring" {
+		t.Fatalf("task %+v", m.tasks.items[0])
 	}
 }
 

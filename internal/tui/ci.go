@@ -311,8 +311,10 @@ func (m model) pipelineEvent(msg pipelineEventMsg) (tea.Model, tea.Cmd) {
 		p := e.Progress
 		if p.GetJob() == "" {
 			v.note = p.GetMessage()
+			m.runTaskStep(v, p.GetMessage())
 			break
 		}
+		m.runTaskStep(v, p.GetJob()+"@"+p.GetDistro()+": "+p.GetMessage())
 		v.event(&anvilv1.RunEvent{Event: &anvilv1.RunEvent_Progress{Progress: &anvilv1.RunProgress{Distro: p.GetJob() + "@" + p.GetDistro(), Message: p.GetMessage()}}})
 	case *anvilv1.PipelineEvent_Output:
 		o := e.Output
@@ -334,6 +336,7 @@ func (m model) pipelineEvent(msg pipelineEventMsg) (tea.Model, tea.Cmd) {
 	}
 	v.done, v.err = true, msg.err
 	cmds := []tea.Cmd{loadCI(m.client)}
+	taskErr := msg.err
 	if r := ci.runInfo; r != nil {
 		v.note = "run " + r.GetId() + " " + r.GetState()
 		if r.GetError() != "" {
@@ -343,9 +346,13 @@ func (m model) pipelineEvent(msg pipelineEventMsg) (tea.Model, tea.Cmd) {
 			v.note += "  •  apply: " + r.GetApplied()
 		}
 		if ci.runArtifacts != "" {
-			cmds = append(cmds, downloadRunArtifacts(m.client, r.GetId(), ci.runArtifacts))
+			cmds = append(cmds, m.track("downloading files of run "+r.GetId(), screenCI, downloadRunArtifacts(m.client, r.GetId(), ci.runArtifacts)))
+		}
+		if taskErr == nil && r.GetState() == "failed" {
+			taskErr = errors.New("run " + r.GetId() + " failed")
 		}
 	}
+	cmds = append(cmds, m.endRunTask(v, taskErr))
 	return m, tea.Batch(cmds...)
 }
 
@@ -552,7 +559,7 @@ func (m model) updateCIForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return fail(errors.New("directory is required"))
 		}
 		ci.form = nil
-		return m, downloadRunArtifacts(m.client, ci.formRun, dir)
+		return m, m.track("downloading files of run "+ci.formRun+" into "+dir, screenCI, downloadRunArtifacts(m.client, ci.formRun, dir))
 	case "run":
 		path := strings.TrimSpace(form.Value("Path"))
 		if path == "" {
@@ -576,6 +583,7 @@ func (m *model) startPipeline(title, artifacts string, open func(ctx context.Con
 	ctx, cancel := context.WithCancel(context.Background())
 	m.ci.run = newRunView(nil, cancel)
 	m.ci.run.title, m.ci.run.note = "Pipeline", title
+	m.runTask(m.ci.run, title, "finished "+title, screenCI)
 	m.ci.runInfo, m.ci.runArtifacts, m.ci.detail = nil, artifacts, nil
 	return func() tea.Msg {
 		recv, err := open(ctx)

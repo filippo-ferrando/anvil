@@ -148,7 +148,7 @@ func (m model) updateManifests(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, loadManifestList(m.client)
 
 	case applyStreamMsg:
-		cmd, applied := mf.apply.handle(msg)
+		cmd, applied := m.applyEvent(&mf.apply, msg)
 		if applied {
 			m.setStatus("applied "+mf.current, false)
 		}
@@ -164,7 +164,7 @@ func (m model) updateManifestsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	mf := &m.manifests
 
 	if mf.apply.active() {
-		return m, mf.apply.key(msg, m.client)
+		return m, m.applyKey(&mf.apply, msg)
 	}
 	if mf.prompt != manifestPromptNone {
 		return m.updateManifestsPrompt(msg)
@@ -342,7 +342,7 @@ func (m model) updateManifestsPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setStatus(err.Error(), true)
 			return m, nil
 		}
-		return m, mf.apply.start(m.client, req)
+		return m, mf.apply.start(m.client, "manifest "+mf.current, req)
 	}
 	return m, nil
 }

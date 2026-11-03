@@ -104,7 +104,7 @@ func (m model) updateIntents(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, loadIntents(m.client)
 
 	case applyStreamMsg:
-		cmd, applied := m.intents.apply.handle(msg)
+		cmd, applied := m.applyEvent(&m.intents.apply, msg)
 		if applied {
 			return m, loadIntents(m.client)
 		}
@@ -135,7 +135,7 @@ func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.intentMembersTask(req)
 	}
 	if in.apply.active() {
-		return m, in.apply.key(msg, m.client)
+		return m, m.applyKey(&in.apply, msg)
 	}
 	if in.applyPrompting {
 		var submitted, cancelled bool
@@ -150,7 +150,7 @@ func (m model) updateIntentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setStatus(err.Error(), true)
 			return m, nil
 		}
-		return m, in.apply.start(m.client, req)
+		return m, in.apply.start(m.client, in.applyForm.Value("Manifest path"), req)
 	}
 	if in.importPrompting {
 		var submitted, cancelled bool

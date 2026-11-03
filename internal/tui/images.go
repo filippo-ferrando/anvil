@@ -307,8 +307,9 @@ func (m model) updateImagesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.setStatus("checksum covers base images only", true)
 					return m, nil
 				}
-				m.setStatus("hashing "+item.image.GetId()+"…", false)
-				return m, loadImageChecksum(m.client, item.image.GetId(), item.image.GetArch())
+				title := "hashing " + item.image.GetId()
+				m.setStatus(inBackground(title), false)
+				return m, m.track(title, screenImages, loadImageChecksum(m.client, item.image.GetId(), item.image.GetArch()))
 			}
 		}
 		return m, nil

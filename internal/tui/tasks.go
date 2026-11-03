@@ -196,6 +196,30 @@ func (m *model) streamTask(title, done string, origin screen, start func(ctx con
 	return t, start(ctx, t.id)
 }
 
+// runTask mirrors run view v as a task; esc on the view and x on the task both cancel it.
+func (m *model) runTask(v *runView, title, done string, origin screen) {
+	t := m.startTask(title, done, origin)
+	t.steps.start()
+	t.cancel = v.cancel
+	t.cancelNote = "Cancels the run and deletes its clones."
+	v.task = t.id
+}
+
+// runTaskStep adds line to the progress of v's task.
+func (m *model) runTaskStep(v *runView, line string) {
+	if t := m.tasks.get(v.task); t != nil && t.running && line != "" {
+		t.steps.add(line)
+	}
+}
+
+// endRunTask ends v's task with err.
+func (m *model) endRunTask(v *runView, err error) tea.Cmd {
+	if t := m.tasks.get(v.task); t != nil && t.running {
+		return m.finishTask(t, err)
+	}
+	return nil
+}
+
 // lineTaskStep wraps the steps of a stream that only reports lines into task t's messages.
 func lineTaskStep(id int) func(lineStep) tea.Msg {
 	return func(s lineStep) tea.Msg { return taskStepMsg{id: id, lineStep: s} }
@@ -286,6 +310,8 @@ func replyErr(msg tea.Msg) error {
 	case hostsDiscoveredMsg:
 		return r.err
 	case cloudInitSavedMsg:
+		return r.err
+	case imageChecksumMsg:
 		return r.err
 	}
 	return nil

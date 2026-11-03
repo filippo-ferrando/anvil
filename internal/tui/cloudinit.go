@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"os"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -51,6 +52,7 @@ type cloudInitModel struct {
 	promptFm simpleForm
 
 	importingRepo bool // showing the ImportRepo streaming progress instead of the list+editor split
+	importTask    int  // the task of the running import
 	importLines   []string
 }
 
@@ -136,25 +138,43 @@ func (m model) updateCloudInit(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, loadCloudInitList(m.client)
 
 	case cloudInitImportStreamMsg:
+		t := m.tasks.get(m.cloudInit.importTask)
+		if t != nil && !t.running {
+			t = nil
+		}
 		if msg.status != "" {
 			m.cloudInit.importLines = appendProgressLine(m.cloudInit.importLines, msg.status)
+			if t != nil {
+				t.steps.add(msg.status)
+			}
 		}
 		if msg.result != nil {
 			r := msg.result
+			var line string
 			switch {
 			case r.GetError() != "":
-				m.cloudInit.importLines = append(m.cloudInit.importLines, styleError.Render(r.GetName()+": FAILED: "+r.GetError()))
+				line = styleError.Render(r.GetName() + ": FAILED: " + r.GetError())
 			case r.GetSkipped():
-				m.cloudInit.importLines = append(m.cloudInit.importLines, styleWarn.Render(r.GetName()+": skipped (already exists)"))
+				line = styleWarn.Render(r.GetName() + ": skipped (already exists)")
 			default:
-				m.cloudInit.importLines = append(m.cloudInit.importLines, styleGood.Render(r.GetName()+": imported"))
+				line = styleGood.Render(r.GetName() + ": imported")
+			}
+			m.cloudInit.importLines = append(m.cloudInit.importLines, line)
+			if t != nil {
+				t.steps.add(line)
 			}
 		}
 		if msg.err != nil {
 			m.cloudInit.importLines = append(m.cloudInit.importLines, errLine(msg.err))
+			if t != nil {
+				return m, m.finishTask(t, msg.err)
+			}
 			return m, nil
 		}
 		if msg.done {
+			if t != nil {
+				return m, tea.Batch(loadCloudInitList(m.client), m.finishTask(t, nil))
+			}
 			return m, loadCloudInitList(m.client)
 		}
 		return m, msg.next
@@ -325,7 +345,12 @@ func (m model) updateCloudInitPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		ci.importingRepo = true
 		ci.importLines = nil
-		return m, startCloudInitImportRepo(m.client, url, force)
+		t := m.startTask("importing cloud-init templates from "+url, "imported cloud-init templates from "+url, screenCloudInit)
+		t.steps.start()
+		ctx, cancel := context.WithCancel(context.Background())
+		t.cancel, t.cancelNote = cancel, "Stops the import. Templates already imported stay."
+		ci.importTask = t.id
+		return m, startCloudInitImportRepo(ctx, m.client, url, force)
 
 	case cloudInitPromptWizard:
 		name := ci.promptFm.Value("Name")
@@ -348,7 +373,7 @@ func (m cloudInitModel) View() string {
 		for _, line := range m.importLines {
 			s += line + "\n"
 		}
-		return s + "\n" + helpBar("any key", "dismiss (import keeps running)")
+		return s + "\n" + helpBar("any key", "dismiss (import keeps running, "+tasksKey()+" shows it)")
 	}
 	if m.prompt == cloudInitPromptDelete {
 		return styleWarn.Render("Delete cloud-init config "+m.current+"?") + "\n\n" +

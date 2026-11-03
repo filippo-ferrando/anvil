@@ -305,7 +305,8 @@ members launched before it are kept, as with the CLI.
 
 Export, import, member launches (`n`, `a`), removals (`x`, `U`) run as tasks, so the
 screen stays usable meanwhile. An apply keeps its plan and transcript on this screen, since
-it waits for a confirmation; keys are ignored while it runs.
+it waits for a confirmation; keys are ignored while it runs. Once confirmed, the apply also
+runs as a task, so its progress shows in the task strip and the Tasks screen.
 
 ## 5. Manifests
 
@@ -468,9 +469,12 @@ cursor on the newest event it follows new ones; elsewhere it stays on the same e
 ## 14. Tasks (key `d`)
 
 Everything started from this TUI that talks to the daemon: launches, forks, deletes,
-starts and stops, exports and imports, migrations, member launches and the other actions
-of every screen except Ephemeral. Each one runs in the background, so the TUI stays usable
-and several can run at once. The list shows the newest first: `⟳` running (with its latest
+starts and stops, exports and imports, migrations, member launches, applies, GUI app
+launches, warm snapshots and runs on Ephemeral, pipeline runs and their file downloads,
+cloud-init repo imports, image checksums and the other actions of every screen. Each one
+runs in the background, so the TUI stays usable and several can run at once. A run (Ephemeral
+or CI) keeps its panes on its own screen; its task shows the progress and fails when a
+clone or the run fails. The list shows the newest first: `⟳` running (with its latest
 step), `✓` done or `✕` failed (with the error), and the time taken. The last 50 finished
 tasks are kept.
 
@@ -484,7 +488,7 @@ asks again every second.
 |-----|--------|
 | `↑` `k` / `↓` `j`, `home` `g` / `end` `G` | Move the selection. |
 | `enter` `l` | Open the task view. |
-| `x` | Cancel a running streamed task (launch, fork, export, import, migration, wait), after a confirmation. A cancelled launch is rolled back by the daemon; a cancelled wait leaves the instance running. |
+| `x` | Cancel a running streamed task (launch, fork, export, import, migration, wait, apply, run, GUI launch, cloud-init repo import), after a confirmation. A cancelled launch is rolled back by the daemon; a cancelled wait leaves the instance running. |
 | `c` | Clear the finished tasks. |
 | `esc` `q` | Back to the sidebar. |
 

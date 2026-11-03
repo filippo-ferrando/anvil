@@ -227,3 +227,64 @@ func TestDetailPanelShowsTheRunningTask(t *testing.T) {
 		t.Errorf("the detail panel should show the task, got:\n%s", view)
 	}
 }
+
+func TestConfirmedApplyRunsAsTask(t *testing.T) {
+	m := tasksTestModel()
+	a := &m.manifests.apply
+	a.owner = screenManifests
+	a.start(m.client, "manifest web", &anvilv1.IntentApplyRequest{})
+	a.handle(applyStreamMsg{owner: screenManifests, streamStep: streamStep[[]string]{result: []string{"plan"}, done: true}})
+	if len(m.tasks.items) != 0 {
+		t.Fatal("a dry run should not start a task")
+	}
+	if cmd := m.applyKey(a, key("enter")); cmd == nil {
+		t.Fatal("enter should send the real apply")
+	}
+	run := m.tasks.running()
+	if len(run) != 1 || run[0].title != "applying manifest web" || run[0].cancel == nil {
+		t.Fatalf("tasks %+v", run)
+	}
+	m.applyEvent(a, applyStreamMsg{owner: screenManifests, streamStep: streamStep[[]string]{status: "creating db"}})
+	_, applied := m.applyEvent(a, applyStreamMsg{owner: screenManifests, streamStep: streamStep[[]string]{done: true}})
+	if !applied || run[0].running || run[0].err != nil || run[0].last() != "creating db" {
+		t.Fatalf("applied %v, task %+v", applied, run[0])
+	}
+}
+
+func TestRunViewTaskReportsFailedClones(t *testing.T) {
+	m := tasksTestModel()
+	_, cancel := context.WithCancel(context.Background())
+	m.ephemeral.run = newRunView([]string{"debian-13", "fedora-42"}, cancel)
+	m.runTask(m.ephemeral.run, "running on debian-13, fedora-42", "ran", screenEphemeral)
+	exit := func(d string, code int32) tea.Msg {
+		return runEventMsg{ev: &anvilv1.RunEvent{Event: &anvilv1.RunEvent_Exit{Exit: &anvilv1.RunExit{Distro: d, ExitCode: code}}}}
+	}
+	for _, msg := range []tea.Msg{
+		runEventMsg{ev: &anvilv1.RunEvent{Event: &anvilv1.RunEvent_Progress{Progress: &anvilv1.RunProgress{Distro: "debian-13", Message: "restoring"}}}},
+		exit("debian-13", 0), exit("fedora-42", 2), runEventMsg{done: true},
+	} {
+		next, _ := m.Update(msg)
+		m = next.(model)
+	}
+	task := m.tasks.items[0]
+	if task.running || task.err == nil || task.err.Error() != "1 of 2 clones failed" || !strings.Contains(task.steps.lines[0], "debian-13: restoring") {
+		t.Fatalf("task %+v, lines %q", task, task.steps.lines)
+	}
+}
+
+func TestCloudInitImportRunsAsTask(t *testing.T) {
+	m := tasksTestModel()
+	m.cloudInit.prompt = cloudInitPromptImportRepo
+	m.cloudInit.promptFm = newSimpleForm("Import", []formField{textField("Manifest URL", "", "https://example.com/m.yaml"), toggleField("Force", "", false)})
+	next, cmd := m.updateCloudInitPrompt(tea.KeyMsg{Type: tea.KeyCtrlS})
+	m = next.(model)
+	if cmd == nil || len(m.tasks.running()) != 1 {
+		t.Fatalf("expected a running import task, got %d", len(m.tasks.running()))
+	}
+	next, _ = m.Update(cloudInitImportStreamMsg{streamStep[*anvilv1.CloudInitImportResult]{result: &anvilv1.CloudInitImportResult{Name: "base"}}})
+	next, _ = next.(model).Update(cloudInitImportStreamMsg{streamStep[*anvilv1.CloudInitImportResult]{done: true}})
+	task := next.(model).tasks.items[0]
+	if task.running || task.err != nil || !strings.Contains(task.last(), "base: imported") {
+		t.Fatalf("task %+v", task)
+	}
+}

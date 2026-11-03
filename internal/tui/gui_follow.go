@@ -17,7 +17,7 @@ import (
 
 const (
 	detachedPrefix = "started in the background, log: "
-	appRunsSuffix  = "deleted when it exits"
+	appRunsMarker  = " runs in " // in the "anvil: <app> runs in <where>" line once the app started
 	logPoll        = 200 * time.Millisecond
 )
 
@@ -141,7 +141,7 @@ func followGUILog(ctx context.Context, path string, emit func(string)) error {
 			}
 			text := strings.TrimPrefix(line, "anvil: ")
 			switch {
-			case strings.HasSuffix(line, appRunsSuffix):
+			case text != line && strings.Contains(text, appRunsMarker):
 				emit(text)
 				return nil
 			case text != line:

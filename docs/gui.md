@@ -148,6 +148,10 @@ The **GUI Apps** screen lists the exported entries of the machine running the TU
 `anvil gui exports`): `enter` starts the app with the entry's own command line, `x`
 removes it after a confirmation (like `anvil gui unexport`).
 
+Every GUI launch from the TUI runs as a task on the Tasks screen. It shows the detached
+run's progress (preparing the instance, rebuilding a missing warm snapshot, restoring the
+clone) until the app runs, or the error if it fails, without opening the log by hand.
+
 ## Limitations
 
 - Wayland hosts only, no plain X11 host session.

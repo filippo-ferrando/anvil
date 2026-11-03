@@ -40,6 +40,20 @@ func TestFollowGUILog_LastRunUntilAppRuns(t *testing.T) {
 	}
 }
 
+func TestFollowGUILog_InstanceAppRuns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dev.log")
+	if err := os.WriteFile(path, []byte("--- now\npreparing dev\nanvil: firefox runs in dev\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, emit := collect()
+	if err := followGUILog(context.Background(), path, emit); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(*got, []string{"preparing dev", "firefox runs in dev"}) {
+		t.Fatalf("got %q", *got)
+	}
+}
+
 func TestFollowGUILog_Failure(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.log")
 	if err := os.WriteFile(path, []byte("--- now\nbuilding\nanvil: no such distro\n"), 0o644); err != nil {
