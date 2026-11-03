@@ -24,7 +24,6 @@ import (
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/config"
 	"git.fferrando.cc/rdfilippo/anvil/internal/guestexec"
-	"git.fferrando.cc/rdfilippo/anvil/internal/gui"
 	"git.fferrando.cc/rdfilippo/anvil/internal/gui/appinfo"
 )
 
@@ -327,7 +326,7 @@ func appArgv(command []string, x11 bool) []string {
 	}
 	argv = append(argv, "server", "--", "sh", "-c",
 		`if command -v dbus-run-session >/dev/null 2>&1; then exec dbus-run-session -- "$@"; fi; exec "$@"`, "sh")
-	return append(argv, gui.WaitArgv(command)...)
+	return append(argv, guestexec.ReapArgv(command)...)
 }
 
 // appEnv is the app's environment; Java windows stay blank under xwayland-satellite without

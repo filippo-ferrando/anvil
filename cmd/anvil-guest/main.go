@@ -15,6 +15,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "reap" {
+		argv := os.Args[2:]
+		if len(argv) > 0 && argv[0] == "--" {
+			argv = argv[1:]
+		}
+		os.Exit(guestexec.Reap(argv))
+	}
 	port := flag.Uint("port", guestexec.Port, "vsock port to listen on")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
