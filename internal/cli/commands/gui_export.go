@@ -12,6 +12,7 @@ import (
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/internal/gui/desktop"
+	"git.fferrando.cc/rdfilippo/anvil/internal/gui/events"
 )
 
 func newGUIExportCommand(flags *globalFlags) *cobra.Command {
@@ -31,55 +32,8 @@ func newGUIExportCommand(flags *globalFlags) *cobra.Command {
 			"  anvil gui export --ephemeral debian-13 firefox-esr",
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name, command := args[0], args[1:]
-			pkg := ""
-			c, err := dial(flags)
-			if err != nil {
-				return err
-			}
-			var info *anvilv1.GUIAppInfoReply
-			if ephemeral {
-				if opts.user != "" {
-					c.Close()
-					return errors.New("--user doesn't apply to --ephemeral: the app runs as the image's default user")
-				}
-				if c.Remote != "" {
-					c.Close()
-					return errors.New("anvil gui --ephemeral doesn't work with --remote yet")
-				}
-				pkg, command = args[1], args[2:]
-				var app *anvilv1.AppStarted
-				app, err = ephemeralAppInfo(cmd.Context(), c, opts.app, name, pkg, command, opts.x11, cmd.ErrOrStderr())
-				if err == nil {
-					info, command = app.GetInfo(), app.GetCommand()
-				}
-			} else {
-				info, err = c.GetGUIAppInfo(cmd.Context(), &anvilv1.GUIAppInfoRequest{Name: name, Command: command[0]})
-			}
-			c.Close()
-			if err != nil {
-				return err
-			}
-			exe, err := os.Executable()
-			if err != nil {
-				return err
-			}
-			if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-				exe = resolved
-			}
-			dataDir, err := desktop.DataHome()
-			if err != nil {
-				return err
-			}
-			path, err := desktop.Write(dataDir, desktop.Spec{
-				Bin: exe, Remote: flags.remote, Instance: name, Command: command,
-				X11: opts.x11, User: opts.user, Title: title, Icon: icon, Package: pkg, Flags: opts.app.args(),
-			}, info)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Exported %s\n", path)
-			return nil
+			o := newGUIOutput(cmd, opts.json)
+			return o.finish(runGUIExport(cmd, flags, opts, o, title, icon, ephemeral, args))
 		},
 	}
 	cmd.Flags().BoolVar(&opts.x11, "x11", false, "the app needs X11 (XWayland)")
@@ -87,8 +41,78 @@ func newGUIExportCommand(flags *globalFlags) *cobra.Command {
 	cmd.Flags().StringVar(&title, "title", "", "name in the launcher (default: the app's own name)")
 	cmd.Flags().StringVar(&icon, "icon", "", "icon file on this host (default: the app's icon from the instance)")
 	cmd.Flags().BoolVar(&ephemeral, "ephemeral", false, "the entry runs <package>'s app in a throwaway clone of <distro>")
+	cmd.Flags().BoolVar(&opts.json, "json", false, "write progress as JSON events on stdout, one per line, for scripts and the TUI")
 	opts.app.addFlags(cmd)
 	return cmd
+}
+
+func runGUIExport(cmd *cobra.Command, flags *globalFlags, opts guiOptions, o guiOutput, title, icon string, ephemeral bool, args []string) error {
+	name, command := args[0], args[1:]
+	pkg := ""
+	c, err := dial(flags)
+	if err != nil {
+		return err
+	}
+	var info *anvilv1.GUIAppInfoReply
+	if ephemeral {
+		if opts.user != "" {
+			c.Close()
+			return errors.New("--user doesn't apply to --ephemeral: the app runs as the image's default user")
+		}
+		if c.Remote != "" {
+			c.Close()
+			return errors.New("anvil gui --ephemeral doesn't work with --remote yet")
+		}
+		pkg, command = args[1], args[2:]
+		var app *anvilv1.AppStarted
+		app, err = ephemeralAppInfo(cmd.Context(), c, opts.app, name, pkg, command, opts.x11, o.steps())
+		if err == nil {
+			info, command = app.GetInfo(), app.GetCommand()
+		}
+	} else {
+		if cmd.Flags().Changed("cpus") || cmd.Flags().Changed("memory") || cmd.Flags().Changed("arch") || cmd.Flags().Changed("env") {
+			c.Close()
+			return errors.New("--cpus, --memory, --arch and --env are for --ephemeral")
+		}
+		// GetGUIAppInfo starts a stopped instance: refuse an entry that could never run first.
+		if c.Remote != "" && opts.x11 {
+			var inst *anvilv1.Instance
+			if inst, err = resolveInstance(cmd.Context(), c, name); err == nil && inst.GetContainer() != nil {
+				err = errRemoteContainerX11
+			}
+		}
+		if err == nil {
+			info, err = c.GetGUIAppInfo(cmd.Context(), &anvilv1.GUIAppInfoRequest{Name: name, Command: command[0]})
+		}
+	}
+	c.Close()
+	if err != nil {
+		return err
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	dataDir, err := desktop.DataHome()
+	if err != nil {
+		return err
+	}
+	path, err := desktop.Write(dataDir, desktop.Spec{
+		Bin: exe, Remote: flags.remote, Instance: name, Command: command,
+		X11: opts.x11, User: opts.user, Title: title, Icon: icon, Package: pkg, Flags: opts.app.args(),
+	}, info)
+	if err != nil {
+		return err
+	}
+	if o.json {
+		o.event(events.Event{Event: events.Exported, Path: path})
+		return nil
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Exported %s\n", path)
+	return nil
 }
 
 func newGUIUnexportCommand() *cobra.Command {

@@ -163,10 +163,7 @@ func runnerLabels(m map[string]string) string {
 
 // runnerDeps is the DEPS column, "-" for none.
 func runnerDeps(deps []string) string {
-	if len(deps) == 0 {
-		return "-"
-	}
-	return strings.Join(deps, ",")
+	return dash(strings.Join(deps, ","))
 }
 
 // runnerState is the STATE column: paused, the last poll's error, or when it last polled.
@@ -257,13 +254,6 @@ func newRunnerJobsCommand(flags *globalFlags) *cobra.Command {
 	}
 	addOutputFlag(cmd, &output)
 	return cmd
-}
-
-func dash(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
 }
 
 // jobDuration is how long a job took, or has been running for.

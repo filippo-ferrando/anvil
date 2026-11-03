@@ -137,7 +137,7 @@ func newSnapshotScheduleCommand(flags *globalFlags) *cobra.Command {
 			case every <= 0:
 				return fmt.Errorf("--every is required (or --off to remove the schedule)")
 			default:
-				req.EverySeconds = int64(every / time.Second)
+				req.EverySeconds = int64(client.CeilSeconds(every))
 				req.Keep = keep
 			}
 

@@ -51,6 +51,16 @@ func printGuestInfo(w io.Writer, inst *anvilv1.Instance) {
 	}
 }
 
+// sshHint is the SSH line for a VM. The forward listens on the daemon host's loopback,
+// so under --remote it jumps through that host and adds its address on a Host line.
+func sshHint(remote, hostAddr string, port int32, user, name string) string {
+	if remote == "" {
+		return fmt.Sprintf("SSH:\tssh -p %d %s@localhost  (or just: anvil shell %s)\n", port, user, name)
+	}
+	return fmt.Sprintf("SSH:\tssh -J %s -p %d %s@localhost  (or just: anvil --remote %s shell %s)\nHost:\t%s\n",
+		remote, port, user, remote, name, hostAddr)
+}
+
 func newInfoCommand(flags *globalFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:   "info <name>...",
@@ -62,6 +72,7 @@ func newInfoCommand(flags *globalFlags) *cobra.Command {
 				if err != nil {
 					return err
 				}
+				hostAddr := "" // the remote daemon's host, looked up once when needed
 				for _, inst := range reply.GetInstances() {
 					fmt.Fprintf(cmd.OutOrStdout(), "Name:\t%s\n", inst.GetName())
 					fmt.Fprintf(cmd.OutOrStdout(), "Kind:\t%s\n", format.Kind(inst.GetKind()))
@@ -86,8 +97,10 @@ func newInfoCommand(flags *globalFlags) *cobra.Command {
 							if user == "" {
 								user = "root"
 							}
-							fmt.Fprintf(cmd.OutOrStdout(), "SSH:\tssh -p %d %s@localhost  (or just: anvil shell %s)\n",
-								vmSpec.GetSshPort(), user, inst.GetName())
+							if c.Remote != "" && hostAddr == "" {
+								hostAddr = c.RemoteHostAddr(cmd.Context())
+							}
+							fmt.Fprint(cmd.OutOrStdout(), sshHint(c.Remote, hostAddr, vmSpec.GetSshPort(), user, inst.GetName()))
 						}
 						for _, p := range vmSpec.GetPorts() {
 							fmt.Fprintf(cmd.OutOrStdout(), "Port:\t%d -> %d/%s\n", p.GetHostPort(), p.GetGuestPort(), p.GetProtocol())

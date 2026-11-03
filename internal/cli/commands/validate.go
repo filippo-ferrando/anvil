@@ -7,13 +7,17 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"git.fferrando.cc/rdfilippo/anvil/internal/yamlcheck"
+	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
-// newValidateCommand checks a saved document (fetched by get) or a local file with check.
+// validateFunc sends content to the daemon to check; file is the local path it came from, "" for a saved one.
+type validateFunc func(ctx context.Context, c *client.Client, file string, content []byte) ([]*anvilv1.ValidationProblem, error)
+
+// newValidateCommand checks a saved document (fetched by get) or a local file on the daemon.
 // Warnings are printed but only errors fail the command.
-func newValidateCommand(flags *globalFlags, what string, get func(ctx context.Context, flags *globalFlags, name string) (string, error),
-	check func(content string) []yamlcheck.Problem) *cobra.Command {
+func newValidateCommand(flags *globalFlags, what string, get func(ctx context.Context, c *client.Client, name string) (string, error),
+	check validateFunc) *cobra.Command {
 	var file string
 	cmd := &cobra.Command{
 		Use:   "validate [<name>] [-f <file>]",
@@ -23,24 +27,33 @@ func newValidateCommand(flags *globalFlags, what string, get func(ctx context.Co
 			if (file == "") == (len(args) == 0) {
 				return fmt.Errorf("give either a saved %s name or -f <file>", what)
 			}
-			var content, label string
+			var content []byte
+			label := file
 			if file != "" {
 				data, err := readManifest(file)
 				if err != nil {
 					return err
 				}
-				content, label = string(data), file
-			} else {
-				var err error
-				if content, err = get(cmd.Context(), flags, args[0]); err != nil {
+				content = data
+			}
+			return withClient(flags, func(c *client.Client) error {
+				if file == "" {
+					label = args[0]
+					saved, err := get(cmd.Context(), c, label)
+					if err != nil {
+						return err
+					}
+					content = []byte(saved)
+				}
+				problems, err := check(cmd.Context(), c, file, content)
+				if err != nil {
 					return err
 				}
-				label = args[0]
-			}
-			if n := printProblems(cmd.OutOrStdout(), label, check(content)); n > 0 {
-				return fmt.Errorf("%s: %d error(s)", label, n)
-			}
-			return nil
+				if n := printProblems(cmd.OutOrStdout(), label, problems); n > 0 {
+					return fmt.Errorf("%s: %d error(s)", label, n)
+				}
+				return nil
+			})
 		},
 	}
 	cmd.Flags().StringVarP(&file, "file", "f", "", `local file to check, or "-" for stdin`)
@@ -48,20 +61,20 @@ func newValidateCommand(flags *globalFlags, what string, get func(ctx context.Co
 }
 
 // printProblems prints one "label:line: message" per problem and returns how many are errors.
-func printProblems(out io.Writer, label string, problems []yamlcheck.Problem) int {
+func printProblems(out io.Writer, label string, problems []*anvilv1.ValidationProblem) int {
 	errs := 0
 	for _, p := range problems {
 		where := label
-		if p.Line > 0 {
-			where = fmt.Sprintf("%s:%d", label, p.Line)
+		if p.GetLine() > 0 {
+			where = fmt.Sprintf("%s:%d", label, p.GetLine())
 		}
 		kind := "error"
-		if p.Warning {
+		if p.GetWarning() {
 			kind = "warning"
 		} else {
 			errs++
 		}
-		fmt.Fprintf(out, "%s: %s: %s\n", where, kind, p.Message)
+		fmt.Fprintf(out, "%s: %s: %s\n", where, kind, p.GetMessage())
 	}
 	return errs
 }

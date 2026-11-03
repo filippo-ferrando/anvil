@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"text/tabwriter"
@@ -72,10 +73,11 @@ func newWarmCreateCommand(flags *globalFlags) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if snap != nil {
-					fmt.Printf("%s %s (%s, %d MiB, %s)\n", snap.GetKey(), snap.GetDistro(), format.CPUs(snap.GetCpus()),
-						snap.GetMemoryMib(), progress.Bytes(snap.GetSizeBytes()))
+				if snap == nil {
+					return errors.New("the daemon ended the stream without a warm snapshot")
 				}
+				fmt.Printf("%s %s (%s, %d MiB, %s)\n", snap.GetKey(), snap.GetDistro(), format.CPUs(snap.GetCpus()),
+					snap.GetMemoryMib(), progress.Bytes(snap.GetSizeBytes()))
 				return nil
 			})
 		},
@@ -108,7 +110,7 @@ func newWarmListCommand(flags *globalFlags) *cobra.Command {
 				tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 				fmt.Fprintln(tw, "KEY\tDISTRO\tAPP\tSETUP\tARCH\tCPUS\tMEMORY\tSIZE\tPOOL\tLAST USED")
 				for _, w := range reply.GetSnapshots() {
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%d MiB\t%s\t%s\t%s\n", w.GetKey(), w.GetDistro(), warmApp(w), warmSetup(w), w.GetArch(), w.GetCpus(),
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%d MiB\t%s\t%s\t%s\n", w.GetKey(), w.GetDistro(), warmApp(w), dash(w.GetSetup()), w.GetArch(), w.GetCpus(),
 						w.GetMemoryMib(), progress.Bytes(w.GetSizeBytes()), warmPool(w), time.Unix(w.GetLastUsedAtUnix(), 0).Format("2006-01-02 15:04"))
 				}
 				return tw.Flush()
@@ -162,14 +164,6 @@ func newWarmSaveCommand(flags *globalFlags) *cobra.Command {
 			})
 		},
 	}
-}
-
-// warmSetup is the SETUP column: the script a snapshot was built with, or the clone it was saved from.
-func warmSetup(w *anvilv1.WarmSnapshot) string {
-	if w.GetSetup() == "" {
-		return "-"
-	}
-	return w.GetSetup()
 }
 
 // warmApp is the APP column: the package an `anvil gui --ephemeral` snapshot has, "-" for none.

@@ -12,8 +12,7 @@ import (
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/internal/intent/apply"
-	"git.fferrando.cc/rdfilippo/anvil/internal/intent/vars"
-	"git.fferrando.cc/rdfilippo/anvil/internal/yamlcheck"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 func newManifestCommand(flags *globalFlags) *cobra.Command {
@@ -29,22 +28,33 @@ func newManifestCommand(flags *globalFlags) *cobra.Command {
 		newManifestShowCommand(flags),
 		newManifestRenameCommand(flags),
 		newManifestDeleteCommand(flags),
-		newValidateCommand(flags, "manifest", func(ctx context.Context, flags *globalFlags, name string) (string, error) {
-			c, err := dial(flags)
-			if err != nil {
-				return "", err
-			}
-			defer c.Close()
-			reply, err := c.Manifest.Get(ctx, &anvilv1.ManifestGetRequest{Name: name})
-			return reply.GetContent(), err
-		}, func(content string) []yamlcheck.Problem {
-			values, err := vars.Load("", "", []byte(content), nil)
-			if err != nil {
-				return []yamlcheck.Problem{{Message: err.Error()}}
-			}
-			return apply.Check([]byte(content), values)
-		}),
+		newManifestValidateCommand(flags),
 	)
+	return cmd
+}
+
+// newManifestValidateCommand fills variables like apply: --var, the shell env, then
+// --env-file or .env beside the file (the current dir for a saved manifest).
+func newManifestValidateCommand(flags *globalFlags) *cobra.Command {
+	var (
+		varFlags []string
+		envFile  string
+	)
+	get := func(ctx context.Context, c *client.Client, name string) (string, error) {
+		reply, err := c.Manifest.Get(ctx, &anvilv1.ManifestGetRequest{Name: name})
+		return reply.GetContent(), err
+	}
+	check := func(ctx context.Context, c *client.Client, file string, content []byte) ([]*anvilv1.ValidationProblem, error) {
+		values, err := client.ResolveVars(file, content, varFlags, envFile)
+		if err != nil {
+			return nil, err
+		}
+		reply, err := c.Manifest.Validate(ctx, &anvilv1.ManifestValidateRequest{Manifest: content, Vars: values})
+		return reply.GetProblems(), err
+	}
+	cmd := newValidateCommand(flags, "manifest", get, check)
+	cmd.Flags().StringArrayVar(&varFlags, "var", nil, "set a manifest variable as KEY=VALUE, over the shell env, .env and vars:")
+	cmd.Flags().StringVar(&envFile, "env-file", "", "file of KEY=VALUE manifest variables (default: .env beside the manifest, if present)")
 	return cmd
 }
 

@@ -51,7 +51,7 @@ func TestConfirm(t *testing.T) {
 }
 
 func planEvent(actions ...string) *anvilv1.IntentApplyProgress {
-	plan := &anvilv1.IntentApplyPlan{IntentName: "web"}
+	plan := &anvilv1.IntentApplyPlan{IntentName: "web", Hash: "h-" + strings.Join(actions, ",")}
 	for _, a := range actions {
 		plan.Steps = append(plan.Steps, &anvilv1.IntentApplyStep{Role: "db", InstanceName: "web-db", Action: a})
 	}
@@ -60,10 +60,11 @@ func planEvent(actions ...string) *anvilv1.IntentApplyProgress {
 
 var appliedEvent = &anvilv1.IntentApplyProgress{Event: &anvilv1.IntentApplyProgress_Intent{Intent: &anvilv1.Intent{Name: "web"}}}
 
-// fakeApplyStarter records which kind of apply each call started.
-func fakeApplyStarter(calls *[]bool, plan *anvilv1.IntentApplyProgress) func(bool) (applyStream, error) {
-	return func(dry bool) (applyStream, error) {
+// fakeApplyStarter records which kind of apply each call started, and the plan hash it expected.
+func fakeApplyStarter(calls *[]bool, hashes *[]string, plan *anvilv1.IntentApplyProgress) func(bool, string) (applyStream, error) {
+	return func(dry bool, planHash string) (applyStream, error) {
 		*calls = append(*calls, dry)
+		*hashes = append(*hashes, planHash)
 		events := []*anvilv1.IntentApplyProgress{plan}
 		if !dry {
 			events = append(events, appliedEvent)
@@ -92,8 +93,9 @@ func TestRunApply(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var calls []bool
+			var hashes []string
 			var out bytes.Buffer
-			if err := runApply(&out, fakeApplyStarter(&calls, tt.plan), tt.ask); err != nil {
+			if err := runApply(&out, fakeApplyStarter(&calls, &hashes, tt.plan), tt.ask); err != nil {
 				t.Fatal(err)
 			}
 			if len(calls) != len(tt.wantCalls) {
@@ -102,6 +104,14 @@ func TestRunApply(t *testing.T) {
 			for i := range calls {
 				if calls[i] != tt.wantCalls[i] {
 					t.Fatalf("calls (dry run per call) = %v, want %v", calls, tt.wantCalls)
+				}
+				// A real apply after a shown dry run expects that plan's hash.
+				want := ""
+				if !calls[i] && tt.ask != nil {
+					want = tt.plan.GetPlan().GetHash()
+				}
+				if hashes[i] != want {
+					t.Errorf("call %d expected plan hash %q, want %q", i, hashes[i], want)
 				}
 			}
 			if n := strings.Count(out.String(), "Plan for intent"); n != tt.wantPlans {
@@ -114,7 +124,7 @@ func TestRunApply(t *testing.T) {
 	}
 
 	t.Run("a failed dry run is returned", func(t *testing.T) {
-		start := func(bool) (applyStream, error) { return nil, errors.New("boom") }
+		start := func(bool, string) (applyStream, error) { return nil, errors.New("boom") }
 		if err := runApply(io.Discard, start, yes); err == nil || err.Error() != "boom" {
 			t.Fatalf("err = %v", err)
 		}

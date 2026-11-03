@@ -41,3 +41,12 @@ func TestCheckOutput(t *testing.T) {
 		t.Error(`checkOutput("yaml"): expected an error`)
 	}
 }
+
+func TestDash(t *testing.T) {
+	if got := dash(""); got != "-" {
+		t.Errorf(`dash("") = %q, want "-"`, got)
+	}
+	if got := dash("x"); got != "x" {
+		t.Errorf(`dash("x") = %q, want "x"`, got)
+	}
+}

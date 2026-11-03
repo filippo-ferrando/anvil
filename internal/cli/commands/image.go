@@ -179,11 +179,11 @@ func newImageContainersDeleteCommand(flags *globalFlags) *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withClient(flags, func(c *client.Client) error {
-				var pbEngine anvilv1.ContainerEngine
-				if engine == "podman" {
-					pbEngine = anvilv1.ContainerEngine_CONTAINER_ENGINE_PODMAN
+				pbEngine, err := parseContainerEngine(engine)
+				if err != nil {
+					return err
 				}
-				_, err := c.Image.DeleteContainerImage(cmd.Context(), &anvilv1.ContainerImageDeleteRequest{
+				_, err = c.Image.DeleteContainerImage(cmd.Context(), &anvilv1.ContainerImageDeleteRequest{
 					Id:     args[0],
 					Engine: pbEngine,
 					Force:  force,

@@ -61,15 +61,15 @@ func newPipelineRunCommand(flags *globalFlags) *cobra.Command {
 				return err
 			}
 			if err := stream.Send(&anvilv1.PipelineRunInput{Input: &anvilv1.PipelineRunInput_Request{Request: &anvilv1.PipelineRunRequest{File: file}}}); err != nil {
-				return err
+				return sendError(err, stream.Recv)
 			}
 			if err := client.SendUpload(path, func(b []byte) error {
 				return stream.Send(&anvilv1.PipelineRunInput{Input: &anvilv1.PipelineRunInput_UploadChunk{UploadChunk: b}})
 			}); err != nil {
-				return err
+				return sendError(err, stream.Recv)
 			}
 			if err := stream.Send(&anvilv1.PipelineRunInput{Input: &anvilv1.PipelineRunInput_UploadDone{UploadDone: true}}); err != nil {
-				return err
+				return sendError(err, stream.Recv)
 			}
 			run, err := printPipeline(ctx, stream.Recv)
 			if err != nil {
@@ -392,7 +392,7 @@ func newPipelineWatchCommand(flags *globalFlags) *cobra.Command {
 		Short: "Watch a branch",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			w.Name, w.IntervalSeconds = args[0], int64(interval/time.Second)
+			w.Name, w.IntervalSeconds = args[0], int64(client.CeilSeconds(interval))
 			return withClient(flags, func(c *client.Client) error {
 				got, err := c.Pipeline.AddWatch(cmd.Context(), &anvilv1.PipelineWatchAddRequest{Watch: &w})
 				if err != nil {

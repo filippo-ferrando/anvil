@@ -119,16 +119,12 @@ func cloneExec(cmd *cobra.Command, c *client.Client, id string, command []string
 			var once sync.Once
 			restore = func() { once.Do(func() { _ = term.Restore(os.Stdin.Fd(), state) }) }
 		}
-		winch := make(chan os.Signal, 1)
-		signal.Notify(winch, syscall.SIGWINCH)
-		defer signal.Stop(winch)
-		go func() {
-			for range winch {
-				if w, h, err := term.GetSize(os.Stdout.Fd()); err == nil {
-					_ = send(&anvilv1.CloneExecInput{Input: &anvilv1.CloneExecInput_Resize{Resize: &anvilv1.TerminalSize{Rows: uint32(h), Cols: uint32(w)}}})
-				}
+		stopResize := watchResize(func() {
+			if w, h, err := term.GetSize(os.Stdout.Fd()); err == nil {
+				_ = send(&anvilv1.CloneExecInput{Input: &anvilv1.CloneExecInput_Resize{Resize: &anvilv1.TerminalSize{Rows: uint32(h), Cols: uint32(w)}}})
 			}
-		}()
+		})
+		defer stopResize()
 	}
 	defer restore()
 	go func() {
@@ -184,4 +180,28 @@ func newEphemeralRmCommand(flags *globalFlags) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "delete every clone")
 	return cmd
+}
+
+// watchResize calls resize on each SIGWINCH until the returned func runs.
+func watchResize(resize func()) (stop func()) {
+	winch := make(chan os.Signal, 1)
+	signal.Notify(winch, syscall.SIGWINCH)
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-winch:
+				resize()
+			case <-done:
+				return
+			}
+		}
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			signal.Stop(winch)
+			close(done)
+		})
+	}
 }

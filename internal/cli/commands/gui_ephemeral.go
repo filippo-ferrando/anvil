@@ -60,7 +60,7 @@ const waypipeSocketWait = 5 * time.Second
 
 // runEphemeralGUI runs pkg's app in a throwaway clone of distro, with its windows on this
 // desktop through a local `waypipe client`, and returns once the app exits.
-func runEphemeralGUI(ctx context.Context, flags *globalFlags, f appFlags, distro, pkg string, command []string, x11 bool) error {
+func runEphemeralGUI(ctx context.Context, flags *globalFlags, f appFlags, o guiOutput, distro, pkg string, command []string, x11 bool) error {
 	// The clone's waypipe runs xwayland-satellite itself, so the host only needs Wayland.
 	if err := checkLocalDisplay(false); err != nil {
 		return err
@@ -95,7 +95,7 @@ func runEphemeralGUI(ctx context.Context, flags *globalFlags, f appFlags, distro
 		}
 	}()
 	var exit *anvilv1.RunExit
-	err = streamStatus(os.Stderr, stream.Recv, func(l *liveLine, ev *anvilv1.AppEvent) (bool, error) {
+	err = streamStatus(o.steps(), stream.Recv, func(l *liveLine, ev *anvilv1.AppEvent) (bool, error) {
 		switch e := ev.GetEvent().(type) {
 		case *anvilv1.AppEvent_Progress:
 			l.set(e.Progress.GetMessage())
@@ -105,10 +105,11 @@ func runEphemeralGUI(ctx context.Context, flags *globalFlags, f appFlags, distro
 			}
 			return false, stream.Send(&anvilv1.AppInput{Input: &anvilv1.AppInput_DisplayReady{DisplayReady: true}})
 		case *anvilv1.AppEvent_App:
-			l.printf("anvil: %s runs in %s, deleted when it exits\n", appLabel(e.App), e.App.GetCloneId())
+			l.finish()
+			o.running(appLabel(e.App), e.App.GetCloneId(), appLabel(e.App)+" runs in "+e.App.GetCloneId()+", deleted when it exits")
 		case *anvilv1.AppEvent_Output:
 			l.finish()
-			w := os.Stdout
+			w := o.appStdout()
 			if e.Output.GetStream() == anvilv1.OutputStream_OUTPUT_STREAM_STDERR {
 				w = os.Stderr
 			}

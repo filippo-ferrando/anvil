@@ -173,7 +173,7 @@ func printIntentMembers(w io.Writer, members []*anvilv1.IntentMember) {
 	fmt.Fprintln(tw, "ROLE\tKIND\tIP\tDNS NAME\tINSTANCE ID")
 	for _, m := range members {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", m.GetRole(), format.Kind(m.GetKind()),
-			orDash(m.GetIp()), orDash(m.GetDnsName()), m.GetInstanceId())
+			dash(m.GetIp()), dash(m.GetDnsName()), m.GetInstanceId())
 	}
 	tw.Flush()
 }

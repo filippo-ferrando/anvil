@@ -136,7 +136,7 @@ func TestMatrixThroughTheStack(t *testing.T) {
 	}
 
 	// One distro: the command's own exit code comes back, and the warm snapshots are listed.
-	stdout, _ = captureOutput(t, func() {
+	captureOutput(t, func() {
 		root := NewRootCommand()
 		root.SetArgs([]string{"--socket", sock, "launch", "--ephemeral", "ubuntu", "--", "sh", "-c", "exit 5"})
 		runErr = root.Execute()

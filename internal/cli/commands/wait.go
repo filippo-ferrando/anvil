@@ -21,7 +21,7 @@ func newWaitCommand(flags *globalFlags) *cobra.Command {
 			return withClient(flags, func(c *client.Client) error {
 				stream, err := c.WaitReady(cmd.Context(), &anvilv1.WaitReadyRequest{
 					Name:           args[0],
-					TimeoutSeconds: int32(timeout.Seconds()),
+					TimeoutSeconds: client.CeilSeconds(timeout),
 				})
 				if err != nil {
 					return err

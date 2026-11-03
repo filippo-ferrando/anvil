@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"cmp"
 	"fmt"
 	"io"
 	"strings"
@@ -57,7 +56,15 @@ func printInstanceTable(w io.Writer, instances []*anvilv1.Instance) {
 			image = c.GetImageRef()
 			engine = format.Engine(c.GetEngine())
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", inst.GetName(), format.Kind(inst.GetKind()), engine, stateLabel(inst.GetState()), cmp.Or(format.InstanceIP(inst), "-"), image)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", inst.GetName(), format.Kind(inst.GetKind()), engine, stateLabel(inst.GetState()), dash(format.InstanceIP(inst)), image)
 	}
 	tw.Flush()
+}
+
+// dash returns s, or "-" for an empty cell.
+func dash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }

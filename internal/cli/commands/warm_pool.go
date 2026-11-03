@@ -82,7 +82,7 @@ func newWarmPoolListCommand(flags *globalFlags) *cobra.Command {
 				fmt.Fprintln(tw, "DISTRO\tARCH\tCPUS\tMEMORY\tREADY\tWARM KEY\tERROR")
 				for _, p := range reply.GetPools() {
 					fmt.Fprintf(tw, "%s\t%s\t%d\t%d MiB\t%d/%d\t%s\t%s\n", p.GetDistro(), p.GetArch(), p.GetCpus(), p.GetMemoryMib(),
-						p.GetReady(), p.GetSize(), dashIfEmpty(p.GetWarmKey()), dashIfEmpty(p.GetError()))
+						p.GetReady(), p.GetSize(), dash(p.GetWarmKey()), dash(p.GetError()))
 				}
 				return tw.Flush()
 			})
@@ -119,13 +119,6 @@ func newWarmPoolRmCommand(flags *globalFlags) *cobra.Command {
 // poolLabel is "ubuntu-24.04 (2 CPUs, 512 MiB)".
 func poolLabel(p *anvilv1.WarmPool) string {
 	return fmt.Sprintf("%s (%s, %d MiB)", p.GetDistro(), format.CPUs(p.GetCpus()), p.GetMemoryMib())
-}
-
-func dashIfEmpty(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
 }
 
 // warmPool is warm list's POOL column: ready/size, "-" without a pool.

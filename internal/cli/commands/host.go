@@ -87,10 +87,7 @@ func newHostListCommand(flags *globalFlags) *cobra.Command {
 				tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 				fmt.Fprintln(tw, "ALIAS\tTARGET\tIDENTITY\tHOST KEY")
 				for _, h := range reply.GetHosts() {
-					identity := h.GetIdentity()
-					if identity == "" {
-						identity = "-"
-					}
+					identity := dash(h.GetIdentity())
 					hostKey := "trust on first use"
 					if h.GetStrictHostKey() {
 						hostKey = "strict"
@@ -263,10 +260,7 @@ func newHostDevicesCommand(flags *globalFlags) *cobra.Command {
 				tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 				fmt.Fprintln(tw, "ID\tVENDOR:PRODUCT\tNAME\tDRIVER\tIOMMU\tSTATUS")
 				for _, d := range reply.GetDevices() {
-					driver := d.GetDriver()
-					if driver == "" {
-						driver = "-"
-					}
+					driver := dash(d.GetDriver())
 					status := client.DeviceStatus(d)
 					if len(d.GetGroupMembers()) > 0 {
 						status += " (with " + strings.Join(d.GetGroupMembers(), ", ") + ")"

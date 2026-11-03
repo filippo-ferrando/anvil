@@ -61,9 +61,10 @@ func newApplyCommand(flags *globalFlags) *cobra.Command {
 				ask = func() bool { return confirm(os.Stdin, out, "Apply these changes?") }
 			}
 			return withClient(flags, func(c *client.Client) error {
-				start := func(dry bool) (applyStream, error) {
+				start := func(dry bool, planHash string) (applyStream, error) {
 					r := proto.CloneOf(req)
 					r.DryRun = r.DryRun || dry
+					r.ExpectedPlanHash = planHash
 					return c.Intent.Apply(cmd.Context(), r)
 				}
 				return runApply(out, start, ask)
@@ -123,11 +124,11 @@ func shouldConfirmApply(dryRun, yes bool, file string, out io.Writer) bool {
 	return !dryRun && !yes && file != "-" && applyInteractive(out)
 }
 
-// runApply applies directly when ask is nil. Otherwise it shows a dry-run plan first
-// and asks before applying, unless the plan changes nothing.
-func runApply(out io.Writer, start func(dry bool) (applyStream, error), ask func() bool) error {
+// runApply applies directly when ask is nil. Otherwise it shows a dry-run plan first and asks
+// before applying, unless the plan changes nothing; the apply then fails if the plan changed.
+func runApply(out io.Writer, start func(dry bool, planHash string) (applyStream, error), ask func() bool) error {
 	if ask == nil {
-		stream, err := start(false)
+		stream, err := start(false, "")
 		if err != nil {
 			return err
 		}
@@ -135,7 +136,7 @@ func runApply(out io.Writer, start func(dry bool) (applyStream, error), ask func
 		return err
 	}
 
-	stream, err := start(true)
+	stream, err := start(true, "")
 	if err != nil {
 		return err
 	}
@@ -144,14 +145,19 @@ func runApply(out io.Writer, start func(dry bool) (applyStream, error), ask func
 		return err
 	}
 	if !planHasChanges(plan) {
-		return runApply(out, start, nil)
+		stream, err := start(false, plan.GetHash())
+		if err != nil {
+			return err
+		}
+		_, err = streamApply(out, stream, true)
+		return err
 	}
 	printApplyPlan(out, plan)
 	if !ask() {
 		fmt.Fprintln(out, "Apply cancelled.")
 		return nil
 	}
-	stream, err = start(false)
+	stream, err = start(false, plan.GetHash())
 	if err != nil {
 		return err
 	}

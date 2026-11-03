@@ -3,7 +3,6 @@ package commands
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +12,7 @@ import (
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/internal/gui"
+	"git.fferrando.cc/rdfilippo/anvil/internal/gui/events"
 	"git.fferrando.cc/rdfilippo/anvil/internal/gui/relay"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
@@ -40,7 +40,7 @@ func checkLocalDisplay(x11 bool) error {
 
 // runContainerGUI relays this session's display sockets into the container's GUI directory,
 // then runs command there with docker exec.
-func runContainerGUI(ctx context.Context, inst *anvilv1.Instance, session *anvilv1.GUISession, opts guiOptions, command []string) error {
+func runContainerGUI(ctx context.Context, inst *anvilv1.Instance, session *anvilv1.GUISession, opts guiOptions, o guiOutput, command []string) error {
 	spec := inst.GetContainer()
 	if spec.GetContainerId() == "" {
 		return fmt.Errorf("%q has no known container ID yet", inst.GetName())
@@ -67,7 +67,7 @@ func runContainerGUI(ctx context.Context, inst *anvilv1.Instance, session *anvil
 	args = append(args, command...)
 
 	cmd := exec.Command(bin, args...)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	cmd.Stdout, cmd.Stderr = o.appStdout(), os.Stderr
 	runErr := cmd.Run()
 	waitForGUIApp(ctx, relays)
 	return runErr
@@ -165,7 +165,8 @@ func waitForGUIApp(ctx context.Context, relays []*relay.Relay) {
 }
 
 // detachGUI re-runs this same command without --detach in a new session, logging to a file.
-func detachGUI(out io.Writer, name string) error {
+// With --json the child logs events too, read from the offset the detached event gives.
+func detachGUI(o guiOutput, name string) error {
 	logPath, err := guiLogPath(name)
 	if err != nil {
 		return err
@@ -183,6 +184,10 @@ func detachGUI(out io.Writer, name string) error {
 		return err
 	}
 	fmt.Fprintf(logFile, "--- %s anvil %v\n", time.Now().Format(time.RFC3339), withoutDetach(os.Args[1:]))
+	st, err := logFile.Stat()
+	if err != nil {
+		return err
+	}
 
 	cmd := exec.Command(exe, withoutDetach(os.Args[1:])...)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
@@ -190,6 +195,10 @@ func detachGUI(out io.Writer, name string) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "started in the background, log: %s\n", logPath)
+	if o.json {
+		o.event(events.Event{Event: events.Detached, Log: logPath, Offset: st.Size()})
+	} else {
+		fmt.Fprintf(o.progress, "started in the background, log: %s\n", logPath)
+	}
 	return cmd.Process.Release()
 }

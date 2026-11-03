@@ -141,14 +141,15 @@ func runEphemeral(cmd *cobra.Command, flags *globalFlags, distros []string, path
 	if f.tty {
 		if path != "" {
 			if err := sendUpload(path, send); err != nil {
-				return err
+				return sendError(err, stream.Recv)
 			}
 		}
 		restore = forwardInput(f.tty, len(distros) == 1, send)
 	} else {
 		go func() {
 			if path != "" {
-				if err := sendUpload(path, send); err != nil {
+				// io.EOF means the daemon ended the stream: Recv carries its real error.
+				if err := sendUpload(path, send); err != nil && !errors.Is(err, io.EOF) {
 					uploadErr <- err
 					cancelRun()
 					return
@@ -189,6 +190,17 @@ type ExitError struct{ Code int }
 
 func (e ExitError) Error() string { return fmt.Sprintf("exit status %d", e.Code) }
 
+// sendError turns the io.EOF a Send gets when the daemon ended the stream into the daemon's error.
+func sendError[T any](err error, recv func() (T, error)) error {
+	if !errors.Is(err, io.EOF) {
+		return err
+	}
+	if _, rerr := recv(); rerr != nil && !errors.Is(rerr, io.EOF) {
+		return rerr
+	}
+	return err
+}
+
 func (e ExitError) orNil() error {
 	if e.Code == 0 {
 		return nil
@@ -216,19 +228,20 @@ func forwardInput(tty, single bool, send func(*anvilv1.RunInput) error) func() {
 	}
 	restore := noop
 	if tty && term.IsTerminal(os.Stdin.Fd()) {
+		restoreTerm := noop
 		if state, err := term.MakeRaw(os.Stdin.Fd()); err == nil {
 			var once sync.Once
-			restore = func() { once.Do(func() { _ = term.Restore(os.Stdin.Fd(), state) }) }
+			restoreTerm = func() { once.Do(func() { _ = term.Restore(os.Stdin.Fd(), state) }) }
 		}
-		winch := make(chan os.Signal, 1)
-		signal.Notify(winch, syscall.SIGWINCH)
-		go func() {
-			for range winch {
-				if w, h, err := term.GetSize(os.Stdout.Fd()); err == nil {
-					_ = send(&anvilv1.RunInput{Input: &anvilv1.RunInput_Resize{Resize: &anvilv1.TerminalSize{Rows: uint32(h), Cols: uint32(w)}}})
-				}
+		stopResize := watchResize(func() {
+			if w, h, err := term.GetSize(os.Stdout.Fd()); err == nil {
+				_ = send(&anvilv1.RunInput{Input: &anvilv1.RunInput_Resize{Resize: &anvilv1.TerminalSize{Rows: uint32(h), Cols: uint32(w)}}})
 			}
-		}()
+		})
+		restore = func() {
+			stopResize()
+			restoreTerm()
+		}
 	}
 	go func() {
 		buf := make([]byte, 32<<10)

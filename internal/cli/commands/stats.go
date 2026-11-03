@@ -69,7 +69,7 @@ func newStatsCommand(flags *globalFlags) *cobra.Command {
 
 func printStats(w io.Writer, name string, s *anvilv1.InstanceStats) {
 	fmt.Fprintf(w, "Name:\t%s\n", name)
-	fmt.Fprintf(w, "Address:\t%s\n", orDash(s.GetAddress()))
+	fmt.Fprintf(w, "Address:\t%s\n", dash(s.GetAddress()))
 	fmt.Fprintf(w, "Uptime:\t%s\n", format.Uptime(s.GetUptimeSeconds(), ""))
 	fmt.Fprintf(w, "CPU:\t%.1f%%\n", s.GetCpuPercent())
 	fmt.Fprintf(w, "Memory:\t%s / %s\n", progress.Bytes(s.GetMemUsedBytes()), progress.Bytes(s.GetMemLimitBytes()))
@@ -85,11 +85,4 @@ func printStats(w io.Writer, name string, s *anvilv1.InstanceStats) {
 	} else {
 		fmt.Fprintln(w, "Network:\tnot available")
 	}
-}
-
-func orDash(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
 }
