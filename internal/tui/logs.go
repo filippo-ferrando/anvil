@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"time"
 
@@ -142,10 +143,10 @@ func (m *logsModel) render() {
 	}
 	m.dirty = false
 	lines := m.lines
-	if live := cleanLine(m.pending); live != "" {
+	if live := cleanLine(m.pending); len(live) > 0 {
 		// Show the in-progress line (e.g. "Starting foo...") before its
 		// terminating newline arrives.
-		lines = append(append([]string{}, m.lines...), live)
+		lines = append(append([]string{}, m.lines...), live...)
 	}
 	m.viewport.SetContent(strings.Join(lines, "\n"))
 	if m.following {
@@ -170,24 +171,30 @@ func (m *logsModel) appendLines(text string) {
 // commitLine appends one complete raw line to the buffer, capping it at
 // maxLogLines. Blank lines are dropped: boot output pads with enough of them to flood the cap and evict genuine earlier history.
 func (m *logsModel) commitLine(rawLine string) {
-	line := cleanLine(rawLine)
-	if line == "" {
-		return
-	}
-	m.lines = append(m.lines, line)
+	m.lines = append(m.lines, cleanLine(rawLine)...)
 	if len(m.lines) > maxLogLines {
 		m.lines = m.lines[len(m.lines)-maxLogLines:]
 	}
 }
 
-// cleanLine strips ANSI escapes, then resolves "\r": a lone trailing "\r" is
-// just the CRLF line ending and is dropped, while any "\r" left after that is a genuine overwrite and collapses to everything after the last one.
-func cleanLine(line string) string {
-	line = strings.TrimSuffix(ansi.Strip(line), "\r")
-	if i := strings.LastIndexByte(line, '\r'); i >= 0 {
-		return line[i+1:]
+// kernelStampRe matches a kernel message's "[    2.322103]" prefix.
+var kernelStampRe = regexp.MustCompile(`^\[\s*\d+\.\d+\]`)
+
+// cleanLine strips ANSI escapes and resolves "\r" into the lines to show, blank ones left out.
+// Text after a "\r" rewrites the line, unless it is a kernel message cutting in, which gets its own line.
+func cleanLine(line string) []string {
+	var out []string
+	for seg := range strings.SplitSeq(ansi.Strip(line), "\r") {
+		switch {
+		case strings.TrimSpace(seg) == "":
+			// A CRLF ending ("\r\r\n" from systemd) or a bare "\r" before the rewrite.
+		case len(out) == 0 || kernelStampRe.MatchString(seg):
+			out = append(out, seg)
+		default:
+			out[len(out)-1] = seg
+		}
 	}
-	return line
+	return out
 }
 
 func (m logsModel) View() string {

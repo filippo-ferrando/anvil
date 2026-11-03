@@ -268,7 +268,14 @@ func guestAddresses(ifaces []qemu.GuestInterface) []string {
 // first; some distros block guest-exec, so result.json is read as a fallback.
 func cloudInitStatus(ctx context.Context, c *qemu.QGAConn) instance.CloudInitStatus {
 	if res, err := c.Exec(ctx, "cloud-init", "status"); err == nil {
-		if s := parseCloudInitStatus(res.Stdout); s != instance.CloudInitUnknown {
+		s := parseCloudInitStatus(res.Stdout)
+		if s == instance.CloudInitRunning && cloudInitNotStarted(res.Stdout) {
+			// A boot that already finished without starting cloud-init won't start it later.
+			if res, err := c.Exec(ctx, "systemctl", "is-system-running"); err == nil && bootFinished(res.Stdout) {
+				return instance.CloudInitDisabled
+			}
+		}
+		if s != instance.CloudInitUnknown {
 			return s
 		}
 	}
@@ -303,6 +310,24 @@ func parseCloudInitStatus(out string) instance.CloudInitStatus {
 	// No status line means the command itself broke (e.g. python upgraded mid-boot), not
 	// cloud-init: stay unknown so result.json decides instead of a sticky error.
 	return instance.CloudInitUnknown
+}
+
+// cloudInitNotStarted reports whether `cloud-init status` says cloud-init hasn't run this boot.
+func cloudInitNotStarted(out string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		if word, ok := strings.CutPrefix(strings.TrimSpace(line), "status:"); ok {
+			word = strings.TrimSpace(word)
+			return word == "not started" || word == "not run"
+		}
+	}
+	return false
+}
+
+// bootFinished reads `systemctl is-system-running`: "running" or "degraded" mean
+// every startup job is over, cloud-init's included.
+func bootFinished(out string) bool {
+	s := strings.TrimSpace(out)
+	return s == "running" || s == "degraded"
 }
 
 // parseCloudInitResult reads /run/cloud-init/result.json, written when cloud-init ends.

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -50,5 +51,28 @@ func TestLogsDropsStaleStream(t *testing.T) {
 	next, _ = m.Update(logsStreamMsg{streamStep: streamStep[[]byte]{result: []byte("new instance\n")}, gen: 2})
 	if got := next.(model).logs.lines; len(got) != 1 || got[0] != "new instance" {
 		t.Fatalf("lines %q", got)
+	}
+}
+
+func TestCleanLine(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want []string
+	}{
+		{"plain", []string{"plain"}},
+		{"crlf\r", []string{"crlf"}},
+		// systemd ends its status lines with "\r\r\n".
+		{"[\x1b[0;32m  OK  \x1b[0m] Started foo.\r\r", []string{"[  OK  ] Started foo."}},
+		{"\rLoading Linux ...", []string{"Loading Linux ..."}},
+		{"50%\r75%\r100%", []string{"100%"}},
+		// A kernel message cutting into a status line gets its own line.
+		{"Starting foo...\r[    2.322103] ACPI: bus registered", []string{"Starting foo...", "[    2.322103] ACPI: bus registered"}},
+		{"\r\r", nil},
+		{"\x1b[2J\x1b[001;001H", nil},
+	}
+	for _, c := range cases {
+		if got := cleanLine(c.raw); !slices.Equal(got, c.want) {
+			t.Errorf("cleanLine(%q) = %q, want %q", c.raw, got, c.want)
+		}
 	}
 }

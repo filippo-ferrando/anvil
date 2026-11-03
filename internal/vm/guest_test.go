@@ -40,6 +40,20 @@ func TestParseCloudInitStatus(t *testing.T) {
 	}
 }
 
+func TestCloudInitNotStartedAfterBoot(t *testing.T) {
+	if !cloudInitNotStarted("status: not started\nextended_status: not started\n") || !cloudInitNotStarted("status: not run\n") {
+		t.Error("not started / not run not recognised")
+	}
+	if cloudInitNotStarted("status: running\n") || cloudInitNotStarted("") {
+		t.Error("running or empty output taken as not started")
+	}
+	for out, want := range map[string]bool{"running\n": true, "degraded\n": true, "starting\n": false, "initializing\n": false, "": false} {
+		if got := bootFinished(out); got != want {
+			t.Errorf("bootFinished(%q) = %v, want %v", out, got, want)
+		}
+	}
+}
+
 func TestParseCloudInitResult(t *testing.T) {
 	if got := parseCloudInitResult([]byte(`{"v1": {"datasource": "NoCloud", "errors": []}}`)); got != instance.CloudInitDone {
 		t.Errorf("got %q, want done", got)
