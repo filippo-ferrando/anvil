@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func collect() (*[]string, func(string)) {
@@ -99,10 +102,10 @@ func TestRunFollowed_FailureStopsCalls(t *testing.T) {
 }
 
 func TestFollowCalls_Messages(t *testing.T) {
-	next := followCalls(context.Background(), 7, "sh", [][]string{{"-c", "echo one; echo two"}})
+	next := followCalls(context.Background(), "sh", [][]string{{"-c", "echo one; echo two"}}, lineTaskStep(7))
 	var lines []string
 	for {
-		msg := next().(appLaunchMsg)
+		msg := next().(taskStepMsg)
 		if msg.id != 7 {
 			t.Fatalf("id = %d", msg.id)
 		}
@@ -112,9 +115,25 @@ func TestFollowCalls_Messages(t *testing.T) {
 			}
 			break
 		}
-		lines, next = append(lines, msg.line), msg.next
+		lines, next = append(lines, msg.status), msg.next
 	}
 	if !reflect.DeepEqual(lines, []string{"one", "two"}) {
 		t.Fatalf("got %q", lines)
+	}
+}
+
+func TestFollowCalls_CancelledEndsCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	next := followCalls(ctx, "sh", [][]string{{"-c", "true"}}, lineTaskStep(1))
+	for {
+		msg := next().(taskStepMsg)
+		if msg.done {
+			if status.Code(msg.err) != codes.Canceled {
+				t.Fatalf("err = %v", msg.err)
+			}
+			return
+		}
+		next = msg.next
 	}
 }

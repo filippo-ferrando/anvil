@@ -69,15 +69,12 @@ type ephemeralModel struct {
 	warm       list.Model
 	clones     list.Model
 
-	form      *simpleForm           // the open form, nil for none
-	formKind  string                // "warm" | "run" | "app" | "pool"
-	poolSnap  *anvilv1.WarmSnapshot // the snapshot the pool form is for
-	confirm   string                // the warm key or clone id waiting for a yes
-	building  transcript            // a warm snapshot build in progress
-	launching transcript            // a GUI app launch: its export, then the detached run's log
-	stopWatch context.CancelFunc    // stops following the launch, which goes on
-	launchID  int                   // tells the current launch's messages from a stopped one's
-	run       *runView
+	form     *simpleForm           // the open form, nil for none
+	formKind string                // "warm" | "run" | "app" | "pool"
+	poolSnap *anvilv1.WarmSnapshot // the snapshot the pool form is for
+	confirm  string                // the warm key or clone id waiting for a yes
+	watching int                   // id of the task shown in place of the list (a warm build, a GUI app), 0 for none
+	run      *runView
 }
 
 func newEphemeralModel() ephemeralModel {
@@ -260,10 +257,6 @@ type clonesLoadedMsg struct {
 	err    error
 }
 
-type warmBuildMsg struct {
-	step streamStep[*anvilv1.WarmSnapshot]
-}
-
 // runEventMsg carries one event of a TUI run, or its end.
 type runEventMsg struct {
 	ev        *anvilv1.RunEvent
@@ -286,17 +279,43 @@ func loadEphemeral(c *client.Client) tea.Cmd {
 	)
 }
 
-func buildWarm(c *client.Client, req *anvilv1.WarmCreateRequest) tea.Cmd {
+func buildWarm(ctx context.Context, c *client.Client, req *anvilv1.WarmCreateRequest, wrap func(lineStep) tea.Msg) tea.Cmd {
 	return func() tea.Msg {
-		stream, err := c.Ephemeral.WarmCreate(context.Background(), req)
+		stream, err := c.Ephemeral.WarmCreate(ctx, req)
 		if err != nil {
-			return warmBuildMsg{failed[*anvilv1.WarmSnapshot](err)}
+			return wrap(failed[struct{}](err))
 		}
-		parse := func(ev *anvilv1.WarmCreateProgress) streamStep[*anvilv1.WarmSnapshot] {
-			return streamStep[*anvilv1.WarmSnapshot]{status: ev.GetStatus(), result: ev.GetSnapshot(), done: ev.GetSnapshot() != nil}
+		parse := func(ev *anvilv1.WarmCreateProgress) lineStep {
+			if snap := ev.GetSnapshot(); snap != nil {
+				return lineStep{status: styleGood.Render("built warm snapshot " + snap.GetKey()), done: true}
+			}
+			return lineStep{status: ev.GetStatus()}
 		}
-		return recvStream(stream.Recv, parse, func(s streamStep[*anvilv1.WarmSnapshot]) tea.Msg { return warmBuildMsg{s} })()
+		return recvStream(stream.Recv, parse, wrap)()
 	}
+}
+
+// warmTask builds req's warm snapshot as a task.
+func (m *model) warmTask(req *anvilv1.WarmCreateRequest) (*task, tea.Cmd) {
+	title := "building warm snapshot of " + req.GetDistro()
+	t, cmd := m.streamTask(title, "built warm snapshot of "+req.GetDistro(), screenEphemeral, func(ctx context.Context, id int) tea.Cmd {
+		return buildWarm(ctx, m.client, req, lineTaskStep(id))
+	})
+	return t, cmd
+}
+
+// appTask starts a's GUI app in a throwaway clone as a task.
+func (m *model) appTask(a appRequest) (*task, tea.Cmd) {
+	what := a.pkg
+	if c := strings.TrimSpace(a.command); c != "" {
+		what = c
+	}
+	title := "starting " + what + " in a " + a.distro + " clone"
+	t, cmd := m.streamTask(title, "started "+what+" in a "+a.distro+" clone", screenEphemeral, func(ctx context.Context, id int) tea.Cmd {
+		return launchEphemeralApp(ctx, m.socketPath, a, lineTaskStep(id))
+	})
+	t.cancelNote = "Stops following the launch. The app keeps starting in its clone."
+	return t, cmd
 }
 
 // startRun opens the Run stream, sends the request, then hands over the first event while
@@ -601,18 +620,6 @@ func (m model) updateEphemeral(msg tea.Msg) (tea.Model, tea.Cmd) {
 			e.clones.SetItems(items)
 		}
 		return m, nil
-	case warmBuildMsg:
-		if msg.step.status != "" {
-			e.building.add(msg.step.status)
-		}
-		if msg.step.err != nil {
-			e.building.add("failed: " + msg.step.err.Error())
-		}
-		if msg.step.done {
-			e.building.running = false
-			return m, loadEphemeral(m.client)
-		}
-		return m, msg.step.next
 	case runEventMsg:
 		if e.run == nil {
 			return m, nil
@@ -625,22 +632,6 @@ func (m model) updateEphemeral(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.done {
 			e.run.done, e.run.err = true, msg.err
-			return m, loadEphemeral(m.client)
-		}
-		return m, msg.next
-	case appLaunchMsg:
-		if msg.id != e.launchID || !e.launching.running {
-			return m, nil
-		}
-		if msg.line != "" {
-			e.launching.add(msg.line)
-		}
-		if msg.done {
-			e.launching.running = false
-			e.stopWatch()
-			if msg.err != nil {
-				e.launching.lines = append(e.launching.lines, errLine(msg.err))
-			}
 			return m, loadEphemeral(m.client)
 		}
 		return m, msg.next
@@ -669,20 +660,21 @@ func (m model) updateEphemeralKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if e.building.active() {
-		e.building.dismiss(msg.String())
-		return m, nil
-	}
-	if e.launching.active() {
-		if e.launching.running {
-			if k := msg.String(); k == "esc" || k == "q" {
-				e.stopWatch()
-				e.launching = transcript{}
-				m.setStatus("the app keeps starting in the background", false)
+	if t := m.tasks.get(e.watching); t != nil {
+		switch msg.String() {
+		case "esc", "q", "enter":
+			if t.running && msg.String() == "enter" {
+				return m, nil
 			}
-			return m, nil
+			e.watching = 0
+			if t.running {
+				m.setStatus(inBackground(t.title), false)
+			}
+		case "t":
+			e.watching = 0
+			m.tasks.open = t.id
+			return m.jumpTo(screenTasks)
 		}
-		e.launching.dismiss(msg.String())
 		return m, nil
 	}
 	if e.confirm != "" {
@@ -716,11 +708,9 @@ func (m model) updateEphemeralKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			e.form = nil
-			ctx, cancel := context.WithCancel(context.Background())
-			e.launching.start()
-			e.stopWatch = cancel
-			e.launchID++
-			return m, launchEphemeralApp(ctx, e.launchID, m.socketPath, a)
+			t, cmd := m.appTask(a)
+			e.watching = t.id
+			return m, cmd
 		}
 		if e.formKind == "pool" {
 			req, err := buildPoolRequest(form, e.poolSnap)
@@ -738,8 +728,9 @@ func (m model) updateEphemeralKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			e.form = nil
-			e.building.start()
-			return m, buildWarm(m.client, req)
+			t, cmd := m.warmTask(req)
+			e.watching = t.id
+			return m, cmd
 		}
 		req, path, err := buildRunRequest(form)
 		if err != nil {
@@ -836,18 +827,13 @@ func (m model) cloneShell(id string) tea.Cmd {
 	return tea.ExecProcess(cmd, func(err error) tea.Msg { return shellDoneMsg{err: err} })
 }
 
-func (e ephemeralModel) View(width, height int) string {
+// View draws the screen; watched is the task the screen follows, nil for none.
+func (e ephemeralModel) View(width, height int, watched *task) string {
 	switch {
 	case e.run != nil:
 		return e.run.view(width, height)
-	case e.building.active():
-		return e.building.view("Building a warm snapshot")
-	case e.launching.active():
-		s := e.launching.view("Starting a GUI app in a throwaway clone")
-		if e.launching.running {
-			s += "\n" + helpBar("esc", "stop watching (the app keeps starting)")
-		}
-		return s
+	case watched != nil:
+		return watchedTaskView(watched)
 	case e.confirm != "":
 		what := "warm snapshot"
 		if e.showClones {
@@ -868,4 +854,17 @@ func (e ephemeralModel) View(width, height int) string {
 		keys = append([]string{"p", "pool"}, keys...)
 	}
 	return l.View() + "\n" + helpBar(keys...)
+}
+
+// watchedTaskView is a task's progress shown in place of the screen it was started from.
+func watchedTaskView(t *task) string {
+	tr := transcript{running: t.running, lines: t.steps.lines, since: t.steps.since}
+	if !t.running && t.err != nil && len(tr.lines) == 0 {
+		tr.lines = []string{errLine(t.err)}
+	}
+	s := styleTitle.Render(" "+t.title+" ") + "\n\n" + progressView(tr.lines, tr.running, tr.since) + "\n"
+	if t.running {
+		return s + helpBar("esc", "keep it running in the background", "t", "open in Tasks")
+	}
+	return s + helpBar("esc", "dismiss", "t", "open in Tasks")
 }

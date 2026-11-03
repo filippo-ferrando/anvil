@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"git.fferrando.cc/rdfilippo/anvil/internal/gui"
 )
 
 func TestWaypipeArgs(t *testing.T) {
@@ -11,11 +13,11 @@ func TestWaypipeArgs(t *testing.T) {
 	got := waypipeArgs(ssh, "ubuntu@localhost", "/opt/anvil", true, []string{"ghidraRun", "--flag"})
 	want := []string{"--remote-bin", "/opt/anvil/waypipe", "--xwls", "ssh",
 		"-p", "2222", "-o", "StrictHostKeyChecking=accept-new", "-J", "me@far", "-i", "/k",
-		"ubuntu@localhost", "env", "_JAVA_AWT_WM_NONREPARENTING=1", "ghidraRun", "--flag"}
+		"ubuntu@localhost", gui.WaitShellCommand([]string{"env", "_JAVA_AWT_WM_NONREPARENTING=1", "ghidraRun", "--flag"})}
 	if !slices.Equal(got, want) {
 		t.Fatalf("got  %q\nwant %q", got, want)
 	}
-	if got := waypipeArgs(nil, "u@h", "/opt/anvil", false, []string{"app"}); slices.Contains(got, "--xwls") || slices.Contains(got, "env") {
+	if got := waypipeArgs(nil, "u@h", "/opt/anvil", false, []string{"app"}); slices.Contains(got, "--xwls") || got[len(got)-1] != gui.WaitShellCommand([]string{"app"}) {
 		t.Fatalf("x11 settings without x11: %q", got)
 	}
 }

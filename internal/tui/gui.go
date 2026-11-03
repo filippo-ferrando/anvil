@@ -139,12 +139,12 @@ func ephemeralAppArgs(socketPath string, sub []string, a appRequest) []string {
 
 // launchEphemeralApp starts a's app in a throwaway clone through the anvil CLI, after
 // `anvil gui export --ephemeral` with export, following its progress until ctx ends.
-func launchEphemeralApp(ctx context.Context, id int, socketPath string, a appRequest) tea.Cmd {
+func launchEphemeralApp(ctx context.Context, socketPath string, a appRequest, wrap func(lineStep) tea.Msg) tea.Cmd {
 	calls := [][]string{ephemeralAppArgs(socketPath, []string{"gui", "--detach"}, a)}
 	if a.export {
 		calls = append([][]string{ephemeralAppArgs(socketPath, []string{"gui", "export"}, a)}, calls...)
 	}
-	return followGUICalls(ctx, id, calls)
+	return followGUICalls(ctx, calls, wrap)
 }
 
 // launchGUIApp starts the app through the anvil CLI, which keeps running after the TUI quits.

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/guestexec"
+	"git.fferrando.cc/rdfilippo/anvil/internal/gui"
 	"git.fferrando.cc/rdfilippo/anvil/internal/gui/appinfo"
 )
 
@@ -108,7 +109,7 @@ func TestPickEntry(t *testing.T) {
 
 func TestAppArgv(t *testing.T) {
 	argv := appArgv([]string{"gimp", "-n"}, true)
-	if !slices.Equal(argv[:6], []string{"waypipe", "--vsock", "-s", "2:7100", "--xwls", "server"}) || !slices.Equal(argv[len(argv)-2:], []string{"gimp", "-n"}) {
+	if !slices.Equal(argv[:6], []string{"waypipe", "--vsock", "-s", "2:7100", "--xwls", "server"}) || !slices.Equal(argv[len(argv)-6:], gui.WaitArgv([]string{"gimp", "-n"})) {
 		t.Fatalf("argv %q", argv)
 	}
 	if env := appEnv(true, []string{"A=1"}); !slices.Contains(env, "_JAVA_AWT_WM_NONREPARENTING=1") || env[len(env)-1] != "A=1" {

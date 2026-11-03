@@ -180,30 +180,35 @@ func TestEphemeralPoolForm(t *testing.T) {
 	}
 }
 
-func TestEphemeralAppLaunchTranscript(t *testing.T) {
+func TestEphemeralAppLaunchIsATask(t *testing.T) {
 	m := model{screen: screenEphemeral, ephemeral: newEphemeralModel()}
-	stopped := false
-	m.ephemeral.launching.start()
-	m.ephemeral.launchID, m.ephemeral.stopWatch = 2, func() { stopped = true }
-	for _, msg := range []appLaunchMsg{
-		{id: 1, line: "from a launch no longer watched"},
-		{id: 2, line: "building the warm snapshot"},
-		{id: 2, line: "app runs in c1, deleted when it exits"},
-		{id: 2, done: true, err: errors.New("lost")},
-	} {
-		next, _ := m.Update(msg)
-		m = next.(model)
+	task, _ := m.appTask(appRequest{distro: "fedora-41", pkg: "gedit"})
+	m.ephemeral.watching = task.id
+	if len(m.tasks.running()) != 1 || task.title != "starting gedit in a fedora-41 clone" {
+		t.Fatalf("tasks %+v", m.tasks.items)
 	}
-	l := m.ephemeral.launching
-	if l.running || !stopped {
-		t.Fatalf("running %v, stopped %v after the end", l.running, stopped)
+	next, _ := m.Update(taskStepMsg{id: task.id, lineStep: lineStep{status: "building the warm snapshot"}})
+	m = next.(model)
+	if !strings.Contains(m.View(), "building the warm snapshot") {
+		t.Fatal("the screen doesn't show the task's progress")
 	}
-	view := strings.Join(l.lines, "\n")
-	if strings.Contains(view, "no longer watched") || !strings.Contains(view, "building the warm snapshot") || !strings.Contains(view, "lost") {
-		t.Fatalf("lines %q", l.lines)
+	// esc leaves the screen, the task goes on in the Tasks screen.
+	next, _ = m.Update(key("esc"))
+	m = next.(model)
+	if m.ephemeral.watching != 0 || !task.running {
+		t.Fatalf("watching %d, running %v after esc", m.ephemeral.watching, task.running)
 	}
-	next, _ := m.Update(key("esc"))
-	if next.(model).ephemeral.launching.active() {
-		t.Fatal("esc doesn't dismiss a finished launch")
+	next, _ = m.Update(taskStepMsg{id: task.id, lineStep: lineStep{err: errors.New("lost"), done: true}})
+	m = next.(model)
+	if task.running || task.err == nil || !strings.Contains(task.last(), "lost") {
+		t.Fatalf("running %v, err %v, last %q", task.running, task.err, task.last())
+	}
+}
+
+func TestEphemeralWarmBuildIsATask(t *testing.T) {
+	m := model{screen: screenEphemeral, ephemeral: newEphemeralModel()}
+	task, _ := m.warmTask(&anvilv1.WarmCreateRequest{Distro: "ubuntu-24.04"})
+	if len(m.tasks.running()) != 1 || task.title != "building warm snapshot of ubuntu-24.04" || task.cancel == nil {
+		t.Fatalf("task %+v", task)
 	}
 }

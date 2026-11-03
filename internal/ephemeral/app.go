@@ -24,6 +24,7 @@ import (
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/config"
 	"git.fferrando.cc/rdfilippo/anvil/internal/guestexec"
+	"git.fferrando.cc/rdfilippo/anvil/internal/gui"
 	"git.fferrando.cc/rdfilippo/anvil/internal/gui/appinfo"
 )
 
@@ -317,7 +318,8 @@ func (f cloneFS) Read(ctx context.Context, p string) ([]byte, bool, error) {
 }
 
 // appArgv runs command as the GUI app under waypipe, which connects to the host over vsock,
-// in a D-Bus session when the guest has one to offer.
+// in a D-Bus session when the guest has one to offer. It ends once every process the
+// command started has exited, so a launcher that forks the app doesn't end it early.
 func appArgv(command []string, x11 bool) []string {
 	argv := []string{"waypipe", "--vsock", "-s", "2:" + strconv.Itoa(AppPort)}
 	if x11 {
@@ -325,7 +327,7 @@ func appArgv(command []string, x11 bool) []string {
 	}
 	argv = append(argv, "server", "--", "sh", "-c",
 		`if command -v dbus-run-session >/dev/null 2>&1; then exec dbus-run-session -- "$@"; fi; exec "$@"`, "sh")
-	return append(argv, command...)
+	return append(argv, gui.WaitArgv(command)...)
 }
 
 // appEnv is the app's environment; Java windows stay blank under xwayland-satellite without

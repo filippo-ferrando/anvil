@@ -12,16 +12,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"google.golang.org/grpc/status"
 )
-
-// appLaunchMsg carries one output line of an ephemeral GUI app launch, or its end.
-type appLaunchMsg struct {
-	id   int // the launch it belongs to
-	line string
-	next tea.Cmd
-	err  error
-	done bool
-}
 
 const (
 	detachedPrefix = "started in the background, log: "
@@ -31,15 +23,16 @@ const (
 
 // followGUICalls runs the anvil CLI once per call and hands over each output line as it
 // comes, then follows the detached run's log until the app runs.
-func followGUICalls(ctx context.Context, id int, calls [][]string) tea.Cmd {
+func followGUICalls(ctx context.Context, calls [][]string, wrap func(lineStep) tea.Msg) tea.Cmd {
 	exe, err := os.Executable()
 	if err != nil {
-		return func() tea.Msg { return appLaunchMsg{id: id, err: err, done: true} }
+		return func() tea.Msg { return wrap(failed[struct{}](err)) }
 	}
-	return followCalls(ctx, id, exe, calls)
+	return followCalls(ctx, exe, calls, wrap)
 }
 
-func followCalls(ctx context.Context, id int, exe string, calls [][]string) tea.Cmd {
+// followCalls ends with a Canceled error once ctx ends, even if the calls went on.
+func followCalls(ctx context.Context, exe string, calls [][]string, wrap func(lineStep) tea.Msg) tea.Cmd {
 	lines, result := make(chan string), make(chan error, 1)
 	// Once ctx ends lines are dropped: the calls still finish, nobody watches them.
 	emit := func(l string) {
@@ -53,9 +46,15 @@ func followCalls(ctx context.Context, id int, exe string, calls [][]string) tea.
 	next = func() tea.Msg {
 		select {
 		case l := <-lines:
-			return appLaunchMsg{id: id, line: l, next: next}
+			return wrap(lineStep{status: l, next: next})
 		case err := <-result:
-			return appLaunchMsg{id: id, err: err, done: true}
+			if err == nil && ctx.Err() != nil {
+				err = status.FromContextError(ctx.Err()).Err()
+			}
+			if err != nil {
+				return wrap(failed[struct{}](err))
+			}
+			return wrap(lineStep{done: true})
 		}
 	}
 	return next

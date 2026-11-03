@@ -14,6 +14,7 @@ import (
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/internal/config"
+	"git.fferrando.cc/rdfilippo/anvil/internal/gui"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
@@ -154,8 +155,8 @@ func runVMGUI(c *client.Client, inst *anvilv1.Instance, session *anvilv1.GUISess
 // windows. Without it their windows stay blank.
 const x11JavaEnv = "_JAVA_AWT_WM_NONREPARENTING=1"
 
-// waypipeArgs builds `waypipe [--xwls] ssh <ssh args> <dest> [env <x11JavaEnv>] <command>`,
-// using the guest's shipped waypipe so both ends run the same version.
+// waypipeArgs builds `waypipe [--xwls] ssh <ssh args> <dest> <command line>`, with the guest's
+// shipped waypipe; the command line waits for processes the command leaves in the background.
 func waypipeArgs(sshArgs []string, dest, guestToolsDir string, x11 bool, command []string) []string {
 	args := []string{"--remote-bin", path.Join(guestToolsDir, "waypipe")}
 	if x11 {
@@ -165,9 +166,9 @@ func waypipeArgs(sshArgs []string, dest, guestToolsDir string, x11 bool, command
 	args = append(args, sshArgs...)
 	args = append(args, dest)
 	if x11 {
-		args = append(args, "env", x11JavaEnv)
+		command = append([]string{"env", x11JavaEnv}, command...)
 	}
-	return append(args, command...)
+	return append(args, gui.WaitShellCommand(command))
 }
 
 // hostWaypipe prefers the waypipe shipped with anvil, the same build the guests run.

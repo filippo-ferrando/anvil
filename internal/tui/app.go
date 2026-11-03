@@ -318,7 +318,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateIntents(msg)
 	case manifestSavedMsg, manifestContentLoadedMsg:
 		return m.updateManifests(msg)
-	case warmLoadedMsg, clonesLoadedMsg, warmBuildMsg, runEventMsg:
+	case warmLoadedMsg, clonesLoadedMsg, runEventMsg:
 		return m.updateEphemeral(msg) // streams keep going while another screen shows
 	case ciLoadedMsg, pipelineEventMsg, ciLogsMsg:
 		return m.updateCI(msg)
@@ -616,7 +616,7 @@ func (m model) screenView() string {
 	case screenMirrors:
 		return m.mirrors.View()
 	case screenEphemeral:
-		return m.ephemeral.View(m.width-sidebarWidth-sidebarGutter, contentHeight(m.height))
+		return m.ephemeral.View(m.width-sidebarWidth-sidebarGutter, contentHeight(m.height), m.tasks.get(m.ephemeral.watching))
 	case screenCI:
 		return m.ci.View()
 	case screenTasks:
