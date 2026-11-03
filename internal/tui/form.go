@@ -141,7 +141,8 @@ func toggleField(label, hint string, on bool) formField {
 	return formField{Label: label, Hint: hint, Kind: fieldToggle, on: on}
 }
 
-// pickerField is a drop-down: space or enter opens it, up/down move, space checks, enter or esc closes.
+// pickerField is a drop-down: space opens it, up/down move, space checks, enter or esc closes.
+// Enter on a closed picker acts as on any field, so a picker last in the form still submits.
 func pickerField(label, hint string, options []pickOption, picked map[string]bool) formField {
 	return formField{Label: label, Hint: hint, Kind: fieldPicker, options: options, picked: picked}
 }
@@ -266,7 +267,7 @@ func (f simpleForm) update(msg tea.Msg) (simpleForm, bool, bool) {
 		if field.open && updatePicker(field, keyMsg.String()) {
 			return f, false, false
 		}
-		if k := keyMsg.String(); (k == " " || k == "enter") && len(field.options) > 0 {
+		if keyMsg.String() == " " && len(field.options) > 0 {
 			field.open = true
 			return f, false, false
 		}

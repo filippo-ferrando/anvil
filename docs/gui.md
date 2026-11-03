@@ -56,6 +56,11 @@ with `--remote` too. The host's `waypipe` and `xwayland-satellite` are shared re
 into the VM over virtiofs and mounted at `/opt/anvil` by the guest agent on first use, so
 both ends run the same version.
 
+The app runs through `/opt/anvil/anvil-guest reap`, so `anvil gui` lasts until every
+process the command started has exited. Launchers that start the app in the background
+and exit right away (VS Code, VSCodium and other Electron apps) keep their window. Without
+`anvil-guest` in the share (an older package), launchers like that can still close early.
+
 The first `--x11` run installs Xwayland in the guest through the guest agent (apt, dnf,
 zypper, pacman or apk), which can take a few minutes. With `--x11`, the app also gets
 `_JAVA_AWT_WM_NONREPARENTING=1`, so Java windows don't stay blank.

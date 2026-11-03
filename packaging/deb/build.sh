@@ -86,6 +86,8 @@ gui_tools="${GUI_TOOLS_DIR:-$repo/build/gui-tools}"
 if [ -x "$gui_tools/waypipe" ] && [ -x "$gui_tools/xwayland-satellite" ]; then
   install -Dm755 "$gui_tools/waypipe" "$pkg_anvild/usr/lib/anvil/gui/waypipe"
   install -Dm755 "$gui_tools/xwayland-satellite" "$pkg_anvild/usr/lib/anvil/gui/xwayland-satellite"
+  # Also in the VM tools share, for `anvil gui`'s `anvil-guest reap`.
+  install -Dm755 "$work/anvil-guest-bin" "$pkg_anvild/usr/lib/anvil/gui/anvil-guest"
 else
   echo "==> warning: no GUI tools in $gui_tools (run make gui-tools), anvil gui won't work with VMs" >&2
 fi

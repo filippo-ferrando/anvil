@@ -188,6 +188,16 @@ func TestLaunchDevicePicker(t *testing.T) {
 	key("down")
 	key(" ")
 
+	key("enter")
+
+	// Enter on the closed PCI drop-down, the last field, submits instead of reopening it.
+	l.form.focus = pci
+	var submitted bool
+	l.form, submitted, _ = l.form.update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !submitted || l.form.fields[pci].open {
+		t.Error("enter on the closed last drop-down should submit the form")
+	}
+
 	l.form.fields[1].input.SetValue("img")
 	req, err := buildLaunchRequest(l)
 	if err != nil {
