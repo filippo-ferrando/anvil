@@ -1,8 +1,10 @@
 package container
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/container/docker"
@@ -63,7 +65,7 @@ func TestEnsureGUIDirs(t *testing.T) {
 	}
 	for _, dir := range []string{filepath.Join(base, "01"), filepath.Join(base, "01", "x11")} {
 		st, err := os.Stat(dir)
-		if err != nil || st.Mode().Perm() != 0o777 {
+		if err != nil || st.Mode().Perm() != 0o777 || st.Mode()&os.ModeSticky == 0 {
 			t.Fatalf("%s: %v %v", dir, st.Mode(), err)
 		}
 	}
@@ -73,5 +75,31 @@ func TestEnsureGUIDirs(t *testing.T) {
 	removeGUIDirs("01")
 	if _, err := os.Stat(filepath.Join(base, "01")); !os.IsNotExist(err) {
 		t.Fatalf("not removed: %v", err)
+	}
+}
+
+func TestCheckRemoteGUI(t *testing.T) {
+	tools := t.TempDir()
+	t.Setenv("ANVIL_GUI_TOOLS", tools)
+	b := &Backend{}
+
+	if err := b.CheckRemoteGUI(true); !errors.Is(err, ErrRemoteContainerX11) {
+		t.Fatalf("x11: got %v, want %v", err, ErrRemoteContainerX11)
+	}
+	if err := b.CheckRemoteGUI(false); err == nil || !strings.Contains(err.Error(), tools) {
+		t.Fatalf("missing waypipe: got %v, want an error naming %s", err, tools)
+	}
+	bin := filepath.Join(tools, "waypipe")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.CheckRemoteGUI(false); err == nil {
+		t.Fatal("a waypipe that isn't executable must be refused")
+	}
+	if err := os.Chmod(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.CheckRemoteGUI(false); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -58,10 +58,7 @@ func Serve(ctx context.Context, name string, port int) error {
 	}
 	joinAll(p)
 
-	go func() {
-		<-ctx.Done()
-		conn.Close()
-	}()
+	defer context.AfterFunc(ctx, func() { conn.Close() })()
 
 	buf := make([]byte, 1500)
 	for {
@@ -120,10 +117,7 @@ func Browse(ctx context.Context, timeout time.Duration) ([]Host, error) {
 		deadline = d
 	}
 	_ = conn.SetReadDeadline(deadline)
-	go func() {
-		<-ctx.Done()
-		_ = conn.SetReadDeadline(time.Now())
-	}()
+	defer context.AfterFunc(ctx, func() { _ = conn.SetReadDeadline(time.Now()) })()
 
 	self := hostLabel("")
 	seen := map[string]Host{}

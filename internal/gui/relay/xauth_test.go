@@ -79,6 +79,38 @@ func TestWriteGuestXAuthority(t *testing.T) {
 	}
 }
 
+// A symlink planted at dst must be replaced, not written through.
+func TestWriteGuestXAuthority_DoesNotFollowSymlink(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "host")
+	dst := filepath.Join(dir, "guest")
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, dst); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	_ = WriteXAuthority(&buf, []XAuthEntry{{Family: familyLocal, Number: "0", Name: "MIT-MAGIC-COOKIE-1", Data: []byte("secret")}})
+	if err := os.WriteFile(src, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := WriteGuestXAuthority(src, 0, dst, 1); !ok || err != nil {
+		t.Fatalf("got %v %v", ok, err)
+	}
+	if b, _ := os.ReadFile(victim); string(b) != "keep" {
+		t.Fatalf("symlink target was overwritten: %q", b)
+	}
+	st, err := os.Lstat(dst)
+	if err != nil || !st.Mode().IsRegular() || st.Mode().Perm() != 0o644 {
+		t.Fatalf("dst: %v %v, want a 0644 regular file", st, err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 3 {
+		t.Fatalf("leftover temp files: %v", entries)
+	}
+}
+
 func TestParseDisplay(t *testing.T) {
 	for in, want := range map[string]int{":0": 0, ":1.0": 1, "unix:12": 12} {
 		got, err := ParseDisplay(in)

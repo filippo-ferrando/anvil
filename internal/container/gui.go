@@ -67,8 +67,8 @@ func deviceGroups(dir string) []string {
 	return gids
 }
 
-// ensureGUIDirs creates the relay directories (world-writable, as container users vary; the
-// parent run dir keeps other host users out). It reports whether they had to be created.
+// ensureGUIDirs creates the relay directories, world-writable and sticky like /tmp: container
+// users vary, but none may replace another's files. It reports whether they had to be created.
 func ensureGUIDirs(id string) (bool, error) {
 	x11 := guiX11Dir(id)
 	if _, err := os.Stat(x11); err == nil {
@@ -78,7 +78,7 @@ func ensureGUIDirs(id string) (bool, error) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return false, fmt.Errorf("docker: creating GUI directory %s: %w", dir, err)
 		}
-		if err := os.Chmod(dir, 0o777); err != nil {
+		if err := os.Chmod(dir, 0o777|os.ModeSticky); err != nil {
 			return false, fmt.Errorf("docker: chmod GUI directory %s: %w", dir, err)
 		}
 	}
@@ -110,7 +110,9 @@ func (b *DockerBackend) PrepareGUI(ctx context.Context, spec *instance.Spec, x11
 			return instance.GUISession{}, err
 		}
 	}
-	return instance.GUISession{RelayDir: guiRelayDir(spec.ID), X11Dir: guiX11Dir(spec.ID)}, nil
+	return instance.GUISession{
+		RelayDir: guiRelayDir(spec.ID), X11Dir: guiX11Dir(spec.ID), HostToolsDir: config.GUIToolsDir(),
+	}, nil
 }
 
 var _ instance.GuestFileReader = (*DockerBackend)(nil)

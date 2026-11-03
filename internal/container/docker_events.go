@@ -70,7 +70,9 @@ func (b *DockerBackend) SetExitHook(hook func(instanceID string, state instance.
 	}
 	b.exits.once.Do(func() {
 		ctx, cancel := context.WithCancel(context.Background())
+		b.exits.mu.Lock()
 		b.exits.stop = cancel
+		b.exits.mu.Unlock()
 		b.exits.wake = make(chan struct{}, 1)
 		go b.runHooks(ctx)
 		go b.watchEvents(ctx)
@@ -79,8 +81,11 @@ func (b *DockerBackend) SetExitHook(hook func(instanceID string, state instance.
 
 // Close stops following Docker's events.
 func (b *DockerBackend) Close() {
-	if b.exits.stop != nil {
-		b.exits.stop()
+	b.exits.mu.Lock()
+	stop := b.exits.stop
+	b.exits.mu.Unlock()
+	if stop != nil {
+		stop()
 	}
 }
 

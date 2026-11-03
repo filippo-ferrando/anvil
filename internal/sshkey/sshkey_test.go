@@ -58,3 +58,29 @@ func TestEnsureDefaultPublicIsTrimmed(t *testing.T) {
 		t.Fatalf("expected an ed25519 public key, got %q", pub)
 	}
 }
+
+// A private key left without its .pub (crash between the two links) gets its .pub rebuilt.
+func TestEnsureRebuildsMissingPublic(t *testing.T) {
+	if _, err := exec.LookPath("ssh-keygen"); err != nil {
+		t.Skip("ssh-keygen not on PATH in this environment")
+	}
+	path := t.TempDir() + "/id_ed25519"
+	if err := Ensure(path, "anvil"); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := os.ReadFile(path + ".pub")
+	if err := os.Remove(path + ".pub"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Ensure(path, "anvil"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path + ".pub")
+	if err != nil {
+		t.Fatalf("public key not rebuilt: %v", err)
+	}
+	key := func(b []byte) string { return strings.Join(strings.Fields(string(b))[:2], " ") }
+	if key(got) != key(want) {
+		t.Fatalf("rebuilt key %q, want %q", got, want)
+	}
+}

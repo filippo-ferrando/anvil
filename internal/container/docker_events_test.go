@@ -184,6 +184,20 @@ func TestExitsMissedWhileDisconnectedAreReconciled(t *testing.T) {
 	noRecord(t, got)
 }
 
+// Close may run while SetExitHook is starting the watch; go test -race catches a bad read.
+func TestCloseRacesSetExitHook(t *testing.T) {
+	_, client := startFakeDocker(t)
+	b := &DockerBackend{Client: client, Registry: specList{}}
+	done := make(chan struct{})
+	go func() {
+		b.SetExitHook(func(string, instance.State, string) {})
+		close(done)
+	}()
+	b.Close()
+	<-done
+	b.Close()
+}
+
 func TestEventsReplayFromBeforeReconcile(t *testing.T) {
 	before := time.Now().Unix()
 	fd, _, _ := watchedBackend(t, nil)

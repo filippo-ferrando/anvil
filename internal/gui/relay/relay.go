@@ -11,9 +11,12 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // maxFDs is how many descriptors one read can carry; Wayland sends at most 28 per message.
@@ -44,11 +47,30 @@ func Listen(listenPath, upstreamPath string) (*Relay, error) {
 		return nil, fmt.Errorf("relay: listening on %s: %w", listenPath, err)
 	}
 	ln.SetUnlinkOnClose(true)
-	if err := os.Chmod(listenPath, 0o777); err != nil {
+	if err := chmodSocket(listenPath, 0o777); err != nil {
 		ln.Close()
 		return nil, fmt.Errorf("relay: chmod %s: %w", listenPath, err)
 	}
 	return &Relay{ln: ln, upstream: upstreamPath, conns: make(map[*net.UnixConn]struct{}), lastBusy: time.Now()}, nil
+}
+
+// chmodSocket sets path's mode only if it is still a socket of this user, not a symlink
+// someone swapped in after bind.
+func chmodSocket(path string, mode uint32) error {
+	fd, err := unix.Open(path, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return err
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFSOCK || int(st.Uid) != os.Getuid() {
+		return fmt.Errorf("not the socket just created")
+	}
+	// An O_PATH fd can't be fchmod-ed; its /proc link reaches the same inode.
+	return os.Chmod("/proc/self/fd/"+strconv.Itoa(fd), os.FileMode(mode))
 }
 
 // Serve accepts clients until Close, then waits for their connections to end.

@@ -2,9 +2,13 @@ package container
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
+	"git.fferrando.cc/rdfilippo/anvil/internal/config"
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 )
 
@@ -166,6 +170,25 @@ func (b *Backend) PrepareGUI(ctx context.Context, spec *instance.Spec, x11 bool,
 		return instance.GUISession{}, fmt.Errorf("container: this engine doesn't support GUI apps")
 	}
 	return gp.PrepareGUI(ctx, spec, x11, progress)
+}
+
+var _ instance.RemoteGUIChecker = (*Backend)(nil)
+
+// ErrRemoteContainerX11 refuses --x11 for a container when the client is on another host.
+var ErrRemoteContainerX11 = errors.New("container: X11 apps (--x11) don't work over --remote for containers: " +
+	"they need the client's X server socket, which can't be forwarded with its file descriptors; use a VM for X11 apps")
+
+// CheckRemoteGUI refuses a remote client's GUI session that can't work: X11, or a host
+// without the shipped waypipe, which runs here to carry the app's Wayland traffic.
+func (b *Backend) CheckRemoteGUI(x11 bool) error {
+	if x11 {
+		return ErrRemoteContainerX11
+	}
+	bin := filepath.Join(config.GUIToolsDir(), "waypipe")
+	if st, err := os.Stat(bin); err != nil || st.IsDir() || st.Mode()&0o111 == 0 {
+		return fmt.Errorf("container: GUI apps over --remote need waypipe in %s on the daemon's host (install the GUI tools there)", config.GUIToolsDir())
+	}
+	return nil
 }
 
 // ImageInfo is one image cached by a container engine: a separate

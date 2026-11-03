@@ -34,7 +34,7 @@ func EnsureDefault() (string, error) {
 // Concurrent callers are safe: the first key linked into place wins.
 func Ensure(path, comment string) error {
 	if _, err := os.Stat(path); err == nil {
-		return nil
+		return ensurePublic(path)
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("checking for SSH key %s: %w", path, err)
 	}
@@ -48,7 +48,7 @@ func Ensure(path, comment string) error {
 	}
 
 	// Generate under a private temp name, then atomically link into place.
-	tmp := fmt.Sprintf("%s.tmp-%d-%d", path, os.Getpid(), time.Now().UnixNano())
+	tmp := tempName(path)
 	defer os.Remove(tmp)
 	defer os.Remove(tmp + ".pub")
 	cmd := exec.Command(keygenBin, "-t", "ed25519", "-N", "", "-C", comment, "-f", tmp)
@@ -58,13 +58,45 @@ func Ensure(path, comment string) error {
 
 	if err := os.Link(tmp, path); err != nil {
 		if os.IsExist(err) {
-			// Someone else generated it first: use theirs, discard ours.
-			return nil
+			// Someone else generated it first: use theirs, but its .pub may not be linked yet.
+			return ensurePublic(path)
 		}
 		return fmt.Errorf("installing SSH key %s: %w", path, err)
 	}
 	if err := os.Link(tmp+".pub", path+".pub"); err != nil && !os.IsExist(err) {
 		return fmt.Errorf("installing SSH public key %s.pub: %w", path, err)
+	}
+	return nil
+}
+
+func tempName(path string) string {
+	return fmt.Sprintf("%s.tmp-%d-%d", path, os.Getpid(), time.Now().UnixNano())
+}
+
+// ensurePublic rebuilds path.pub from the private key when it is missing,
+// e.g. after a crash between linking the two halves.
+func ensurePublic(path string) error {
+	pubPath := path + ".pub"
+	if _, err := os.Stat(pubPath); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("checking for SSH public key %s: %w", pubPath, err)
+	}
+	keygenBin, err := exec.LookPath("ssh-keygen")
+	if err != nil {
+		return fmt.Errorf("ssh-keygen: not found on PATH (needed to rebuild %s)", pubPath)
+	}
+	pub, err := exec.Command(keygenBin, "-y", "-f", path).Output()
+	if err != nil {
+		return fmt.Errorf("rebuilding SSH public key %s: %w", pubPath, err)
+	}
+	tmp := tempName(pubPath)
+	defer os.Remove(tmp)
+	if err := os.WriteFile(tmp, pub, 0o644); err != nil {
+		return fmt.Errorf("rebuilding SSH public key %s: %w", pubPath, err)
+	}
+	if err := os.Link(tmp, pubPath); err != nil && !os.IsExist(err) {
+		return fmt.Errorf("installing SSH public key %s: %w", pubPath, err)
 	}
 	return nil
 }

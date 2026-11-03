@@ -217,6 +217,42 @@ func TestClaim_HandsOutFreeNumbers(t *testing.T) {
 	}
 }
 
+// A lock file planted as a symlink must make Claim fail, not create its target.
+func TestClaim_RefusesSymlinkedLock(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(t.TempDir(), "victim")
+	if err := os.Symlink(victim, filepath.Join(dir, ".X0-lock")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Claim(dir, "X"); err == nil {
+		t.Fatal("Claim followed a symlinked lock file")
+	}
+	if _, err := os.Stat(victim); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("symlink target was created: %v", err)
+	}
+}
+
+func TestChmodSocket_RefusesSymlink(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(victim, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := chmodSocket(link, 0o777); err == nil {
+		t.Fatal("chmodSocket followed a symlink")
+	}
+	if err := chmodSocket(victim, 0o777); err == nil {
+		t.Fatal("chmodSocket changed a regular file")
+	}
+	if st, _ := os.Stat(victim); st.Mode().Perm() != 0o600 {
+		t.Fatalf("victim mode changed to %v", st.Mode().Perm())
+	}
+}
+
 func TestWaitIdle_WaitsForOpenConnections(t *testing.T) {
 	upstreamPath := filepath.Join(t.TempDir(), "upstream.sock")
 	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: upstreamPath, Net: "unix"})

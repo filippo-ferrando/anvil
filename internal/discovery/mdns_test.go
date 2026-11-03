@@ -1,8 +1,11 @@
 package discovery
 
 import (
+	"context"
 	"net/netip"
+	"runtime"
 	"testing"
+	"time"
 )
 
 func TestResponseRoundTrip(t *testing.T) {
@@ -47,5 +50,22 @@ func TestHostLabel(t *testing.T) {
 	}
 	if got := hostLabel("!!"); got != "anvil" {
 		t.Fatalf("hostLabel: got %q, want fallback %q", got, "anvil")
+	}
+}
+
+// Browse with a context that is never cancelled must not leave a goroutine behind.
+func TestBrowse_NoGoroutineLeak(t *testing.T) {
+	before := runtime.NumGoroutine()
+	for range 5 {
+		if _, err := Browse(context.Background(), 10*time.Millisecond); err != nil {
+			t.Skipf("no multicast interface to query on: %v", err)
+		}
+	}
+	deadline := time.Now().Add(time.Second)
+	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := runtime.NumGoroutine(); n > before {
+		t.Fatalf("goroutines: %d before, %d after", before, n)
 	}
 }

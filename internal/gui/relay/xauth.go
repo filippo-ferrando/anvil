@@ -117,13 +117,26 @@ func WriteGuestXAuthority(src string, hostDisplay int, dst string, guestDisplay 
 	}
 	e.Family, e.Address, e.Number = familyWild, nil, strconv.Itoa(guestDisplay)
 
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	// dst's directory is writable by the guest: write a fresh file and rename it over dst,
+	// so a symlink planted at dst is replaced, never followed.
+	out, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+"-*")
 	if err != nil {
 		return false, err
 	}
-	if err := WriteXAuthority(out, []XAuthEntry{e}); err != nil {
-		out.Close()
+	tmp := out.Name()
+	err = out.Chmod(0o644)
+	if err == nil {
+		err = WriteXAuthority(out, []XAuthEntry{e})
+	}
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, dst)
+	}
+	if err != nil {
+		os.Remove(tmp)
 		return false, err
 	}
-	return true, out.Close()
+	return true, nil
 }
