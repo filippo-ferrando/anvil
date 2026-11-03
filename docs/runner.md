@@ -79,7 +79,10 @@ Only repository scopes (`repos/<owner>/<repo>`). anvild lists queued workflow ru
 their jobs, and for each matching job makes a just-in-time runner config
 (`generate-jitconfig`, default runner group), which the clone's runner uses for one job.
 A just-in-time runner takes any queued job with its labels, not only the one that started
-it. The token needs administration rights on the repository. `--url` points at a GitHub
+it. anvild checks the runner every 30 seconds once its clone runs: the job it took is the
+one `anvil runner jobs` records, and the job that started it can be picked up again. When
+no job comes to the runner within 5 minutes, or the job that started it is cancelled or
+taken by another runner, the clone is stopped and the job shows as `skipped`. The token needs administration rights on the repository. `--url` points at a GitHub
 Enterprise Server instead of github.com.
 
 ## Limits and safety

@@ -13,6 +13,8 @@ a terminal, `anvil apply` asks `Apply these changes? [y/N]` after the plan and o
 on `y`. A plan with nothing to change, `-y/--yes`, a manifest read from stdin (`-f -`) and
 a non-terminal stdin or stdout (scripts, CI) skip the question and apply right away. In the TUI, press `A` on the
 Intents screen: the plan is shown first and applied on `enter`.
+If the state changes between the shown plan and the apply, so the fresh plan differs, the
+apply stops with "the plan changed since it was shown, run apply again" and changes nothing.
 
 Manifests can also be saved on the daemon and applied by name:
 
@@ -21,6 +23,9 @@ anvil manifest new shop --from anvil.yaml   # or without --from, for a starter t
 anvil manifest list|show|edit|rename|delete|validate
 anvil apply --saved shop
 ```
+
+`anvil manifest validate -f anvil.yaml` (or a saved name) runs the daemon's checks and takes
+the same `--var` and `--env-file` flags as apply, reading `.env` beside the file by default.
 
 A saved manifest's `.env` is read from the current directory. The TUI's Manifests
 screen edits, applies and tears down saved manifests.

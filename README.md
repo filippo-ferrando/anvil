@@ -490,7 +490,8 @@ aren't there yet:
 - **macOS** support (Apple Virtualization.framework, `internal/vm/vz`) is being built.
   The daemon compiles for darwin, but the VM backend is still a stub; Linux is the only
   host that runs VMs today.
-- **`anvil gui`** needs a Wayland host session, and with `--remote` it only works for VMs.
+- **`anvil gui`** needs a Wayland host session. With `--remote`, containers get no `--x11`
+  and `--ephemeral` doesn't work.
 - **Ephemeral runs** are Firecracker-only and need the jailer. There is no inbound
   networking to clones and no limit on how many start at once, so a large matrix starts
   every clone together.

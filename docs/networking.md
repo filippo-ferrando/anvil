@@ -45,7 +45,7 @@ A VM that is not part of an intent gets QEMU's user-mode network stack
 (`buildNetdev` in `internal/vm/qemu/args.go`):
 
 ```
--netdev user,id=net0,hostfwd=tcp::<ssh-port>-:22[,hostfwd=...]
+-netdev user,id=net0,hostfwd=tcp:127.0.0.1:<ssh-port>-:22[,hostfwd=...]
 -device virtio-net-pci,netdev=net0
 ```
 
@@ -65,7 +65,8 @@ exist for that case.
 ### The SSH forward
 
 On every start, `Backend.Start` (`internal/vm/backend.go`) picks a free host port with
-`allocateFreePort` and forwards it to guest port 22. The port is stored as `VMSpec.SSHPort`
+`allocateFreePort` and forwards it to guest port 22. The forward listens on 127.0.0.1 only,
+so other machines can't reach the guest's sshd; `--remote` goes through the daemon's host. The port is stored as `VMSpec.SSHPort`
 and is what `anvil shell`/`exec`/`transfer` connect to, as `localhost:<port>`
 (`resolveSSHTarget` in `internal/cli/commands/ssh.go`). The port changes across restarts.
 
@@ -121,8 +122,8 @@ Firecracker has no SLIRP, so a standalone `--hypervisor firecracker` VM gets a t
   ports go through anvild's proxy below.
 - **DNS.** anvild answers on the bridge gateway and forwards to the host's resolvers, the
   same server intent networks use.
-- **SSH and `anvil port`.** A TCP/UDP proxy inside anvild listens on the host port (all
-  interfaces, like SLIRP's hostfwd) and forwards to the guest, so `anvil shell`,
+- **SSH and `anvil port`.** A TCP/UDP proxy inside anvild listens on the host port and
+  forwards to the guest (SSH on 127.0.0.1 only, published ports on all interfaces), so `anvil shell`,
   `--publish` and `anvil port` work the same as for a QEMU VM. After an anvild restart the
   proxies come back on the same ports.
 

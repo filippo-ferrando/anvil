@@ -19,6 +19,9 @@ anvil gui --detach dev -- firefox
   panel show whether an instance supports it.
 - VMs only: the guest agent (no `--no-guest-agent`), and the static `waypipe` and
   `xwayland-satellite` that the packages install in `/usr/lib/anvil/gui`.
+- `--remote`: `waypipe` on the machine running `anvil gui`. For a container, also the GUI
+  tools on the daemon's host, and access to its Docker for the SSH user (as for
+  `anvil exec`).
 
 A stopped instance is started first, and `anvil gui` waits for a VM's first boot to
 finish before running the app.
@@ -31,6 +34,7 @@ finish before running the app.
 | `--detach` | Return right away. Output goes to `$XDG_STATE_HOME/anvil/gui/<name>.log`. |
 | `--user U` | User to run the app as (VM: SSH user, container: `docker exec --user`). |
 | `-i, --identity` | Private key for SSH instead of anvil's managed key (VM only). |
+| `--json` | Write progress as JSON lines on stdout instead of text, see below. Also on `gui export`. |
 
 Put `--` before the app's command when it has flags of its own.
 
@@ -48,6 +52,15 @@ with `--x11`, X11) sockets, file descriptors included, then runs the app with
 `docker exec` and the right `WAYLAND_DISPLAY`/`DISPLAY`/`XAUTHORITY`. The sockets exist
 inside the container only while `anvil gui` runs, and the relay stays up as long as the
 app still has windows open.
+
+With `--remote`, the container is on another host, and the relay can't pass file
+descriptors over SSH. `anvil gui` runs `waypipe ssh` to the daemon's host instead: the
+`waypipe server` there (from the GUI tools dir anvild reports) creates its Wayland socket
+in the container's relay directory under a random name, and the app runs in the container
+through `docker exec`, under the same wait script the VMs use (so the container needs
+`sh`). The local waypipe talks to the desktop. `--x11` is refused for a remote container,
+before anything on the remote host is started or changed: the X11 socket of the desktop
+can't be forwarded with its file descriptors.
 
 ### VMs
 
@@ -134,6 +147,22 @@ Entries are written to `~/.local/share/applications/anvil-<instance>-<app>.deskt
 icons to `~/.local/share/anvil/icons/`. An export made with `--remote` keeps it in the
 entry.
 
+### JSON events
+
+With `--json`, stdout carries one JSON object per line, empty fields left out (the app's own
+stdout goes to stderr). With `--detach`, the events go to the log file after the run's header.
+
+| Event | Fields | Meaning |
+|---|---|---|
+| `step` | `text` | A progress status. |
+| `exported` | `path` | `gui export` wrote this desktop entry. |
+| `detached` | `log`, `offset` | The run went to the background; its events start at `offset` in `log`. |
+| `running` | `app`, `where`, `text` | The app started. |
+| `error` | `message` | The run failed. |
+| `done` | | The run ended. |
+
+Every run ends with `error` or `done`. The types live in `internal/gui/events`.
+
 ## TUI
 
 On the Instances screen, `g` opens the GUI app form: command, an "X11 app" toggle, and an
@@ -148,14 +177,15 @@ The **GUI Apps** screen lists the exported entries of the machine running the TU
 `anvil gui exports`): `enter` starts the app with the entry's own command line, `x`
 removes it after a confirmation (like `anvil gui unexport`).
 
-Every GUI launch from the TUI runs as a task on the Tasks screen. It shows the detached
+The TUI runs `anvil gui --json` and reads these events. Every GUI launch from the TUI runs as a task on the Tasks screen. It shows the detached
 run's progress (preparing the instance, rebuilding a missing warm snapshot, restoring the
 clone) until the app runs, or the error if it fails, without opening the log by hand.
 
 ## Limitations
 
 - Wayland hosts only, no plain X11 host session.
-- `--remote` works for VMs, not yet for containers or `--ephemeral`.
+- `--remote` works for VMs and containers, not yet for `--ephemeral`. A remote container
+  gets no `--x11`, and its apps go through waypipe, so they are slower than local ones.
 - The host GPU is passed through to containers only, VM apps get no GPU access.
 
 ## Building the tools
