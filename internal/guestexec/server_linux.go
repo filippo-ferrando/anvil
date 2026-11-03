@@ -167,18 +167,18 @@ func (r *run) setupIO(cmd *exec.Cmd, hdr Header) error {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 		return nil
 	}
-	inR, inW, err := os.Pipe()
-	if err != nil {
-		return err
+	var fds []*os.File
+	for range 3 {
+		pr, pw, err := os.Pipe()
+		if err != nil {
+			for _, f := range fds {
+				f.Close()
+			}
+			return err
+		}
+		fds = append(fds, pr, pw)
 	}
-	outR, outW, err := os.Pipe()
-	if err != nil {
-		return err
-	}
-	errR, errW, err := os.Pipe()
-	if err != nil {
-		return err
-	}
+	inR, inW, outR, outW, errR, errW := fds[0], fds[1], fds[2], fds[3], fds[4], fds[5]
 	r.stdin, r.output, r.child = inW, []*os.File{outR, errR}, []*os.File{inR, outW, errW}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = inR, outW, errW
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -212,8 +212,20 @@ func (r *run) killGroup() {
 	}
 }
 
+// stdinQueue is how many input frames wait for a command that doesn't read them yet.
+const stdinQueue = 64
+
 // readInput feeds stdin and resizes to the command; the connection closing kills it.
+// Input goes through writeInput, so a command not reading stdin doesn't stop this loop.
 func (r *run) readInput() {
+	in := make(chan []byte, stdinQueue)
+	go r.writeInput(in)
+	open := true
+	defer func() {
+		if open {
+			close(in)
+		}
+	}()
 	for {
 		typ, payload, err := readFrame(r.conn)
 		if err != nil {
@@ -222,16 +234,33 @@ func (r *run) readInput() {
 		}
 		switch typ {
 		case frameStdin:
-			_, _ = r.stdin.Write(payload)
+			if open {
+				in <- payload
+			}
 		case frameStdinClose:
-			if !r.tty {
-				r.stdin.Close()
+			if open && !r.tty {
+				close(in)
+				open = false
 			}
 		case frameResize:
 			if s, ok := decodeSize(payload); ok && r.tty {
 				_ = setSize(r.stdin, s)
 			}
 		}
+	}
+}
+
+// writeInput writes the input frames to the command, then closes its stdin pipe.
+func (r *run) writeInput(in <-chan []byte) {
+	failed := false
+	for p := range in {
+		if !failed {
+			_, err := r.stdin.Write(p)
+			failed = err != nil // the command closed its stdin: the rest is dropped
+		}
+	}
+	if !r.tty {
+		r.stdin.Close()
 	}
 }
 

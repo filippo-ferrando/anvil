@@ -165,13 +165,11 @@ func (w *Watcher) checkOne(ctx context.Context, name string, force bool) error {
 		return err
 	}
 	update := func(change func(*store.PipelineWatch)) {
-		// Re-read: the user may have paused or changed it meanwhile.
-		cur, err := w.Exec.Store.GetPipelineWatch(name)
-		if err != nil {
-			return
-		}
-		change(&cur)
-		_ = w.Exec.Store.PutPipelineWatch(cur)
+		// One transaction, so a pause made meanwhile is kept and a removed watch stays gone.
+		_, _ = w.Exec.Store.UpdatePipelineWatch(name, func(c *store.PipelineWatch) error {
+			change(c)
+			return nil
+		})
 	}
 	commit, err := headCommit(ctx, pw.Repo, pw.Branch)
 	update(func(c *store.PipelineWatch) {
@@ -185,7 +183,8 @@ func (w *Watcher) checkOne(ctx context.Context, name string, force bool) error {
 	}
 	tarPath, err := w.packCommit(ctx, pw.Repo, pw.Branch, commit)
 	if err != nil {
-		update(func(c *store.PipelineWatch) { c.LastError, c.LastCommit = err.Error(), commit })
+		// The commit stays unseen, so the next check tries it again.
+		update(func(c *store.PipelineWatch) { c.LastError = err.Error() })
 		return err
 	}
 	// The commit counts as seen before the run, so a failing pipeline isn't run again.

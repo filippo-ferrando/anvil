@@ -96,11 +96,13 @@ func (f *fakeEngine) SweepClones(context.Context) error { f.swept = true; return
 func (f *fakeEngine) DrainNetworks(context.Context) error { f.drained.Add(1); return nil }
 
 func (f *fakeEngine) SaveClone(_ context.Context, id, baseDir, dir string) error {
-	if f.saveErr != nil {
-		return f.saveErr
-	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
+	}
+	if f.saveErr != nil {
+		// A save cut short leaves part of its files behind.
+		_ = os.WriteFile(filepath.Join(dir, "vmstate"), nil, 0o640)
+		return f.saveErr
 	}
 	for _, name := range []string{"vmstate", "mem", "disk.raw"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("saved "+id), 0o640); err != nil {
@@ -400,6 +402,7 @@ func TestRunRestoresDuringUpload(t *testing.T) {
 		f.Close()
 		close(ready)
 	}()
+	started := 0
 	err := m.Run(context.Background(), RunRequest{
 		Distros: []string{"ubuntu"}, Argv: []string{"cat", "hello"}, Upload: upload,
 		WaitUpload: func(ctx context.Context) error {
@@ -414,6 +417,8 @@ func TestRunRestoresDuringUpload(t *testing.T) {
 		switch {
 		case ev.Progress != nil && strings.HasPrefix(ev.Progress.Message, "restored"):
 			restored <- struct{}{}
+		case ev.Progress != nil && ev.Progress.Started:
+			started++
 		case ev.Output != nil:
 			out.Write(ev.Output.Data)
 		case ev.Exit != nil:
@@ -423,6 +428,9 @@ func TestRunRestoresDuringUpload(t *testing.T) {
 	m.WaitDeletes()
 	if err != nil || exit.Code != 0 || out.String() != "hi\n" {
 		t.Fatalf("Run = %v, exit %+v, output %q", err, exit, out.String())
+	}
+	if started != 1 {
+		t.Errorf("started events = %d, want 1", started)
 	}
 
 	// A broken upload fails the command, not the daemon.
@@ -437,5 +445,56 @@ func TestRunRestoresDuringUpload(t *testing.T) {
 	m.WaitDeletes()
 	if err != nil || exit.Code != -1 || !strings.Contains(exit.Err, "receiving the upload") {
 		t.Errorf("broken upload: Run = %v, exit %+v", err, exit)
+	}
+}
+
+func TestWarmWaiterRetriesCancelledBuild(t *testing.T) {
+	m, _ := newTestManager(t)
+	s := WarmSpec{Key: "kshared", Distro: "shared"}
+	first, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	firstErr := make(chan error, 1)
+	go func() {
+		_, _, err := m.ensureWarm(first, s, false, func(string) {}, func() (store.WarmSnapshot, error) {
+			close(started)
+			<-first.Done()
+			return store.WarmSnapshot{}, first.Err()
+		})
+		firstErr <- err
+	}()
+	<-started
+	waiterErr := make(chan error, 1)
+	go func() {
+		_, _, err := m.ensureWarm(context.Background(), s, false, func(string) {}, func() (store.WarmSnapshot, error) {
+			return store.WarmSnapshot{Key: s.Key}, nil
+		})
+		waiterErr <- err
+	}()
+	time.Sleep(20 * time.Millisecond) // the waiter is now waiting on the first build
+	cancel()
+	if err := <-firstErr; !errors.Is(err, context.Canceled) {
+		t.Errorf("first caller = %v", err)
+	}
+	if err := <-waiterErr; err != nil {
+		t.Errorf("a waiter still here got the first caller's error: %v", err)
+	}
+}
+
+// failingGetWarm fails every GetWarm, as a store read error would.
+type failingGetWarm struct{ WarmStore }
+
+func (failingGetWarm) GetWarm(string) (store.WarmSnapshot, error) {
+	return store.WarmSnapshot{}, errors.New("store busy")
+}
+
+func TestCleanupKeepsWarmOnStoreError(t *testing.T) {
+	m, _ := newTestManager(t)
+	if _, _, err := m.Warm(context.Background(), WarmParams{Distro: "ubuntu", CPUs: 1}, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	m.Store = failingGetWarm{m.Store}
+	m.Cleanup(context.Background())
+	if !m.complete("kubuntu1") {
+		t.Error("Cleanup removed a warm snapshot on a store read error")
 	}
 }

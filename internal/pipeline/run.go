@@ -22,6 +22,16 @@ import (
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
+// ErrInvalid marks a run refused for bad input, as opposed to a host failure.
+var ErrInvalid = errors.New("invalid pipeline request")
+
+// invalidError keeps err's message and matches ErrInvalid.
+type invalidError struct{ err error }
+
+func (e invalidError) Error() string        { return e.err.Error() }
+func (e invalidError) Unwrap() error        { return e.err }
+func (e invalidError) Is(target error) bool { return target == ErrInvalid }
+
 // Store keeps runs and watches; *store.Store is one.
 type Store interface {
 	PutPipelineRun(store.PipelineRun) error
@@ -30,6 +40,7 @@ type Store interface {
 	DeletePipelineRun(id string) error
 	PutPipelineWatch(store.PipelineWatch) error
 	GetPipelineWatch(name string) (store.PipelineWatch, error)
+	UpdatePipelineWatch(name string, fn func(*store.PipelineWatch) error) (store.PipelineWatch, error)
 	ListPipelineWatches() ([]store.PipelineWatch, error)
 	DeletePipelineWatch(name string) error
 }
@@ -104,7 +115,7 @@ func (e *Executor) Run(ctx context.Context, src Source, emit func(Event)) (store
 		src.File = DefaultFile
 	}
 	if err := relPath(src.File); err != nil {
-		return store.PipelineRun{}, fmt.Errorf("pipeline file: %w", err)
+		return store.PipelineRun{}, invalidError{fmt.Errorf("pipeline file: %w", err)}
 	}
 	id := ulid.Make().String()
 	dir := e.RunDir(id)
@@ -259,7 +270,7 @@ func (r *run) execute(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("unpacking the source: %w", err)
 	}
-	data, err := os.ReadFile(filepath.Join(srcDir, filepath.FromSlash(r.rec.File)))
+	data, err := readSource(srcDir, r.rec.File)
 	if err != nil {
 		return fmt.Errorf("reading the pipeline file: %w", err)
 	}
@@ -425,7 +436,7 @@ func (r *run) applyManifest(ctx context.Context, srcDir, file string) {
 		r.save()
 	}
 	r.progress("", "", "applying "+file)
-	data, err := os.ReadFile(filepath.Join(srcDir, filepath.FromSlash(file)))
+	data, err := readSource(srcDir, file)
 	if err == nil && r.e.Apply == nil {
 		err = errors.New("apply isn't available here")
 	}
@@ -442,19 +453,29 @@ func (r *run) applyManifest(ctx context.Context, srcDir, file string) {
 
 // readSetup reads a job's setup script and key files from the source.
 func readSetup(srcDir, script string, keyFiles []string) (*ephemeral.SetupScript, error) {
-	data, err := os.ReadFile(filepath.Join(srcDir, filepath.FromSlash(script)))
+	data, err := readSource(srcDir, script)
 	if err != nil {
 		return nil, fmt.Errorf("reading the setup script: %w", err)
 	}
 	s := &ephemeral.SetupScript{Name: script, Script: data}
 	for _, f := range keyFiles {
-		b, err := os.ReadFile(filepath.Join(srcDir, filepath.FromSlash(f)))
+		b, err := readSource(srcDir, f)
 		if err != nil {
 			return nil, fmt.Errorf("reading key file: %w", err)
 		}
 		s.Files = append(s.Files, ephemeral.SetupFile{Name: f, Data: b})
 	}
 	return s, nil
+}
+
+// readSource reads name inside srcDir; links that point outside srcDir are refused.
+func readSource(srcDir, name string) ([]byte, error) {
+	root, err := os.OpenRoot(srcDir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return root.ReadFile(filepath.FromSlash(name))
 }
 
 // logName is the log file of job on distro.

@@ -23,7 +23,12 @@ func Serve() error {
 	if !ok {
 		return fmt.Errorf("devhelper: stdin is not a unix socket")
 	}
-	raw, err := uc.SyscallConn()
+	return ServeConn(uc)
+}
+
+// ServeConn answers one request on conn, acting for the peer's uid and gid.
+func ServeConn(conn *net.UnixConn) error {
+	raw, err := conn.SyscallConn()
 	if err != nil {
 		return err
 	}

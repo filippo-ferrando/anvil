@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"path"
 	"sort"
 	"strings"
@@ -160,6 +161,7 @@ func (m *Manager) layerWarm(ctx context.Context, e Engine, s WarmSpec, base stor
 	progress("taking the snapshot")
 	dir := m.Dir(s.Key)
 	if err := e.SaveClone(ctx, clone.ID(), m.Dir(base.Key), dir); err != nil {
+		_ = os.RemoveAll(dir)
 		return store.WarmSnapshot{}, fmt.Errorf("saving the %s warm snapshot: %w", s.SetupName, err)
 	}
 	now := time.Now()
@@ -167,6 +169,7 @@ func (m *Manager) layerWarm(ctx context.Context, e Engine, s WarmSpec, base stor
 	rec.Key, rec.Base, rec.Setup, rec.Saved = s.Key, base.Key, s.SetupName, false
 	rec.SizeBytes, rec.CreatedAt, rec.LastUsedAt = diskUsage(dir), now, now
 	if err := m.Store.PutWarm(rec); err != nil {
+		_ = os.RemoveAll(dir)
 		return store.WarmSnapshot{}, err
 	}
 	progress(fmt.Sprintf("built the %s + %s warm snapshot in %s", s.Distro, s.SetupName, time.Since(start).Round(time.Second)))
@@ -230,6 +233,7 @@ func (m *Manager) SaveClone(ctx context.Context, prefix string) (store.WarmSnaps
 	key := hex.EncodeToString(sum[:])[:16]
 	dir := m.Dir(key)
 	if err := e.SaveClone(ctx, st.id, m.Dir(base.Key), dir); err != nil {
+		_ = os.RemoveAll(dir)
 		return store.WarmSnapshot{}, fmt.Errorf("saving clone %s: %w", st.id, err)
 	}
 	now := time.Now()
@@ -237,6 +241,7 @@ func (m *Manager) SaveClone(ctx context.Context, prefix string) (store.WarmSnaps
 	rec.Key, rec.Base, rec.Setup, rec.Saved = key, base.Key, "saved from "+st.id, true
 	rec.SizeBytes, rec.CreatedAt, rec.LastUsedAt = diskUsage(dir), now, now
 	if err := m.Store.PutWarm(rec); err != nil {
+		_ = os.RemoveAll(dir)
 		return store.WarmSnapshot{}, err
 	}
 	return rec, nil

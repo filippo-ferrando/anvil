@@ -127,9 +127,13 @@ func appSetup(s WarmSpec) Setup {
 	return func(ctx context.Context, dial Dialer, progress func(string)) error {
 		progress("adding the GUI tools")
 		pr, pw := io.Pipe()
-		go func() { pw.CloseWithError(writeToolsTar(pw, guiToolsDir())) }()
+		dir := guiToolsDir()
+		go func() { pw.CloseWithError(writeToolsTar(pw, dir)) }()
 		install := "install -m 0755 " + strings.Join(guiTools, " ") + " /usr/local/bin/ && rm -rf \"$PWD\""
-		if _, err := guestOutput(ctx, dial, guestexec.Request{Header: guestexec.Header{Argv: []string{"sh", "-c", install}}, Upload: pr}); err != nil {
+		_, err := guestOutput(ctx, dial, guestexec.Request{Header: guestexec.Header{Argv: []string{"sh", "-c", install}}, Upload: pr})
+		// Unblocks the tar writer when the upload stopped before reading all of it.
+		pr.Close()
+		if err != nil {
 			return fmt.Errorf("adding the GUI tools: %w", err)
 		}
 		progress("installing " + s.App + " with the distro's package manager, once for the warm snapshot")
@@ -414,7 +418,7 @@ func (m *Manager) RunApp(ctx context.Context, r AppRequest, emit func(Event)) er
 	}
 	go forwardDisplay(l, r.Display)
 
-	progress("running: " + app.Name)
+	emit(Event{Progress: &Progress{CloneID: id, Distro: distro, Message: "running: " + app.Name, Started: true}})
 	code, runErr := m.guestRun(ctx, clone, guestexec.Request{
 		Header: guestexec.Header{Argv: appArgv(app.Command, r.X11), Env: appEnv(r.X11, r.Env), User: spec.User},
 		Stdout: writerFunc(func(p []byte) { emit(Event{Output: &Output{CloneID: id, Distro: distro, Data: p}}) }),

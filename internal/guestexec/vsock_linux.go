@@ -43,5 +43,3 @@ func (l *VsockListener) Accept() (io.ReadWriteCloser, error) {
 		return os.NewFile(uintptr(nfd), "vsock"), nil
 	}
 }
-
-func (l *VsockListener) Close() error { return unix.Close(l.fd) }

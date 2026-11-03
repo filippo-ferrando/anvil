@@ -23,6 +23,7 @@ type Job struct {
 	Name   string
 	Labels []string
 	Handle string // forgejo: picks this exact job for one-job
+	RunID  int64  // github: the workflow run the job is in
 }
 
 // Launch is what a clone runs for one job: a script, its secrets in the environment
@@ -31,6 +32,16 @@ type Launch struct {
 	Script  string
 	Env     []string
 	Cleanup func(ctx context.Context)
+	// Watch, when set, reports which job the runner took; a forge that hands a job to
+	// any idle runner with matching labels sets it.
+	Watch func(ctx context.Context) (RunnerState, error)
+}
+
+// RunnerState is how a single-use runner is doing on its forge.
+type RunnerState struct {
+	Busy    bool // it took a job, or took one and is gone
+	Took    *Job // the job it took, when found
+	Waiting bool // the job it was made for still waits for a runner
 }
 
 // Forge is one forge's side of a runner.

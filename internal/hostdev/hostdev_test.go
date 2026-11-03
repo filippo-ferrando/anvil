@@ -163,6 +163,10 @@ func TestClaimRefusesBlockedAndBadInput(t *testing.T) {
 		{Op: "claim", Bus: "usb", Addr: "../../etc"},
 		{Op: "release", Claim: &Claim{Bus: "pci", Addr: "0000:04:00.0", Members: []Member{{Addr: "0000:04:00.0", Driver: "../x"}}}},
 		{Op: "release", Claim: &Claim{Bus: "disk", Addr: "sda"}},
+		// Release checks for critical devices too, not only claim.
+		{Op: "release", Claim: &Claim{Bus: "pci", Addr: "0000:01:00.0", Members: []Member{{Addr: "0000:01:00.0", Driver: "nvme"}}}},
+		{Op: "release", Claim: &Claim{Bus: "pci", Addr: "0000:03:00.0", Members: []Member{{Addr: "0000:03:00.0", Driver: "igc"}}}},
+		{Op: "release", Claim: &Claim{Bus: "pci", Addr: "../x", Members: []Member{{Addr: "0000:04:00.0"}}}},
 		{Op: "format"},
 	} {
 		if rep := handle(req, os.Getuid(), os.Getgid()); rep.Error == "" {

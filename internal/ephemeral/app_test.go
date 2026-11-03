@@ -4,11 +4,13 @@ package ephemeral
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -310,5 +312,21 @@ func TestPickEntrySkipsNoDisplay(t *testing.T) {
 	}
 	if e, ok := pickEntry("code", nil, entries[:1], names[:1]); !ok || e.Name != handler.Name {
 		t.Errorf("only a NoDisplay entry: %+v", e)
+	}
+}
+
+func TestAppSetupDialFailureEndsToolsWriter(t *testing.T) {
+	fakeGUITools(t)
+	before := runtime.NumGoroutine()
+	dial := func(context.Context) (io.ReadWriteCloser, error) { return nil, errors.New("no vsock") }
+	if err := appSetup(WarmSpec{App: "gedit"})(context.Background(), dial, func(string) {}); err == nil {
+		t.Fatal("setup worked without a guest")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > before {
+		if time.Now().After(deadline) {
+			t.Fatalf("the tools tar writer is still blocked: %d goroutines, %d before", runtime.NumGoroutine(), before)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

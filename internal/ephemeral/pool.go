@@ -296,10 +296,24 @@ func (m *Manager) releaseIdle() {
 	}
 }
 
-// Shutdown runs as anvild stops: nothing is left built ahead of time on the host.
+// Shutdown runs as anvild stops: nothing is left built ahead of time on the host. The
+// pools' records stay, so the next anvild fills them again.
 func (m *Manager) Shutdown(ctx context.Context) {
 	if m.Engine == nil {
 		return
+	}
+	m.mu.Lock()
+	var pooled []Clone
+	for _, pl := range m.pools {
+		pl.gone = true // a refill in progress deletes what it restores
+		pooled = append(pooled, pl.ready...)
+		pl.ready = nil
+	}
+	m.mu.Unlock()
+	for _, c := range pooled {
+		if err := m.Engine.DeleteClone(ctx, c.ID()); err != nil {
+			log.Printf("ephemeral: deleting pooled clone %s: %v", c.ID(), err)
+		}
 	}
 	if err := m.Engine.DrainNetworks(ctx); err != nil {
 		log.Printf("ephemeral: dropping spare clone networks: %v", err)
@@ -311,7 +325,8 @@ func (m *Manager) dropPoolsOf(key string) error {
 	m.mu.Lock()
 	var gone []*pool
 	for id, p := range m.pools {
-		if p.key == key {
+		// A pool by key that never filled has no key set yet, only its "@<key>" distro.
+		if p.key == key || p.cfg.Distro == "@"+key {
 			gone = append(gone, p)
 			delete(m.pools, id)
 		}

@@ -3,7 +3,6 @@
 package hostdev
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -17,15 +16,6 @@ import (
 	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
 )
-
-// LocalNetns builds clone netns in this process instead of through the helper, for a
-// caller that already runs as root (tests under unshare).
-type LocalNetns struct{ UID, GID int }
-
-func (l LocalNetns) CreateNetns(_ context.Context, n Netns) error {
-	return createNetns(n, l.UID, l.GID)
-}
-func (LocalNetns) DeleteNetns(_ context.Context, id string) error { return deleteNetns(id) }
 
 // createNetns builds clone n's netns as CreateNetns describes, the guest's tap owned by uid:gid.
 func createNetns(n Netns, uid, gid int) (err error) {

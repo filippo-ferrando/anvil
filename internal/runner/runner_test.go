@@ -108,11 +108,23 @@ func TestGitHubClient(t *testing.T) {
 	var jit map[string]any
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v3/repos/acme/app/actions/runs", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("status") != "queued" || r.Header.Get("Authorization") != "Bearer tok" {
+		if r.Header.Get("Authorization") != "Bearer tok" {
 			http.Error(w, "bad request", 400)
 			return
 		}
-		_, _ = w.Write([]byte(`{"workflow_runs":[{"id":100}]}`))
+		switch r.URL.Query().Get("status") {
+		case "queued":
+			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":100}]}`))
+		case "in_progress":
+			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":100},{"id":200}]}`))
+		default:
+			http.Error(w, "bad request", 400)
+		}
+	})
+	mux.HandleFunc("GET /api/v3/repos/acme/app/actions/runs/200/jobs", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"jobs":[
+			{"id":7,"name":"done","status":"completed","labels":["anvil-ubuntu"]},
+			{"id":8,"name":"needs","status":"queued","labels":["anvil-ubuntu"]}]}`))
 	})
 	mux.HandleFunc("GET /api/v3/repos/acme/app/actions/runs/100/jobs", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"jobs":[
@@ -135,7 +147,7 @@ func TestGitHubClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(jobs) != 1 || jobs[0].ID != 1 {
+	if len(jobs) != 2 || jobs[0].ID != 1 || jobs[1].ID != 8 {
 		t.Fatalf("jobs = %+v", jobs)
 	}
 	launch, err := g.Register(context.Background(), "anvil-r-1", jobs[0])
@@ -209,6 +221,8 @@ type fakeForge struct {
 	regs    atomic.Int32
 	cleaned atomic.Int32
 	regErr  error
+	// watch, when set, makes each launch's Watch.
+	watch func(job Job) func(context.Context) (RunnerState, error)
 }
 
 func (f *fakeForge) Waiting(context.Context, []string) ([]Job, error) {
@@ -222,7 +236,11 @@ func (f *fakeForge) Register(_ context.Context, name string, job Job) (Launch, e
 		return Launch{}, f.regErr
 	}
 	f.regs.Add(1)
-	return Launch{Script: "run " + name, Env: []string{"TOKEN=x"}, Cleanup: func(context.Context) { f.cleaned.Add(1) }}, nil
+	l := Launch{Script: "run " + name, Env: []string{"TOKEN=x"}, Cleanup: func(context.Context) { f.cleaned.Add(1) }}
+	if f.watch != nil {
+		l.Watch = f.watch(job)
+	}
+	return l, nil
 }
 
 func (f *fakeForge) Install(_ string, deps []string) (string, string) {
@@ -242,6 +260,7 @@ func (f *fakeRuns) Run(ctx context.Context, r ephemeral.RunRequest, emit func(ep
 	f.reqs = append(f.reqs, r)
 	f.mu.Unlock()
 	emit(ephemeral.Event{Progress: &ephemeral.Progress{CloneID: "eph-1", Distro: r.Distros[0], Message: "restored"}})
+	emit(ephemeral.Event{Progress: &ephemeral.Progress{CloneID: "eph-1", Distro: r.Distros[0], Message: "running: sh -c", Started: true}})
 	select {
 	case <-f.release:
 	case <-ctx.Done():
@@ -462,4 +481,206 @@ func TestManagerDepsOnEveryDistro(t *testing.T) {
 	if !slices.Equal(distros, []string{"@k1", "debian-13", "ubuntu-24.04"}) {
 		t.Errorf("distros = %v", distros)
 	}
+}
+
+func TestManagerRemoveWaitsForJobs(t *testing.T) {
+	forge := &fakeForge{jobs: []Job{{ID: 1, Labels: []string{"debian"}}}}
+	runs := &fakeRuns{release: make(chan struct{})}
+	m := newTestManager(t, forge, runs)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if _, err := m.Add(ctx, store.Runner{Name: "ci", Forge: "forgejo", URL: "https://x", Scope: "repos/a/b", Token: "t",
+		Labels: map[string]string{"debian": "debian-13"}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "a running job", func() bool { list, _ := m.List(); return len(list) == 1 && list[0].Running == 1 })
+	if err := m.Remove("ci"); err != nil {
+		t.Fatal(err)
+	}
+	m.Wait()
+	if jobs, _ := m.Jobs("ci"); len(jobs) != 0 {
+		t.Errorf("a removed runner's job came back: %+v", jobs)
+	}
+}
+
+func TestGitHubWatch(t *testing.T) {
+	var mu sync.Mutex
+	job1 := `{"id":1,"run_id":100,"name":"ours","status":"queued","labels":["anvil-ubuntu"]}`
+	runner := `{"id":55,"busy":false}`
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v3/repos/acme/app/actions/runs", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"workflow_runs":[{"id":100},{"id":200}]}`))
+	})
+	mux.HandleFunc("GET /api/v3/repos/acme/app/actions/runs/{run}/jobs", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.PathValue("run") {
+		case "100":
+			_, _ = w.Write([]byte(`{"jobs":[` + job1 + `]}`))
+		case "200":
+			_, _ = w.Write([]byte(`{"jobs":[{"id":9,"run_id":200,"name":"other","status":"in_progress","labels":["anvil-ubuntu"],"runner_name":"anvil-r-1"}]}`))
+		}
+	})
+	mux.HandleFunc("GET /api/v3/repos/acme/app/actions/jobs/1", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		_, _ = w.Write([]byte(job1))
+	})
+	mux.HandleFunc("GET /api/v3/repos/acme/app/actions/runners/55", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if runner == "" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(runner))
+	})
+	mux.HandleFunc("POST /api/v3/repos/acme/app/actions/runners/generate-jitconfig", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"runner":{"id":55},"encoded_jit_config":"JITCFG"}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	g, err := newForge(store.Runner{Forge: "github", URL: srv.URL, Scope: "repos/acme/app", Token: "tok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := g.Waiting(context.Background(), []string{"anvil-ubuntu"})
+	if err != nil || len(jobs) != 1 || jobs[0].RunID != 100 {
+		t.Fatalf("jobs = %+v, %v", jobs, err)
+	}
+	launch, err := g.Register(context.Background(), "anvil-r-1", jobs[0])
+	if err != nil || launch.Watch == nil {
+		t.Fatalf("launch = %+v, %v", launch, err)
+	}
+	set := func(j, r string) { mu.Lock(); job1, runner = j, r; mu.Unlock() }
+	check := func(what string, want RunnerState) {
+		t.Helper()
+		st, err := launch.Watch(context.Background())
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		if st.Busy != want.Busy || st.Waiting != want.Waiting || (st.Took == nil) != (want.Took == nil) ||
+			(st.Took != nil && (st.Took.ID != want.Took.ID || st.Took.RunID != want.Took.RunID || st.Took.Name != want.Took.Name)) {
+			t.Errorf("%s: state = %+v (took %+v)", what, st, st.Took)
+		}
+	}
+	check("idle", RunnerState{Waiting: true})
+	set(`{"id":1,"run_id":100,"name":"ours","status":"in_progress","runner_name":"anvil-r-1"}`, `{"id":55,"busy":true}`)
+	check("took its job", RunnerState{Busy: true, Took: &Job{ID: 1, RunID: 100, Name: "ours"}})
+	set(`{"id":1,"run_id":100,"name":"ours","status":"in_progress","runner_name":"someone-else"}`, `{"id":55,"busy":false}`)
+	check("taken elsewhere", RunnerState{})
+	set(`{"id":1,"run_id":100,"name":"ours","status":"in_progress","runner_name":"someone-else"}`, `{"id":55,"busy":true}`)
+	check("took another job", RunnerState{Busy: true, Took: &Job{ID: 9, RunID: 200, Name: "other"}})
+	set(`{"id":1,"run_id":100,"name":"ours","status":"queued"}`, "")
+	check("gone after a job", RunnerState{Busy: true, Waiting: true, Took: &Job{ID: 9, RunID: 200, Name: "other"}})
+}
+
+// shortWatch makes the runner watchdog fast for one test.
+func shortWatch(t *testing.T) {
+	t.Helper()
+	every, limit := watchEvery, idleLimit
+	watchEvery, idleLimit = 10*time.Millisecond, 150*time.Millisecond
+	t.Cleanup(func() { watchEvery, idleLimit = every, limit })
+}
+
+func TestManagerWatchSkips(t *testing.T) {
+	shortWatch(t)
+	for _, tc := range []struct {
+		name, want string
+		waiting    bool
+	}{
+		{"idle", "no job came to this runner within", true},
+		{"taken elsewhere", "taken by another runner", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var polls atomic.Int32
+			forge := &fakeForge{jobs: []Job{{ID: 1, Labels: []string{"debian"}}}, watch: func(Job) func(context.Context) (RunnerState, error) {
+				return func(context.Context) (RunnerState, error) { polls.Add(1); return RunnerState{Waiting: tc.waiting}, nil }
+			}}
+			runs := &fakeRuns{release: make(chan struct{})}
+			m := newTestManager(t, forge, runs)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if _, err := m.Add(ctx, store.Runner{Name: "ci", Forge: "github", Scope: "repos/a/b", Token: "t", MaxJobs: 1,
+				Labels: map[string]string{"debian": "debian-13"}}); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "a skipped job", func() bool { jobs, _ := m.Jobs("ci"); return len(jobs) > 0 && jobs[len(jobs)-1].State == "skipped" })
+			jobs, _ := m.Jobs("ci")
+			if j := jobs[len(jobs)-1]; !strings.Contains(j.Error, tc.want) {
+				t.Errorf("skipped job = %+v", j)
+			}
+			waitFor(t, "the runner deleted", func() bool { return forge.cleaned.Load() >= 1 })
+			if tc.waiting && polls.Load() < 5 {
+				t.Errorf("skipped after %d polls, before the idle limit", polls.Load())
+			}
+			cancel()
+			m.Wait()
+		})
+	}
+}
+
+func TestManagerWatchRecordsTakenJob(t *testing.T) {
+	shortWatch(t)
+	// The runner made for job 1 takes job 9; job 1 still waits and gets its own clone.
+	forge := &fakeForge{jobs: []Job{{ID: 1, Name: "x", Labels: []string{"debian"}}}}
+	forge.watch = func(j Job) func(context.Context) (RunnerState, error) {
+		return func(context.Context) (RunnerState, error) {
+			if j.ID == 1 && forge.regs.Load() == 1 {
+				return RunnerState{Busy: true, Took: &Job{ID: 9, Name: "y", Labels: []string{"debian"}}}, nil
+			}
+			return RunnerState{Busy: true, Took: &j}, nil
+		}
+	}
+	runs := &fakeRuns{release: make(chan struct{})}
+	m := newTestManager(t, forge, runs)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if _, err := m.Add(ctx, store.Runner{Name: "ci", Forge: "github", Scope: "repos/a/b", Token: "t", MaxJobs: 2,
+		Labels: map[string]string{"debian": "debian-13"}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "job 1 started again", func() bool { return forge.regs.Load() == 2 })
+	m.mu.Lock()
+	l := m.loops["ci"]
+	active := map[int64]int{}
+	for id, n := range l.active {
+		active[id] = n
+	}
+	running := l.running
+	m.mu.Unlock()
+	if running != 2 || active[1] != 1 || active[9] != 1 {
+		t.Errorf("running %d, active %v", running, active)
+	}
+	ids := map[int64]string{}
+	for _, j := range must(m.Jobs("ci")) {
+		ids[j.JobID] = j.Name
+	}
+	if ids[9] != "y" || ids[1] != "x" {
+		t.Errorf("recorded jobs = %v", ids)
+	}
+	forge.mu.Lock()
+	forge.jobs = nil
+	forge.mu.Unlock()
+	close(runs.release)
+	waitFor(t, "both jobs done", func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return l.running == 0 && len(l.active) == 0
+	})
+	m.mu.Lock()
+	_, recent9 := l.recent[9]
+	m.mu.Unlock()
+	if !recent9 {
+		t.Error("the job the runner took isn't marked as handled")
+	}
+	cancel()
+	m.Wait()
+}
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
 }

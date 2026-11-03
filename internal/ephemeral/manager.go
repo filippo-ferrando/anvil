@@ -144,7 +144,8 @@ func (m *Manager) ensureWarm(ctx context.Context, s WarmSpec, rebuild bool, prog
 			case <-ctx.Done():
 				return store.WarmSnapshot{}, s, ctx.Err()
 			}
-			if b.err != nil {
+			// A build cut short by its own caller leaving is tried again by a caller still here.
+			if b.err != nil && !errors.Is(b.err, context.Canceled) && !errors.Is(b.err, context.DeadlineExceeded) {
 				return store.WarmSnapshot{}, s, b.err
 			}
 			rebuild = false
@@ -326,7 +327,8 @@ func (m *Manager) Cleanup(ctx context.Context) {
 		return
 	}
 	for _, e := range entries {
-		if _, err := m.Store.GetWarm(e.Name()); err != nil {
+		// Only a missing record marks a dir as unfinished, not a store read error.
+		if _, err := m.Store.GetWarm(e.Name()); errors.Is(err, instance.ErrNotFound) {
 			log.Printf("ephemeral: removing unfinished warm snapshot %s", e.Name())
 			_ = os.RemoveAll(filepath.Join(parent, e.Name()))
 		}

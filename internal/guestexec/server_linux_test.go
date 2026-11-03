@@ -212,6 +212,37 @@ func TestServeDisconnectKills(t *testing.T) {
 	}
 }
 
+func TestServeDisconnectKillsWithUnreadStdin(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for i := 0; i < 50; i++ {
+			if _, err := os.Stat(pidFile); err == nil {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		time.Sleep(100 * time.Millisecond) // the input fills the stdin pipe meanwhile
+		cancel()
+	}()
+	// More input than a pipe holds, for a command that never reads it.
+	r := cmd("sh", "-c", "echo $$ > "+pidFile+"; exec sleep 30")
+	r.Stdin = bytes.NewReader(make([]byte, 512<<10))
+	got := runPipe(t, ctx, r)
+	if !errors.Is(got.err, context.Canceled) {
+		t.Fatalf("Run = %+v, want a cancel", got)
+	}
+	data, _ := os.ReadFile(pidFile)
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+	deadline := time.Now().Add(3 * time.Second)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			t.Fatalf("the command (pid %d) survived the disconnect", pid)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func TestServeBackgroundChildDoesNotHang(t *testing.T) {
 	start := time.Now()
 	got := runPipe(t, context.Background(), cmd("sh", "-c", "sleep 30 & echo done"))

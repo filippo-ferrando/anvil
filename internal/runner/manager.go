@@ -15,6 +15,19 @@ import (
 	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 )
 
+// ErrInvalid marks a runner refused for bad settings; ErrExists one whose name is taken.
+var (
+	ErrInvalid = errors.New("invalid runner")
+	ErrExists  = errors.New("already exists")
+)
+
+// invalidError keeps err's message and matches ErrInvalid.
+type invalidError struct{ err error }
+
+func (e invalidError) Error() string        { return e.err.Error() }
+func (e invalidError) Unwrap() error        { return e.err }
+func (e invalidError) Is(target error) bool { return target == ErrInvalid }
+
 // Store keeps runners and their jobs; *store.Store is one.
 type Store interface {
 	PutRunner(store.Runner) error
@@ -44,6 +57,14 @@ const (
 	errTail = 2 << 10
 )
 
+// Watchdog timings for runners whose forge reports which job they took; tests shorten them.
+var (
+	watchEvery = 30 * time.Second
+	idleLimit  = 5 * time.Minute
+	// watchLookups bounds the polls spent looking for the job a busy runner took.
+	watchLookups = 10
+)
+
 // Manager polls every runner's forge and runs the jobs it finds.
 type Manager struct {
 	Store Store
@@ -61,7 +82,10 @@ type Manager struct {
 // loop is one runner's polling, and the jobs it started.
 type loop struct {
 	cancel   context.CancelFunc
-	active   map[int64]bool // forge job ids with a clone now
+	done     chan struct{} // closed when the polling goroutine returns
+	jobs     sync.WaitGroup
+	running  int           // clones now
+	active   map[int64]int // forge job ids with a clone now, and how many
 	recent   map[int64]time.Time
 	lastPoll time.Time
 	lastErr  string
@@ -149,10 +173,10 @@ func normalize(r *store.Runner) error {
 // Add saves a new runner and starts it.
 func (m *Manager) Add(ctx context.Context, r store.Runner) (Info, error) {
 	if err := normalize(&r); err != nil {
-		return Info{}, err
+		return Info{}, invalidError{err}
 	}
 	if _, err := m.Store.GetRunner(r.Name); err == nil {
-		return Info{}, fmt.Errorf("a runner named %s already exists", r.Name)
+		return Info{}, fmt.Errorf("a runner named %s %w", r.Name, ErrExists)
 	}
 	r.CreatedAt = time.Now()
 	if err := m.Store.PutRunner(r); err != nil {
@@ -167,6 +191,7 @@ func (m *Manager) Remove(name string) error {
 	if _, err := m.Store.GetRunner(name); err != nil {
 		return err
 	}
+	// Running jobs record how they ended, so the history goes only after they stop.
 	m.stop(name)
 	if err := m.Store.DeleteRunner(name); err != nil {
 		return err
@@ -215,7 +240,7 @@ func (m *Manager) info(r store.Runner) Info {
 	in := Info{Runner: r}
 	m.mu.Lock()
 	if l := m.loops[r.Name]; l != nil {
-		in.Running, in.LastPoll, in.LastErr = len(l.active), l.lastPoll, l.lastErr
+		in.Running, in.LastPoll, in.LastErr = l.running, l.lastPoll, l.lastErr
 	}
 	m.mu.Unlock()
 	return in
@@ -223,7 +248,7 @@ func (m *Manager) info(r store.Runner) Info {
 
 func (m *Manager) start(ctx context.Context, r store.Runner) {
 	ctx, cancel := context.WithCancel(ctx)
-	l := &loop{cancel: cancel, active: map[int64]bool{}, recent: map[int64]time.Time{}}
+	l := &loop{cancel: cancel, done: make(chan struct{}), active: map[int64]int{}, recent: map[int64]time.Time{}}
 	m.mu.Lock()
 	if old := m.loops[r.Name]; old != nil {
 		old.cancel()
@@ -233,6 +258,7 @@ func (m *Manager) start(ctx context.Context, r store.Runner) {
 	go m.run(ctx, r.Name, l)
 }
 
+// stop cancels a runner's loop and waits for it and its jobs to end.
 func (m *Manager) stop(name string) {
 	m.mu.Lock()
 	l := m.loops[name]
@@ -240,6 +266,8 @@ func (m *Manager) stop(name string) {
 	m.mu.Unlock()
 	if l != nil {
 		l.cancel()
+		<-l.done
+		l.jobs.Wait()
 	}
 }
 
@@ -247,6 +275,7 @@ func (m *Manager) stop(name string) {
 func (m *Manager) Wait() { m.jobs.Wait() }
 
 func (m *Manager) run(ctx context.Context, name string, l *loop) {
+	defer close(l.done)
 	t := time.NewTicker(m.Poll)
 	defer t.Stop()
 	for {
@@ -308,23 +337,34 @@ func (m *Manager) pollOnce(ctx context.Context, name string, l *loop) {
 			}
 		}
 		_, recent := l.recent[job.ID]
-		take := !l.active[job.ID] && !recent && len(l.active) < r.MaxJobs
+		take := l.active[job.ID] == 0 && !recent && l.running < r.MaxJobs
 		if take {
-			l.active[job.ID] = true
+			l.active[job.ID]++
+			l.running++
 		}
 		m.mu.Unlock()
 		if !take {
 			continue
 		}
 		m.jobs.Add(1)
+		l.jobs.Add(1)
 		go func() {
 			defer m.jobs.Done()
-			m.runJob(ctx, r, forge, job, distro)
+			defer l.jobs.Done()
+			id := m.runJob(ctx, r, forge, job, distro, l)
 			m.mu.Lock()
-			delete(l.active, job.ID)
-			l.recent[job.ID] = time.Now()
+			l.running--
+			l.unmark(id)
+			l.recent[id] = time.Now()
 			m.mu.Unlock()
 		}()
+	}
+}
+
+// unmark drops one clone of job id from l.active; m.mu is held.
+func (l *loop) unmark(id int64) {
+	if l.active[id]--; l.active[id] <= 0 {
+		delete(l.active, id)
 	}
 }
 
@@ -348,21 +388,29 @@ func pickDistro(mapped map[string]string, labels []string) string {
 }
 
 // runJob registers single-use runner credentials and runs the forge's runner for job in
-// a clone of distro, recording how it went.
-func (m *Manager) runJob(ctx context.Context, r store.Runner, forge Forge, job Job, distro string) {
+// a clone of distro, recording how it went. It returns the id of the job the runner took.
+func (m *Manager) runJob(ctx context.Context, r store.Runner, forge Forge, job Job, distro string, l *loop) int64 {
 	start := time.Now()
 	rec := store.RunnerJob{
 		ID: fmt.Sprintf("%s/%d/%d", r.Name, job.ID, start.UnixNano()), Runner: r.Name, JobID: job.ID, Name: job.Name,
 		Labels: job.Labels, Distro: distro, State: "running", StartedAt: start,
 	}
+	// recMu guards rec and skipped, which the watchdog also writes.
+	var recMu sync.Mutex
+	skipped := ""
 	_ = m.Store.PutRunnerJob(rec)
 	finish := func(code int, err error) {
+		recMu.Lock()
+		defer recMu.Unlock()
 		rec.EndedAt, rec.ExitCode, rec.State = time.Now(), code, "succeeded"
 		if err != nil || code != 0 {
 			rec.State = "failed"
 		}
 		if err != nil {
 			rec.Error = err.Error()
+		}
+		if skipped != "" {
+			rec.State, rec.Error = "skipped", skipped
 		}
 		if ctx.Err() != nil {
 			rec.State, rec.Error = "failed", "the runner was stopped"
@@ -374,7 +422,7 @@ func (m *Manager) runJob(ctx context.Context, r store.Runner, forge Forge, job J
 	launch, err := forge.Register(ctx, name, job)
 	if err != nil {
 		finish(-1, err)
-		return
+		return job.ID
 	}
 	defer func() {
 		if launch.Cleanup != nil {
@@ -391,13 +439,56 @@ func (m *Manager) runJob(ctx context.Context, r store.Runner, forge Forge, job J
 	req.Setup = &ephemeral.SetupScript{Name: installName, Script: []byte("#!/bin/sh\n" + script)}
 	runCtx, cancel := context.WithTimeout(ctx, jobTimeout)
 	defer cancel()
+
+	current := job.ID
+	started := make(chan struct{})
+	var startOnce sync.Once
+	watchCtx, stopWatch := context.WithCancel(runCtx)
+	watched := make(chan struct{})
+	go func() {
+		defer close(watched)
+		if launch.Watch == nil {
+			return
+		}
+		watchRunner(watchCtx, launch.Watch, started, func(took Job) {
+			recMu.Lock()
+			defer recMu.Unlock()
+			if took.ID == rec.JobID {
+				return
+			}
+			// The runner took another job: it is the one to record, and job goes back to waiting.
+			m.mu.Lock()
+			l.unmark(current)
+			l.active[took.ID]++
+			m.mu.Unlock()
+			current = took.ID
+			rec.JobID, rec.Name = took.ID, took.Name
+			if len(took.Labels) > 0 {
+				rec.Labels = took.Labels
+			}
+			_ = m.Store.PutRunnerJob(rec)
+		}, func(why string) {
+			recMu.Lock()
+			skipped = why
+			recMu.Unlock()
+			cancel()
+		})
+	}()
+
 	var out tail
 	code, runErr := -1, error(nil)
 	err = m.Runs.Run(runCtx, req, func(ev ephemeral.Event) {
 		switch {
-		case ev.Progress != nil && ev.Progress.CloneID != "" && rec.CloneID == "":
-			rec.CloneID = ev.Progress.CloneID
-			_ = m.Store.PutRunnerJob(rec)
+		case ev.Progress != nil:
+			recMu.Lock()
+			if ev.Progress.CloneID != "" && rec.CloneID == "" {
+				rec.CloneID = ev.Progress.CloneID
+				_ = m.Store.PutRunnerJob(rec)
+			}
+			recMu.Unlock()
+			if ev.Progress.Started {
+				startOnce.Do(func() { close(started) })
+			}
 		case ev.Output != nil:
 			out.write(ev.Output.Data)
 		case ev.Exit != nil:
@@ -407,6 +498,8 @@ func (m *Manager) runJob(ctx context.Context, r store.Runner, forge Forge, job J
 			}
 		}
 	})
+	stopWatch()
+	<-watched
 	if err == nil {
 		err = runErr
 	}
@@ -414,6 +507,61 @@ func (m *Manager) runJob(ctx context.Context, r store.Runner, forge Forge, job J
 		err = fmt.Errorf("the runner exited %d: %s", code, strings.TrimSpace(out.String()))
 	}
 	finish(code, err)
+	recMu.Lock()
+	defer recMu.Unlock()
+	return current
+}
+
+// watchRunner polls a runner once its clone runs the command. It reports the job the
+// runner took, or calls skip when no job comes to it.
+func watchRunner(ctx context.Context, watch func(context.Context) (RunnerState, error), started <-chan struct{}, took func(Job), skip func(string)) {
+	select {
+	case <-started:
+	case <-ctx.Done():
+		return
+	}
+	since := time.Now()
+	t := time.NewTicker(watchEvery)
+	defer t.Stop()
+	misses, lookups := 0, 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		st, err := watch(ctx)
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Printf("runner watchdog: %v", err)
+			}
+			continue
+		}
+		if st.Busy {
+			// Busy: only the job it took is left to find; the job timeout still applies.
+			if st.Took != nil {
+				took(*st.Took)
+				return
+			}
+			if lookups++; lookups >= watchLookups {
+				return
+			}
+			continue
+		}
+		// Two polls in a row, so a job being handed over isn't cut off.
+		misses++
+		if st.Waiting {
+			misses = 0
+		}
+		switch {
+		case misses >= 2:
+			skip("the job was cancelled or taken by another runner, and no other job came to this runner")
+			return
+		case time.Since(since) >= idleLimit:
+			skip(fmt.Sprintf("no job came to this runner within %s", idleLimit))
+			return
+		}
+	}
 }
 
 // prune drops runner's oldest finished jobs past keepJobs.

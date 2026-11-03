@@ -26,7 +26,11 @@ type Event struct {
 	App      *App     // RunApp only, before the app starts
 }
 
-type Progress struct{ CloneID, Distro, Message string }
+// Progress is a status line; Started marks the one sent as the command or app starts.
+type Progress struct {
+	CloneID, Distro, Message string
+	Started                  bool
+}
 
 type Output struct {
 	CloneID, Distro string
@@ -139,7 +143,7 @@ func (m *Manager) runOne(ctx context.Context, e Engine, r RunRequest, distro str
 	m.clones[id] = st
 	m.mu.Unlock()
 
-	progress("running: " + strings.Join(r.Argv, " "))
+	emit(Event{Progress: &Progress{CloneID: id, Distro: distro, Message: "running: " + strings.Join(r.Argv, " "), Started: true}})
 	code, runErr := m.runCommand(ctx, clone, r, func(stderr bool, data []byte) {
 		emit(Event{Output: &Output{CloneID: id, Distro: distro, Stderr: stderr, Data: data}})
 	})

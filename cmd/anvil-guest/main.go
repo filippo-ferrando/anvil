@@ -5,10 +5,13 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"syscall"
+	"time"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/guestexec"
 	"git.fferrando.cc/rdfilippo/anvil/internal/version"
@@ -38,6 +41,11 @@ func main() {
 	log.Printf("anvil-guest %s listening on vsock port %d", v, *port)
 	for {
 		conn, err := l.Accept()
+		if err != nil && temporary(err) {
+			log.Printf("anvil-guest: accept: %v (trying again)", err)
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
 		if err != nil {
 			log.Printf("anvil-guest: accept: %v", err)
 			os.Exit(1)
@@ -48,4 +56,16 @@ func main() {
 			}
 		}()
 	}
+}
+
+// temporary reports whether an accept error can pass, like running out of fds for a moment
+// or a connection the host dropped before it was accepted.
+func temporary(err error) bool {
+	for _, e := range []syscall.Errno{syscall.EMFILE, syscall.ENFILE, syscall.ENOBUFS, syscall.ENOMEM,
+		syscall.ECONNABORTED, syscall.EPROTO, syscall.EAGAIN, syscall.EPERM} {
+		if errors.Is(err, e) {
+			return true
+		}
+	}
+	return false
 }

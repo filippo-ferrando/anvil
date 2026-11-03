@@ -240,6 +240,10 @@ func bindVFIO(addr, drv string) error {
 func release(cl Claim) error {
 	switch {
 	case cl.Bus == "usb" && usbAddrRe.MatchString(cl.Addr):
+		// Checked again: the caller's claim could name a device that was never handed out.
+		if why := criticalPaths().blocked(usbDir(cl.Addr)); why != "" {
+			return fmt.Errorf("usb:%s %s and is left alone", cl.Addr, why)
+		}
 		node, err := usbNode(cl.Addr)
 		if err != nil {
 			return nil // unplugged meanwhile, its node is gone too
@@ -250,11 +254,15 @@ func release(cl Claim) error {
 		_ = os.Chmod(node, 0o664)
 		_ = exec.Command("udevadm", "trigger", "--action=change", usbDir(cl.Addr)).Run()
 		return nil
-	case cl.Bus == "pci":
+	case cl.Bus == "pci" && pciRe.MatchString(cl.Addr):
 		var errs []string
+		crit := criticalPaths()
 		for _, m := range cl.Members {
 			if !pciRe.MatchString(m.Addr) || (m.Driver != "" && !driverRe.MatchString(m.Driver)) {
 				return fmt.Errorf("invalid claim member %q", m.Addr)
+			}
+			if why := crit.blocked(pciDir(m.Addr)); why != "" {
+				return fmt.Errorf("pci:%s %s and is left alone", m.Addr, why)
 			}
 		}
 		for _, m := range cl.Members {

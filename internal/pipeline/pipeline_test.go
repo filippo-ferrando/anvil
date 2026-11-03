@@ -504,6 +504,55 @@ func TestWatcher(t *testing.T) {
 	if got, _ := e.Store.GetPipelineWatch("bad"); !strings.Contains(got.LastError, "ls-remote") {
 		t.Errorf("bad watch error = %q", got.LastError)
 	}
+
+	// A commit that fails to pack isn't marked as seen, so it runs on a later check.
+	blocked := filepath.Join(t.TempDir(), "file")
+	_ = os.WriteFile(blocked, nil, 0o644)
+	_ = os.WriteFile(filepath.Join(repo, "anvil-ci.yaml"), []byte("jobs:\n  a: {distro: u, run: third}\n"), 0o644)
+	git("commit", "-q", "-am", "three")
+	w2 := NewWatcher(e, blocked)
+	if err := w2.checkOne(ctx, "app", false); err == nil {
+		t.Fatal("packing into a file path worked")
+	}
+	if got, _ := e.Store.GetPipelineWatch("app"); got.LastCommit != list[0].Commit || got.LastError == "" {
+		t.Errorf("watch after a failed pack = %+v", got)
+	}
 	cancel()
 	w.Wait()
+}
+
+func TestReadSetupRefusesEscapingLinks(t *testing.T) {
+	src, outside := t.TempDir(), t.TempDir()
+	secret := filepath.Join(outside, "secret")
+	if err := os.WriteFile(secret, []byte("daemon data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "setup.sh"), []byte("echo hi"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(src, "secrets")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(src, "link.sh")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSetup(src, "setup.sh", []string{"secrets"}); err == nil {
+		t.Fatal("key file linking outside the source was read")
+	}
+	if _, err := readSetup(src, "link.sh", nil); err == nil {
+		t.Fatal("setup script linking outside the source was read")
+	}
+	if _, err := readSource(src, "../"+filepath.Base(outside)+"/secret"); err == nil {
+		t.Fatal("path outside the source was read")
+	}
+	if _, err := readSetup(src, "setup.sh", nil); err != nil {
+		t.Fatalf("plain setup script: %v", err)
+	}
+}
+
+func TestRunRejectsBadFileAsInvalid(t *testing.T) {
+	_, err := (&Executor{}).Run(context.Background(), Source{File: "../escape.yaml"}, nil)
+	if !errors.Is(err, ErrInvalid) {
+		t.Errorf("expected ErrInvalid, got %v", err)
+	}
 }

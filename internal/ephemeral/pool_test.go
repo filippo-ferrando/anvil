@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 )
 
 // newPoolManager is newTestManager with pooled clones that wake without a guest.
@@ -158,6 +160,26 @@ func TestDeleteWarmDropsItsPool(t *testing.T) {
 	}
 }
 
+func TestDeleteWarmDropsUnfilledKeyPool(t *testing.T) {
+	m, _ := newTestManager(t)
+	rec, _, err := m.Warm(context.Background(), WarmParams{Distro: "ubuntu"}, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A "@<key>" pool whose fill never worked has no key set yet.
+	cfg := store.WarmPool{Distro: "@" + rec.Key, Size: 1}
+	if err := m.Store.PutWarmPool(cfg); err != nil {
+		t.Fatal(err)
+	}
+	m.poolFor(cfg)
+	if _, err := m.DeleteWarm([]string{rec.Key}, false); err != nil {
+		t.Fatal(err)
+	}
+	if pools, _ := m.Pools(); len(pools) != 0 {
+		t.Errorf("pools after deleting the snapshot: %+v", pools)
+	}
+}
+
 func TestStartPools(t *testing.T) {
 	m, _, _ := newPoolManager(t)
 	if _, err := m.SetPool(WarmParams{Distro: "ubuntu"}, 2); err != nil {
@@ -195,5 +217,23 @@ func TestRemovingLastPoolDrainsNetworks(t *testing.T) {
 	m.Shutdown(context.Background())
 	if n := e.drained.Load(); n != 2 {
 		t.Errorf("drained %d times after Shutdown, want 2", n)
+	}
+}
+
+func TestShutdownDeletesPooledClones(t *testing.T) {
+	m, e, _ := newPoolManager(t)
+	if _, err := m.SetPool(WarmParams{Distro: "ubuntu"}, 2); err != nil {
+		t.Fatal(err)
+	}
+	waitPool(t, m, "ubuntu", 2)
+	m.Shutdown(context.Background())
+	if n := len(e.deletedIDs()); n != 2 {
+		t.Errorf("deleted %d pooled clones at shutdown, want 2", n)
+	}
+	if e.drained.Load() == 0 {
+		t.Error("shutdown kept the spare clone networks")
+	}
+	if list, _ := m.Store.ListWarmPools(); len(list) != 1 {
+		t.Errorf("pool records after shutdown = %+v, want them kept", list)
 	}
 }

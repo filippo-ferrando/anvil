@@ -198,6 +198,9 @@ func TestSaveClone(t *testing.T) {
 	if list, _ := m.ListWarm(); len(list) != 2 {
 		t.Errorf("records = %d, want the base and one saved", len(list))
 	}
+	if dirs, _ := os.ReadDir(filepath.Dir(m.Dir(base.Key))); len(dirs) != 2 {
+		t.Errorf("warm dirs = %d, a failed save left its files", len(dirs))
+	}
 }
 
 // TestSetupOnWarmKey layers a setup script on a snapshot picked by key: it runs in a clone
