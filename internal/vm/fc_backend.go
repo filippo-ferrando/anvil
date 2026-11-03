@@ -258,11 +258,13 @@ func (b *FCBackend) start(ctx context.Context, spec *instance.Spec, netns *Clone
 		return fmt.Errorf("vm: finding the root partition: %w", err)
 	}
 
-	paths := fcPathsFor(spec.ID, b.newJail(spec.ID))
+	var paths fcInstancePaths
 	if netns != nil {
 		if paths, err = b.clonePaths(spec.ID, netns.NetNS); err != nil {
 			return err
 		}
+	} else {
+		paths = fcPathsFor(spec.ID, b.newJail(spec.ID))
 	}
 	if err := prepareJail(spec.ID, paths); err != nil {
 		return err
@@ -352,7 +354,7 @@ func (b *FCBackend) start(ctx context.Context, spec *instance.Spec, netns *Clone
 		unwind()
 		return fmt.Errorf("vm: %w", err)
 	}
-	proc, err := firecracker.Spawn(ctx, paths.Paths)
+	proc, err := firecracker.Spawn(paths.Paths)
 	if err != nil {
 		unwind()
 		return fmt.Errorf("vm: spawning firecracker: %w", err)
@@ -648,9 +650,10 @@ func proxyKey(hostPort int, protocol string) string {
 func (b *FCBackend) startProxies(spec *instance.Spec, sshPort int) error {
 	v := spec.VM
 	guest := ipam.StripCIDR(v.StaticIP)
-	ssh, err := startPortProxy("tcp", sshPort, net.JoinHostPort(guest, "22"))
+	// SSH is for clients on this host only, like the QEMU SSH forward.
+	ssh, err := startPortProxyOn("tcp", "127.0.0.1", sshPort, net.JoinHostPort(guest, "22"))
 	if err != nil && sshPort != 0 {
-		ssh, err = startPortProxy("tcp", 0, net.JoinHostPort(guest, "22"))
+		ssh, err = startPortProxyOn("tcp", "127.0.0.1", 0, net.JoinHostPort(guest, "22"))
 	}
 	if err != nil {
 		return fmt.Errorf("vm: forwarding SSH: %w", err)

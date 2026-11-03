@@ -183,6 +183,9 @@ type qemuImgInfo struct {
 func qemuImgInspect(path string) (qemuImgInfo, error) {
 	st, err := os.Stat(path)
 	if err != nil {
+		infoCacheMu.Lock()
+		delete(infoCache, path)
+		infoCacheMu.Unlock()
 		return qemuImgInfo{}, fmt.Errorf("qemu-img info: %w", err)
 	}
 	key := fileVersionOf(st)
@@ -197,15 +200,34 @@ func qemuImgInspect(path string) (qemuImgInfo, error) {
 		return qemuImgInfo{}, err
 	}
 	infoCacheMu.Lock()
+	if len(infoCache) >= infoCacheMax {
+		pruneInfoCache()
+	}
 	infoCache[path] = cachedInfo{version: key, info: info}
 	infoCacheMu.Unlock()
 	return info, nil
 }
 
+// infoCacheMax bounds infoCache, so disks deleted long ago don't stay in it forever.
+const infoCacheMax = 512
+
 var (
 	infoCacheMu sync.Mutex
 	infoCache   = map[string]cachedInfo{}
 )
+
+// pruneInfoCache drops entries for files that are gone, or all of them if that is not
+// enough. Callers hold infoCacheMu.
+func pruneInfoCache() {
+	for p := range infoCache {
+		if _, err := os.Stat(p); err != nil {
+			delete(infoCache, p)
+		}
+	}
+	if len(infoCache) >= infoCacheMax {
+		clear(infoCache)
+	}
+}
 
 type cachedInfo struct {
 	version fileVersion

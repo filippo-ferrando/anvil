@@ -100,7 +100,7 @@ func (b *FCBackend) RestoreClone(ctx context.Context, id string, s ephemeral.War
 	}
 	phases.done(how)
 
-	proc, err := firecracker.Spawn(ctx, paths.Paths)
+	proc, err := firecracker.Spawn(paths.Paths)
 	if err != nil {
 		return nil, fmt.Errorf("vm: spawning the clone's firecracker: %w", err)
 	}

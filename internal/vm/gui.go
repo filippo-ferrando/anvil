@@ -133,7 +133,18 @@ func (b *guestTracker) ListGuestDir(ctx context.Context, spec *instance.Spec, di
 	if err != nil {
 		return nil, fmt.Errorf("vm: listing %s in %s: %w", dir, spec.Name, err)
 	}
-	return strings.Fields(res.Stdout), nil
+	return dirEntries(res.Stdout), nil
+}
+
+// dirEntries splits `ls -1A` output into names, keeping names with spaces whole.
+func dirEntries(out string) []string {
+	var names []string
+	for _, name := range strings.Split(out, "\n") {
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // ReadGuestFile reads path in the guest through the agent. A file the guest can't open counts as missing.

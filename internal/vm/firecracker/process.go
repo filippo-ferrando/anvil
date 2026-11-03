@@ -147,7 +147,7 @@ type Process struct {
 
 // Spawn starts firecracker, which boots the VM described by paths.ConfigFile right away,
 // or waits for a snapshot load when paths.ConfigFile is empty.
-func Spawn(ctx context.Context, paths Paths) (*Process, error) {
+func Spawn(paths Paths) (*Process, error) {
 	if err := os.MkdirAll(filepath.Dir(paths.ConsoleLog), 0o750); err != nil {
 		return nil, fmt.Errorf("firecracker: creating log dir: %w", err)
 	}

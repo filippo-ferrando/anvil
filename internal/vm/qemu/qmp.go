@@ -273,13 +273,14 @@ func (c *QMPClient) DeleteVMSnapshot(ctx context.Context, name string) (string, 
 }
 
 // hostfwdAddLine renders the hostfwd_add HMP command line for f on netdevID.
-// The empty host/guest addresses (::) mean "any host" / "the guest's own address", the same convention buildNetdev's hostfwd= option uses.
+// An empty HostAddr means all host interfaces and the empty guest address the guest's own,
+// the same convention buildNetdev's hostfwd= option uses.
 func hostfwdAddLine(netdevID string, f HostForward) string {
 	proto := f.Protocol
 	if proto == "" {
 		proto = "tcp"
 	}
-	return fmt.Sprintf("hostfwd_add %s %s::%d-:%d", netdevID, proto, f.HostPort, f.GuestPort)
+	return fmt.Sprintf("hostfwd_add %s %s:%s:%d-:%d", netdevID, proto, f.HostAddr, f.HostPort, f.GuestPort)
 }
 
 // hostfwdRemoveLine renders the hostfwd_remove HMP command line.
@@ -430,9 +431,10 @@ func backupTargetNode(jobID string) string {
 
 // FinishTopBackup waits for a StartTopBackup job, then releases it and its target node.
 // progress, if set, gets the job's completion percentage now and then.
-func (c *QMPClient) FinishTopBackup(ctx context.Context, jobID string, progress func(pct int)) error {
+func (c *QMPClient) FinishTopBackup(ctx context.Context, jobID string, progress func(pct int)) (err error) {
 	defer func() {
-		if ctx.Err() != nil {
+		if err != nil {
+			// A job left running keeps its fixed ID taken, which blocks later forks.
 			c.cancelJob(ctx, jobID)
 		}
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)

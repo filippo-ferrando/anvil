@@ -54,7 +54,8 @@ func gptRoot(f io.ReaderAt, header []byte, arch string) (string, error) {
 	entriesLBA := binary.LittleEndian.Uint64(header[72:80])
 	count := binary.LittleEndian.Uint32(header[80:84])
 	entrySize := binary.LittleEndian.Uint32(header[84:88])
-	if entrySize < 128 || count == 0 || count > 1024 {
+	// The header comes from the guest's disk: a power-of-two entry size keeps the table small.
+	if entrySize < 128 || entrySize > 4096 || entrySize&(entrySize-1) != 0 || count == 0 || count > 1024 {
 		return "", fmt.Errorf("odd GPT header (%d entries of %d bytes)", count, entrySize)
 	}
 	table := make([]byte, int(count)*int(entrySize))
@@ -74,7 +75,11 @@ func gptRoot(f io.ReaderAt, header []byte, arch string) (string, error) {
 		if bytes.Equal(typ, make([]byte, 16)) {
 			continue // unused slot
 		}
-		size := binary.LittleEndian.Uint64(e[40:48]) - binary.LittleEndian.Uint64(e[32:40]) + 1
+		first, last := binary.LittleEndian.Uint64(e[32:40]), binary.LittleEndian.Uint64(e[40:48])
+		if last < first {
+			continue // broken entry, its size would wrap around
+		}
+		size := last - first + 1
 		switch {
 		case bytes.Equal(typ, rootType) && root == nil:
 			root = e[16:32]

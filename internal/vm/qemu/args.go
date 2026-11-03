@@ -56,6 +56,7 @@ type Config struct {
 }
 
 type HostForward struct {
+	HostAddr  string // host address to bind, empty for all interfaces
 	HostPort  int
 	GuestPort int
 	Protocol  string // "tcp" | "udp", defaults to "tcp" if empty
@@ -390,7 +391,7 @@ func buildNetdev(cfg Config) ([]string, error) {
 		if proto == "" {
 			proto = "tcp"
 		}
-		netdev += fmt.Sprintf(",hostfwd=%s::%d-:%d", proto, f.HostPort, f.GuestPort)
+		netdev += fmt.Sprintf(",hostfwd=%s:%s:%d-:%d", proto, f.HostAddr, f.HostPort, f.GuestPort)
 	}
 	return []string{
 		"-netdev", netdev,

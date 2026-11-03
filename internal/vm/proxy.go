@@ -28,7 +28,12 @@ func (p *portProxy) Close() { p.close() }
 // startPortProxy forwards protocol ("tcp"/"udp") traffic on hostPort to target
 // ("ip:port"). hostPort 0 picks a free port, read back from HostPort.
 func startPortProxy(protocol string, hostPort int, target string) (*portProxy, error) {
-	addr := ":" + strconv.Itoa(hostPort)
+	return startPortProxyOn(protocol, "", hostPort, target)
+}
+
+// startPortProxyOn is startPortProxy listening on bind only, all interfaces when empty.
+func startPortProxyOn(protocol, bind string, hostPort int, target string) (*portProxy, error) {
+	addr := net.JoinHostPort(bind, strconv.Itoa(hostPort))
 	switch protocol {
 	case "tcp":
 		l, err := net.Listen("tcp", addr)

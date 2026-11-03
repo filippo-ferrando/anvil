@@ -707,7 +707,8 @@ func (b *Backend) Start(ctx context.Context, spec *instance.Spec) error {
 		if err != nil {
 			return fmt.Errorf("vm: allocating SSH forward port: %w", err)
 		}
-		cfg.SLIRPHostForwards = []qemu.HostForward{{HostPort: sshPort, GuestPort: 22, Protocol: "tcp"}}
+		// SSH is only for local clients (and --remote, which runs on this host), so it binds localhost.
+		cfg.SLIRPHostForwards = []qemu.HostForward{{HostAddr: "127.0.0.1", HostPort: sshPort, GuestPort: 22, Protocol: "tcp"}}
 		for _, p := range v.Ports {
 			proto := instance.Protocol(p.Protocol)
 			cfg.SLIRPHostForwards = append(cfg.SLIRPHostForwards, qemu.HostForward{
@@ -796,7 +797,10 @@ func (b *Backend) Stop(ctx context.Context, spec *instance.Spec, force bool, tim
 	// A connected guest agent is tried before ACPI: it doesn't depend on the guest
 	// handling the power button event. ACPI and then a hard stop remain as fallbacks.
 	stopErr := b.gracefulStop(ctx, spec, proc, force, timeout)
-	// Clean up unconditionally: the process is gone by now either way.
+	if stopErr != nil && !exitedNow(proc.Exited()) {
+		// Its tap and runtime state stay while it may still run; watchExit releases them once it's gone.
+		return fmt.Errorf("vm: stopping instance %s: %w", spec.ID, stopErr)
+	}
 	networkMode := ""
 	if spec.VM != nil {
 		networkMode = spec.VM.NetworkMode
@@ -863,8 +867,10 @@ func (b *Backend) removeLeftovers(spec *instance.Spec) {
 }
 
 func (b *Backend) Delete(ctx context.Context, spec *instance.Spec) error {
-	// Best-effort stop first.
-	_ = b.Stop(ctx, spec, true, 0)
+	// A failed stop is fine only once QEMU is gone: its dir can't go while it still runs.
+	if err := b.Stop(ctx, spec, true, 0); err != nil && b.tracked(spec.ID) {
+		return err
+	}
 	b.removeLeftovers(spec)
 
 	dir := instanceDir(spec.ID)
@@ -934,8 +940,8 @@ func (b *Backend) Logs(ctx context.Context, spec *instance.Spec, follow bool, ta
 	defer f.Close()
 
 	if tailLines > 0 {
-		// console.log is append-only and never rotated, so a long-lived VM's
-		// can reach gigabytes. Read back only enough to hold the wanted lines.
+		// console.log is never rotated, so a long-lived VM's can reach gigabytes.
+		// Read back only enough to hold the wanted lines.
 		limit := int64(tailLines) * maxConsoleLineBytes
 		if fi, err := f.Stat(); err == nil && fi.Size() > limit {
 			if _, err := f.Seek(-limit, io.SeekEnd); err != nil {
@@ -958,7 +964,7 @@ func (b *Backend) Logs(ctx context.Context, spec *instance.Spec, follow bool, ta
 		return nil
 	}
 
-	// console.log is append-only, so keep reading from the current offset.
+	// Keep reading from the current offset; followFile handles QEMU truncating it on restart.
 	return followFile(ctx, f, path, send)
 }
 
@@ -1004,12 +1010,44 @@ func followFile(ctx context.Context, f *os.File, path string, send func([]byte) 
 		}
 	}
 	for {
+		if err := rewindIfTruncated(f); err != nil {
+			return err
+		}
 		if err := sendInChunks(f, send); err != nil {
 			return err
 		}
 		if err := wait(); err != nil {
 			return err
 		}
+	}
+}
+
+// rewindIfTruncated seeks f back to the start when the file got shorter than the
+// current offset, as QEMU truncates console.log on every start.
+func rewindIfTruncated(f *os.File) error {
+	off, err := f.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return fmt.Errorf("vm: reading console log offset: %w", err)
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("vm: checking console log: %w", err)
+	}
+	if fi.Size() < off {
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			return fmt.Errorf("vm: rewinding console log: %w", err)
+		}
+	}
+	return nil
+}
+
+// exitedNow reports whether exited is already closed.
+func exitedNow(exited <-chan struct{}) bool {
+	select {
+	case <-exited:
+		return true
+	default:
+		return false
 	}
 }
 

@@ -73,15 +73,19 @@ func TestBuildArgsSLIRPHostForward(t *testing.T) {
 		DiskPath:  "/d",
 		QMPSocket: "/q",
 		SLIRPHostForwards: []HostForward{
-			{HostPort: 2222, GuestPort: 22, Protocol: "tcp"},
+			{HostAddr: "127.0.0.1", HostPort: 2222, GuestPort: 22, Protocol: "tcp"},
+			{HostPort: 8080, GuestPort: 80},
 		},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "hostfwd=tcp::2222-:22") {
-		t.Errorf("expected hostfwd entry, got: %s", joined)
+	if !strings.Contains(joined, "hostfwd=tcp:127.0.0.1:2222-:22") {
+		t.Errorf("expected a localhost-only SSH hostfwd entry, got: %s", joined)
+	}
+	if !strings.Contains(joined, "hostfwd=tcp::8080-:80") {
+		t.Errorf("expected a published port on all interfaces, got: %s", joined)
 	}
 }
 

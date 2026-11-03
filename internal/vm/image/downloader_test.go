@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -253,5 +254,128 @@ func TestStreamHash(t *testing.T) {
 	_, _ = resumed.Write(data[1000:])
 	if got, _ := resumed.final(path); got != want {
 		t.Errorf("resumed = %s, want %s", got, want)
+	}
+}
+
+// A waiter whose progress callback blocks must not stop others from joining or leaving.
+func TestDedupSlowProgressDoesNotBlockOthers(t *testing.T) {
+	d := newDownloadDedup()
+	inCallback := make(chan struct{})
+	unblock := make(chan struct{})
+	fn := func(ctx context.Context, progress func(string)) error {
+		progress("tick")
+		return nil
+	}
+	firstErr := make(chan error)
+	go func() {
+		firstErr <- d.do(context.Background(), "k", func(string) {
+			close(inCallback)
+			<-unblock
+		}, fn)
+	}()
+	<-inCallback
+
+	ctx, cancel := context.WithCancel(context.Background())
+	joined := make(chan error)
+	go func() { joined <- d.do(ctx, "k", nil, fn) }()
+	cancel()
+	select {
+	case err := <-joined:
+		if err != context.Canceled {
+			t.Errorf("expected the second caller to leave with its cancellation, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("second caller blocked behind a slow progress callback")
+	}
+	close(unblock)
+	if err := <-firstErr; err != nil {
+		t.Errorf("first caller: %v", err)
+	}
+}
+
+// A server that stalls midway is given up on after the idle timeout, then resumed.
+func TestDownloaderResumesAfterStall(t *testing.T) {
+	old := downloadIdleTimeout
+	downloadIdleTimeout = 200 * time.Millisecond
+	defer func() { downloadIdleTimeout = old }()
+
+	payload := strings.Repeat("abcdefgh", 1024)
+	sum := sha256.Sum256([]byte(payload))
+	stop := make(chan struct{})
+	defer close(stop)
+	var ranges []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ranges = append(ranges, r.Header.Get("Range"))
+		if len(ranges) == 1 {
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(payload[:3000]))
+			w.(http.Flusher).Flush()
+			select { // stall without closing the connection
+			case <-stop:
+			case <-r.Context().Done():
+			}
+			return
+		}
+		http.ServeContent(w, r, "img", time.Time{}, strings.NewReader(payload))
+	}))
+	defer srv.Close()
+
+	dest := filepath.Join(t.TempDir(), "img.qcow2")
+	entry := DistroEntry{ID: "fake", URL: srv.URL, SHA256: hex.EncodeToString(sum[:])}
+	if err := NewDownloader().Fetch(context.Background(), entry, dest, nil); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if got, _ := os.ReadFile(dest); string(got) != payload {
+		t.Fatalf("downloaded content mismatch: got %d bytes", len(got))
+	}
+	if len(ranges) != 2 || ranges[1] != "bytes=3000-" {
+		t.Errorf("expected a resume at byte 3000 after the stall, got %q", ranges)
+	}
+}
+
+// A 206 reply starting somewhere other than the asked offset is not appended.
+func TestDownloaderRejectsWrongContentRange(t *testing.T) {
+	payload := strings.Repeat("abcdefgh", 1024)
+	sum := sha256.Sum256([]byte(payload))
+	var ranges []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ranges = append(ranges, r.Header.Get("Range"))
+		if r.Header.Get("Range") != "" {
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes 0-%d/%d", len(payload)-1, len(payload)))
+			w.WriteHeader(http.StatusPartialContent)
+			w.Write([]byte(payload))
+			return
+		}
+		w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+
+	dest := filepath.Join(t.TempDir(), "img.qcow2")
+	if err := os.WriteFile(dest+".part", []byte(payload[:3000]), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	entry := DistroEntry{ID: "fake", URL: srv.URL, SHA256: hex.EncodeToString(sum[:])}
+	if err := NewDownloader().Fetch(context.Background(), entry, dest, nil); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if got, _ := os.ReadFile(dest); string(got) != payload {
+		t.Fatalf("downloaded content mismatch: got %d bytes, want %d", len(got), len(payload))
+	}
+	if len(ranges) != 2 || ranges[0] != "bytes=3000-" || ranges[1] != "" {
+		t.Errorf("expected a range request then a full restart, got %q", ranges)
+	}
+}
+
+func TestRangeStart(t *testing.T) {
+	for in, want := range map[string]int64{"bytes 3000-8191/8192": 3000, "bytes 0-1/*": 0} {
+		if got, ok := rangeStart(in); !ok || got != want {
+			t.Errorf("rangeStart(%q) = %d, %v; want %d", in, got, ok, want)
+		}
+	}
+	for _, in := range []string{"", "bytes */8192", "items 1-2/3"} {
+		if _, ok := rangeStart(in); ok {
+			t.Errorf("rangeStart(%q) should fail", in)
+		}
 	}
 }

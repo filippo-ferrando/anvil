@@ -82,7 +82,7 @@ func (a *GuestAgent) Do(ctx context.Context, fn func(c *QGAConn) error) error {
 
 	conn, err := a.dial(ctx)
 	if err != nil {
-		return ErrAgentUnavailable
+		return a.unavailable(ctx)
 	}
 	defer conn.Close()
 	// Unblock pending reads if the caller gives up.
@@ -91,9 +91,18 @@ func (a *GuestAgent) Do(ctx context.Context, fn func(c *QGAConn) error) error {
 
 	c := &QGAConn{conn: conn, r: bufio.NewReader(conn)}
 	if err := c.sync(); err != nil {
-		return ErrAgentUnavailable
+		return a.unavailable(ctx)
 	}
 	return fn(c)
+}
+
+// unavailable is the error for a failed dial or sync. It also wraps ctx's error when
+// the caller gave up, so errors.Is matches either one.
+func (a *GuestAgent) unavailable(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%w: %w", ErrAgentUnavailable, err)
+	}
+	return ErrAgentUnavailable
 }
 
 func (a *GuestAgent) dial(ctx context.Context) (net.Conn, error) {
@@ -327,6 +336,9 @@ func (c *QGAConn) Exec(ctx context.Context, path string, args ...string) (ExecRe
 	}
 }
 
+// maxGuestFileBytes caps what ReadFile reads; a larger file is an error, not a cut copy.
+const maxGuestFileBytes = 1 << 20
+
 // ReadFile reads a whole (small) file from the guest. ok is false if it doesn't exist.
 func (c *QGAConn) ReadFile(path string) (data []byte, ok bool, err error) {
 	var handle int
@@ -352,7 +364,10 @@ func (c *QGAConn) ReadFile(path string) (data []byte, ok bool, err error) {
 			return nil, false, fmt.Errorf("qga: decoding file data: %w", err)
 		}
 		data = append(data, b...)
-		if chunk.EOF || chunk.Count == 0 || len(data) > 1<<20 {
+		if len(data) > maxGuestFileBytes {
+			return nil, false, fmt.Errorf("qga: %s is larger than %d bytes", path, maxGuestFileBytes)
+		}
+		if chunk.EOF || chunk.Count == 0 {
 			return data, true, nil
 		}
 	}

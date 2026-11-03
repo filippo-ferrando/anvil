@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -257,5 +258,31 @@ func TestGuestAgentDoWaitHonoursCtx(t *testing.T) {
 	}
 	if err := agent.Do(context.Background(), func(*QGAConn) error { return nil }); err != nil {
 		t.Fatalf("call after release: %v", err)
+	}
+}
+
+func TestGuestAgentReadFileTooLarge(t *testing.T) {
+	fa := startFakeAgent(t)
+	fa.files["/big"] = strings.Repeat("x", maxGuestFileBytes+1)
+	err := NewGuestAgent(fa.socket).Do(context.Background(), func(c *QGAConn) error {
+		data, ok, err := c.ReadFile("/big")
+		if err == nil || ok || data != nil {
+			return fmt.Errorf("ReadFile of an oversized file = %d bytes, %v, %v; want an error", len(data), ok, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGuestAgentCancelledCtxKeepsItsError(t *testing.T) {
+	agent := NewGuestAgent(filepath.Join(t.TempDir(), "missing.sock"))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	// A failed dial under a cancelled ctx reports the cancel, not only a missing agent.
+	err := agent.Do(ctx, func(*QGAConn) error { return nil })
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Do with a cancelled ctx = %v, want context.Canceled", err)
 	}
 }

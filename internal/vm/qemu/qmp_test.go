@@ -22,6 +22,7 @@ func TestHostfwdAddLine(t *testing.T) {
 	}{
 		{"defaults to tcp", HostForward{HostPort: 8080, GuestPort: 80}, "hostfwd_add net0 tcp::8080-:80"},
 		{"explicit udp", HostForward{HostPort: 53, GuestPort: 53, Protocol: "udp"}, "hostfwd_add net0 udp::53-:53"},
+		{"localhost only", HostForward{HostAddr: "127.0.0.1", HostPort: 2222, GuestPort: 22}, "hostfwd_add net0 tcp:127.0.0.1:2222-:22"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -216,5 +217,38 @@ func TestFinishTopBackupCancelWaitsForTheJob(t *testing.T) {
 	defer mu.Unlock()
 	if !dismissed {
 		t.Errorf("job dismissed before it concluded (status %s)", status)
+	}
+}
+
+// TestFinishTopBackupCancelsAFailedJob covers a job that fails without ctx being done:
+// left running, its fixed ID would block the next fork.
+func TestFinishTopBackupCancelsAFailedJob(t *testing.T) {
+	var mu sync.Mutex
+	cancelled := false
+	path := fakeQMP(t, true, func(id, execute string) string {
+		mu.Lock()
+		defer mu.Unlock()
+		switch execute {
+		case "query-jobs":
+			return fmt.Sprintf(`{"error":{"class":"GenericError","desc":"boom"},"id":%q}`, id)
+		case "job-cancel":
+			cancelled = true
+			return fmt.Sprintf(`{"error":{"class":"GenericError","desc":"stop here"},"id":%q}`, id)
+		}
+		return fmt.Sprintf(`{"return":{},"id":%q}`, id)
+	})
+	c, err := DialQMP(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	if err := c.FinishTopBackup(context.Background(), "job1", nil); err == nil {
+		t.Fatal("expected the query error")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !cancelled {
+		t.Error("a failed backup job was left running")
 	}
 }

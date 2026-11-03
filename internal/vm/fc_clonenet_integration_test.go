@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -19,6 +20,36 @@ import (
 	"git.fferrando.cc/rdfilippo/anvil/internal/hostdev"
 	"git.fferrando.cc/rdfilippo/anvil/internal/intent/dns"
 )
+
+// startNetnsHelper serves the root helper's protocol in this process on a temp socket,
+// for tests that already run as root under unshare.
+func startNetnsHelper(t *testing.T) hostdev.Client {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "hd") // short: a socket path is limited to 108 bytes
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "devhelper.sock")
+	l, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	go func() {
+		for {
+			conn, err := l.AcceptUnix()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				_ = hostdev.ServeConn(conn) // the caller sees a failed call
+			}()
+		}
+	}()
+	return hostdev.Client{Socket: sock}
+}
 
 // TestCloneNetworkReal sets up a clone network with the helper's code run in process, then
 // asks anvild's DNS server a question from inside the clone netns. Run under `unshare -rnm`.
@@ -40,7 +71,7 @@ func TestCloneNetworkReal(t *testing.T) {
 
 	ctx := context.Background()
 	changes := 0
-	c := &CloneNetworks{Helper: hostdev.LocalNetns{UID: os.Getuid(), GID: os.Getgid()}, OnChange: func() { changes++ }}
+	c := &CloneNetworks{Helper: startNetnsHelper(t), OnChange: func() { changes++ }}
 	cn, err := c.Setup(ctx, "eph-REAL1")
 	if err != nil {
 		t.Fatalf("Setup: %v", err)

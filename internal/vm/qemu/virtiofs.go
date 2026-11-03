@@ -117,9 +117,6 @@ func (v *Virtiofsd) Kill() {
 	<-v.exited
 }
 
-// Exited is closed once v is gone.
-func (v *Virtiofsd) Exited() <-chan struct{} { return v.exited }
-
 // WaitExit waits up to timeout for v to exit by itself.
 func (v *Virtiofsd) WaitExit(ctx context.Context, timeout time.Duration) bool {
 	select {

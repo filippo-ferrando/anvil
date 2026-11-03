@@ -91,3 +91,17 @@ func TestPortProxyUDP(t *testing.T) {
 		}
 	}
 }
+
+func TestPortProxyBindsLocalhost(t *testing.T) {
+	p, err := startPortProxyOn("tcp", "127.0.0.1", 0, "127.0.0.1:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	// The same port stays free on other addresses, so the proxy holds only localhost.
+	other, err := net.Listen("tcp", net.JoinHostPort("127.0.0.2", strconv.Itoa(p.HostPort)))
+	if err != nil {
+		t.Fatalf("port %d taken beyond localhost: %v", p.HostPort, err)
+	}
+	other.Close()
+}

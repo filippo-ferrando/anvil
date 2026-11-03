@@ -104,3 +104,37 @@ func TestRootPartUUIDMBR(t *testing.T) {
 		t.Fatal("a disk with no partition table was accepted")
 	}
 }
+
+// writeGPTHeader writes a disk whose GPT header claims count entries of entrySize bytes.
+func writeGPTHeader(t *testing.T, count, entrySize uint32) string {
+	t.Helper()
+	disk := make([]byte, 4*sectorSize)
+	h := disk[sectorSize:]
+	copy(h, "EFI PART")
+	binary.LittleEndian.PutUint64(h[72:80], 2)
+	binary.LittleEndian.PutUint32(h[80:84], count)
+	binary.LittleEndian.PutUint32(h[84:88], entrySize)
+	path := filepath.Join(t.TempDir(), "disk.raw")
+	if err := os.WriteFile(path, disk, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestRootPartUUIDRejectsHugeEntries(t *testing.T) {
+	for _, size := range []uint32{0xFFFFFFFF, 1 << 30, 8192, 200, 64} {
+		if _, err := RootPartUUID(writeGPTHeader(t, 1024, size), "x86_64"); err == nil {
+			t.Errorf("entry size %d: want an error, got none", size)
+		}
+	}
+}
+
+func TestRootPartUUIDSkipsWrappingEntry(t *testing.T) {
+	path := writeGPT(t, []gptPart{
+		{swapType, "cccccccc-0000-4000-8000-000000000001", 5000, 10}, // last < first
+		{efiType, "cccccccc-0000-4000-8000-000000000002", 2048, 4095},
+	})
+	if got, err := RootPartUUID(path, "x86_64"); err != nil || got != "cccccccc-0000-4000-8000-000000000002" {
+		t.Errorf("RootPartUUID = %q, %v; want the valid partition", got, err)
+	}
+}

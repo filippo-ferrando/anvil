@@ -270,7 +270,7 @@ func TestFirecrackerSnapshotRestore(t *testing.T) {
 		ConsoleLog: filepath.Join(cloneDir, "console.log"),
 		LogFile:    filepath.Join(cloneDir, "firecracker.log"),
 	}
-	clone, err := firecracker.Spawn(ctx, paths)
+	clone, err := firecracker.Spawn(paths)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}

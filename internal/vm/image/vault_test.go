@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -395,5 +396,51 @@ func TestQemuImgInfoCache(t *testing.T) {
 	}
 	if _, err := qemuImgVirtualSize(filepath.Join(t.TempDir(), "missing.qcow2")); err == nil {
 		t.Error("a missing disk was answered")
+	}
+}
+
+// Entries for deleted disks leave the cache, and it never grows past infoCacheMax.
+func TestQemuImgInfoCacheDropsGoneFiles(t *testing.T) {
+	orig := qemuImgInfoRun
+	qemuImgInfoRun = func(string) (qemuImgInfo, error) { return qemuImgInfo{VirtualSize: 1}, nil }
+	t.Cleanup(func() { qemuImgInfoRun = orig })
+	infoCacheMu.Lock()
+	clear(infoCache)
+	infoCacheMu.Unlock()
+
+	dir := t.TempDir()
+	gone := filepath.Join(dir, "gone.qcow2")
+	if err := os.WriteFile(gone, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := qemuImgInspect(gone); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove(gone)
+	if _, err := qemuImgInspect(gone); err == nil {
+		t.Fatal("a deleted disk was answered")
+	}
+	infoCacheMu.Lock()
+	_, kept := infoCache[gone]
+	infoCacheMu.Unlock()
+	if kept {
+		t.Error("the deleted disk is still cached")
+	}
+
+	for i := range infoCacheMax + 10 {
+		p := filepath.Join(dir, strconv.Itoa(i))
+		if err := os.WriteFile(p, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := qemuImgInspect(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	infoCacheMu.Lock()
+	n := len(infoCache)
+	clear(infoCache)
+	infoCacheMu.Unlock()
+	if n > infoCacheMax {
+		t.Errorf("cache holds %d entries, want at most %d", n, infoCacheMax)
 	}
 }

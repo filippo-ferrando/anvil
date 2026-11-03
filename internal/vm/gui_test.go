@@ -78,3 +78,14 @@ func TestXwaylandInstallScriptSkipsWhenPresent(t *testing.T) {
 		t.Fatalf("should exit early: %v %s", err, out)
 	}
 }
+
+func TestDirEntriesKeepsSpaces(t *testing.T) {
+	got := dirEntries("My App.desktop\nfirefox.desktop\n\n")
+	want := []string{"My App.desktop", "firefox.desktop"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("dirEntries = %q, want %q", got, want)
+	}
+	if got := dirEntries(""); len(got) != 0 {
+		t.Errorf("dirEntries of empty output = %q", got)
+	}
+}

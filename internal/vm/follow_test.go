@@ -74,3 +74,56 @@ func TestFollowFile(t *testing.T) {
 		t.Errorf("followFile = %v after cancel", err)
 	}
 }
+
+// TestFollowFileAfterTruncate covers a restart: QEMU truncates console.log, and the
+// follower has to start over from the top instead of waiting past the old end.
+func TestFollowFileAfterTruncate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "console.log")
+	if err := os.WriteFile(path, []byte("old boot output, quite a long line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	var mu sync.Mutex
+	var got bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- followFile(ctx, f, path, func(b []byte) error {
+			mu.Lock()
+			defer mu.Unlock()
+			got.Write(b)
+			return nil
+		})
+	}()
+	waitFor := func(want string) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			mu.Lock()
+			s := got.String()
+			mu.Unlock()
+			if bytes.HasSuffix([]byte(s), []byte(want)) {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("got %q, want it to end with %q", s, want)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	waitFor("long line\n")
+
+	// Shorter than what was already read, like a fresh boot's first line.
+	if err := os.WriteFile(path, []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	waitFor("new\n")
+	cancel()
+	<-done
+}

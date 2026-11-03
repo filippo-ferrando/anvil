@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
@@ -34,9 +35,10 @@ func (b *Backend) forkLive(ctx context.Context, source *instance.Spec, proc *qem
 		return err
 	}
 
-	frozen := false
+	frozen, triedFreeze := false, false
 	if info, _ := b.GuestInfo(source); info.AgentConnected {
 		say("freezing guest filesystems")
+		triedFreeze = true
 		err := b.agentFor(source.ID).Do(ctx, func(c *qemu.QGAConn) error { return c.FreezeFilesystems() })
 		if err != nil {
 			say(fmt.Sprintf("could not freeze guest filesystems (%v), copy is crash-consistent", err))
@@ -46,12 +48,9 @@ func (b *Backend) forkLive(ctx context.Context, source *instance.Spec, proc *qem
 	}
 	jobID := "fork-" + source.ID
 	startErr := proc.QMP.StartTopBackup(ctx, qemu.DiskDriveID, diskPath, jobID)
-	if frozen {
-		// The copy's point in time is fixed once the job started: thaw right away.
-		thawErr := b.agentFor(source.ID).Do(context.WithoutCancel(ctx), func(c *qemu.QGAConn) error { return c.ThawFilesystems() })
-		if thawErr != nil {
-			log.Printf("vm: thawing %s's filesystems after fork: %v", source.Name, thawErr)
-		}
+	if triedFreeze {
+		// A failed or cancelled freeze can still leave the guest frozen, so always thaw.
+		b.thawAfterFork(ctx, source, frozen)
 	}
 	if startErr != nil {
 		return fmt.Errorf("vm: forking disk: %w", startErr)
@@ -68,6 +67,20 @@ func (b *Backend) forkLive(ctx context.Context, source *instance.Spec, proc *qem
 		return fmt.Errorf("vm: forking disk: %w", err)
 	}
 	return nil
+}
+
+// forkThawTimeout bounds the thaw after a fork's freeze, which runs even when ctx is done.
+const forkThawTimeout = 45 * time.Second
+
+// thawAfterFork thaws source's filesystems. An error only matters when the freeze was
+// known to work: after a failed freeze the guest is most likely not frozen.
+func (b *Backend) thawAfterFork(ctx context.Context, source *instance.Spec, frozen bool) {
+	thawCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), forkThawTimeout)
+	defer cancel()
+	err := b.agentFor(source.ID).Do(thawCtx, func(c *qemu.QGAConn) error { return c.ThawFilesystems() })
+	if err != nil && frozen {
+		log.Printf("vm: thawing %s's filesystems after fork: %v", source.Name, err)
+	}
 }
 
 // ResizeDisk grows spec's disk to newGiB. A running VM grows live, and with a guest agent

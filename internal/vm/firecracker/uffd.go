@@ -52,9 +52,9 @@ type PageHandler struct {
 	done      chan struct{}
 	prefetchN int
 	took      time.Duration
-	err       error
 
 	mu      sync.Mutex
+	err     error
 	touched map[uint32]struct{} // pages that faulted while recording
 	stopRec time.Time
 }
@@ -86,7 +86,17 @@ func (h *PageHandler) Ready() <-chan struct{} { return h.ready }
 func (h *PageHandler) Prefetched() (int, time.Duration) { return h.prefetchN, h.took }
 
 // Err is why the handler stopped early, once Ready or after Close.
-func (h *PageHandler) Err() error { return h.err }
+func (h *PageHandler) Err() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.err
+}
+
+func (h *PageHandler) setErr(err error) {
+	h.mu.Lock()
+	h.err = err
+	h.mu.Unlock()
+}
 
 // WorkingSet is the pages that faulted while recording, sorted.
 func (h *PageHandler) WorkingSet() []uint32 {
@@ -115,13 +125,13 @@ func (h *PageHandler) run() {
 	defer readyOnce()
 	uffd, maps, err := h.handshake()
 	if err != nil {
-		h.err = err
+		h.setErr(err)
 		return
 	}
 	defer unix.Close(uffd)
 	f, err := os.Open(h.memFile)
 	if err != nil {
-		h.err = err
+		h.setErr(err)
 		return
 	}
 	info, err := f.Stat()
@@ -134,7 +144,7 @@ func (h *PageHandler) run() {
 	}
 	f.Close()
 	if err != nil {
-		h.err = fmt.Errorf("firecracker: mapping %s: %w", h.memFile, err)
+		h.setErr(fmt.Errorf("firecracker: mapping %s: %w", h.memFile, err))
 		return
 	}
 	defer unix.Munmap(mem)
@@ -148,7 +158,7 @@ func (h *PageHandler) run() {
 	h.mu.Unlock()
 	readyOnce()
 	if err := s.serve(h.stop, h.fault); err != nil {
-		h.err = err
+		h.setErr(err)
 		log.Printf("firecracker: page handler for %s: %v", h.memFile, err)
 	}
 }

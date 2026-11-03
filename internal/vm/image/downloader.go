@@ -4,14 +4,17 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/progress"
@@ -30,6 +33,7 @@ type flight struct {
 	err      error
 	cancel   context.CancelFunc
 	canceled bool // every waiter left; set under downloadDedup.mu
+	joined   int  // waiters still there; guarded by downloadDedup.mu
 
 	mu      sync.Mutex
 	waiters map[*int]func(status string) // each waiter's progress, keyed by a unique pointer
@@ -39,14 +43,19 @@ func newDownloadDedup() *downloadDedup {
 	return &downloadDedup{inFlight: make(map[string]*flight)}
 }
 
-// progress forwards status to every waiter still there.
+// progress forwards status to every waiter still there. The callbacks run unlocked,
+// so one slow waiter doesn't hold up others joining or leaving.
 func (f *flight) progress(status string) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	calls := make([]func(string), 0, len(f.waiters))
 	for _, p := range f.waiters {
 		if p != nil {
-			p(status)
+			calls = append(calls, p)
 		}
+	}
+	f.mu.Unlock()
+	for _, p := range calls {
+		p(status)
 	}
 }
 
@@ -69,11 +78,12 @@ func (d *downloadDedup) do(ctx context.Context, key string, progress func(string
 		f = &flight{done: make(chan struct{}), cancel: cancel, waiters: map[*int]func(string){}}
 		d.inFlight[key] = f
 	}
+	f.joined++
+	d.mu.Unlock()
 	me := new(int)
 	f.mu.Lock()
 	f.waiters[me] = progress
 	f.mu.Unlock()
-	d.mu.Unlock()
 	if fctx != nil {
 		go func() {
 			f.err = fn(fctx, f.progress)
@@ -89,12 +99,12 @@ func (d *downloadDedup) do(ctx context.Context, key string, progress func(string
 	case <-f.done:
 		return f.err
 	case <-ctx.Done():
-		d.mu.Lock()
 		f.mu.Lock()
 		delete(f.waiters, me)
-		last := len(f.waiters) == 0
 		f.mu.Unlock()
-		if last {
+		d.mu.Lock()
+		f.joined--
+		if f.joined == 0 {
 			f.canceled = true
 			f.cancel()
 		}
@@ -111,7 +121,61 @@ type Downloader struct {
 }
 
 func NewDownloader() *Downloader {
-	return &Downloader{dedup: newDownloadDedup(), HTTPClient: http.DefaultClient}
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.ResponseHeaderTimeout = time.Minute
+	return &Downloader{dedup: newDownloadDedup(), HTTPClient: &http.Client{Transport: tr}}
+}
+
+// downloadIdleTimeout fails a transfer that sent no bytes for this long, so the resume logic retries it.
+var downloadIdleTimeout = time.Minute
+
+var errDownloadIdle = errors.New("no data received for too long")
+
+// idleReader closes the body once no bytes arrived for idle, which unblocks a stuck Read.
+type idleReader struct {
+	r     io.ReadCloser
+	idle  time.Duration
+	timer *time.Timer
+	fired atomic.Bool
+}
+
+func newIdleReader(r io.ReadCloser, idle time.Duration) *idleReader {
+	ir := &idleReader{r: r, idle: idle}
+	ir.timer = time.AfterFunc(idle, func() {
+		ir.fired.Store(true)
+		r.Close()
+	})
+	return ir
+}
+
+func (ir *idleReader) Read(b []byte) (int, error) {
+	n, err := ir.r.Read(b)
+	if n > 0 {
+		ir.timer.Reset(ir.idle)
+	}
+	if err != nil && err != io.EOF && ir.fired.Load() {
+		err = errDownloadIdle
+	}
+	return n, err
+}
+
+func (ir *idleReader) Close() error {
+	ir.timer.Stop()
+	return ir.r.Close()
+}
+
+// rangeStart returns the first byte of a "bytes START-END/TOTAL" Content-Range.
+func rangeStart(v string) (int64, bool) {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(v), "bytes ")
+	if !ok {
+		return 0, false
+	}
+	start, _, ok := strings.Cut(rest, "-")
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(start), 10, 64)
+	return n, err == nil
 }
 
 // Fetch downloads entry's image to destPath if not already present with
@@ -227,12 +291,18 @@ func (d *Downloader) fetchPart(ctx context.Context, entry DistroEntry, tmpPath, 
 	if err != nil {
 		return true, fmt.Errorf("image: fetching %s: %w", entry.URL, err)
 	}
-	defer resp.Body.Close()
+	idle := newIdleReader(resp.Body, downloadIdleTimeout)
+	defer idle.Close()
 
 	flags := os.O_CREATE | os.O_WRONLY
 	total := resp.ContentLength
 	switch {
 	case resp.StatusCode == http.StatusPartialContent && offset > 0:
+		if start, ok := rangeStart(resp.Header.Get("Content-Range")); !ok || start != offset {
+			// Appending bytes from another offset would corrupt the file: start over.
+			_ = os.Remove(tmpPath)
+			return true, fmt.Errorf("image: fetching %s: server sent range %q, asked from %d", entry.URL, resp.Header.Get("Content-Range"), offset)
+		}
 		flags |= os.O_APPEND
 		if total >= 0 {
 			total += offset
@@ -263,9 +333,9 @@ func (d *Downloader) fetchPart(ctx context.Context, entry DistroEntry, tmpPath, 
 	if err != nil {
 		return false, fmt.Errorf("image: opening temp file: %w", err)
 	}
-	body := io.Reader(resp.Body)
+	body := io.Reader(idle)
 	if progress != nil {
-		body = &progressReader{r: resp.Body, total: total, read: offset, label: "downloading " + entry.ID, progress: progress}
+		body = &progressReader{r: idle, total: total, read: offset, label: "downloading " + entry.ID, progress: progress}
 	}
 	_, copyErr := io.Copy(io.MultiWriter(out, sum), body)
 	if err := out.Close(); err != nil && copyErr == nil {

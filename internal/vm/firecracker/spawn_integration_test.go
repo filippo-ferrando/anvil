@@ -39,7 +39,7 @@ func TestSpawnRealProcessLifecycle(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	proc, err := Spawn(ctx, paths)
+	proc, err := Spawn(paths)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestSnapshotRestore(t *testing.T) {
 	defer cancel()
 	spawn := func(p Paths) *Process {
 		t.Helper()
-		proc, err := Spawn(ctx, p)
+		proc, err := Spawn(p)
 		if err != nil {
 			t.Fatalf("Spawn: %v", err)
 		}

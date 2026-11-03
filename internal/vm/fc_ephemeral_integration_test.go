@@ -70,12 +70,13 @@ func realCloneManager(t *testing.T) (*FCBackend, *ephemeral.Manager, string) {
 	if _, err := exec.LookPath("nft"); err != nil {
 		t.Skip("nft not installed")
 	}
+	helper := startNetnsHelper(t) // first, so it outlives the backend's cleanup
 	b, root := newFCTestBackend(t)
 	b.unjailedClones = true
 	t.Setenv(netnsPoolEnv, "0") // the test owns every netns it sees
 	hostdev.NetnsDir = filepath.Join(root, "netns")
 	t.Cleanup(func() { hostdev.NetnsDir = "/run/netns" })
-	b.Clones.Helper = hostdev.LocalNetns{UID: os.Getuid(), GID: os.Getgid()}
+	b.Clones.Helper = helper
 	t.Setenv("ANVIL_GUEST_TOOLS", buildAnvilGuest(t))
 	db, err := store.Open(filepath.Join(root, "anvil.db"))
 	if err != nil {
