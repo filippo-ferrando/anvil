@@ -50,12 +50,14 @@ var iconCandidates = []struct {
 // Entry is the part of a desktop entry this package uses.
 type Entry struct {
 	Name, Exec, TryExec, Icon string
+	// NoDisplay marks a helper entry, e.g. a URL handler, that menus don't show.
+	NoDisplay bool
 }
 
 // Find looks for the desktop entry that runs command and loads its icon.
 func Find(ctx context.Context, fs FS, command string) (App, bool, error) {
 	want := path.Base(command)
-	var fallback *Entry
+	var hidden, fallback *Entry
 	for _, dir := range applicationDirs {
 		names, err := fs.List(ctx, dir)
 		if err != nil {
@@ -77,12 +79,20 @@ func Find(ctx context.Context, fs FS, command string) (App, bool, error) {
 				continue
 			}
 			if Program(e.Exec) == want || (e.TryExec != "" && path.Base(e.TryExec) == want) {
-				return Load(ctx, fs, e)
+				if !e.NoDisplay {
+					return Load(ctx, fs, e)
+				}
+				if hidden == nil {
+					hidden = &e
+				}
 			}
 			if fallback == nil && strings.TrimSuffix(n, ".desktop") == want {
 				fallback = &e
 			}
 		}
+	}
+	if hidden != nil {
+		return Load(ctx, fs, *hidden)
 	}
 	if fallback != nil {
 		return Load(ctx, fs, *fallback)
@@ -164,6 +174,8 @@ func Parse(data []byte) (Entry, bool) {
 			e.Icon = value
 		case "Hidden":
 			hidden = value == "true"
+		case "NoDisplay":
+			e.NoDisplay = value == "true"
 		}
 	}
 	return e, isApp && !hidden && e.Exec != ""

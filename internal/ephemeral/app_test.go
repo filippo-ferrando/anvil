@@ -296,3 +296,19 @@ func TestLineProgress(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// Arch's code package: the NoDisplay URL handler sorts before the real entry.
+func TestPickEntrySkipsNoDisplay(t *testing.T) {
+	handler, _ := appinfo.Parse([]byte("[Desktop Entry]\nType=Application\nName=Code - OSS - URL Handler\nExec=/usr/bin/code-oss --open-url %U\nNoDisplay=true\n"))
+	editor, _ := appinfo.Parse([]byte("[Desktop Entry]\nType=Application\nName=Code - OSS\nExec=/usr/bin/code-oss %F\n"))
+	entries, names := []appinfo.Entry{handler, editor}, []string{"code-oss-url-handler", "code-oss"}
+	if e, _ := pickEntry("code", nil, entries, names); e.Name != "Code - OSS" {
+		t.Errorf("by package: %+v", e)
+	}
+	if e, _ := pickEntry("code", []string{"code-oss"}, entries, names); e.Name != "Code - OSS" {
+		t.Errorf("by command: %+v", e)
+	}
+	if e, ok := pickEntry("code", nil, entries[:1], names[:1]); !ok || e.Name != handler.Name {
+		t.Errorf("only a NoDisplay entry: %+v", e)
+	}
+}

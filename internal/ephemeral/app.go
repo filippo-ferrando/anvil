@@ -259,25 +259,39 @@ func (m *Manager) resolveApp(ctx context.Context, clone Clone, pkg string, comma
 }
 
 // pickEntry picks the desktop entry for an app: the one running command when given, else
-// the one named like the package, else the first.
+// the one named like the package, else the first. Visible entries win over NoDisplay ones.
 func pickEntry(pkg string, command []string, entries []appinfo.Entry, names []string) (appinfo.Entry, bool) {
-	if len(entries) == 0 {
-		return appinfo.Entry{}, false
+	for _, visible := range []bool{true, false} {
+		if e, ok := pickEntryOf(pkg, command, entries, names, visible); ok {
+			return e, true
+		}
 	}
-	if len(command) > 0 {
-		for _, e := range entries {
+	return appinfo.Entry{}, false
+}
+
+func pickEntryOf(pkg string, command []string, entries []appinfo.Entry, names []string, visible bool) (appinfo.Entry, bool) {
+	first := -1
+	for i, e := range entries {
+		if e.NoDisplay == visible {
+			continue
+		}
+		if len(command) > 0 {
 			if appinfo.Program(e.Exec) == path.Base(command[0]) {
 				return e, true
 			}
+			continue
 		}
+		if names[i] == pkg || strings.HasSuffix(names[i], "."+pkg) {
+			return e, true
+		}
+		if first < 0 {
+			first = i
+		}
+	}
+	if first < 0 {
 		return appinfo.Entry{}, false
 	}
-	for i, n := range names {
-		if n == pkg || strings.HasSuffix(n, "."+pkg) {
-			return entries[i], true
-		}
-	}
-	return entries[0], true
+	return entries[first], true
 }
 
 // cloneFS reads a clone's files through anvil-guest, for appinfo.

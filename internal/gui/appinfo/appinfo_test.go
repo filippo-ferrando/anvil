@@ -112,3 +112,28 @@ func TestFind_FallsBackToFileNameAndMissing(t *testing.T) {
 		t.Fatal("expected no match")
 	}
 }
+
+func TestFindSkipsNoDisplay(t *testing.T) {
+	fs := mapFS{
+		"/usr/share/applications/code-oss-url-handler.desktop": "[Desktop Entry]\nType=Application\nName=URL Handler\nExec=/usr/bin/code-oss --open-url %U\nNoDisplay=true\n",
+		"/usr/share/applications/code-oss.desktop":             "[Desktop Entry]\nType=Application\nName=Code - OSS\nExec=/usr/bin/code-oss %F\n",
+	}
+	if app, ok, err := Find(context.Background(), fs, "code-oss"); err != nil || !ok || app.Name != "Code - OSS" {
+		t.Fatalf("got %+v %v %v", app, ok, err)
+	}
+	delete(fs, "/usr/share/applications/code-oss.desktop")
+	if app, ok, _ := Find(context.Background(), fs, "code-oss"); !ok || app.Name != "URL Handler" {
+		t.Fatalf("only the hidden entry: %+v %v", app, ok)
+	}
+}
+
+// Microsoft's .deb on Debian/Ubuntu: code-url-handler.desktop sorts before code.desktop.
+func TestFindSkipsNoDisplayDeb(t *testing.T) {
+	fs := mapFS{
+		"/usr/share/applications/code-url-handler.desktop": "[Desktop Entry]\nName=Visual Studio Code - URL Handler\nExec=/usr/share/code/code --open-url %U\nType=Application\nNoDisplay=true\n",
+		"/usr/share/applications/code.desktop":             "[Desktop Entry]\nName=Visual Studio Code\nExec=/usr/share/code/code %F\nType=Application\nActions=new-empty-window;\n\n[Desktop Action new-empty-window]\nName=New Empty Window\nExec=/usr/share/code/code --new-window %F\n",
+	}
+	if app, ok, err := Find(context.Background(), fs, "code"); err != nil || !ok || app.Name != "Visual Studio Code" {
+		t.Fatalf("got %+v %v %v", app, ok, err)
+	}
+}
