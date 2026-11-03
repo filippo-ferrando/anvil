@@ -10,6 +10,8 @@ Built from commit subjects by `scripts/changelog.sh`.
 
 ### Fixes
 
+- fixed all (2d67d23)
+- improved guest agent for gui exports (4bcbfaa)
 - gui and task (0db8fc4)
 - NoDisplay entry choosen (7762bc7)
 - race condition on uffd ram allocation (2a3d633)
