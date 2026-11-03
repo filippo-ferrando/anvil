@@ -13,6 +13,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/internal/format"
@@ -243,10 +244,7 @@ func (v *runView) view(width, height int) string {
 			lines = lines[len(lines)-n:]
 		}
 		for _, l := range lines {
-			if len(l) > width-2 {
-				l = l[:width-2]
-			}
-			b.WriteString("  " + l + "\n")
+			b.WriteString("  " + ansi.Truncate(l, max(width-2, 0), "") + "\n")
 		}
 	}
 	if v.done {
@@ -879,11 +877,11 @@ func (e ephemeralModel) View(width, height int, watched *task) string {
 
 // watchedTaskView is a task's progress shown in place of the screen it was started from.
 func watchedTaskView(t *task) string {
-	tr := transcript{running: t.running, lines: t.steps.lines, since: t.steps.since}
-	if !t.running && t.err != nil && len(tr.lines) == 0 {
-		tr.lines = []string{errLine(t.err)}
+	lines := t.steps.lines
+	if !t.running && t.err != nil && len(lines) == 0 {
+		lines = []string{errLine(t.err)}
 	}
-	s := styleTitle.Render(" "+t.title+" ") + "\n\n" + progressView(tr.lines, tr.running, tr.since) + "\n"
+	s := styleTitle.Render(" "+t.title+" ") + "\n\n" + progressView(lines, t.running, t.steps.since) + "\n"
 	if t.running {
 		return s + helpBar("esc", "keep it running in the background", "t", "open in Tasks")
 	}

@@ -230,7 +230,12 @@ func TestCIFormsAndConfirm(t *testing.T) {
 	if press("l") == nil || m.ci.logs == nil || !strings.Contains(m.ci.logs.title, "b@u") {
 		t.Fatalf("l in a run didn't open the job's logs: %+v", m.ci.logs)
 	}
-	next, _ = m.updateCI(ciLogsMsg{text: "hello from b\n"})
+	next, _ = m.updateCI(ciLogsMsg{viewer: &ciLogs{}, text: "stale from another run\n"})
+	m = next.(model)
+	if strings.Contains(m.ci.View(), "stale from another run") {
+		t.Error("a reply for another viewer was shown")
+	}
+	next, _ = m.updateCI(ciLogsMsg{viewer: m.ci.logs, text: "hello from b\n"})
 	m = next.(model)
 	if v := m.ci.View(); !strings.Contains(v, "hello from b") {
 		t.Errorf("logs view:\n%s", v)

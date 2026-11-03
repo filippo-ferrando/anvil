@@ -784,9 +784,7 @@ func (m *model) deleteTask(names []string, purge bool) tea.Cmd {
 	return tea.Batch(cmd, m.followTaskLog(t))
 }
 
-func (m instancesModel) View() string { return m.viewWith(tasksModel{}) }
-
-// viewWith is View with the running tasks, shown in the detail panel of their instance.
+// viewWith renders the Instances screen, with the running tasks shown in the detail panel of their instance.
 func (m instancesModel) viewWith(tasks tasksModel) string {
 	if len(m.confirmDelete) > 0 {
 		return styleBox.BorderForeground(colorWarn).Render(

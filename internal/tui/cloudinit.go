@@ -114,17 +114,22 @@ func (m model) updateCloudInit(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.cloudInit.current = msg.name
 		m.cloudInit.dirty = false
-		m.cloudInit.editor.SetValue(msg.content)
-		return m, nil
+		return m, m.cloudInit.editor.SetValue(msg.content)
 
 	case cloudInitSavedMsg:
 		if msg.err != nil {
 			m.setStatus("saving "+msg.name+": "+msg.err.Error(), true)
 			return m, nil
 		}
-		m.cloudInit.current = msg.name
-		m.cloudInit.dirty = false
 		m.setStatus("saved "+msg.name, false)
+		switch msg.from {
+		case "":
+			// A new config: show its content, not the doc the editor still holds.
+			return m, tea.Batch(loadCloudInitList(m.client), loadCloudInitContent(m.client, msg.name))
+		case m.cloudInit.current:
+			m.cloudInit.current = msg.name
+			m.cloudInit.dirty = false
+		}
 		return m, loadCloudInitList(m.client)
 
 	case actionDoneMsg:
@@ -132,21 +137,35 @@ func (m model) updateCloudInit(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus(msg.verb+": "+msg.err.Error(), true)
 			return m, nil
 		}
-		m.cloudInit.current = ""
-		m.cloudInit.editor.SetValue("")
+		if msg.name == m.cloudInit.current {
+			m.cloudInit.current = ""
+			m.cloudInit.dirty = false
+			m.cloudInit.editor.SetValue("")
+		}
 		m.setStatus("config "+msg.verb, false)
 		return m, loadCloudInitList(m.client)
 
 	case cloudInitImportStreamMsg:
-		t := m.tasks.get(m.cloudInit.importTask)
+		t := m.tasks.get(msg.task)
 		if t != nil && !t.running {
 			t = nil
 		}
-		if msg.status != "" {
-			m.cloudInit.importLines = appendProgressLine(m.cloudInit.importLines, msg.status)
-			if t != nil {
-				t.steps.add(msg.status)
+		// Only the latest import feeds the progress view; older ones still update their own task.
+		latest := msg.task == m.cloudInit.importTask
+		addLine := func(line string, progress bool) {
+			if latest {
+				if progress {
+					m.cloudInit.importLines = appendProgressLine(m.cloudInit.importLines, line)
+				} else {
+					m.cloudInit.importLines = append(m.cloudInit.importLines, line)
+				}
 			}
+			if t != nil {
+				t.steps.add(line)
+			}
+		}
+		if msg.status != "" {
+			addLine(msg.status, true)
 		}
 		if msg.result != nil {
 			r := msg.result
@@ -159,13 +178,12 @@ func (m model) updateCloudInit(msg tea.Msg) (tea.Model, tea.Cmd) {
 			default:
 				line = styleGood.Render(r.GetName() + ": imported")
 			}
-			m.cloudInit.importLines = append(m.cloudInit.importLines, line)
-			if t != nil {
-				t.steps.add(line)
-			}
+			addLine(line, false)
 		}
 		if msg.err != nil {
-			m.cloudInit.importLines = append(m.cloudInit.importLines, errLine(msg.err))
+			if latest {
+				m.cloudInit.importLines = append(m.cloudInit.importLines, errLine(msg.err))
+			}
 			if t != nil {
 				return m, m.finishTask(t, msg.err)
 			}
@@ -209,7 +227,7 @@ func (m model) updateCloudInitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.setStatus("select or create a config first", true)
 				return m, nil
 			}
-			return m, saveCloudInit(m.client, ci.current, ci.editor.Value())
+			return m, saveCloudInit(m.client, ci.current, ci.current, ci.editor.Value())
 		}
 		var cmd tea.Cmd
 		ci.editor, cmd = ci.editor.Update(msg)
@@ -312,7 +330,7 @@ func (m model) updateCloudInitPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if name == "" {
 			return m, nil
 		}
-		return m, saveCloudInit(m.client, name, "#cloud-config\n")
+		return m, saveCloudInit(m.client, name, "", "#cloud-config\n")
 
 	case cloudInitPromptImport:
 		name, path := ci.promptFm.Value("Name"), ci.promptFm.Value("Local file path")
@@ -325,7 +343,7 @@ func (m model) updateCloudInitPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setStatus("reading "+path+": "+err.Error(), true)
 			return m, nil
 		}
-		return m, saveCloudInit(m.client, name, string(data))
+		return m, saveCloudInit(m.client, name, "", string(data))
 
 	case cloudInitPromptRename:
 		newName := ci.promptFm.Value("New name")
@@ -350,7 +368,7 @@ func (m model) updateCloudInitPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		ctx, cancel := context.WithCancel(context.Background())
 		t.cancel, t.cancelNote = cancel, "Stops the import. Templates already imported stay."
 		ci.importTask = t.id
-		return m, startCloudInitImportRepo(ctx, m.client, url, force)
+		return m, startCloudInitImportRepo(ctx, m.client, t.id, url, force)
 
 	case cloudInitPromptWizard:
 		name := ci.promptFm.Value("Name")

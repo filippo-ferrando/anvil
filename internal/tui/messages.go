@@ -56,7 +56,8 @@ type actionDoneMsg struct {
 	// which screen the user is currently viewing.
 	screen screen
 
-	err error
+	name string // the item the action was about, when a handler needs it
+	err  error
 }
 
 type intentsLoadedMsg struct {
@@ -91,6 +92,7 @@ type cloudInitContentLoadedMsg struct {
 
 type cloudInitSavedMsg struct {
 	name string
+	from string // the editor doc this save came from, "" for a new config
 	err  error
 }
 
@@ -131,11 +133,16 @@ type snapshotsLoadedMsg struct {
 }
 
 // logsStreamMsg carries one chunk off an InstanceService.Logs stream.
-type logsStreamMsg struct{ streamStep[[]byte] }
+// gen drops a chunk from the stream of an earlier Logs screen.
+type logsStreamMsg struct {
+	streamStep[[]byte]
+	gen int
+}
 
 // cloudInitImportStreamMsg carries one event off a CloudInitService.ImportRepo stream.
 type cloudInitImportStreamMsg struct {
 	streamStep[*anvilv1.CloudInitImportResult]
+	task int // the import's task id
 }
 
 const (
@@ -498,10 +505,11 @@ func loadCloudInitContent(c *client.Client, name string) tea.Cmd {
 	}
 }
 
-func saveCloudInit(c *client.Client, name, content string) tea.Cmd {
+// saveCloudInit saves content as name; from is the editor doc it came from, "" for a new config.
+func saveCloudInit(c *client.Client, name, from, content string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.CloudInit.Save(context.Background(), &anvilv1.CloudInitSaveRequest{Name: name, Content: content})
-		return cloudInitSavedMsg{name: name, err: err}
+		return cloudInitSavedMsg{name: name, from: from, err: err}
 	}
 }
 
@@ -515,26 +523,26 @@ func generateCloudInit(c *client.Client, req *anvilv1.CloudInitGenerateRequest) 
 func renameCloudInit(c *client.Client, oldName, newName string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.CloudInit.Rename(context.Background(), &anvilv1.CloudInitRenameRequest{OldName: oldName, NewName: newName})
-		return cloudInitSavedMsg{name: newName, err: err}
+		return cloudInitSavedMsg{name: newName, from: oldName, err: err}
 	}
 }
 
 func deleteCloudInit(c *client.Client, name string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.CloudInit.Delete(context.Background(), &anvilv1.CloudInitDeleteRequest{Name: name})
-		return actionDoneMsg{screen: screenCloudInit, verb: "deleted", err: err}
+		return actionDoneMsg{screen: screenCloudInit, verb: "deleted", name: name, err: err}
 	}
 }
 
-func startCloudInitImportRepo(ctx context.Context, c *client.Client, manifestURL string, force bool) tea.Cmd {
+func startCloudInitImportRepo(ctx context.Context, c *client.Client, task int, manifestURL string, force bool) tea.Cmd {
 	return func() tea.Msg {
 		stream, err := c.CloudInit.ImportRepo(ctx, &anvilv1.CloudInitImportRepoRequest{
 			ManifestUrl: manifestURL, Force: force,
 		})
 		if err != nil {
-			return cloudInitImportStreamMsg{failed[*anvilv1.CloudInitImportResult](err)}
+			return cloudInitImportStreamMsg{failed[*anvilv1.CloudInitImportResult](err), task}
 		}
-		return recvCloudInitImport(stream)()
+		return recvCloudInitImport(stream, task)()
 	}
 }
 
@@ -684,7 +692,7 @@ func recvImport(stream anvilv1.ExportService_ImportClient, wrap func(lineStep) t
 	}, wrap)
 }
 
-func recvCloudInitImport(stream anvilv1.CloudInitService_ImportRepoClient) tea.Cmd {
+func recvCloudInitImport(stream anvilv1.CloudInitService_ImportRepoClient, task int) tea.Cmd {
 	type step = streamStep[*anvilv1.CloudInitImportResult]
 	return recvStream(stream.Recv, func(ev *anvilv1.CloudInitImportRepoProgress) step {
 		switch e := ev.GetEvent().(type) {
@@ -696,5 +704,5 @@ func recvCloudInitImport(stream anvilv1.CloudInitService_ImportRepoClient) tea.C
 			return step{result: e.Imported}
 		}
 		return step{}
-	}, func(s step) tea.Msg { return cloudInitImportStreamMsg{s} })
+	}, func(s step) tea.Msg { return cloudInitImportStreamMsg{s, task} })
 }

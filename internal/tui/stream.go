@@ -49,41 +49,18 @@ func recvStream[E, R any](recv func() (E, error), parse func(E) streamStep[R], w
 	return next
 }
 
-// transcript is a streamed operation's progress, shown in place of its screen until dismissed.
-type transcript struct {
+// taskSteps is a streamed task's progress lines.
+type taskSteps struct {
 	running bool
 	lines   []string
 	since   time.Time // when the last line's step began
 }
 
-func (t *transcript) start() { *t = transcript{running: true, since: time.Now()} }
+func (t *taskSteps) start() { *t = taskSteps{running: true, since: time.Now()} }
 
-// active reports whether the transcript is on screen.
-func (t transcript) active() bool { return t.running || len(t.lines) > 0 }
-
-func (t *transcript) add(status string) {
+func (t *taskSteps) add(status string) {
 	t.since = stepStart(t.lines, status, t.since)
 	t.lines = appendProgressLine(t.lines, status)
-}
-
-func (t transcript) view(title string) string {
-	s := styleTitle.Render(" "+title+" ") + "\n\n" + progressView(t.lines, t.running, t.since)
-	if !t.running {
-		s += "\n" + helpBar("esc", "dismiss")
-	}
-	return s
-}
-
-// dismiss clears a finished transcript on esc, enter or q. It reports whether t was showing.
-func (t *transcript) dismiss(key string) bool {
-	if !t.active() {
-		return false
-	}
-	switch key {
-	case "esc", "enter", "q":
-		t.lines = nil
-	}
-	return true
 }
 
 // parseLaunchProgress maps the LaunchProgress events shared by Launch, Fork and WaitReady.

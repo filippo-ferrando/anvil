@@ -66,6 +66,7 @@ type manifestContentLoadedMsg struct {
 
 type manifestSavedMsg struct {
 	name string
+	from string // the editor doc this save came from, "" for a new manifest
 	err  error
 }
 
@@ -83,24 +84,25 @@ func loadManifestContent(c *client.Client, name string) tea.Cmd {
 	}
 }
 
-func saveManifest(c *client.Client, name, content string) tea.Cmd {
+// saveManifest saves content as name; from is the editor doc it came from, "" for a new manifest.
+func saveManifest(c *client.Client, name, from, content string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.Manifest.Save(context.Background(), &anvilv1.ManifestSaveRequest{Name: name, Content: content})
-		return manifestSavedMsg{name: name, err: err}
+		return manifestSavedMsg{name: name, from: from, err: err}
 	}
 }
 
 func renameManifest(c *client.Client, oldName, newName string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.Manifest.Rename(context.Background(), &anvilv1.ManifestRenameRequest{OldName: oldName, NewName: newName})
-		return manifestSavedMsg{name: newName, err: err}
+		return manifestSavedMsg{name: newName, from: oldName, err: err}
 	}
 }
 
 func deleteManifest(c *client.Client, name string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.Manifest.Delete(context.Background(), &anvilv1.ManifestDeleteRequest{Name: name})
-		return actionDoneMsg{screen: screenManifests, verb: "deleted", err: err}
+		return actionDoneMsg{screen: screenManifests, verb: "deleted", name: name, err: err}
 	}
 }
 
@@ -125,8 +127,7 @@ func (m model) updateManifests(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		mf.current, mf.intent, mf.dirty = msg.name, msg.intent, false
-		mf.editor.SetValue(msg.content)
-		return m, nil
+		return m, mf.editor.SetValue(msg.content)
 
 	case manifestSavedMsg:
 		if msg.err != nil {
@@ -134,6 +135,9 @@ func (m model) updateManifests(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.setStatus("saved "+msg.name, false)
+		if msg.from != "" && msg.from != mf.current {
+			return m, loadManifestList(m.client) // the user opened another doc meanwhile
+		}
 		// Reload so the intent: field shown and used by teardown matches what was saved.
 		return m, tea.Batch(loadManifestList(m.client), loadManifestContent(m.client, msg.name))
 
@@ -142,8 +146,10 @@ func (m model) updateManifests(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus("manifest "+msg.verb+": "+msg.err.Error(), true)
 			return m, nil
 		}
-		mf.current, mf.intent = "", ""
-		mf.editor.SetValue("")
+		if msg.name == mf.current {
+			mf.current, mf.intent, mf.dirty = "", "", false
+			mf.editor.SetValue("")
+		}
 		m.setStatus("manifest "+msg.verb, false)
 		return m, loadManifestList(m.client)
 
@@ -177,7 +183,7 @@ func (m model) updateManifestsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			mf.editor.Blur()
 			return m, nil
 		case "ctrl+s":
-			return m, saveManifest(m.client, mf.current, mf.editor.Value())
+			return m, saveManifest(m.client, mf.current, mf.current, mf.editor.Value())
 		}
 		var cmd tea.Cmd
 		mf.editor, cmd = mf.editor.Update(msg)
@@ -298,7 +304,7 @@ func (m model) updateManifestsPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch prompt {
 	case manifestPromptNew:
 		if name := strings.TrimSpace(mf.promptFm.Value("Name")); name != "" {
-			return m, saveManifest(m.client, name, apply.Starter(name))
+			return m, saveManifest(m.client, name, "", apply.Starter(name))
 		}
 
 	case manifestPromptImport:
@@ -314,7 +320,7 @@ func (m model) updateManifestsPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setStatus("reading "+path+": "+err.Error(), true)
 			return m, nil
 		}
-		return m, saveManifest(m.client, name, string(data))
+		return m, saveManifest(m.client, name, "", string(data))
 
 	case manifestPromptExport:
 		path := mf.promptFm.Value("Output path")

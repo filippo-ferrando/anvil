@@ -1,17 +1,18 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"git.fferrando.cc/rdfilippo/anvil/internal/intent/apply"
-	"git.fferrando.cc/rdfilippo/anvil/internal/intent/vars"
-	"git.fferrando.cc/rdfilippo/anvil/internal/vm/cloudinit"
+	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/internal/yamlcheck"
+	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
 // Token classes the YAML highlighter gives each rune.
@@ -40,40 +41,60 @@ var tokStyles = []lipgloss.Style{
 // gutterWidth matches the textarea's own prompt and line numbers, so pages size it as before.
 const gutterWidth = 6
 
+// yamlCheck asks the daemon for a document's problems.
+type yamlCheck func(ctx context.Context, c *client.Client, doc string) ([]*anvilv1.ValidationProblem, error)
+
 // yamlEditor is a textarea drawn with YAML highlighting, marking the lines check finds problems on.
 type yamlEditor struct {
 	textarea.Model
-	check    func(string) []yamlcheck.Problem
+	check    yamlCheck
 	okText   string // shown under the text when check finds nothing
 	problems []yamlcheck.Problem
 	top      int // first display row shown
+	id       int // tells this editor's check messages from other editors'
+	seq      int // bumped per edit, so an older check's result is dropped
+	checking bool
 }
 
-func newYAMLEditor(placeholder, okText string, check func(string) []yamlcheck.Problem) yamlEditor {
+var lastYAMLEditorID int
+
+func newYAMLEditor(placeholder, okText string, check yamlCheck) yamlEditor {
 	ta := textarea.New()
 	ta.Placeholder = placeholder
 	ta.MaxHeight = 0 // the default 99-line cap cuts longer documents on SetValue
-	return yamlEditor{Model: ta, check: check, okText: okText}
+	lastYAMLEditorID++
+	return yamlEditor{Model: ta, check: check, okText: okText, id: lastYAMLEditorID}
 }
 
-func checkCloudInit(s string) []yamlcheck.Problem {
-	if strings.TrimSpace(s) == "" {
-		return nil
-	}
-	return cloudinit.Validate(s)
+func checkCloudInit(ctx context.Context, c *client.Client, doc string) ([]*anvilv1.ValidationProblem, error) {
+	reply, err := c.CloudInit.Validate(ctx, &anvilv1.CloudInitValidateRequest{Content: doc})
+	return reply.GetProblems(), err
 }
 
 // checkManifest fills variables the way applying from the TUI does: shell env, then .env in the current dir.
-func checkManifest(s string) []yamlcheck.Problem {
-	values, err := vars.Load("", "", []byte(s), nil)
+func checkManifest(ctx context.Context, c *client.Client, doc string) ([]*anvilv1.ValidationProblem, error) {
+	values, err := client.ResolveVars("", []byte(doc), nil, "")
 	if err != nil {
-		return []yamlcheck.Problem{{Message: err.Error()}}
+		return []*anvilv1.ValidationProblem{{Message: err.Error()}}, nil
 	}
-	return apply.Check([]byte(s), values)
+	reply, err := c.Manifest.Validate(ctx, &anvilv1.ManifestValidateRequest{Manifest: []byte(doc), Vars: values})
+	return reply.GetProblems(), err
+}
+
+// yamlCheckDelay lets typing settle before the document is sent to the daemon.
+const yamlCheckDelay = 300 * time.Millisecond
+
+// yamlCheckDueMsg fires once an edit has settled; yamlCheckedMsg carries the daemon's answer.
+type yamlCheckDueMsg struct{ id, seq int }
+
+type yamlCheckedMsg struct {
+	id, seq  int
+	problems []yamlcheck.Problem
 }
 
 // SetValue starts a document taller than the view at its top; a short one keeps the cursor at the end, to type on.
-func (e *yamlEditor) SetValue(s string) {
+// The returned command checks the new content.
+func (e *yamlEditor) SetValue(s string) tea.Cmd {
 	e.Model.SetValue(s)
 	if e.LineCount() > e.textHeight() {
 		for e.Line() > 0 {
@@ -82,14 +103,65 @@ func (e *yamlEditor) SetValue(s string) {
 		e.CursorStart()
 	}
 	e.top = 0
-	e.revalidate()
+	return e.revalidate()
 }
 
-func (e *yamlEditor) revalidate() {
-	e.problems = nil
-	if e.check != nil {
-		e.problems = e.check(e.Value())
+// revalidate schedules a check of the current content; the old problems show until it answers.
+func (e *yamlEditor) revalidate() tea.Cmd {
+	e.seq++
+	if e.check == nil || strings.TrimSpace(e.Value()) == "" {
+		e.problems, e.checking = nil, false
+		return nil
 	}
+	e.checking = true
+	id, seq := e.id, e.seq
+	return tea.Tick(yamlCheckDelay, func(time.Time) tea.Msg { return yamlCheckDueMsg{id, seq} })
+}
+
+// runCheck sends the content to the daemon once the edit that scheduled it is still the latest.
+func (e *yamlEditor) runCheck(c *client.Client, msg yamlCheckDueMsg) tea.Cmd {
+	if msg.id != e.id || msg.seq != e.seq || e.check == nil || c == nil {
+		return nil
+	}
+	check, doc := e.check, e.Value()
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		pbs, err := check(ctx, c, doc)
+		if err != nil {
+			return yamlCheckedMsg{msg.id, msg.seq, []yamlcheck.Problem{{Message: "checking: " + err.Error(), Warning: true}}}
+		}
+		problems := make([]yamlcheck.Problem, len(pbs))
+		for i, p := range pbs {
+			problems[i] = yamlcheck.Problem{Line: int(p.GetLine()), Message: p.GetMessage(), Warning: p.GetWarning()}
+		}
+		return yamlCheckedMsg{msg.id, msg.seq, problems}
+	}
+}
+
+func (e *yamlEditor) setProblems(msg yamlCheckedMsg) {
+	if msg.id == e.id && msg.seq == e.seq {
+		e.problems, e.checking = msg.problems, false
+	}
+}
+
+// yamlEditors returns every page's editor, for routing check messages wherever the user is.
+func (m *model) yamlEditors() []*yamlEditor {
+	return []*yamlEditor{&m.manifests.editor, &m.cloudInit.editor, &m.launch.cloudInitEditor}
+}
+
+// updateYAMLCheck routes a check message to the editor it belongs to.
+func (m model) updateYAMLCheck(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	for _, e := range m.yamlEditors() {
+		switch msg := msg.(type) {
+		case yamlCheckDueMsg:
+			cmds = append(cmds, e.runCheck(m.client, msg))
+		case yamlCheckedMsg:
+			e.setProblems(msg)
+		}
+	}
+	return m, tea.Batch(cmds...)
 }
 
 func (e yamlEditor) Update(msg tea.Msg) (yamlEditor, tea.Cmd) {
@@ -97,7 +169,7 @@ func (e yamlEditor) Update(msg tea.Msg) (yamlEditor, tea.Cmd) {
 	var cmd tea.Cmd
 	e.Model, cmd = e.Model.Update(msg)
 	if e.Value() != before {
-		e.revalidate()
+		cmd = tea.Batch(cmd, e.revalidate())
 	}
 	e.top = e.scrollTop()
 	return e, cmd
@@ -222,6 +294,9 @@ func (e yamlEditor) statusLine() string {
 	if len(e.problems) == 0 {
 		if e.check == nil || strings.TrimSpace(e.Value()) == "" {
 			return ""
+		}
+		if e.checking {
+			return styleSubtitle.Render("checking…")
 		}
 		return styleGood.Render("✓ " + e.okText)
 	}

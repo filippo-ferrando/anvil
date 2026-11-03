@@ -49,19 +49,12 @@ func TestRecvStreamError(t *testing.T) {
 	}
 }
 
-func TestTranscriptAddAndDismiss(t *testing.T) {
-	var tr transcript
-	tr.start()
-	tr.add("copying: 10%")
-	tr.add("copying: 60%")
-	if len(tr.lines) != 1 || !strings.Contains(tr.view("Exporting…"), "] 60%") {
-		t.Errorf("updates with one key should redraw one barred line, got %q", tr.lines)
-	}
-	tr.running = false
-	if !strings.Contains(tr.view("Exporting…"), "dismiss") {
-		t.Error("a finished transcript should offer to dismiss it")
-	}
-	if !tr.dismiss("esc") || tr.active() {
-		t.Error("esc should clear a finished transcript")
+func TestTaskStepsAdd(t *testing.T) {
+	var st taskSteps
+	st.start()
+	st.add("copying: 10%")
+	st.add("copying: 60%")
+	if len(st.lines) != 1 || !strings.Contains(progressView(st.lines, st.running, st.since), "] 60%") {
+		t.Errorf("updates with one key should redraw one barred line, got %q", st.lines)
 	}
 }

@@ -280,9 +280,9 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus(fmt.Sprintf("loading %q to edit: %v (starting from a blank template instead)", msg.name, msg.err), true)
 			content = "#cloud-config\n"
 		}
-		m.launch.cloudInitEditor.SetValue(content)
+		cmd := m.launch.cloudInitEditor.SetValue(content)
 		m.launch.cloudInitEditor.Focus()
-		return m, nil
+		return m, cmd
 
 	// Each load fired when Launch was entered fills in one slice of
 	// autocomplete candidates as its RPC comes back, independently.
@@ -414,18 +414,18 @@ func (m model) updateLaunch(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) startEditingLaunchCloudInit() (tea.Model, tea.Cmd) {
 	m.launch.editingCloudInit = true
 	if m.launch.cloudInitOverrideOK {
-		m.launch.cloudInitEditor.SetValue(m.launch.cloudInitOverride)
+		cmd := m.launch.cloudInitEditor.SetValue(m.launch.cloudInitOverride)
 		m.launch.cloudInitEditor.Focus()
-		return m, nil
+		return m, cmd
 	}
 	if name := m.launch.form.Value(cloudInitNameField); name != "" {
 		m.launch.loadingCloudInit = true
 		m.launch.cloudInitEditor.SetValue("")
 		return m, loadCloudInitContent(m.client, name)
 	}
-	m.launch.cloudInitEditor.SetValue("#cloud-config\n")
+	cmd := m.launch.cloudInitEditor.SetValue("#cloud-config\n")
 	m.launch.cloudInitEditor.Focus()
-	return m, nil
+	return m, cmd
 }
 
 func (m model) updateLaunchCloudInitEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

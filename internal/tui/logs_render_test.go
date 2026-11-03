@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -12,7 +13,7 @@ func TestLogsRenderCoalesced(t *testing.T) {
 	m := model{screen: screenLogs, logs: newLogsModel(&anvilv1.Instance{Name: "web"}, 80, 10)}
 	chunk := func(s string, done bool) {
 		t.Helper()
-		next, _ := m.Update(logsStreamMsg{streamStep[[]byte]{result: []byte(s), done: done}})
+		next, _ := m.Update(logsStreamMsg{streamStep: streamStep[[]byte]{result: []byte(s), done: done}})
 		m = next.(model)
 	}
 	for i := range 50 {
@@ -33,5 +34,21 @@ func TestLogsRenderCoalesced(t *testing.T) {
 	chunk("last line, no newline", true)
 	if !strings.Contains(m.logs.viewport.View(), "last line, no newline") {
 		t.Errorf("end of stream not shown:\n%s", m.logs.viewport.View())
+	}
+}
+
+func TestLogsDropsStaleStream(t *testing.T) {
+	m := model{screen: screenLogs, logs: newLogsModel(&anvilv1.Instance{Name: "web"}, 80, 10)}
+	m.logs.gen = 2
+	next, _ := m.Update(logsStreamMsg{streamStep: streamStep[[]byte]{result: []byte("old instance\n")}, gen: 1})
+	m = next.(model)
+	next, _ = m.Update(logsStreamMsg{streamStep: failed[[]byte](context.Canceled), gen: 1})
+	m = next.(model)
+	if len(m.logs.lines) != 0 || !m.logs.streaming || m.status != "" {
+		t.Fatalf("stale stream applied: lines %q, streaming %v, status %q", m.logs.lines, m.logs.streaming, m.status)
+	}
+	next, _ = m.Update(logsStreamMsg{streamStep: streamStep[[]byte]{result: []byte("new instance\n")}, gen: 2})
+	if got := next.(model).logs.lines; len(got) != 1 || got[0] != "new instance" {
+		t.Fatalf("lines %q", got)
 	}
 }

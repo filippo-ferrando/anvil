@@ -5,12 +5,15 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"git.fferrando.cc/rdfilippo/anvil/internal/gui/events"
 )
 
 func collect() (*[]string, func(string)) {
@@ -18,20 +21,40 @@ func collect() (*[]string, func(string)) {
 	return &got, func(l string) { got = append(got, l) }
 }
 
-func TestFollowGUILog_LastRunUntilAppRuns(t *testing.T) {
+// ev is e as one `anvil gui --json` output line.
+func ev(e events.Event) string {
+	var b strings.Builder
+	_ = events.Encode(&b, e)
+	return b.String()
+}
+
+func step(text string) string { return ev(events.Event{Event: events.Step, Text: text}) }
+
+func running(text string) string { return ev(events.Event{Event: events.Running, Text: text}) }
+
+// echoArgs is a `sh -c` call printing lines.
+func echoArgs(lines ...string) []string {
+	var b strings.Builder
+	for _, l := range lines {
+		b.WriteString("printf '%s\\n' '" + strings.TrimSpace(l) + "'; ")
+	}
+	return []string{"-c", b.String()}
+}
+
+func TestFollowGUILog_FromOffsetUntilAppRuns(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.log")
-	old := "--- 2026-01-01 anvil gui\nold line\nanvil: old failure\n"
-	if err := os.WriteFile(path, []byte(old+"--- 2026-11-02 anvil gui\nrestoring the clone\n"), 0o644); err != nil {
+	old := "--- 2026-01-01 anvil gui\n" + step("old line") + ev(events.Event{Event: events.Error, Message: "old failure"}) + "--- now\n"
+	if err := os.WriteFile(path, []byte(old+step("restoring the clone")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	go func() {
 		time.Sleep(3 * logPoll / 2)
 		f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 		defer f.Close()
-		_, _ = f.WriteString("starting the app\nanvil: firefox runs in c1, deleted when it exits\napp output\n")
+		_, _ = f.WriteString(step("starting the app") + "waypipe noise\n" + running("firefox runs in c1, deleted when it exits") + step("after"))
 	}()
 	got, emit := collect()
-	if err := followGUILog(context.Background(), path, emit); err != nil {
+	if err := followGUILog(context.Background(), path, int64(len(old)), emit); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"restoring the clone", "starting the app", "firefox runs in c1, deleted when it exits"}
@@ -40,27 +63,14 @@ func TestFollowGUILog_LastRunUntilAppRuns(t *testing.T) {
 	}
 }
 
-func TestFollowGUILog_InstanceAppRuns(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "dev.log")
-	if err := os.WriteFile(path, []byte("--- now\npreparing dev\nanvil: firefox runs in dev\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got, emit := collect()
-	if err := followGUILog(context.Background(), path, emit); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(*got, []string{"preparing dev", "firefox runs in dev"}) {
-		t.Fatalf("got %q", *got)
-	}
-}
-
 func TestFollowGUILog_Failure(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.log")
-	if err := os.WriteFile(path, []byte("--- now\nbuilding\nanvil: no such distro\n"), 0o644); err != nil {
+	data := step("building") + "anvil: no such distro\n" + ev(events.Event{Event: events.Error, Message: "no such distro"})
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got, emit := collect()
-	err := followGUILog(context.Background(), path, emit)
+	err := followGUILog(context.Background(), path, 0, emit)
 	if err == nil || err.Error() != "no such distro" {
 		t.Fatalf("err = %v", err)
 	}
@@ -69,42 +79,51 @@ func TestFollowGUILog_Failure(t *testing.T) {
 	}
 }
 
+func TestFollowGUILog_DoneEnds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.log")
+	if err := os.WriteFile(path, []byte(step("preparing")+ev(events.Event{Event: events.Done})), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := followGUILog(context.Background(), path, 0, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFollowGUILog_StopsWithContext(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.log")
-	if err := os.WriteFile(path, []byte("--- now\nwaiting\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(step("waiting")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*logPoll)
 	defer cancel()
-	if err := followGUILog(ctx, path, func(string) {}); err != nil {
+	if err := followGUILog(ctx, path, 0, func(string) {}); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestRunFollowed_StreamsThenFollowsLog(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.log")
-	if err := os.WriteFile(path, []byte("--- now\nanvil: app runs in c1, deleted when it exits\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("--- now\n"+running("app runs in c1")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	calls := [][]string{
-		{"-c", "echo building warm; echo Exported x.desktop"},
-		{"-c", "echo '" + detachedPrefix + path + "'"},
+		echoArgs(step("building warm"), "not an event", ev(events.Event{Event: events.Exported, Path: "x.desktop"}), ev(events.Event{Event: events.Done})),
+		echoArgs(ev(events.Event{Event: events.Detached, Log: path, Offset: int64(len("--- now\n"))}), ev(events.Event{Event: events.Done})),
 	}
 	got, emit := collect()
 	if err := runFollowed(context.Background(), "sh", calls, emit); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"building warm", "Exported x.desktop", detachedPrefix + path, "app runs in c1, deleted when it exits"}
+	want := []string{"building warm", "exported x.desktop", "started in the background, log: " + path, "app runs in c1"}
 	if !reflect.DeepEqual(*got, want) {
 		t.Fatalf("got %q, want %q", *got, want)
 	}
 }
 
 func TestRunFollowed_FailureStopsCalls(t *testing.T) {
-	calls := [][]string{
-		{"-c", "echo step; echo 'anvil: build failed' >&2; exit 1"},
-		{"-c", "echo never"},
-	}
+	fail := echoArgs(step("step"), ev(events.Event{Event: events.Error, Message: "build failed"}))
+	fail[1] += "echo 'anvil: build failed' >&2; exit 1"
+	calls := [][]string{fail, echoArgs(step("never"))}
 	got, emit := collect()
 	err := runFollowed(context.Background(), "sh", calls, emit)
 	if err == nil || err.Error() != "build failed" {
@@ -115,8 +134,16 @@ func TestRunFollowed_FailureStopsCalls(t *testing.T) {
 	}
 }
 
+func TestRunFollowed_FailureWithoutEvent(t *testing.T) {
+	calls := [][]string{{"-c", "echo 'anvil: unknown flag: --bad' >&2; exit 1"}}
+	err := runFollowed(context.Background(), "sh", calls, func(string) {})
+	if err == nil || err.Error() != "anvil: unknown flag: --bad" {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestFollowCalls_Messages(t *testing.T) {
-	next := followCalls(context.Background(), "sh", [][]string{{"-c", "echo one; echo two"}}, lineTaskStep(7))
+	next := followCalls(context.Background(), "sh", [][]string{echoArgs(step("one"), step("two"))}, lineTaskStep(7))
 	var lines []string
 	for {
 		msg := next().(taskStepMsg)
@@ -149,5 +176,27 @@ func TestFollowCalls_CancelledEndsCancelled(t *testing.T) {
 			return
 		}
 		next = msg.next
+	}
+}
+
+func TestRunFollowed_CancelStopsCalls(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	first := echoArgs(step("started"), step("waiting"))
+	first[1] += "sleep 30"
+	calls := [][]string{first, echoArgs(step("never"))}
+	var got []string
+	emit := func(l string) {
+		got = append(got, l)
+		cancel()
+	}
+	start := time.Now()
+	if err := runFollowed(ctx, "sh", calls, emit); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if time.Since(start) > 10*time.Second {
+		t.Fatal("cancel did not kill the running call")
+	}
+	if slices.Contains(got, "never") {
+		t.Fatalf("got %q, the second call ran after cancel", got)
 	}
 }

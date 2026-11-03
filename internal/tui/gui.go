@@ -48,9 +48,9 @@ func guiRequestFrom(form simpleForm) guiRequest {
 	}
 }
 
-// guiArgs builds the `anvil gui --detach` call for name, which runs in its own session.
+// guiArgs builds the `anvil gui --detach --json` call for name, which runs in its own session.
 func guiArgs(socketPath, remote, name string, g guiRequest) []string {
-	opts := []string{"gui", "--detach"}
+	opts := []string{"gui", "--detach", "--json"}
 	if g.identity != "" {
 		opts = append(opts, "--identity", g.identity)
 	}
@@ -59,7 +59,7 @@ func guiArgs(socketPath, remote, name string, g guiRequest) []string {
 
 // guiExportArgs builds the `anvil gui export` call that adds the app to this desktop's launcher.
 func guiExportArgs(socketPath, remote, name string, g guiRequest) []string {
-	opts := []string{"gui", "export"}
+	opts := []string{"gui", "export", "--json"}
 	if g.title != "" {
 		opts = append(opts, "--title", g.title)
 	}
@@ -102,7 +102,7 @@ func ephemeralAppArgs(socketPath string, sub []string, a appRequest) []string {
 	if socketPath != "" {
 		args = append(args, "--socket", socketPath)
 	}
-	args = append(append(args, sub...), "--ephemeral")
+	args = append(append(args, sub...), "--json", "--ephemeral")
 	if a.x11 {
 		args = append(args, "--x11")
 	}

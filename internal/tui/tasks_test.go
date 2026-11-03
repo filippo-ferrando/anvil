@@ -233,7 +233,7 @@ func TestConfirmedApplyRunsAsTask(t *testing.T) {
 	a := &m.manifests.apply
 	a.owner = screenManifests
 	a.start(m.client, "manifest web", &anvilv1.IntentApplyRequest{})
-	a.handle(applyStreamMsg{owner: screenManifests, streamStep: streamStep[[]string]{result: []string{"plan"}, done: true}})
+	a.handle(applyStreamMsg{owner: screenManifests, streamStep: streamStep[applyPlanResult]{result: applyPlanResult{lines: []string{"plan"}}, done: true}, gen: a.gen})
 	if len(m.tasks.items) != 0 {
 		t.Fatal("a dry run should not start a task")
 	}
@@ -244,8 +244,8 @@ func TestConfirmedApplyRunsAsTask(t *testing.T) {
 	if len(run) != 1 || run[0].title != "applying manifest web" || run[0].cancel == nil {
 		t.Fatalf("tasks %+v", run)
 	}
-	m.applyEvent(a, applyStreamMsg{owner: screenManifests, streamStep: streamStep[[]string]{status: "creating db"}})
-	_, applied := m.applyEvent(a, applyStreamMsg{owner: screenManifests, streamStep: streamStep[[]string]{done: true}})
+	m.applyEvent(a, applyStreamMsg{owner: screenManifests, streamStep: streamStep[applyPlanResult]{status: "creating db"}, gen: a.gen})
+	_, applied := m.applyEvent(a, applyStreamMsg{owner: screenManifests, streamStep: streamStep[applyPlanResult]{done: true}, gen: a.gen})
 	if !applied || run[0].running || run[0].err != nil || run[0].last() != "creating db" {
 		t.Fatalf("applied %v, task %+v", applied, run[0])
 	}
@@ -281,10 +281,29 @@ func TestCloudInitImportRunsAsTask(t *testing.T) {
 	if cmd == nil || len(m.tasks.running()) != 1 {
 		t.Fatalf("expected a running import task, got %d", len(m.tasks.running()))
 	}
-	next, _ = m.Update(cloudInitImportStreamMsg{streamStep[*anvilv1.CloudInitImportResult]{result: &anvilv1.CloudInitImportResult{Name: "base"}}})
-	next, _ = next.(model).Update(cloudInitImportStreamMsg{streamStep[*anvilv1.CloudInitImportResult]{done: true}})
+	id := m.cloudInit.importTask
+	next, _ = m.Update(cloudInitImportStreamMsg{streamStep[*anvilv1.CloudInitImportResult]{result: &anvilv1.CloudInitImportResult{Name: "base"}}, id})
+	next, _ = next.(model).Update(cloudInitImportStreamMsg{streamStep[*anvilv1.CloudInitImportResult]{done: true}, id})
 	task := next.(model).tasks.items[0]
 	if task.running || task.err != nil || !strings.Contains(task.last(), "base: imported") {
 		t.Fatalf("task %+v", task)
+	}
+}
+
+func TestDryRunApplyCancelsOnEsc(t *testing.T) {
+	m := tasksTestModel()
+	a := &m.manifests.apply
+	a.owner = screenManifests
+	a.start(m.client, "manifest web", &anvilv1.IntentApplyRequest{})
+	ctx, cancel := context.WithCancel(context.Background())
+	a.cancel = cancel
+	gen := a.gen
+	m.applyKey(a, key("esc"))
+	if ctx.Err() == nil || a.running || a.active() {
+		t.Fatalf("esc should cancel the dry run: running %v, active %v", a.running, a.active())
+	}
+	a.handle(applyStreamMsg{owner: screenManifests, streamStep: failed[applyPlanResult](context.Canceled), gen: gen})
+	if a.active() {
+		t.Fatalf("the cancelled call's error came back: %q", a.lines)
 	}
 }

@@ -13,10 +13,17 @@ import (
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
-// applyStreamMsg carries events off an IntentService.Apply stream; result holds a plan's lines.
+// applyStreamMsg carries events off an IntentService.Apply stream; result holds a plan.
 type applyStreamMsg struct {
 	owner screen // the page that started the apply and shows its transcript
-	streamStep[[]string]
+	streamStep[applyPlanResult]
+	gen int // the applyRun.gen of the call, so a cancelled call's events are dropped
+}
+
+// applyPlanResult is a plan as shown, with the hash a confirmed apply sends back.
+type applyPlanResult struct {
+	lines []string
+	hash  string
 }
 
 // newApplyForm is the A form on the Intents screen, the same settings as `anvil apply`.
@@ -53,31 +60,31 @@ func newApplyRequest(form simpleForm) (*anvilv1.IntentApplyRequest, error) {
 	})
 }
 
-func startApplyStream(ctx context.Context, c *client.Client, req *anvilv1.IntentApplyRequest, owner screen) tea.Cmd {
+func startApplyStream(ctx context.Context, c *client.Client, req *anvilv1.IntentApplyRequest, owner screen, gen int) tea.Cmd {
 	return func() tea.Msg {
 		stream, err := c.Intent.Apply(ctx, req)
 		if err != nil {
-			return applyStreamMsg{owner, failed[[]string](err)}
+			return applyStreamMsg{owner, failed[applyPlanResult](err), gen}
 		}
-		return recvApply(stream, owner)()
+		return recvApply(stream, owner, gen)()
 	}
 }
 
-func recvApply(stream anvilv1.IntentService_ApplyClient, owner screen) tea.Cmd {
-	type step = streamStep[[]string]
+func recvApply(stream anvilv1.IntentService_ApplyClient, owner screen, gen int) tea.Cmd {
+	type step = streamStep[applyPlanResult]
 	return recvStream(stream.Recv, func(ev *anvilv1.IntentApplyProgress) step {
 		switch e := ev.GetEvent().(type) {
 		case *anvilv1.IntentApplyProgress_Plan:
-			return step{result: applyPlanLines(e.Plan)}
+			return step{result: applyPlanResult{applyPlanLines(e.Plan), e.Plan.GetHash()}}
 		case *anvilv1.IntentApplyProgress_Status:
 			return step{status: e.Status}
 		case *anvilv1.IntentApplyProgress_Error:
-			return failed[[]string](errors.New(e.Error))
+			return failed[applyPlanResult](errors.New(e.Error))
 		case *anvilv1.IntentApplyProgress_Intent:
 			return step{status: styleGood.Render("applied intent " + e.Intent.GetName())}
 		}
 		return step{}
-	}, func(s step) tea.Msg { return applyStreamMsg{owner, s} })
+	}, func(s step) tea.Msg { return applyStreamMsg{owner, s, gen} })
 }
 
 func applyPlanLines(plan *anvilv1.IntentApplyPlan) []string {
@@ -102,20 +109,30 @@ type applyRun struct {
 	running bool
 	confirm bool // a dry run finished cleanly and waits for enter to apply
 	lines   []string
+	gen     int // bumped per Apply call, see applyStreamMsg
 }
 
 func (a *applyRun) active() bool { return a.running || len(a.lines) > 0 }
 
 // start sends req as a dry run first, so the plan is shown before anything changes.
 func (a *applyRun) start(c *client.Client, what string, req *anvilv1.IntentApplyRequest) tea.Cmd {
-	req.DryRun = true
+	req.DryRun, req.ExpectedPlanHash = true, ""
 	a.what, a.req, a.running, a.confirm, a.lines, a.task = what, req, true, false, nil, 0
-	return startApplyStream(context.Background(), c, req, a.owner)
+	a.gen++
+	ctx, cancel := context.WithCancel(context.Background())
+	a.cancel = cancel
+	return startApplyStream(ctx, c, req, a.owner, a.gen)
 }
 
 // handle records one stream event; applied is true once a real (not dry) run has ended.
 func (a *applyRun) handle(msg applyStreamMsg) (cmd tea.Cmd, applied bool) {
-	a.lines = append(a.lines, msg.result...)
+	if msg.gen != a.gen {
+		return nil, false // a cancelled call
+	}
+	a.lines = append(a.lines, msg.result.lines...)
+	if msg.result.hash != "" && a.req.GetDryRun() {
+		a.req.ExpectedPlanHash = msg.result.hash // the real run fails if its plan differs
+	}
 	if msg.status != "" {
 		a.lines = appendProgressLine(a.lines, msg.status)
 	}
@@ -136,8 +153,17 @@ func (a *applyRun) handle(msg applyStreamMsg) (cmd tea.Cmd, applied bool) {
 }
 
 // key handles a key press while the transcript is up: enter applies a confirmed plan, esc dismisses.
+// esc also cancels a running dry run; a real run is cancelled from its task.
 func (a *applyRun) key(msg tea.KeyMsg, c *client.Client) tea.Cmd {
 	if a.running {
+		switch msg.String() {
+		case "esc", "q":
+			if a.req.GetDryRun() {
+				a.cancel()
+				a.gen++
+				a.running, a.lines, a.confirm = false, nil, false
+			}
+		}
 		return nil
 	}
 	switch msg.String() {
@@ -147,7 +173,8 @@ func (a *applyRun) key(msg tea.KeyMsg, c *client.Client) tea.Cmd {
 			a.confirm, a.running, a.lines = false, true, nil
 			ctx, cancel := context.WithCancel(context.Background())
 			a.cancel = cancel
-			return startApplyStream(ctx, c, a.req, a.owner)
+			a.gen++
+			return startApplyStream(ctx, c, a.req, a.owner, a.gen)
 		}
 		a.lines = nil
 	case "esc", "q", "n":
@@ -171,6 +198,9 @@ func (m *model) applyKey(a *applyRun, msg tea.KeyMsg) tea.Cmd {
 
 // applyEvent records one stream event on a and on the task of a real run.
 func (m *model) applyEvent(a *applyRun, msg applyStreamMsg) (cmd tea.Cmd, applied bool) {
+	if msg.gen != a.gen {
+		return nil, false
+	}
 	cmd, applied = a.handle(msg)
 	t := m.tasks.get(a.task)
 	if t == nil || !t.running || a.req.GetDryRun() {
@@ -190,6 +220,8 @@ func (a applyRun) view() string {
 	switch {
 	case a.confirm:
 		s += helpBar("enter", "apply", "esc", "cancel")
+	case a.running && a.req.GetDryRun():
+		s += helpBar("esc", "cancel")
 	case !a.running:
 		s += helpBar("esc", "dismiss")
 	}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
@@ -104,6 +105,17 @@ func TestRunViewPanes(t *testing.T) {
 	}
 	if n := len(v.panes["alpine"].lines); n != paneKeep {
 		t.Errorf("a pane kept %d lines, want %d", n, paneKeep)
+	}
+}
+
+func TestRunViewNarrowWidth(t *testing.T) {
+	v := newRunView([]string{"ubuntu"}, func() {})
+	v.event(&anvilv1.RunEvent{Event: &anvilv1.RunEvent_Output{Output: &anvilv1.RunOutput{Distro: "ubuntu", Data: []byte("héllo wörld\n")}}})
+	for _, w := range []int{0, 1, 2, 5} {
+		view := v.view(w, 20) // must not panic
+		if !utf8.ValidString(view) {
+			t.Errorf("width %d cut a rune: %q", w, view)
+		}
 	}
 }
 

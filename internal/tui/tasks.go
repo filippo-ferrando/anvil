@@ -35,7 +35,7 @@ type task struct {
 	err     error
 	started time.Time
 	ended   time.Time
-	steps   transcript         // streamed progress, empty for a single call
+	steps   taskSteps          // streamed progress, empty for a single call
 	cancel  context.CancelFunc // aborts the request, nil when it can't be
 	// cancelNote says what cancelling leaves behind, shown before it happens.
 	cancelNote string

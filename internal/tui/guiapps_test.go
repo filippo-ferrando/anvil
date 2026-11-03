@@ -67,7 +67,7 @@ func TestGUIAppsListAndUnexport(t *testing.T) {
 }
 
 func TestRelaunchGUIAppRunsExec(t *testing.T) {
-	next := relaunchGUIApp(context.Background(), desktop.Export{Exec: []string{"sh", "-c", "echo building; echo started"}}, lineTaskStep(3))
+	next := relaunchGUIApp(context.Background(), desktop.Export{Exec: []string{"sh", "-c", `echo '{"event":"step","text":"building"}'; echo noise; echo '{"event":"step","text":"started"}'`}}, lineTaskStep(3))
 	var lines []string
 	for {
 		msg := next().(taskStepMsg)
@@ -91,7 +91,7 @@ func TestRelaunchGUIAppRunsExec(t *testing.T) {
 func TestGUIAppsEnterStartsTask(t *testing.T) {
 	m := model{screen: screenGUIApps, guiApps: newGUIAppsModel()}
 	m.guiApps.list.SetItems([]list.Item{guiAppItem{e: desktop.Export{
-		Instance: "ephemeral-archlinux-firefox", App: "firefox", Name: "Firefox", Exec: []string{"sh", "-c", "echo restoring"},
+		Instance: "ephemeral-archlinux-firefox", App: "firefox", Name: "Firefox", Exec: []string{"sh", "-c", `echo '{"event":"step","text":"restoring"}'`},
 	}}})
 	next, cmd := m.Update(key("enter"))
 	m = next.(model)

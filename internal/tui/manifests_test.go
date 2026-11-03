@@ -42,12 +42,30 @@ func TestApplyStreamGoesToOwner(t *testing.T) {
 	m.manifests.apply.req = &anvilv1.IntentApplyRequest{DryRun: true}
 	m.manifests.apply.running = true
 
-	next, _ := m.Update(applyStreamMsg{owner: screenManifests, streamStep: streamStep[[]string]{result: []string{"plan"}, done: true}})
+	next, _ := m.Update(applyStreamMsg{owner: screenManifests, streamStep: streamStep[applyPlanResult]{result: applyPlanResult{lines: []string{"plan"}}, done: true}})
 	m = next.(model)
 	if len(m.manifests.apply.lines) != 1 || !m.manifests.apply.confirm {
 		t.Fatalf("manifests apply = %+v, want the plan waiting for confirmation", m.manifests.apply)
 	}
 	if m.intents.apply.active() {
 		t.Fatal("the intents page picked up a manifests apply")
+	}
+}
+
+// TestApplyConfirmSendsPlanHash checks the real run carries the hash of the dry-run plan it confirms.
+func TestApplyConfirmSendsPlanHash(t *testing.T) {
+	a := applyRun{owner: screenManifests}
+	a.start(nil, "m", &anvilv1.IntentApplyRequest{ExpectedPlanHash: "old"})
+	if a.req.GetExpectedPlanHash() != "" {
+		t.Fatal("a dry run should not expect a plan hash")
+	}
+	a.handle(applyStreamMsg{owner: screenManifests, gen: a.gen, streamStep: streamStep[applyPlanResult]{result: applyPlanResult{lines: []string{"plan"}, hash: "abc"}}})
+	a.handle(applyStreamMsg{owner: screenManifests, gen: a.gen, streamStep: streamStep[applyPlanResult]{done: true}})
+	if !a.confirm {
+		t.Fatal("the plan should wait for confirmation")
+	}
+	a.key(tea.KeyMsg{Type: tea.KeyEnter}, nil)
+	if a.req.GetDryRun() || a.req.GetExpectedPlanHash() != "abc" {
+		t.Fatalf("confirmed request = %v, want a real run expecting hash abc", a.req)
 	}
 }

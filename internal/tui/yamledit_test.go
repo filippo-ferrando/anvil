@@ -7,6 +7,9 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/cloudinit"
+	"git.fferrando.cc/rdfilippo/anvil/internal/yamlcheck"
 )
 
 // classOf returns the class of the first rune of sub in line, highlighting lines together.
@@ -73,6 +76,7 @@ func TestYAMLEditorView(t *testing.T) {
 	}
 	b.WriteString("runcmd: reboot") // an error, with the cursor on it
 	e.SetValue(b.String())
+	e.setProblems(yamlCheckedMsg{e.id, e.seq, cloudinit.Validate(b.String())}) // what the daemon answers
 	e.Focus()
 	view := func() []string { return strings.Split(ansiRe.ReplaceAllString(e.View(), ""), "\n") }
 	if rows := view(); !strings.Contains(rows[0], "  1 #cloud-config") {
@@ -103,5 +107,36 @@ func TestYAMLEditorKeepsLongDocuments(t *testing.T) {
 	e.SetValue(long)
 	if e.Value() != long {
 		t.Fatalf("SetValue kept %d of 151 lines", e.LineCount())
+	}
+}
+
+// TestYAMLEditorDropsStaleChecks checks a result for older content never replaces the current one's.
+func TestYAMLEditorDropsStaleChecks(t *testing.T) {
+	e := newYAMLEditor("", "ok", checkCloudInit)
+	if cmd := e.SetValue("#cloud-config\nruncmd: x\n"); cmd == nil {
+		t.Fatal("new content should schedule a check")
+	}
+	old := e.seq
+	if !strings.Contains(ansiRe.ReplaceAllString(e.statusLine(), ""), "checking") {
+		t.Errorf("status while checking = %q", e.statusLine())
+	}
+	e.SetValue("#cloud-config\n")
+	e.setProblems(yamlCheckedMsg{e.id, old, []yamlcheck.Problem{{Line: 2, Message: "stale"}}})
+	if len(e.problems) != 0 {
+		t.Fatalf("a stale result was kept: %v", e.problems)
+	}
+	if e.runCheck(nil, yamlCheckDueMsg{e.id, old}) != nil {
+		t.Error("a check scheduled for older content should not run")
+	}
+	e.setProblems(yamlCheckedMsg{e.id + 1, e.seq, []yamlcheck.Problem{{Message: "other editor"}}})
+	if len(e.problems) != 0 {
+		t.Fatal("another editor's result was kept")
+	}
+	e.setProblems(yamlCheckedMsg{e.id, e.seq, nil})
+	if e.checking || !strings.Contains(e.statusLine(), "ok") {
+		t.Errorf("after the answer, status = %q", e.statusLine())
+	}
+	if e.SetValue("  \n") != nil {
+		t.Error("blank content should not be sent to the daemon")
 	}
 }

@@ -239,6 +239,9 @@ func updatePicker(field *formField, key string) bool {
 			field.cursor++
 		}
 	case " ":
+		if field.cursor < 0 || field.cursor >= len(field.options) {
+			return true // a picker left open after its options went away
+		}
 		if o := field.options[field.cursor]; o.Note == "" {
 			field.picked[o.ID] = !field.picked[o.ID]
 		}

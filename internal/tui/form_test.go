@@ -51,3 +51,11 @@ func TestCompletePathMatches(t *testing.T) {
 		}
 	})
 }
+
+func TestPickerSpaceWithNoOptions(t *testing.T) {
+	f := pickerField("USB", "", nil, map[string]bool{})
+	f.open = true
+	if !updatePicker(&f, " ") || len(f.picked) != 0 {
+		t.Fatalf("space on an empty picker: picked %v", f.picked)
+	}
+}

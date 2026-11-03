@@ -153,8 +153,8 @@ func TestMultiSelect(t *testing.T) {
 
 	next, _ := m.Update(key("d"))
 	m = next.(model)
-	if len(m.instances.confirmDelete) != 2 || !strings.Contains(m.instances.View(), "2 instances (a, b)") {
-		t.Errorf("expected the delete confirmation to list both:\n%s", m.instances.View())
+	if len(m.instances.confirmDelete) != 2 || !strings.Contains(m.instances.viewWith(m.tasks), "2 instances (a, b)") {
+		t.Errorf("expected the delete confirmation to list both:\n%s", m.instances.viewWith(m.tasks))
 	}
 	next, cmd := m.Update(key("n")) // any other key cancels
 	m = next.(model)

@@ -26,6 +26,7 @@ type logsModel struct {
 	streaming bool
 	dirty     bool // lines changed since the viewport was last filled
 	queued    bool // a logsRenderMsg is on its way
+	gen       int  // bumped per opened stream, see logsStreamMsg
 
 	// cancel ends the Logs RPC's context; call it when the user leaves this screen.
 	cancel context.CancelFunc
@@ -42,30 +43,35 @@ const logsTailField = "Tail lines"
 // openLogs switches to the Logs takeover for inst, starting from its last tail lines (0: all of it).
 func (m model) openLogs(inst *anvilv1.Instance, tail int32) (tea.Model, tea.Cmd) {
 	m.screen = screenLogs
+	gen := m.logs.gen + 1
 	m.logs = newLogsModel(inst, m.width, logsViewportHeight(m.height))
-	cmd, cancel := startLogsStream(m.client, inst.GetName(), tail)
+	m.logs.gen = gen
+	cmd, cancel := startLogsStream(m.client, inst.GetName(), tail, gen)
 	m.logs.cancel = cancel
 	return m, tea.Batch(tea.ClearScreen, cmd)
 }
 
 // startLogsStream returns the Cmd that kicks off the stream and the CancelFunc for its RPC context.
-func startLogsStream(c *client.Client, name string, tail int32) (tea.Cmd, context.CancelFunc) {
+func startLogsStream(c *client.Client, name string, tail int32, gen int) (tea.Cmd, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	return func() tea.Msg {
 		// TailLines 0 means everything available; maxLogLines bounds memory instead.
 		stream, err := c.Logs(ctx, &anvilv1.LogsRequest{Name: name, Follow: true, TailLines: tail})
 		if err != nil {
-			return logsStreamMsg{failed[[]byte](err)}
+			return logsStreamMsg{failed[[]byte](err), gen}
 		}
 		return recvStream(stream.Recv, func(c *anvilv1.LogChunk) streamStep[[]byte] {
 			return streamStep[[]byte]{result: c.GetData()}
-		}, func(s streamStep[[]byte]) tea.Msg { return logsStreamMsg{s} })()
+		}, func(s streamStep[[]byte]) tea.Msg { return logsStreamMsg{s, gen} })()
 	}, cancel
 }
 
 func (m model) updateLogs(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case logsStreamMsg:
+		if msg.gen != m.logs.gen {
+			return m, nil // the stream of an earlier Logs screen, cancelled
+		}
 		if msg.err != nil {
 			m.logs.streaming = false
 			m.setStatus("logs: "+msg.err.Error(), true)
@@ -82,11 +88,15 @@ func (m model) updateLogs(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A busy log fills the viewport at most every logsRenderEvery, not on every chunk.
 		if m.logs.dirty && !m.logs.queued {
 			m.logs.queued = true
-			return m, tea.Batch(msg.next, tea.Tick(logsRenderEvery, func(time.Time) tea.Msg { return logsRenderMsg{} }))
+			gen := m.logs.gen
+			return m, tea.Batch(msg.next, tea.Tick(logsRenderEvery, func(time.Time) tea.Msg { return logsRenderMsg{gen} }))
 		}
 		return m, msg.next
 
 	case logsRenderMsg:
+		if msg.gen != m.logs.gen {
+			return m, nil
+		}
 		m.logs.queued = false
 		m.logs.render()
 		return m, nil
@@ -123,7 +133,7 @@ func (m model) updateLogs(msg tea.Msg) (tea.Model, tea.Cmd) {
 const logsRenderEvery = 50 * time.Millisecond
 
 // logsRenderMsg fills the viewport with the lines received since the last one.
-type logsRenderMsg struct{}
+type logsRenderMsg struct{ gen int }
 
 // render fills the viewport with the buffer, once something changed.
 func (m *logsModel) render() {

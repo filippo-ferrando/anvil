@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -57,7 +58,20 @@ func relaunchGUIApp(ctx context.Context, e desktop.Export, wrap func(lineStep) t
 		err := errors.New(e.File + " has no Exec line")
 		return func() tea.Msg { return wrap(failed[struct{}](err)) }
 	}
-	return followCalls(ctx, e.Exec[0], [][]string{e.Exec[1:]}, wrap)
+	return followCalls(ctx, e.Exec[0], [][]string{withJSON(e.Exec[1:])}, wrap)
+}
+
+// withJSON adds --json after the entry's "gui" argument, so its progress comes as events.
+func withJSON(args []string) []string {
+	for i, a := range args {
+		if a == "--" {
+			break
+		}
+		if a == "gui" {
+			return slices.Concat(args[:i+1], []string{"--json"}, args[i+1:])
+		}
+	}
+	return args
 }
 
 // relaunchTask starts an exported app as a task.

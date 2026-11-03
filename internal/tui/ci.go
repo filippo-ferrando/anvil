@@ -152,6 +152,7 @@ type ciLogs struct {
 	title   string
 	loading bool
 	vp      viewport.Model
+	cancel  context.CancelFunc // ends the Logs call
 }
 
 func newCIModel() ciModel {
@@ -194,8 +195,9 @@ type pipelineEventMsg struct {
 
 // ciLogsMsg carries a run's logs for the viewer.
 type ciLogsMsg struct {
-	text string
-	err  error
+	viewer *ciLogs // the viewer that asked, so a stale reply is dropped
+	text   string
+	err    error
 }
 
 func loadCI(c *client.Client) tea.Cmd {
@@ -263,7 +265,7 @@ func (m model) updateCI(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pipelineEventMsg:
 		return m.pipelineEvent(msg)
 	case ciLogsMsg:
-		if ci.logs == nil {
+		if ci.logs == nil || msg.viewer != ci.logs {
 			return m, nil
 		}
 		ci.logs.loading = false
@@ -372,6 +374,7 @@ func (m model) updateCIKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case ci.logs != nil:
 		if key == "esc" || key == "q" {
+			ci.logs.cancel()
 			ci.logs = nil
 			return m, nil
 		}
@@ -499,8 +502,9 @@ func (m model) runAction(key string, r *anvilv1.PipelineRun, job *anvilv1.Pipeli
 			req.Job, req.Distro = job.GetName(), job.GetDistro()
 			title = "Logs of " + job.GetName() + "@" + job.GetDistro() + " in run " + r.GetId()
 		}
-		ci.logs = &ciLogs{title: title, loading: true, vp: viewport.New(ci.width, max(1, ci.height-1))}
-		return m, loadPipelineLogs(m.client, req), true
+		ctx, cancel := context.WithCancel(context.Background())
+		ci.logs = &ciLogs{title: title, loading: true, vp: viewport.New(ci.width, max(1, ci.height-1)), cancel: cancel}
+		return m, loadPipelineLogs(ctx, m.client, req, ci.logs), true
 	case "R":
 		return m, m.startPipeline("rerun of "+r.GetId(), "", func(ctx context.Context) (func() (*anvilv1.PipelineEvent, error), error) {
 			stream, err := m.client.Pipeline.Rerun(ctx, &anvilv1.PipelineRerunRequest{Id: r.GetId()})
@@ -647,11 +651,11 @@ func openPipelineRun(ctx context.Context, c *client.Client, path, file string) (
 	}, nil
 }
 
-func loadPipelineLogs(c *client.Client, req *anvilv1.PipelineLogsRequest) tea.Cmd {
+func loadPipelineLogs(ctx context.Context, c *client.Client, req *anvilv1.PipelineLogsRequest, viewer *ciLogs) tea.Cmd {
 	return func() tea.Msg {
-		stream, err := c.Pipeline.Logs(context.Background(), req)
+		stream, err := c.Pipeline.Logs(ctx, req)
 		if err != nil {
-			return ciLogsMsg{err: err}
+			return ciLogsMsg{viewer: viewer, err: err}
 		}
 		var b []byte
 		for {
@@ -660,14 +664,14 @@ func loadPipelineLogs(c *client.Client, req *anvilv1.PipelineLogsRequest) tea.Cm
 				break
 			}
 			if err != nil {
-				return ciLogsMsg{text: string(b), err: err}
+				return ciLogsMsg{viewer: viewer, text: string(b), err: err}
 			}
 			b = append(b, ch.GetData()...)
 			if len(b) > ciLogsMax {
 				b = b[len(b)-ciLogsMax:]
 			}
 		}
-		return ciLogsMsg{text: string(b)}
+		return ciLogsMsg{viewer: viewer, text: string(b)}
 	}
 }
 

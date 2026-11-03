@@ -302,7 +302,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Replies to long-running requests go to the screen that made them, even after the user moved on.
-	switch msg.(type) {
+	switch typed := msg.(type) {
 	case statsStreamMsg, instanceEventsLoadedMsg, selectionSettledMsg:
 		return m.updateInstances(msg)
 	case snapshotsSettledMsg:
@@ -312,7 +312,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case imageChecksumMsg:
 		return m.updateImages(msg)
 	case applyStreamMsg:
-		if msg.(applyStreamMsg).owner == screenManifests {
+		if typed.owner == screenManifests {
 			return m.updateManifests(msg)
 		}
 		return m.updateIntents(msg)
@@ -326,6 +326,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateMigration(msg)
 	case cloudInitImportStreamMsg, cloudInitSavedMsg:
 		return m.updateCloudInit(msg)
+	case yamlCheckDueMsg, yamlCheckedMsg:
+		return m.updateYAMLCheck(msg)
 	case taskDoneMsg, taskStepMsg, taskLogMsg, taskLogRetryMsg, taskLogRenderMsg:
 		return m.updateTasks(msg) // tasks run on whatever screen shows
 	}
