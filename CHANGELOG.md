@@ -2,6 +2,12 @@
 
 Built from commit subjects by `scripts/changelog.sh`.
 
+## v1.3.6 (2026-11-03)
+
+### Fixes
+
+- found some small issues (b8ba99f)
+
 ## v1.3.5 (2026-11-03)
 
 ### Features
