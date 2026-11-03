@@ -35,7 +35,7 @@ func TestPrepareGUI_RunningInstance(t *testing.T) {
 	m := NewManager(reg, map[Kind]Backend{KindContainer: b})
 
 	var statuses []string
-	spec, session, err := m.PrepareGUI(t.Context(), "dev", true, func(s string) { statuses = append(statuses, s) })
+	spec, session, err := m.PrepareGUI(t.Context(), "dev", GUIOptions{X11: true}, func(s string) { statuses = append(statuses, s) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestPrepareGUI_StartsStoppedInstanceFirst(t *testing.T) {
 	_ = reg.PutInstance(&Spec{ID: "01", Name: "dev", Kind: KindVM, State: StateStopped, GUI: true})
 	m := NewManager(reg, map[Kind]Backend{KindVM: b})
 
-	if _, _, err := m.PrepareGUI(t.Context(), "dev", false, func(string) {}); err != nil {
+	if _, _, err := m.PrepareGUI(t.Context(), "dev", GUIOptions{}, func(string) {}); err != nil {
 		t.Fatal(err)
 	}
 	if len(b.started) != 1 || len(b.waited) != 1 || len(b.prepared) != 1 {
@@ -71,7 +71,7 @@ func TestPrepareGUI_BackendWithoutSupport(t *testing.T) {
 	reg := &memRegistry{}
 	_ = reg.PutInstance(&Spec{ID: "01", Name: "dev", Kind: KindVM, State: StateRunning, GUI: true})
 	m := NewManager(reg, map[Kind]Backend{KindVM: &guestBackend{}})
-	if _, _, err := m.PrepareGUI(t.Context(), "dev", false, func(string) {}); err == nil {
+	if _, _, err := m.PrepareGUI(t.Context(), "dev", GUIOptions{}, func(string) {}); err == nil {
 		t.Fatal("expected an error")
 	}
 }
@@ -81,8 +81,62 @@ func TestPrepareGUI_PropagatesBackendError(t *testing.T) {
 	reg := &memRegistry{}
 	_ = reg.PutInstance(&Spec{ID: "01", Name: "dev", Kind: KindVM, State: StateRunning, GUI: true})
 	m := NewManager(reg, map[Kind]Backend{KindVM: &guiBackend{err: want}})
-	if _, _, err := m.PrepareGUI(t.Context(), "dev", false, func(string) {}); !errors.Is(err, want) {
+	if _, _, err := m.PrepareGUI(t.Context(), "dev", GUIOptions{}, func(string) {}); !errors.Is(err, want) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// remoteGUIBackend refuses remote GUI sessions, like a container backend without the tools.
+type remoteGUIBackend struct {
+	guiBackend
+	checked []bool // x11 of each CheckRemoteGUI call
+	refuse  error
+}
+
+func (b *remoteGUIBackend) CheckRemoteGUI(x11 bool) error {
+	b.checked = append(b.checked, x11)
+	return b.refuse
+}
+
+func TestPrepareGUI_RemoteRefusalTouchesNothing(t *testing.T) {
+	want := errors.New("no x11 over --remote")
+	b := &remoteGUIBackend{refuse: want}
+	reg := &memRegistry{}
+	_ = reg.PutInstance(&Spec{ID: "01", Name: "dev", Kind: KindContainer, State: StateStopped, GUI: true})
+	m := NewManager(reg, map[Kind]Backend{KindContainer: b})
+
+	var statuses []string
+	_, _, err := m.PrepareGUI(t.Context(), "dev", GUIOptions{X11: true, Remote: true}, func(s string) { statuses = append(statuses, s) })
+	if !errors.Is(err, want) {
+		t.Fatalf("got %v, want %v", err, want)
+	}
+	if len(b.checked) != 1 || !b.checked[0] {
+		t.Fatalf("checked %v, want one x11 check", b.checked)
+	}
+	if len(b.started) != 0 || len(b.prepared) != 0 || len(statuses) != 0 {
+		t.Fatalf("a refused remote session must not start or prepare anything: started %v prepared %v statuses %v",
+			b.started, b.prepared, statuses)
+	}
+}
+
+func TestPrepareGUI_RemoteCheckOnlyForRemoteClients(t *testing.T) {
+	b := &remoteGUIBackend{refuse: errors.New("refused")}
+	reg := &memRegistry{}
+	_ = reg.PutInstance(&Spec{ID: "01", Name: "dev", Kind: KindContainer, State: StateRunning, GUI: true})
+	m := NewManager(reg, map[Kind]Backend{KindContainer: b})
+	if _, _, err := m.PrepareGUI(t.Context(), "dev", GUIOptions{X11: true}, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.checked) != 0 || len(b.prepared) != 1 {
+		t.Fatalf("checked %v prepared %v", b.checked, b.prepared)
+	}
+
+	b.refuse = nil
+	if _, _, err := m.PrepareGUI(t.Context(), "dev", GUIOptions{Remote: true}, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.checked) != 1 || b.checked[0] || len(b.prepared) != 2 {
+		t.Fatalf("checked %v prepared %v", b.checked, b.prepared)
 	}
 }
 

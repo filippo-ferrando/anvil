@@ -499,3 +499,42 @@ func TestApplyLevelRunsInParallel(t *testing.T) {
 		t.Errorf("app launched after its dependency failed: %v", f.log)
 	}
 }
+
+// TestApplyExpectedPlanHash checks a real apply runs only while its fresh plan matches the shown one.
+func TestApplyExpectedPlanHash(t *testing.T) {
+	m := mustParse(t, sample)
+	f := &fakes{}
+	a := &Applier{Instances: f, Intents: f}
+	var shown string
+	if err := a.Apply(context.Background(), m, Options{DryRun: true}, func(ss []Step) { shown = PlanHash(m.Intent, ss) }, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	f.member(m, "db", instance.StateStopped) // the state changes after the plan was shown
+	if _, err := runApply(t, f, m, Options{ExpectedPlanHash: shown}); !errors.Is(err, ErrPlanChanged) {
+		t.Fatalf("err = %v, want ErrPlanChanged", err)
+	}
+	if len(f.log) != 0 {
+		t.Fatalf("a changed plan still ran: %v", f.log)
+	}
+	var fresh string
+	if err := a.Apply(context.Background(), m, Options{DryRun: true}, func(ss []Step) { fresh = PlanHash(m.Intent, ss) }, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if fresh == shown {
+		t.Fatal("a different plan has the same hash")
+	}
+	if _, err := runApply(t, f, m, Options{ExpectedPlanHash: fresh}); err != nil {
+		t.Fatalf("a matching plan should apply: %v", err)
+	}
+}
+
+func TestPlanHashIsStable(t *testing.T) {
+	steps := []Step{{Role: "db", Name: "shop-db", Action: ActionUpdate, Changes: []string{"cpus 1 -> 2"}}}
+	if PlanHash("shop", steps) != PlanHash("shop", slices.Clone(steps)) {
+		t.Fatal("the same plan hashed differently")
+	}
+	other := []Step{{Role: "db", Name: "shop-db", Action: ActionUpdate, Changes: []string{"cpus 1 -> 3"}}}
+	if PlanHash("shop", steps) == PlanHash("shop", other) || PlanHash("shop", steps) == PlanHash("web", steps) {
+		t.Fatal("different plans share a hash")
+	}
+}

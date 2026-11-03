@@ -2,9 +2,11 @@ package client
 
 import (
 	"io"
+	"net"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCmdConn_RoundTrip(t *testing.T) {
@@ -34,6 +36,19 @@ func TestCmdConn_SurfacesStderr(t *testing.T) {
 	}
 }
 
+func TestCmdConn_ReadAfterExit(t *testing.T) {
+	conn, err := startCmdConn(exec.Command("sh", "-c", "echo hello; echo boom >&2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	time.Sleep(200 * time.Millisecond) // let the process exit before the first read
+	data, err := io.ReadAll(conn)
+	if string(data) != "hello\n" || err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("want the output and then the stderr message, got %q, %v", data, err)
+	}
+}
+
 func TestClient_RemoteHelpers(t *testing.T) {
 	t.Setenv(muxEnv, "off") // the plain -J form; TestJumpArgs covers the shared connection
 	local := &Client{}
@@ -57,5 +72,45 @@ func TestClient_RemoteHelpers(t *testing.T) {
 	}
 	if p, err := remote.HostPath("/srv/data"); err != nil || p != "/srv/data" {
 		t.Fatalf("remote absolute path: %q, %v", p, err)
+	}
+}
+
+func TestSSHConfigHostname(t *testing.T) {
+	out := []byte("user ops\nhostname 10.0.0.7\nport 22\nhostkeyalias box\n")
+	if got := sshConfigHostname(out); got != "10.0.0.7" {
+		t.Errorf("sshConfigHostname = %q, want 10.0.0.7", got)
+	}
+	if got := sshConfigHostname([]byte("user ops\n")); got != "" {
+		t.Errorf("sshConfigHostname without a hostname line = %q", got)
+	}
+}
+
+func TestDestHost(t *testing.T) {
+	for dest, want := range map[string]string{
+		"box":                   "box",
+		"me@box":                "box",
+		"ssh://me@box:2222":     "box",
+		"ssh://me@[fe80::1]:22": "fe80::1",
+		"ssh://box":             "box",
+	} {
+		if got := destHost(dest); got != want {
+			t.Errorf("destHost(%q) = %q, want %q", dest, got, want)
+		}
+	}
+}
+
+func TestPickIP(t *testing.T) {
+	ips := []net.IP{net.ParseIP("fe80::1"), net.ParseIP("192.168.1.5")}
+	if got := pickIP(ips).String(); got != "192.168.1.5" {
+		t.Errorf("pickIP = %s, want the IPv4 one", got)
+	}
+	if got := pickIP(ips[:1]).String(); got != "fe80::1" {
+		t.Errorf("pickIP = %s, want fe80::1", got)
+	}
+}
+
+func TestRemoteHostAddr_Local(t *testing.T) {
+	if got := (&Client{}).RemoteHostAddr(t.Context()); got != "" {
+		t.Errorf("local RemoteHostAddr = %q, want empty", got)
 	}
 }

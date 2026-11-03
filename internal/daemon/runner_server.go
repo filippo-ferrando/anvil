@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -57,8 +58,13 @@ func (s *RunnerServer) Add(_ context.Context, req *anvilv1.RunnerAddRequest) (*a
 		CPUs: int(r.GetCpus()), MemoryMiB: r.GetMemoryMib(), MaxJobs: int(r.GetMaxJobs()), Version: r.GetVersion(), Paused: r.GetPaused(),
 		Deps: r.GetDeps(),
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, runner.ErrInvalid):
 		return nil, status.Error(codes.InvalidArgument, err.Error())
+	case errors.Is(err, runner.ErrExists):
+		return nil, status.Error(codes.AlreadyExists, err.Error())
+	case err != nil:
+		return nil, wrapErr(err)
 	}
 	return &anvilv1.RunnerAddReply{Runner: runnerToPB(info)}, nil
 }

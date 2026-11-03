@@ -9,8 +9,8 @@ import (
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 )
 
-// wrapErr converts instance.ErrNotFound to codes.NotFound and instance.ErrNoNames
-// to codes.InvalidArgument, passing any other error through unchanged.
+// wrapErr maps instance errors to gRPC codes (NotFound, InvalidArgument, AlreadyExists,
+// Aborted) and passes any other error through unchanged.
 func wrapErr(err error) error {
 	if err == nil {
 		return nil
@@ -20,6 +20,12 @@ func wrapErr(err error) error {
 	}
 	if errors.Is(err, instance.ErrNoNames) {
 		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	if errors.Is(err, instance.ErrNameInUse) {
+		return status.Error(codes.AlreadyExists, err.Error())
+	}
+	if errors.Is(err, instance.ErrBusy) {
+		return status.Error(codes.Aborted, err.Error())
 	}
 	return err
 }

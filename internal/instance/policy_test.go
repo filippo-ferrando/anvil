@@ -301,3 +301,31 @@ func TestUpdateAppliesLiveWhenPossible(t *testing.T) {
 		t.Errorf("expected a failed change not to be recorded, got %d", s.VM.CPUs)
 	}
 }
+
+// diskFailBackend applies cpus live but fails to grow the disk.
+type diskFailBackend struct{ liveBackend }
+
+func (b *diskFailBackend) ResizeDisk(context.Context, *Spec, int64) (string, error) {
+	return "", errors.New("disk full")
+}
+
+func TestUpdateSavesLiveChangesOnLaterFailure(t *testing.T) {
+	reg := &memRegistry{}
+	_ = reg.PutInstance(&Spec{ID: "01", Name: "web", Kind: KindVM, State: StateRunning, VM: &VMSpec{CPUs: 1, MemoryMiB: 1024, DiskGiB: 10}})
+	m := NewManager(reg, map[Kind]Backend{KindVM: &diskFailBackend{}})
+
+	if _, err := m.Update(context.Background(), "web", UpdateParams{CPUs: intp(2), DiskGiB: i64p(20)}); err == nil {
+		t.Fatal("expected the disk failure to be returned")
+	}
+	if s, _ := reg.GetByID("01"); s.VM.CPUs != 2 || s.VM.DiskGiB != 10 {
+		t.Errorf("expected the live cpu change saved and the disk untouched, got %+v", s.VM)
+	}
+
+	// A bad memory value is rejected before cpus change.
+	if _, err := m.Update(context.Background(), "web", UpdateParams{CPUs: intp(3), MemoryMiB: i64p(1)}); err == nil {
+		t.Fatal("expected an error for too little memory")
+	}
+	if s, _ := reg.GetByID("01"); s.VM.CPUs != 2 {
+		t.Errorf("expected no change after a validation error, got %d cpus", s.VM.CPUs)
+	}
+}

@@ -62,6 +62,67 @@ func (c *Client) jumpArgs() []string {
 	return []string{"-o", "ProxyCommand=" + strings.Join(hop, " ")}
 }
 
+// RemoteHostAddr returns the IP address of the daemon's host, empty when local. It reads
+// the hostname from `ssh -G`, so config aliases work, and falls back to the name itself.
+func (c *Client) RemoteHostAddr(ctx context.Context) string {
+	if c.Remote == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	host := destHost(c.Remote)
+	if out, err := exec.CommandContext(ctx, "ssh", "-G", c.Remote).Output(); err == nil {
+		if h := sshConfigHostname(out); h != "" {
+			host = h
+		}
+	}
+	if net.ParseIP(host) != nil {
+		return host
+	}
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil || len(addrs) == 0 {
+		return host
+	}
+	ips := make([]net.IP, len(addrs))
+	for i, a := range addrs {
+		ips[i] = a.IP
+	}
+	return pickIP(ips).String()
+}
+
+// sshConfigHostname returns the value of the hostname line in `ssh -G` output.
+func sshConfigHostname(out []byte) string {
+	for _, line := range strings.Split(string(out), "\n") {
+		key, val, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if ok && strings.EqualFold(key, "hostname") {
+			return strings.TrimSpace(val)
+		}
+	}
+	return ""
+}
+
+// destHost strips the scheme, user and port from an ssh destination.
+func destHost(dest string) string {
+	dest = strings.TrimPrefix(dest, "ssh://")
+	if i := strings.LastIndex(dest, "@"); i >= 0 {
+		dest = dest[i+1:]
+	}
+	if h, _, err := net.SplitHostPort(dest); err == nil {
+		return h
+	}
+	return strings.Trim(dest, "[]")
+}
+
+// pickIP returns the first IPv4 address in ips, or else the first one.
+func pickIP(ips []net.IP) net.IP {
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			return ip
+		}
+	}
+	return ips[0]
+}
+
 // muxEnv set to "off" gives every ssh call to the remote host its own connection.
 const muxEnv = "ANVIL_SSH_MUX"
 
@@ -134,13 +195,20 @@ func startCmdConn(cmd *exec.Cmd) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	out, err := cmd.StdoutPipe()
+	// A plain os.Pipe keeps the read end ours: Wait would close a StdoutPipe while gRPC still reads.
+	out, w, err := os.Pipe()
 	if err != nil {
+		in.Close()
 		return nil, err
 	}
 	c := &cmdConn{cmd: cmd, in: in, out: out, stderr: &bytes.Buffer{}, done: make(chan struct{})}
+	cmd.Stdout = w
 	cmd.Stderr = c.stderr
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	w.Close()
+	if err != nil {
+		in.Close()
+		out.Close()
 		return nil, err
 	}
 	go func() {
@@ -168,6 +236,7 @@ func (c *cmdConn) Close() error {
 	c.once.Do(func() {
 		c.in.Close()
 		_ = c.cmd.Process.Kill()
+		c.out.Close()
 	})
 	return nil
 }

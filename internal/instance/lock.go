@@ -12,6 +12,9 @@ import (
 // ErrBusy means another operation on the same instance (or launch of the same name) is still running.
 var ErrBusy = errors.New("instance busy")
 
+// ErrNameInUse means another instance has the name, or a launch of it is running.
+var ErrNameInUse = errors.New("already in use")
+
 // keyLocks is a set of named locks: one per instance ID, or one per name being created.
 type keyLocks struct {
 	mu   sync.Mutex
@@ -156,12 +159,12 @@ func (m *Manager) reserveName(ctx context.Context, name string) (release func(),
 	release = func() {}
 	if !reservedNames(ctx)[name] {
 		if release, err = m.names.acquire(name, false); err != nil {
-			return nil, fmt.Errorf("instance: name %q is already in use", name)
+			return nil, fmt.Errorf("instance: name %q is %w", name, ErrNameInUse)
 		}
 	}
 	if _, err := m.registry.GetByName(name); err == nil {
 		release()
-		return nil, fmt.Errorf("instance: name %q is already in use", name)
+		return nil, fmt.Errorf("instance: name %q is %w", name, ErrNameInUse)
 	} else if !errors.Is(err, ErrNotFound) {
 		release()
 		return nil, err

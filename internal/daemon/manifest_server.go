@@ -6,7 +6,9 @@ import (
 	"gopkg.in/yaml.v3"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/intent/apply"
 	"git.fferrando.cc/rdfilippo/anvil/internal/store"
+	"git.fferrando.cc/rdfilippo/anvil/internal/yamlcheck"
 )
 
 // ManifestServer implements anvilv1.ManifestServiceServer against *store.Store.
@@ -67,4 +69,16 @@ func (s *ManifestServer) Delete(ctx context.Context, req *anvilv1.ManifestDelete
 		return nil, wrapErr(err)
 	}
 	return &anvilv1.ManifestDeleteReply{}, nil
+}
+
+func (s *ManifestServer) Validate(ctx context.Context, req *anvilv1.ManifestValidateRequest) (*anvilv1.ManifestValidateReply, error) {
+	return &anvilv1.ManifestValidateReply{Problems: problemsToPB(apply.Check(req.GetManifest(), req.GetVars()))}, nil
+}
+
+func problemsToPB(problems []yamlcheck.Problem) []*anvilv1.ValidationProblem {
+	out := make([]*anvilv1.ValidationProblem, len(problems))
+	for i, p := range problems {
+		out[i] = &anvilv1.ValidationProblem{Line: int32(p.Line), Message: p.Message, Warning: p.Warning}
+	}
+	return out
 }

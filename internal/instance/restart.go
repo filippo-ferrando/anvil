@@ -96,17 +96,19 @@ func (m *Manager) maybeRestart(spec *Spec) {
 	}
 	t := &m.restarts
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.init()
 	if last, ok := t.lastStart[spec.ID]; ok && time.Since(last) > restartStableAfter {
 		t.attempts[spec.ID] = 0
 	}
 	n := t.attempts[spec.ID]
 	if p := spec.RestartPolicy; p.Mode == RestartOnFailure && p.MaxRetries > 0 && n >= p.MaxRetries {
+		t.mu.Unlock()
+		// Recorded after unlocking: the event is a database write.
 		log.Printf("instance: %s failed %d times in a row, not restarting it again", spec.Name, n)
 		m.record(context.Background(), spec, "restart", "", fmt.Errorf("failed %d times in a row, not restarting it again", n))
 		return
 	}
+	defer t.mu.Unlock()
 	delay := restartDelay(n)
 	t.attempts[spec.ID] = n + 1
 	if old := t.timers[spec.ID]; old != nil {

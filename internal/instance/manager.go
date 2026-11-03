@@ -377,6 +377,9 @@ func (m *Manager) Fork(ctx context.Context, params ForkParams, progress func(Lau
 	for k, v := range source.Labels {
 		labels[k] = v
 	}
+	// A fork runs standalone, so it must not look like an intent member.
+	delete(labels, IntentLabel)
+	delete(labels, RoleLabel)
 
 	id := ulid.Make().String()
 	dest := &Spec{
@@ -428,12 +431,12 @@ func (m *Manager) Fork(ctx context.Context, params ForkParams, progress func(Lau
 }
 
 // cloneVMSpecForFork deep-copies v's configuration for a new forked
-// instance, clearing fields the backend/network populate fresh (disk/seed paths, SSH port, bridge/intent addressing).
+// instance, clearing fields the backend/network populate fresh (disk/seed paths, SSH port, host ports, bridge/intent addressing).
 func cloneVMSpecForFork(v *VMSpec, id string) *VMSpec {
 	clone := *v
 	clone.NetworkMode = "slirp"
 	clone.SSHPublicKeys = append([]string(nil), v.SSHPublicKeys...)
-	clone.Ports = append([]PortMapping(nil), v.Ports...)
+	clone.Ports = nil
 	clone.Mounts = append([]Mount(nil), v.Mounts...)
 	clone.DiskPath = ""
 	clone.SeedISOPath = ""

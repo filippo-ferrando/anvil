@@ -28,13 +28,13 @@ func TestCloneVMSpecForForkDeepCopiesSlices(t *testing.T) {
 
 	// Mutating the clone's slices must not affect source's.
 	clone.SSHPublicKeys[0] = "mutated"
-	clone.Ports[0].HostPort = 9999
 	clone.Mounts[0].Tag = "mutated"
 	if source.SSHPublicKeys[0] != "ssh-ed25519 AAAA" {
 		t.Errorf("mutating clone.SSHPublicKeys leaked into source: %v", source.SSHPublicKeys)
 	}
-	if source.Ports[0].HostPort != 2222 {
-		t.Errorf("mutating clone.Ports leaked into source: %v", source.Ports)
+	// Host forwards stay with the source, so both can run at once.
+	if clone.Ports != nil || len(source.Ports) != 1 {
+		t.Errorf("expected fork Ports cleared and source kept, got %v / %v", clone.Ports, source.Ports)
 	}
 	if source.Mounts[0].Tag != "mount0" {
 		t.Errorf("mutating clone.Mounts leaked into source: %v", source.Mounts)
@@ -82,5 +82,22 @@ func TestStateActionsRejectEmptyNames(t *testing.T) {
 	}
 	if err := m.Delete(ctx, nil); !errors.Is(err, ErrNoNames) {
 		t.Errorf("Delete: got %v, want ErrNoNames", err)
+	}
+}
+
+func TestForkDropsIntentLabels(t *testing.T) {
+	reg := &memRegistry{}
+	_ = reg.PutInstance(&Spec{ID: "01", Name: "src", Kind: KindVM, State: StateStopped, VM: &VMSpec{},
+		Labels: map[string]string{IntentLabel: "i1", RoleLabel: "db", "team": "a"}})
+	m := NewManager(reg, map[Kind]Backend{KindVM: &forkingBackend{}})
+	if err := m.Fork(t.Context(), ForkParams{Source: "src", NewName: "copy"}, func(LaunchEvent) {}); err != nil {
+		t.Fatal(err)
+	}
+	fork, _ := reg.GetByName("copy")
+	if _, ok := fork.Labels[IntentLabel]; ok || fork.Labels[RoleLabel] != "" || fork.Labels["team"] != "a" {
+		t.Errorf("expected intent/role labels dropped and others kept, got %v", fork.Labels)
+	}
+	if src, _ := reg.GetByName("src"); src.Labels[IntentLabel] != "i1" {
+		t.Errorf("source labels changed: %v", src.Labels)
 	}
 }

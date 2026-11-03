@@ -7,6 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/intent"
@@ -108,14 +111,15 @@ func (s *IntentServer) Apply(req *anvilv1.IntentApplyRequest, stream anvilv1.Int
 		return sendErr(err)
 	}
 	opts := apply.Options{
-		DryRun:      req.GetDryRun(),
-		Prune:       req.GetPrune(),
-		Recreate:    req.GetRecreate(),
-		SSHKeys:     req.GetSshPublicKeys(),
-		WaitTimeout: time.Duration(req.GetWaitTimeoutSeconds()) * time.Second,
+		DryRun:           req.GetDryRun(),
+		Prune:            req.GetPrune(),
+		Recreate:         req.GetRecreate(),
+		SSHKeys:          req.GetSshPublicKeys(),
+		WaitTimeout:      time.Duration(req.GetWaitTimeoutSeconds()) * time.Second,
+		ExpectedPlanHash: req.GetExpectedPlanHash(),
 	}
 	onPlan := func(steps []apply.Step) {
-		plan := &anvilv1.IntentApplyPlan{IntentName: m.Intent}
+		plan := &anvilv1.IntentApplyPlan{IntentName: m.Intent, Hash: apply.PlanHash(m.Intent, steps)}
 		for _, st := range steps {
 			plan.Steps = append(plan.Steps, &anvilv1.IntentApplyStep{
 				Role: st.Role, InstanceName: st.Name, Action: string(st.Action), Changes: st.Changes,
@@ -127,6 +131,9 @@ func (s *IntentServer) Apply(req *anvilv1.IntentApplyRequest, stream anvilv1.Int
 		_ = stream.Send(&anvilv1.IntentApplyProgress{Event: &anvilv1.IntentApplyProgress_Status{Status: status}})
 	}
 	if err := s.Applier.Apply(stream.Context(), m, opts, onPlan, progress); err != nil {
+		if errors.Is(err, apply.ErrPlanChanged) {
+			return status.Error(codes.FailedPrecondition, err.Error())
+		}
 		return sendErr(err)
 	}
 	if opts.DryRun {

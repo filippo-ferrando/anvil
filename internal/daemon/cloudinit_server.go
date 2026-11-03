@@ -11,6 +11,7 @@ import (
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/internal/cloudinitrepo"
 	"git.fferrando.cc/rdfilippo/anvil/internal/store"
+	"git.fferrando.cc/rdfilippo/anvil/internal/vm/cloudinit"
 )
 
 // CloudInitServer implements anvilv1.CloudInitServiceServer against *store.Store.
@@ -169,4 +170,8 @@ func trimNonEmpty(in []string) []string {
 		}
 	}
 	return out
+}
+
+func (s *CloudInitServer) Validate(ctx context.Context, req *anvilv1.CloudInitValidateRequest) (*anvilv1.CloudInitValidateReply, error) {
+	return &anvilv1.CloudInitValidateReply{Problems: problemsToPB(cloudinit.Validate(req.GetContent()))}, nil
 }

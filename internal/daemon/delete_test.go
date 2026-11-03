@@ -101,3 +101,19 @@ func qemuImg(t *testing.T, args ...string) {
 		t.Fatalf("qemu-img %v: %v: %s", args, err, out)
 	}
 }
+
+// TestDeleteDuplicateNames deletes an instance named twice in one request once.
+func TestDeleteDuplicateNames(t *testing.T) {
+	s := newTestServer(t, readyBackend{})
+	params := instance.LaunchParams{Name: "dup", Kind: instance.KindVM, VM: &instance.VMSpec{}, NoStart: true}
+	if err := s.Manager.Launch(context.Background(), params, func(instance.LaunchEvent) {}); err != nil {
+		t.Fatal(err)
+	}
+	names := []string{"dup", "dup"}
+	if _, err := s.Delete(context.Background(), &anvilv1.DeleteRequest{Names: names}); err != nil {
+		t.Fatalf("delete with repeated names: %v", err)
+	}
+	if left, _ := s.Manager.List(""); len(left) != 0 {
+		t.Errorf("left after delete: %v", left)
+	}
+}

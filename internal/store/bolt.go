@@ -90,7 +90,7 @@ func (s *Store) PutInstance(spec *instance.Spec) error {
 	return s.db.Update(func(tx *bbolt.Tx) error {
 		names := tx.Bucket(bucketInstanceNames)
 		if id := names.Get([]byte(spec.Name)); id != nil && string(id) != spec.ID {
-			return fmt.Errorf("store: name %q is already in use", spec.Name)
+			return fmt.Errorf("store: name %q is %w", spec.Name, instance.ErrNameInUse)
 		}
 		if err := tx.Bucket(bucketInstances).Put([]byte(spec.ID), data); err != nil {
 			return err

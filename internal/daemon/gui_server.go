@@ -4,13 +4,15 @@ import (
 	"context"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 )
 
 func (s *Server) PrepareGUI(req *anvilv1.PrepareGUIRequest, stream anvilv1.InstanceService_PrepareGUIServer) error {
 	progress := func(status string) {
 		_ = stream.Send(&anvilv1.PrepareGUIProgress{Event: &anvilv1.PrepareGUIProgress_Status{Status: status}})
 	}
-	spec, session, err := s.Manager.PrepareGUI(stream.Context(), req.GetName(), req.GetX11(), progress)
+	spec, session, err := s.Manager.PrepareGUI(stream.Context(), req.GetName(),
+		instance.GUIOptions{X11: req.GetX11(), Remote: req.GetRemote()}, progress)
 	if err != nil {
 		// Reported in-band, like a failed launch.
 		return stream.Send(&anvilv1.PrepareGUIProgress{Event: &anvilv1.PrepareGUIProgress_Error{Error: err.Error()}})
@@ -20,6 +22,7 @@ func (s *Server) PrepareGUI(req *anvilv1.PrepareGUIRequest, stream anvilv1.Insta
 		RelayDir:      session.RelayDir,
 		X11Dir:        session.X11Dir,
 		GuestToolsDir: session.GuestToolsDir,
+		HostToolsDir:  session.HostToolsDir,
 	}}})
 }
 

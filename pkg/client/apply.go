@@ -21,11 +21,7 @@ type ApplyOptions struct {
 // NewApplyRequest resolves the manifest's variables on the client side, since
 // the daemon can't see the caller's env or files. path locates a default .env.
 func NewApplyRequest(path string, data []byte, opts ApplyOptions) (*anvilv1.IntentApplyRequest, error) {
-	overrides, err := ParseVars(opts.Vars)
-	if err != nil {
-		return nil, err
-	}
-	values, err := vars.Load(path, opts.EnvFile, data, overrides)
+	values, err := ResolveVars(path, data, opts.Vars, opts.EnvFile)
 	if err != nil {
 		return nil, err
 	}
@@ -42,6 +38,16 @@ func NewApplyRequest(path string, data []byte, opts ApplyOptions) (*anvilv1.Inte
 		WaitTimeoutSeconds: CeilSeconds(opts.WaitTimeout),
 		Vars:               values,
 	}, nil
+}
+
+// ResolveVars fills the manifest's variables from KEY=VALUE overrides, the shell env and
+// envFile ("" means .env beside path, if present), as both apply and validate send them.
+func ResolveVars(path string, data []byte, overrides []string, envFile string) (map[string]string, error) {
+	given, err := ParseVars(overrides)
+	if err != nil {
+		return nil, err
+	}
+	return vars.Load(path, envFile, data, given)
 }
 
 // ParseVars parses KEY=VALUE manifest variable overrides.

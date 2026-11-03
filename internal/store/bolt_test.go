@@ -85,3 +85,33 @@ func TestUpdateInstance(t *testing.T) {
 		t.Error("UpdateInstance recreated a deleted record")
 	}
 }
+
+func TestUpdatePipelineWatch(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "anvil.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.PutPipelineWatch(PipelineWatch{Name: "app", Repo: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.UpdatePipelineWatch("app", func(w *PipelineWatch) error { w.Paused = true; return nil })
+	if err != nil || !got.Paused {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if w, _ := s.GetPipelineWatch("app"); !w.Paused || w.Repo != "r" {
+		t.Errorf("update not stored: %+v", w)
+	}
+	if _, err := s.UpdatePipelineWatch("app", func(w *PipelineWatch) error { w.Name = "x"; return nil }); err == nil {
+		t.Error("expected a rename to be refused")
+	}
+
+	// A deleted watch must not come back.
+	_ = s.DeletePipelineWatch("app")
+	if _, err := s.UpdatePipelineWatch("app", func(*PipelineWatch) error { return nil }); !errors.Is(err, instance.ErrNotFound) {
+		t.Errorf("expected not found, got %v", err)
+	}
+	if _, err := s.GetPipelineWatch("app"); err == nil {
+		t.Error("deleted watch was written back")
+	}
+}

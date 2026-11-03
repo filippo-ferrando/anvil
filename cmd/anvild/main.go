@@ -220,6 +220,19 @@ func run() error {
 			grpcServer.Stop()
 		}
 		drainCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		// Runner jobs and watched pipelines stop with ctx; their clones go before the pools.
+		waited := make(chan struct{})
+		go func() {
+			runnerMgr.Wait()
+			pipelineWatcher.Wait()
+			ephemeralMgr.WaitDeletes()
+			close(waited)
+		}()
+		select {
+		case <-waited:
+		case <-drainCtx.Done():
+			log.Print("anvild: timed out waiting for runner jobs, pipelines and clone deletes")
+		}
 		ephemeralMgr.Shutdown(drainCtx)
 		cancel()
 		return nil

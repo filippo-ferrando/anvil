@@ -32,17 +32,28 @@ func (m *Manager) guiSpec(ctx context.Context, name string, progress func(status
 	return spec, b, nil
 }
 
+// GUIOptions are the PrepareGUI choices of the client.
+type GUIOptions struct {
+	X11    bool // also ready XWayland
+	Remote bool // the client runs on another host
+}
+
 // PrepareGUI readies name for `anvil gui`, starting it first when stopped.
-func (m *Manager) PrepareGUI(ctx context.Context, name string, x11 bool, progress func(status string)) (*Spec, GUISession, error) {
+func (m *Manager) PrepareGUI(ctx context.Context, name string, opts GUIOptions, progress func(status string)) (*Spec, GUISession, error) {
 	_, gp, err := capability[GUIPreparer](m, name, "GUI apps")
 	if err != nil {
 		return nil, GUISession{}, err
+	}
+	if rc, ok := gp.(RemoteGUIChecker); ok && opts.Remote {
+		if err := rc.CheckRemoteGUI(opts.X11); err != nil {
+			return nil, GUISession{}, err
+		}
 	}
 	spec, _, err := m.guiSpec(ctx, name, progress)
 	if err != nil {
 		return nil, GUISession{}, err
 	}
-	session, err := gp.PrepareGUI(ctx, spec, x11, progress)
+	session, err := gp.PrepareGUI(ctx, spec, opts.X11, progress)
 	if err != nil {
 		return nil, GUISession{}, err
 	}

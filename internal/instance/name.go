@@ -1,7 +1,9 @@
 package instance
 
 import (
+	"context"
 	"errors"
+	"maps"
 	"strconv"
 	"strings"
 )
@@ -63,4 +65,39 @@ func (m *Manager) DefaultName(imageRef string) (string, error) {
 		_, err := m.registry.GetByName(name)
 		return !errors.Is(err, ErrNotFound)
 	})
+}
+
+// ReserveDefaultName picks a free name derived from imageRef and holds it until release,
+// so two unnamed launches can't pick the same one. Launch with the returned ctx uses it.
+func (m *Manager) ReserveDefaultName(ctx context.Context, imageRef string) (context.Context, string, func(), error) {
+	inRegistry := func(name string) bool {
+		_, err := m.registry.GetByName(name)
+		return !errors.Is(err, ErrNotFound)
+	}
+	var release func()
+	name, err := UniqueName(NameFromImage(imageRef), func(name string) bool {
+		if inRegistry(name) {
+			return true
+		}
+		r, err := m.names.acquire(name, false)
+		if err != nil {
+			return true
+		}
+		// Checked again: a launch may have saved the name and let it go meanwhile.
+		if inRegistry(name) {
+			r()
+			return true
+		}
+		release = r
+		return false
+	})
+	if err != nil {
+		return ctx, "", nil, err
+	}
+	reserved := maps.Clone(reservedNames(ctx))
+	if reserved == nil {
+		reserved = map[string]bool{}
+	}
+	reserved[name] = true
+	return context.WithValue(ctx, reservedKey{}, reserved), name, release, nil
 }

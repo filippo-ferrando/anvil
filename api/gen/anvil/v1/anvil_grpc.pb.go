@@ -951,6 +951,7 @@ const (
 	CloudInitService_Delete_FullMethodName     = "/anvil.v1.CloudInitService/Delete"
 	CloudInitService_ImportRepo_FullMethodName = "/anvil.v1.CloudInitService/ImportRepo"
 	CloudInitService_Generate_FullMethodName   = "/anvil.v1.CloudInitService/Generate"
+	CloudInitService_Validate_FullMethodName   = "/anvil.v1.CloudInitService/Validate"
 )
 
 // CloudInitServiceClient is the client API for CloudInitService service.
@@ -969,6 +970,8 @@ type CloudInitServiceClient interface {
 	ImportRepo(ctx context.Context, in *CloudInitImportRepoRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CloudInitImportRepoProgress], error)
 	// Generate renders a quick-start #cloud-config and saves it when save_as is set.
 	Generate(ctx context.Context, in *CloudInitGenerateRequest, opts ...grpc.CallOption) (*CloudInitGenerateReply, error)
+	// Validate checks a cloud-init document and lists its problems; it saves nothing.
+	Validate(ctx context.Context, in *CloudInitValidateRequest, opts ...grpc.CallOption) (*CloudInitValidateReply, error)
 }
 
 type cloudInitServiceClient struct {
@@ -1058,6 +1061,16 @@ func (c *cloudInitServiceClient) Generate(ctx context.Context, in *CloudInitGene
 	return out, nil
 }
 
+func (c *cloudInitServiceClient) Validate(ctx context.Context, in *CloudInitValidateRequest, opts ...grpc.CallOption) (*CloudInitValidateReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CloudInitValidateReply)
+	err := c.cc.Invoke(ctx, CloudInitService_Validate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CloudInitServiceServer is the server API for CloudInitService service.
 // All implementations must embed UnimplementedCloudInitServiceServer
 // for forward compatibility.
@@ -1074,6 +1087,8 @@ type CloudInitServiceServer interface {
 	ImportRepo(*CloudInitImportRepoRequest, grpc.ServerStreamingServer[CloudInitImportRepoProgress]) error
 	// Generate renders a quick-start #cloud-config and saves it when save_as is set.
 	Generate(context.Context, *CloudInitGenerateRequest) (*CloudInitGenerateReply, error)
+	// Validate checks a cloud-init document and lists its problems; it saves nothing.
+	Validate(context.Context, *CloudInitValidateRequest) (*CloudInitValidateReply, error)
 	mustEmbedUnimplementedCloudInitServiceServer()
 }
 
@@ -1104,6 +1119,9 @@ func (UnimplementedCloudInitServiceServer) ImportRepo(*CloudInitImportRepoReques
 }
 func (UnimplementedCloudInitServiceServer) Generate(context.Context, *CloudInitGenerateRequest) (*CloudInitGenerateReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method Generate not implemented")
+}
+func (UnimplementedCloudInitServiceServer) Validate(context.Context, *CloudInitValidateRequest) (*CloudInitValidateReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method Validate not implemented")
 }
 func (UnimplementedCloudInitServiceServer) mustEmbedUnimplementedCloudInitServiceServer() {}
 func (UnimplementedCloudInitServiceServer) testEmbeddedByValue()                          {}
@@ -1245,6 +1263,24 @@ func _CloudInitService_Generate_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CloudInitService_Validate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CloudInitValidateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CloudInitServiceServer).Validate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CloudInitService_Validate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CloudInitServiceServer).Validate(ctx, req.(*CloudInitValidateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CloudInitService_ServiceDesc is the grpc.ServiceDesc for CloudInitService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1276,6 +1312,10 @@ var CloudInitService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "Generate",
 			Handler:    _CloudInitService_Generate_Handler,
 		},
+		{
+			MethodName: "Validate",
+			Handler:    _CloudInitService_Validate_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -1288,11 +1328,12 @@ var CloudInitService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ManifestService_List_FullMethodName   = "/anvil.v1.ManifestService/List"
-	ManifestService_Get_FullMethodName    = "/anvil.v1.ManifestService/Get"
-	ManifestService_Save_FullMethodName   = "/anvil.v1.ManifestService/Save"
-	ManifestService_Rename_FullMethodName = "/anvil.v1.ManifestService/Rename"
-	ManifestService_Delete_FullMethodName = "/anvil.v1.ManifestService/Delete"
+	ManifestService_List_FullMethodName     = "/anvil.v1.ManifestService/List"
+	ManifestService_Get_FullMethodName      = "/anvil.v1.ManifestService/Get"
+	ManifestService_Save_FullMethodName     = "/anvil.v1.ManifestService/Save"
+	ManifestService_Rename_FullMethodName   = "/anvil.v1.ManifestService/Rename"
+	ManifestService_Delete_FullMethodName   = "/anvil.v1.ManifestService/Delete"
+	ManifestService_Validate_FullMethodName = "/anvil.v1.ManifestService/Validate"
 )
 
 // ManifestServiceClient is the client API for ManifestService service.
@@ -1307,6 +1348,8 @@ type ManifestServiceClient interface {
 	Save(ctx context.Context, in *ManifestSaveRequest, opts ...grpc.CallOption) (*ManifestSaveReply, error)
 	Rename(ctx context.Context, in *ManifestRenameRequest, opts ...grpc.CallOption) (*ManifestRenameReply, error)
 	Delete(ctx context.Context, in *ManifestDeleteRequest, opts ...grpc.CallOption) (*ManifestDeleteReply, error)
+	// Validate checks a manifest the way Apply parses it, without planning or saving anything.
+	Validate(ctx context.Context, in *ManifestValidateRequest, opts ...grpc.CallOption) (*ManifestValidateReply, error)
 }
 
 type manifestServiceClient struct {
@@ -1367,6 +1410,16 @@ func (c *manifestServiceClient) Delete(ctx context.Context, in *ManifestDeleteRe
 	return out, nil
 }
 
+func (c *manifestServiceClient) Validate(ctx context.Context, in *ManifestValidateRequest, opts ...grpc.CallOption) (*ManifestValidateReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ManifestValidateReply)
+	err := c.cc.Invoke(ctx, ManifestService_Validate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ManifestServiceServer is the server API for ManifestService service.
 // All implementations must embed UnimplementedManifestServiceServer
 // for forward compatibility.
@@ -1379,6 +1432,8 @@ type ManifestServiceServer interface {
 	Save(context.Context, *ManifestSaveRequest) (*ManifestSaveReply, error)
 	Rename(context.Context, *ManifestRenameRequest) (*ManifestRenameReply, error)
 	Delete(context.Context, *ManifestDeleteRequest) (*ManifestDeleteReply, error)
+	// Validate checks a manifest the way Apply parses it, without planning or saving anything.
+	Validate(context.Context, *ManifestValidateRequest) (*ManifestValidateReply, error)
 	mustEmbedUnimplementedManifestServiceServer()
 }
 
@@ -1403,6 +1458,9 @@ func (UnimplementedManifestServiceServer) Rename(context.Context, *ManifestRenam
 }
 func (UnimplementedManifestServiceServer) Delete(context.Context, *ManifestDeleteRequest) (*ManifestDeleteReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method Delete not implemented")
+}
+func (UnimplementedManifestServiceServer) Validate(context.Context, *ManifestValidateRequest) (*ManifestValidateReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method Validate not implemented")
 }
 func (UnimplementedManifestServiceServer) mustEmbedUnimplementedManifestServiceServer() {}
 func (UnimplementedManifestServiceServer) testEmbeddedByValue()                         {}
@@ -1515,6 +1573,24 @@ func _ManifestService_Delete_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ManifestService_Validate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ManifestValidateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ManifestServiceServer).Validate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ManifestService_Validate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ManifestServiceServer).Validate(ctx, req.(*ManifestValidateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ManifestService_ServiceDesc is the grpc.ServiceDesc for ManifestService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1541,6 +1617,10 @@ var ManifestService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Delete",
 			Handler:    _ManifestService_Delete_Handler,
+		},
+		{
+			MethodName: "Validate",
+			Handler:    _ManifestService_Validate_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

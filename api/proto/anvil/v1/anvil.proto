@@ -61,6 +61,9 @@ service InstanceService {
 message PrepareGUIRequest {
   string name = 1;
   bool x11 = 2; // also prepare XWayland for X11 apps
+  // The client runs on another host (anvil --remote). A container is then checked for what
+  // that path needs before anything is started or changed.
+  bool remote = 3;
 }
 
 message PrepareGUIProgress {
@@ -81,6 +84,9 @@ message GUISession {
 
   // VM only: where the shipped waypipe and xwayland-satellite are in the guest.
   string guest_tools_dir = 4;
+
+  // Container only: the dir of the shipped waypipe on the daemon's host, run there for a remote client.
+  string host_tools_dir = 5;
 }
 
 message GUIAppInfoRequest {
@@ -494,6 +500,24 @@ service CloudInitService {
 
   // Generate renders a quick-start #cloud-config and saves it when save_as is set.
   rpc Generate(CloudInitGenerateRequest) returns (CloudInitGenerateReply);
+
+  // Validate checks a cloud-init document and lists its problems; it saves nothing.
+  rpc Validate(CloudInitValidateRequest) returns (CloudInitValidateReply);
+}
+
+// ValidationProblem is one finding in a YAML document. line is 1-based, 0 when it has none.
+message ValidationProblem {
+  int32 line = 1;
+  string message = 2;
+  bool warning = 3; // the document still works, like an unknown cloud-init key
+}
+
+message CloudInitValidateRequest {
+  string content = 1;
+}
+
+message CloudInitValidateReply {
+  repeated ValidationProblem problems = 1;
 }
 
 message CloudInitConfigInfo {
@@ -577,6 +601,17 @@ service ManifestService {
   rpc Save(ManifestSaveRequest) returns (ManifestSaveReply); // creates or updates
   rpc Rename(ManifestRenameRequest) returns (ManifestRenameReply);
   rpc Delete(ManifestDeleteRequest) returns (ManifestDeleteReply);
+  // Validate checks a manifest the way Apply parses it, without planning or saving anything.
+  rpc Validate(ManifestValidateRequest) returns (ManifestValidateReply);
+}
+
+message ManifestValidateRequest {
+  bytes manifest = 1;           // anvil.yaml content
+  map<string, string> vars = 2; // values for ${VAR}, resolved by the client as for Apply
+}
+
+message ManifestValidateReply {
+  repeated ValidationProblem problems = 1;
 }
 
 message ManifestInfo {
@@ -867,6 +902,7 @@ message IntentApplyRequest {
   repeated string ssh_public_keys = 5; // authorized on every new VM, e.g. the caller's anvil key
   int32 wait_timeout_seconds = 6;   // readiness wait per depended-on member, defaults to 900
   map<string, string> vars = 7;     // values for ${VAR} in the manifest, over its own vars: block
+  string expected_plan_hash = 8;    // a dry run's plan hash; a different fresh plan fails the apply
 }
 
 // IntentApplyStep is one planned change to a member.
@@ -880,6 +916,7 @@ message IntentApplyStep {
 message IntentApplyPlan {
   string intent_name = 1;
   repeated IntentApplyStep steps = 2;
+  string hash = 3; // identifies the steps, for IntentApplyRequest.expected_plan_hash
 }
 
 message IntentApplyProgress {

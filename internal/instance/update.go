@@ -69,6 +69,7 @@ func (m *Manager) update(ctx context.Context, spec *Spec, p UpdateParams) (Updat
 	running := spec.State == StateRunning
 	live, _ := m.backends[spec.Kind].(LiveResizer)
 	var res UpdateResult
+	applied := false // set once a change reaches the running VM
 
 	// applyLive runs a live change on a running VM and records how it went.
 	applyLive := func(fallback string, change func() (string, error)) error {
@@ -85,6 +86,7 @@ func (m *Manager) update(ctx context.Context, spec *Spec, p UpdateParams) (Updat
 		switch {
 		case err == nil:
 			res.Notes = append(res.Notes, note)
+			applied = true
 		case errors.Is(err, ErrNeedsRestart):
 			res.Notes = append(res.Notes, fmt.Sprintf("%s (%v)", fallback, err))
 			res.RestartPending = true
@@ -94,40 +96,55 @@ func (m *Manager) update(ctx context.Context, spec *Spec, p UpdateParams) (Updat
 		return nil
 	}
 
-	if p.CPUs != nil && *p.CPUs != spec.VM.CPUs {
-		n := *p.CPUs
-		if n < minCPUs {
-			return UpdateResult{}, fmt.Errorf("instance: cpus must be at least %d", minCPUs)
-		}
-		err := applyLive(fmt.Sprintf("cpus set to %d", n), func() (string, error) { return live.SetCPUsLive(ctx, spec, n) })
-		if err != nil {
-			return UpdateResult{}, err
-		}
-		spec.VM.CPUs = n
+	// Check every input first, so a bad one can't stop the update half-applied.
+	if p.CPUs != nil && *p.CPUs < minCPUs {
+		return UpdateResult{}, fmt.Errorf("instance: cpus must be at least %d", minCPUs)
 	}
-	if p.MemoryMiB != nil && *p.MemoryMiB != spec.VM.MemoryMiB {
-		mib := *p.MemoryMiB
-		if mib < minMemoryMiB {
-			return UpdateResult{}, fmt.Errorf("instance: memory must be at least %d MiB", minMemoryMiB)
-		}
-		err := applyLive(fmt.Sprintf("memory set to %d MiB", mib), func() (string, error) { return live.SetMemoryLive(ctx, spec, mib) })
-		if err != nil {
-			return UpdateResult{}, err
-		}
-		spec.VM.MemoryMiB = mib
+	if p.MemoryMiB != nil && *p.MemoryMiB < minMemoryMiB {
+		return UpdateResult{}, fmt.Errorf("instance: memory must be at least %d MiB", minMemoryMiB)
 	}
+	var rz Resizer
 	if p.DiskGiB != nil {
 		b, err := m.backendFor(spec.Kind)
 		if err != nil {
 			return UpdateResult{}, err
 		}
-		rz, ok := b.(Resizer)
-		if !ok {
+		var ok bool
+		if rz, ok = b.(Resizer); !ok {
 			return UpdateResult{}, fmt.Errorf("instance: %s instances can't be resized", spec.Kind)
 		}
+	}
+
+	// failed still records changes already made to the running VM.
+	failed := func(err error) (UpdateResult, error) {
+		if applied {
+			if serr := m.save(spec, nil); serr != nil {
+				err = errors.Join(err, serr)
+			}
+		}
+		return UpdateResult{}, err
+	}
+
+	if p.CPUs != nil && *p.CPUs != spec.VM.CPUs {
+		n := *p.CPUs
+		err := applyLive(fmt.Sprintf("cpus set to %d", n), func() (string, error) { return live.SetCPUsLive(ctx, spec, n) })
+		if err != nil {
+			return failed(err)
+		}
+		spec.VM.CPUs = n
+	}
+	if p.MemoryMiB != nil && *p.MemoryMiB != spec.VM.MemoryMiB {
+		mib := *p.MemoryMiB
+		err := applyLive(fmt.Sprintf("memory set to %d MiB", mib), func() (string, error) { return live.SetMemoryLive(ctx, spec, mib) })
+		if err != nil {
+			return failed(err)
+		}
+		spec.VM.MemoryMiB = mib
+	}
+	if rz != nil {
 		note, err := rz.ResizeDisk(ctx, spec, *p.DiskGiB)
 		if err != nil {
-			return UpdateResult{}, err
+			return failed(err)
 		}
 		spec.VM.DiskGiB = *p.DiskGiB
 		res.Notes = append(res.Notes, note)

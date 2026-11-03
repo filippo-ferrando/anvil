@@ -20,6 +20,7 @@ import (
 	"git.fferrando.cc/rdfilippo/anvil/internal/ephemeral"
 	"git.fferrando.cc/rdfilippo/anvil/internal/pipeline"
 	"git.fferrando.cc/rdfilippo/anvil/internal/runner"
+	"git.fferrando.cc/rdfilippo/anvil/internal/store"
 	"git.fferrando.cc/rdfilippo/anvil/pkg/client"
 )
 
@@ -201,7 +202,7 @@ func TestRunnerServer(t *testing.T) {
 	if err != nil || reply.GetRunner().GetMaxJobs() != 2 || !reply.GetRunner().GetPaused() {
 		t.Fatalf("Add = %+v, %v", reply, err)
 	}
-	if _, err := c.Runner.Add(ctx, add); status.Code(err) != codes.InvalidArgument {
+	if _, err := c.Runner.Add(ctx, add); status.Code(err) != codes.AlreadyExists {
 		t.Errorf("duplicate = %v", err)
 	}
 	add.Runner.Name, add.Token = "x", ""
@@ -227,5 +228,32 @@ func TestRunnerServer(t *testing.T) {
 	}
 	if _, err := c.Runner.Remove(ctx, &anvilv1.RunnerRemoveRequest{Name: "ci"}); status.Code(err) != codes.NotFound {
 		t.Errorf("remove twice = %v", err)
+	}
+}
+
+// TestPipelineLogsReadError reports a failed log read instead of a short, silent log.
+func TestPipelineLogsReadError(t *testing.T) {
+	c, exec := ciClient(t)
+	run := store.PipelineRun{ID: "01RUN", Owner: uint32(os.Getuid()), State: "failed",
+		Jobs: []store.PipelineJob{{Name: "build", Distro: "u2", State: "failed"}}}
+	if err := exec.Store.PutPipelineRun(run); err != nil {
+		t.Fatal(err)
+	}
+	// A directory opens fine but fails to read.
+	if err := os.MkdirAll(exec.LogPath(run.ID, "build", "u2"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	logs, err := c.Pipeline.Logs(context.Background(), &anvilv1.PipelineLogsRequest{Id: run.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		_, err = logs.Recv()
+		if err != nil {
+			break
+		}
+	}
+	if err == io.EOF {
+		t.Fatal("expected the read error, got a clean end of stream")
 	}
 }

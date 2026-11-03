@@ -61,10 +61,12 @@ func (s *Server) launch(ctx context.Context, req *anvilv1.LaunchRequest, stream 
 		return err
 	}
 	if params.Name == "" {
-		if err := s.defaultLaunchName(&params); err != nil {
+		var release func()
+		if ctx, release, err = s.defaultLaunchName(ctx, &params); err != nil {
 			sendLaunchEvent(stream, instance.LaunchEvent{Err: err})
 			return err
 		}
+		defer release()
 	}
 	// Checked before anything is named after it on disk.
 	if err := instance.ValidateName(params.Name); err != nil {
@@ -110,11 +112,11 @@ func (s *Server) launch(ctx context.Context, req *anvilv1.LaunchRequest, stream 
 }
 
 // defaultLaunchName names an unnamed launch: "<intent>-<role>" for an intent member,
-// otherwise a free name derived from the image ref.
-func (s *Server) defaultLaunchName(params *instance.LaunchParams) error {
+// otherwise a free name derived from the image ref, held in the returned ctx until release.
+func (s *Server) defaultLaunchName(ctx context.Context, params *instance.LaunchParams) (context.Context, func(), error) {
 	if params.IntentName != "" && params.Role != "" {
 		params.Name = intent.MemberName(params.IntentName, params.Role)
-		return nil
+		return ctx, func() {}, nil
 	}
 	var ref string
 	switch {
@@ -123,9 +125,9 @@ func (s *Server) defaultLaunchName(params *instance.LaunchParams) error {
 	case params.Container != nil:
 		ref = params.Container.ImageRef
 	}
-	name, err := s.Manager.DefaultName(ref)
+	ctx, name, release, err := s.Manager.ReserveDefaultName(ctx, ref)
 	params.Name = name
-	return err
+	return ctx, release, err
 }
 
 func (s *Server) WaitReady(req *anvilv1.WaitReadyRequest, stream anvilv1.InstanceService_WaitReadyServer) error {
@@ -207,9 +209,18 @@ func (s *Server) Delete(ctx context.Context, req *anvilv1.DeleteRequest) (*anvil
 	}
 	// Resolved before deleting so each instance's intent-membership label
 	// is still available afterward.
-	specs, err := s.Manager.Info(req.GetNames())
+	all, err := s.Manager.Info(req.GetNames())
 	if err != nil {
 		return nil, err
+	}
+	// A name given twice, or a name and its ID, must not delete the same instance twice.
+	var specs []*instance.Spec
+	seen := map[string]bool{}
+	for _, spec := range all {
+		if !seen[spec.ID] {
+			seen[spec.ID] = true
+			specs = append(specs, spec)
+		}
 	}
 
 	// Each instance is deleted on its own, several at once, so a failure on one doesn't

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -93,8 +94,11 @@ func (s *PipelineServer) run(ctx context.Context, src pipeline.Source, send func
 			sendErr = send(pipelineEventToPB(ev))
 		}
 	})
-	if err != nil {
+	if errors.Is(err, pipeline.ErrInvalid) {
 		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	if err != nil {
+		return wrapErr(err)
 	}
 	return sendErr
 }
@@ -266,8 +270,12 @@ func (s *PipelineServer) Logs(req *anvilv1.PipelineLogsRequest, stream anvilv1.P
 					return err
 				}
 			}
-			if rerr != nil {
+			if rerr == io.EOF {
 				break
+			}
+			if rerr != nil {
+				f.Close()
+				return rerr
 			}
 		}
 		f.Close()
@@ -344,13 +352,12 @@ func (s *PipelineServer) RemoveWatch(_ context.Context, req *anvilv1.PipelineWat
 }
 
 func (s *PipelineServer) SetWatchPaused(_ context.Context, req *anvilv1.PipelineWatchPauseRequest) (*anvilv1.PipelineWatch, error) {
-	w, err := s.Exec.Store.GetPipelineWatch(req.GetName())
+	w, err := s.Exec.Store.UpdatePipelineWatch(req.GetName(), func(w *store.PipelineWatch) error {
+		w.Paused = req.GetPaused()
+		return nil
+	})
 	if err != nil {
 		return nil, wrapErr(err)
-	}
-	w.Paused = req.GetPaused()
-	if err := s.Exec.Store.PutPipelineWatch(w); err != nil {
-		return nil, err
 	}
 	return watchToPB(w), nil
 }

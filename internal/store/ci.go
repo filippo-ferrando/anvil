@@ -180,6 +180,35 @@ func (s *Store) DeletePipelineRun(id string) error { return deleteJSON(s, bucket
 func (s *Store) PutPipelineWatch(w PipelineWatch) error {
 	return putJSON(s, bucketPipelineWatches, w.Name, w)
 }
+
+// UpdatePipelineWatch reads, changes and writes the watch name in one transaction.
+// A watch deleted meanwhile stays deleted and gives instance.ErrNotFound.
+func (s *Store) UpdatePipelineWatch(name string, fn func(*PipelineWatch) error) (PipelineWatch, error) {
+	var w PipelineWatch
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketPipelineWatches)
+		data := bucket.Get([]byte(name))
+		if data == nil {
+			return fmt.Errorf("store: no %s %q: %w", bucketPipelineWatches, name, instance.ErrNotFound)
+		}
+		if err := json.Unmarshal(data, &w); err != nil {
+			return err
+		}
+		if err := fn(&w); err != nil {
+			return err
+		}
+		if w.Name != name {
+			return fmt.Errorf("store: an update can't rename pipeline watch %s", name)
+		}
+		out, err := json.Marshal(w)
+		if err != nil {
+			return fmt.Errorf("store: encoding pipeline watch %s: %w", name, err)
+		}
+		return bucket.Put([]byte(name), out)
+	})
+	return w, err
+}
+
 func (s *Store) GetPipelineWatch(name string) (PipelineWatch, error) {
 	var w PipelineWatch
 	return w, getJSON(s, bucketPipelineWatches, name, &w)

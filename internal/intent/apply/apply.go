@@ -2,6 +2,8 @@ package apply
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -69,6 +71,28 @@ type Options struct {
 	SSHKeys []string
 	// WaitTimeout bounds the readiness wait for each member others depend on.
 	WaitTimeout time.Duration
+	// ExpectedPlanHash, when set, fails a real apply whose fresh plan has another PlanHash.
+	ExpectedPlanHash string
+}
+
+// ErrPlanChanged is returned when the fresh plan differs from Options.ExpectedPlanHash.
+var ErrPlanChanged = errors.New("the plan changed since it was shown, run apply again")
+
+// PlanHash identifies a plan by its intent and steps, so a shown plan can be matched with a fresh one.
+func PlanHash(intentName string, steps []Step) string {
+	h := sha256.New()
+	field := func(s string) { fmt.Fprintf(h, "%d:%s", len(s), s) }
+	field(intentName)
+	for _, s := range steps {
+		field(s.Role)
+		field(s.Name)
+		field(string(s.Action))
+		fmt.Fprintf(h, "%d;", len(s.Changes))
+		for _, c := range s.Changes {
+			field(c)
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 const defaultWaitTimeout = 15 * time.Minute
@@ -114,6 +138,9 @@ func (a *Applier) Apply(ctx context.Context, m *Manifest, opts Options, onPlan f
 		defer release()
 	}
 	steps, err := a.plan(m, opts)
+	if err == nil && !opts.DryRun && opts.ExpectedPlanHash != "" && PlanHash(m.Intent, steps) != opts.ExpectedPlanHash {
+		return ErrPlanChanged
+	}
 	if steps != nil {
 		onPlan(steps)
 	}
