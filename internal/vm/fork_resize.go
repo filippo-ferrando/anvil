@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"time"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
@@ -123,3 +125,75 @@ func (b *Backend) ResizeDisk(ctx context.Context, spec *instance.Spec, newGiB in
 // every catalog distro's root layout.
 const growGuestFSScript = "cloud-init single --name growpart --frequency always && " +
 	"cloud-init single --name resizefs --frequency always"
+
+// Fork copies source's disk into dest's dir, preserving the backing-file pointer. A running
+// source is copied live and point-in-time (see forkLive); a stopped one with qemu-img.
+func (b *Backend) Fork(ctx context.Context, source, dest *instance.Spec, progress func(status string)) error {
+	if source.VM == nil || dest.VM == nil {
+		return fmt.Errorf("vm: Fork called with a nil VMSpec")
+	}
+
+	backing, err := image.BackingFile(source.VM.DiskPath)
+	if err != nil {
+		return fmt.Errorf("vm: inspecting %s's disk: %w", source.Name, err)
+	}
+	if backing == "" {
+		return fmt.Errorf("vm: %s's disk has no backing file to preserve", source.Name)
+	}
+
+	dir := instanceDir(dest.ID)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return fmt.Errorf("vm: creating instance dir: %w", err)
+	}
+	diskPath := filepath.Join(dir, "disk.qcow2")
+
+	proc, running := b.lookup(source.ID)
+	if running && proc.QMP != nil {
+		if err := b.forkLive(ctx, source, proc, backing, diskPath, progress); err != nil {
+			_ = os.Remove(diskPath)
+			return err
+		}
+	} else {
+		if progress != nil {
+			progress("copying disk")
+		}
+		if !reflinkFork(ctx, source.VM.DiskPath, diskPath) {
+			// -U still opens a disk some untracked QEMU might hold locked.
+			if err := qemuImg(ctx, "forking disk", "convert", "-U", "-O", "qcow2",
+				"-o", "backing_file="+backing+",backing_fmt=qcow2", source.VM.DiskPath, diskPath); err != nil {
+				return err
+			}
+		}
+	}
+	dest.VM.DiskPath = diskPath
+
+	if progress != nil {
+		progress("building cloud-init seed")
+	}
+	return b.buildSeed(dest)
+}
+
+// reflinkFork makes dst a copy-on-write clone of a stopped source's disk, in one call
+// whatever its size, where the filesystem can. A clone keeps the backing file's name as
+// written, so only an absolute one qualifies, and the source's internal snapshots are
+// dropped, as a convert leaves them out. False leaves nothing behind, for a convert instead.
+func reflinkFork(ctx context.Context, src, dst string) bool {
+	if backing, err := image.BackingFile(src); err != nil || !filepath.IsAbs(backing) {
+		return false
+	}
+	if reflink(src, dst) != nil {
+		return false
+	}
+	snaps, err := image.ListSnapshots(dst)
+	for _, s := range snaps {
+		if err != nil {
+			break
+		}
+		err = qemuImg(ctx, "dropping the source's snapshots", "snapshot", "-d", s.Name, dst)
+	}
+	if err != nil {
+		_ = os.Remove(dst)
+		return false
+	}
+	return true
+}

@@ -149,8 +149,11 @@ func (s *Server) waitReady(ctx context.Context, name string, timeoutSeconds int3
 		return nil // reported in-band, like a failed launch
 	}
 	specs, err := s.Manager.Info([]string{name})
-	if err != nil || len(specs) == 0 {
-		sendLaunchEvent(stream, instance.LaunchEvent{Err: fmt.Errorf("instance: reading %s after waiting: %v", name, err)})
+	if err == nil && len(specs) == 0 {
+		err = fmt.Errorf("%w: %s", instance.ErrNotFound, name)
+	}
+	if err != nil {
+		sendLaunchEvent(stream, instance.LaunchEvent{Err: fmt.Errorf("instance: reading %s after waiting: %w", name, err)})
 		return nil
 	}
 	sendLaunchEvent(stream, instance.LaunchEvent{Instance: specs[0]})

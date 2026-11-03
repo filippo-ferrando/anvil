@@ -69,7 +69,7 @@ func gptRoot(f io.ReaderAt, header []byte, arch string) (string, error) {
 	}
 	var root, data, largest []byte
 	var dataSize, largestSize uint64
-	for i := 0; i < int(count); i++ {
+	for i := range int(count) {
 		e := table[i*int(entrySize) : (i+1)*int(entrySize)]
 		typ := e[0:16]
 		if bytes.Equal(typ, make([]byte, 16)) {
@@ -106,7 +106,7 @@ func mbrRoot(sector []byte) (string, error) {
 	}
 	best, bestLinux := -1, false
 	var bestSize uint32
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		e := sector[446+16*i : 446+16*(i+1)]
 		typ, size := e[4], binary.LittleEndian.Uint32(e[12:16])
 		if typ == 0 || size == 0 || typ == 0x05 || typ == 0x0f || typ == 0xee {

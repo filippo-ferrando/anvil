@@ -180,12 +180,11 @@ func (m model) updateMigration(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case hostTestedMsg:
-		if msg.err != nil {
+		switch {
+		case msg.err != nil:
 			m.setStatus(msg.alias+": "+msg.err.Error(), true)
-		} else if !msg.ok {
-			m.setStatus(msg.alias+": "+msg.detail, true)
-		} else {
-			m.setStatus(msg.alias+": "+msg.detail, false)
+		default:
+			m.setStatus(msg.alias+": "+msg.detail, !msg.ok)
 		}
 		return m, nil
 

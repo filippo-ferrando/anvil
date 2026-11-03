@@ -310,16 +310,18 @@ func (m snapshotsModel) View() string {
 		instancesBox = styleBoxFocused
 	}
 
+	inst := m.selectedInstance()
 	snapsBody := m.snaps.View()
-	if m.loading {
+	switch {
+	case m.loading:
 		snapsBody = styleSubtitle.Render("loading…")
-	} else if m.selectedInstance() != nil && len(m.snaps.Items()) == 0 {
-		snapsBody = styleSubtitle.Render("no snapshots yet: press n to create one")
-	} else if m.selectedInstance() == nil {
+	case inst == nil:
 		snapsBody = styleSubtitle.Render("no VM instances yet")
+	case len(m.snaps.Items()) == 0:
+		snapsBody = styleSubtitle.Render("no snapshots yet: press n to create one")
 	}
 
-	if inst := m.selectedInstance(); inst != nil {
+	if inst != nil {
 		sched := format.Schedule(inst.GetVm().GetSnapshotSchedule(), "01-02 15:04")
 		if sched == "" {
 			sched = "no schedule (S to set one)"

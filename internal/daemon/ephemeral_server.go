@@ -381,7 +381,7 @@ func (s *EphemeralServer) CloneDelete(ctx context.Context, req *anvilv1.CloneDel
 }
 
 // appDisplayDir is where a RunApp client's waypipe listens; a var for tests.
-var appDisplayDir = func(id string) string { return config.GUIRelayDir(id) }
+var appDisplayDir = config.GUIRelayDir
 
 func (s *EphemeralServer) RunApp(stream anvilv1.EphemeralService_RunAppServer) error {
 	ctx := stream.Context()

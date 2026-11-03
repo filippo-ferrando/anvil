@@ -80,6 +80,9 @@ type ExportParams struct {
 	IsIntent bool
 }
 
+// bundleFile is one file or directory copied into a bundle.
+type bundleFile struct{ archivePath, localPath string }
+
 // Export packages p.Name into a tar.zst bundle at p.OutputPath. Every member is stopped for a
 // consistent snapshot, then resumed to its prior state, even on failure.
 func (m *Manager) Export(ctx context.Context, p ExportParams, progress func(status string)) error {
@@ -105,42 +108,22 @@ func (m *Manager) Export(ctx context.Context, p ExportParams, progress func(stat
 		return fmt.Errorf("export: %w", err)
 	}
 	defer release()
-	wasRunning := make(map[string]bool, len(members))
+	var restart []string
 	for i, spec := range members {
 		if members[i], err = m.Instances.GetByID(spec.ID); err != nil {
 			return fmt.Errorf("export: %w", err)
 		}
-		wasRunning[spec.Name] = members[i].State == instance.StateRunning
+		if members[i].State == instance.StateRunning {
+			restart = append(restart, spec.Name)
+		}
 	}
 
 	// Registered before the stop, so members that did stop come back when another one fails.
-	defer func() {
-		var restart []string
-		for _, name := range names {
-			if wasRunning[name] {
-				restart = append(restart, name)
-			}
-		}
-		if len(restart) == 0 {
-			return
-		}
-		progress(fmt.Sprintf("resuming %d instance(s)", len(restart)))
-		// Detached from ctx: a cancelled export (Ctrl-C) would otherwise stop
-		// the instances and then fail to start them again.
-		resumeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
-		defer cancel()
-		if err := m.Instances.Start(resumeCtx, restart); err != nil {
-			progress(fmt.Sprintf("warning: some instances failed to resume after export: %v", err))
-		}
-	}()
+	defer m.resume(ctx, restart, progress)
 	progress(fmt.Sprintf("stopping %d instance(s)", len(names)))
 	if err := m.Instances.Stop(ctx, names, false, 30*time.Second); err != nil {
 		return fmt.Errorf("export: stopping source instance(s): %w", err)
 	}
-
-	// One entry per file or directory copied into the bundle.
-	type source struct{ archivePath, localPath string }
-	var disks, dirs []source
 
 	// Disk files converted for the bundle, next to it since there's room for the bundle
 	// there, and gone once it's written.
@@ -150,6 +133,7 @@ func (m *Manager) Export(ctx context.Context, p ExportParams, progress func(stat
 	}
 	defer os.RemoveAll(diskDir)
 
+	var disks, dirs []bundleFile
 	for _, spec := range members {
 		progress(fmt.Sprintf("archiving %q", spec.Name))
 		mem := Member{Name: spec.Name, Kind: string(spec.Kind)}
@@ -160,85 +144,128 @@ func (m *Manager) Export(ctx context.Context, p ExportParams, progress func(stat
 			}
 		}
 
+		var memberDirs []bundleFile
 		switch spec.Kind {
 		case instance.KindVM:
-			v := spec.VM
+			var disk bundleFile
+			mem.VM, disk, memberDirs, err = m.exportVM(ctx, spec, diskDir, progress)
+			if err != nil {
+				return err
+			}
 			// A standalone Firecracker guest has its address configured inside the disk too.
+			v := spec.VM
 			standaloneFC := v.HypervisorOf() == instance.VMHypervisorFirecracker && v.NetworkMode != "bridge"
 			if (manifest.Network != nil || standaloneFC) && v.StaticIP != "" {
 				mem.StaticIP = v.StaticIP
 			}
-			mem.VM = &VM{
-				ImageRef:         v.ImageRef,
-				Arch:             v.Arch,
-				CPUs:             int32(v.CPUs),
-				MemoryMiB:        v.MemoryMiB,
-				DiskGiB:          v.DiskGiB,
-				CloudInitContent: m.resolveCloudInit(v),
-				SSHPublicKeys:    v.SSHPublicKeys,
-				DiskFile:         "disks/" + spec.ID + ".qcow2",
-				MACAddress:       v.MACAddress,
-				Hypervisor:       string(v.HypervisorOf()),
-				Devices:          v.Devices,
-			}
-			// A disk with no base image (one adopted from a flattened migration) has
-			// no checksum to record, which only means the import can't cross-check it.
-			if sum, err := m.VMImporter.BaseImageChecksum(spec); err == nil {
-				mem.VM.BaseSHA256 = sum
-			}
-			for _, port := range v.Ports {
-				mem.VM.Ports = append(mem.VM.Ports, PortMapping{HostPort: port.HostPort, GuestPort: port.GuestPort, Protocol: port.Protocol})
-			}
-			progress(fmt.Sprintf("preparing %q's disk", spec.Name))
-			diskFile, err := m.VMImporter.ExportDiskFile(ctx, spec, diskDir)
-			if err != nil {
-				return fmt.Errorf("export: preparing %q's disk: %w", spec.Name, err)
-			}
-			disks = append(disks, source{archivePath: mem.VM.DiskFile, localPath: diskFile})
-			for i, mnt := range v.Mounts {
-				out := Mount{GuestPath: mnt.GuestPath, Tag: mnt.Tag, ReadOnly: mnt.ReadOnly}
-				if info, err := os.Stat(mnt.HostPath); err == nil && info.IsDir() {
-					out.Archive = fmt.Sprintf("mounts/%s/%d", spec.ID, i)
-					dirs = append(dirs, source{archivePath: out.Archive, localPath: mnt.HostPath})
-				} else {
-					progress(fmt.Sprintf("warning: %q's shared folder %s isn't a directory anvild can read, skipping its contents", spec.Name, mnt.HostPath))
-				}
-				mem.VM.Mounts = append(mem.VM.Mounts, out)
-			}
-
+			disks = append(disks, disk)
 		case instance.KindContainer:
-			c := spec.Container
-			mem.Container = &Container{
-				ImageRef: c.ImageRef, Env: c.Env, Entrypoint: c.Entrypoint, Cmd: c.Cmd, Engine: string(c.Engine),
-			}
-			for _, port := range c.Ports {
-				mem.Container.Ports = append(mem.Container.Ports, PortMapping{HostPort: port.HostPort, GuestPort: port.GuestPort, Protocol: port.Protocol})
-			}
-			for i, v := range c.Volumes {
-				vol := VolumeMount{ContainerPath: v.ContainerPath, ReadOnly: v.ReadOnly}
-				if info, err := os.Stat(v.HostPath); err == nil && info.IsDir() {
-					vol.Archive = fmt.Sprintf("volumes/%s/%d", spec.ID, i)
-					dirs = append(dirs, source{archivePath: vol.Archive, localPath: v.HostPath})
-				} else {
-					progress(fmt.Sprintf("warning: %q's volume %s isn't a directory anvild can read, skipping its contents", spec.Name, v.HostPath))
-				}
-				mem.Container.Volumes = append(mem.Container.Volumes, vol)
-			}
-
+			mem.Container, memberDirs = exportContainer(spec, progress)
 		default:
 			return fmt.Errorf("export: unsupported instance kind %q", spec.Kind)
 		}
-
+		dirs = append(dirs, memberDirs...)
 		manifest.Members = append(manifest.Members, mem)
 	}
 
-	manifestJSON, err := json.Marshal(manifest)
-	if err != nil {
-		return fmt.Errorf("export: encoding manifest: %w", err)
+	progress("writing bundle")
+	if err := writeBundle(ctx, p.OutputPath, manifest, disks, dirs); err != nil {
+		return fmt.Errorf("export: writing bundle: %w", err)
+	}
+	progress("done: " + p.OutputPath)
+	return nil
+}
+
+// resume starts again the instances an export stopped.
+func (m *Manager) resume(ctx context.Context, names []string, progress func(status string)) {
+	if len(names) == 0 {
+		return
+	}
+	progress(fmt.Sprintf("resuming %d instance(s)", len(names)))
+	// Detached from ctx: a cancelled export (Ctrl-C) would otherwise stop
+	// the instances and then fail to start them again.
+	resumeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+	defer cancel()
+	if err := m.Instances.Start(resumeCtx, names); err != nil {
+		progress(fmt.Sprintf("warning: some instances failed to resume after export: %v", err))
+	}
+}
+
+// exportVM describes spec's VM for the manifest and prepares its disk in diskDir.
+func (m *Manager) exportVM(ctx context.Context, spec *instance.Spec, diskDir string, progress func(status string)) (*VM, bundleFile, []bundleFile, error) {
+	v := spec.VM
+	out := &VM{
+		ImageRef:         v.ImageRef,
+		Arch:             v.Arch,
+		CPUs:             int32(v.CPUs),
+		MemoryMiB:        v.MemoryMiB,
+		DiskGiB:          v.DiskGiB,
+		CloudInitContent: m.resolveCloudInit(v),
+		SSHPublicKeys:    v.SSHPublicKeys,
+		DiskFile:         "disks/" + spec.ID + ".qcow2",
+		MACAddress:       v.MACAddress,
+		Hypervisor:       string(v.HypervisorOf()),
+		Devices:          v.Devices,
+	}
+	// A disk with no base image (one adopted from a flattened migration) has
+	// no checksum to record, which only means the import can't cross-check it.
+	if sum, err := m.VMImporter.BaseImageChecksum(spec); err == nil {
+		out.BaseSHA256 = sum
+	}
+	for _, port := range v.Ports {
+		out.Ports = append(out.Ports, PortMapping{HostPort: port.HostPort, GuestPort: port.GuestPort, Protocol: port.Protocol})
 	}
 
-	progress("writing bundle")
-	err = writeTarZst(ctx, p.OutputPath, func(tw *tar.Writer) error {
+	progress(fmt.Sprintf("preparing %q's disk", spec.Name))
+	diskFile, err := m.VMImporter.ExportDiskFile(ctx, spec, diskDir)
+	if err != nil {
+		return nil, bundleFile{}, nil, fmt.Errorf("export: preparing %q's disk: %w", spec.Name, err)
+	}
+
+	var dirs []bundleFile
+	for i, mnt := range v.Mounts {
+		mount := Mount{GuestPath: mnt.GuestPath, Tag: mnt.Tag, ReadOnly: mnt.ReadOnly}
+		if isDir(mnt.HostPath) {
+			mount.Archive = fmt.Sprintf("mounts/%s/%d", spec.ID, i)
+			dirs = append(dirs, bundleFile{archivePath: mount.Archive, localPath: mnt.HostPath})
+		} else {
+			progress(fmt.Sprintf("warning: %q's shared folder %s isn't a directory anvild can read, skipping its contents", spec.Name, mnt.HostPath))
+		}
+		out.Mounts = append(out.Mounts, mount)
+	}
+	return out, bundleFile{archivePath: out.DiskFile, localPath: diskFile}, dirs, nil
+}
+
+// exportContainer describes spec's container for the manifest, with the volume dirs to archive.
+func exportContainer(spec *instance.Spec, progress func(status string)) (*Container, []bundleFile) {
+	c := spec.Container
+	out := &Container{
+		ImageRef: c.ImageRef, Env: c.Env, Entrypoint: c.Entrypoint, Cmd: c.Cmd, Engine: string(c.Engine),
+	}
+	for _, port := range c.Ports {
+		out.Ports = append(out.Ports, PortMapping{HostPort: port.HostPort, GuestPort: port.GuestPort, Protocol: port.Protocol})
+	}
+	var dirs []bundleFile
+	for i, v := range c.Volumes {
+		vol := VolumeMount{ContainerPath: v.ContainerPath, ReadOnly: v.ReadOnly}
+		if isDir(v.HostPath) {
+			vol.Archive = fmt.Sprintf("volumes/%s/%d", spec.ID, i)
+			dirs = append(dirs, bundleFile{archivePath: vol.Archive, localPath: v.HostPath})
+		} else {
+			progress(fmt.Sprintf("warning: %q's volume %s isn't a directory anvild can read, skipping its contents", spec.Name, v.HostPath))
+		}
+		out.Volumes = append(out.Volumes, vol)
+	}
+	return out, dirs
+}
+
+// writeBundle writes the manifest, then disks, then directories into a tar.zst at path.
+func writeBundle(ctx context.Context, path string, manifest Manifest, disks, dirs []bundleFile) error {
+	manifestJSON, err := json.Marshal(manifest)
+	if err != nil {
+		return fmt.Errorf("encoding manifest: %w", err)
+	}
+	return writeTarZst(ctx, path, func(tw *tar.Writer) error {
 		if err := addBytesToTar(tw, "manifest.json", manifestJSON); err != nil {
 			return err
 		}
@@ -254,12 +281,11 @@ func (m *Manager) Export(ctx context.Context, p ExportParams, progress func(stat
 		}
 		return nil
 	})
-	if err != nil {
-		return fmt.Errorf("export: writing bundle: %w", err)
-	}
+}
 
-	progress("done: " + p.OutputPath)
-	return nil
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // resolveCloudInit returns v's effective cloud-init user-data as literal content, resolving a named

@@ -443,15 +443,16 @@ func (b *guestTracker) waitReady(ctx context.Context, spec *instance.Spec, exite
 		}
 
 		status := "waiting for cloud-init: guest agent not up yet"
-		if !expectsAgent {
+		switch {
+		case !expectsAgent:
 			status = "waiting for cloud-init"
-		} else if info.CloudInit == instance.CloudInitDone && !info.AgentConnected {
-			status = "cloud-init done, waiting for the guest agent"
-		} else if info.AgentConnected {
+		case info.AgentConnected:
 			status = "waiting for cloud-init: running"
 			if len(info.IPAddresses) > 0 {
 				status += " (" + strings.Join(info.IPAddresses, ", ") + ")"
 			}
+		case info.CloudInit == instance.CloudInitDone:
+			status = "cloud-init done, waiting for the guest agent"
 		}
 		if progress != nil && status != last {
 			progress(status)

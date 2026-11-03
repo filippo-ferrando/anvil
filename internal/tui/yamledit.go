@@ -260,7 +260,7 @@ func (e yamlEditor) renderLine(i int, runes []rune, classes []int, w int, marks 
 		n++ // the cursor sits after a full row
 	}
 	out := make([]string, 0, n)
-	for r := 0; r < n; r++ {
+	for r := range n {
 		gutter := marker + " " + numStyle.Render(fmt.Sprintf("%3d ", i+1))
 		if r > 0 {
 			gutter = marker + strings.Repeat(" ", gutterWidth-1)

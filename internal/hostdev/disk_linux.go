@@ -66,7 +66,7 @@ func createCloneDisk(d CloneDisk, uid, gid int) (err error) {
 	name := DMName(d.ID)
 	table := fmt.Sprintf("0 %d snapshot %s %s N 8", size/512, originLoop.Name(), cowLoop.Name())
 	if out, err := exec.Command(dmsetup, "create", name, "--noudevsync", "--table", table).CombinedOutput(); err != nil {
-		return fmt.Errorf("dmsetup create %s: %v: %s", name, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("dmsetup create %s: %w: %s", name, err, strings.TrimSpace(string(out)))
 	}
 	defer func() {
 		if err != nil {
@@ -98,7 +98,7 @@ func deleteCloneDisk(id string) error {
 	}
 	out, err := exec.Command(dmsetup, "remove", "--retry", "--noudevsync", name).CombinedOutput()
 	if err != nil && !strings.Contains(string(out), "No such device") {
-		return fmt.Errorf("dmsetup remove %s: %v: %s", name, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("dmsetup remove %s: %w: %s", name, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -182,7 +182,7 @@ func loadDMSnapshot() error {
 		return nil
 	}
 	if out, err := exec.Command("modprobe", "dm_snapshot").CombinedOutput(); err != nil {
-		return fmt.Errorf("loading dm_snapshot: %v: %s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("loading dm_snapshot: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

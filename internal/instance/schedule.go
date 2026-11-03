@@ -135,7 +135,7 @@ func snapshotsToPrune(snaps []Snapshot, keep int) []string {
 	}
 	sort.Slice(auto, func(i, j int) bool { return auto[i].CreatedAt.Before(auto[j].CreatedAt) })
 	var out []string
-	for i := 0; i < len(auto)-keep; i++ {
+	for i := range len(auto) - keep {
 		out = append(out, auto[i].Name)
 	}
 	return out

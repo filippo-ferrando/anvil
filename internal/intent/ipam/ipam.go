@@ -67,7 +67,7 @@ func UsedVMIndices(subnet string, addrs []string) (map[int]bool, error) {
 
 // NextFreeVMIndex returns the lowest VMAddress index not marked used.
 func NextFreeVMIndex(used map[int]bool) (int, error) {
-	for i := 0; i <= 125; i++ {
+	for i := range 126 {
 		if !used[i] {
 			return i, nil
 		}

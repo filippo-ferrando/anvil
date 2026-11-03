@@ -156,7 +156,7 @@ func (m *Manager) ensureNetwork(ctx context.Context, it *store.Intent, pinned *i
 	}
 
 	var lastErr error
-	for attempt := 0; attempt < maxSubnetAttempts; attempt++ {
+	for attempt := range maxSubnetAttempts {
 		subnet, gateway, dockerIPRange := ipam.AllocateSubnet(it.ID, attempt)
 		if err := m.Networker.CreateNetwork(ctx, engineName, bridgeIface, subnet, gateway, dockerIPRange); err != nil {
 			lastErr = err

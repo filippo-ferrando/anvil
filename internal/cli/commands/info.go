@@ -72,77 +72,94 @@ func newInfoCommand(flags *globalFlags) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				hostAddr := "" // the remote daemon's host, looked up once when needed
+				out := cmd.OutOrStdout()
+				// The remote daemon's host, looked up once when an SSH hint needs it.
+				var hostAddr string
+				remoteHost := func() string {
+					if c.Remote != "" && hostAddr == "" {
+						hostAddr = c.RemoteHostAddr(cmd.Context())
+					}
+					return hostAddr
+				}
 				for _, inst := range reply.GetInstances() {
-					fmt.Fprintf(cmd.OutOrStdout(), "Name:\t%s\n", inst.GetName())
-					fmt.Fprintf(cmd.OutOrStdout(), "Kind:\t%s\n", format.Kind(inst.GetKind()))
-					fmt.Fprintf(cmd.OutOrStdout(), "State:\t%s\n", stateLabel(inst.GetState()))
-					fmt.Fprintf(cmd.OutOrStdout(), "Autostart:\t%s\n", yesNo(inst.GetAutostart()))
-					fmt.Fprintf(cmd.OutOrStdout(), "Restart:\t%s\n", format.RestartPolicy(inst.GetRestartPolicy()))
-					fmt.Fprintf(cmd.OutOrStdout(), "GUI:\t%s\n", yesNo(inst.GetGuiEnabled()))
-					if intentName, role := inst.GetLabels()["intent"], inst.GetLabels()["role"]; intentName != "" {
-						fmt.Fprintf(cmd.OutOrStdout(), "Intent:\t%s (role: %s)\n", intentName, role)
+					printInstanceInfo(out, inst)
+					if vm := inst.GetVm(); vm != nil {
+						printVMInfo(out, inst, c.Remote, remoteHost)
 					}
-					if vmSpec := inst.GetVm(); vmSpec != nil {
-						fmt.Fprintf(cmd.OutOrStdout(), "Image:\t%s\n", vmSpec.GetImageRef())
-						fmt.Fprintf(cmd.OutOrStdout(), "Hypervisor:\t%s\n", format.Hypervisor(vmSpec.GetHypervisor()))
-						fmt.Fprintf(cmd.OutOrStdout(), "CPUs:\t%d\n", vmSpec.GetCpus())
-						fmt.Fprintf(cmd.OutOrStdout(), "Memory:\t%d MiB\n", vmSpec.GetMemoryMib())
-						fmt.Fprintf(cmd.OutOrStdout(), "Disk:\t%d GiB\n", vmSpec.GetDiskGib())
-						if devs := vmSpec.GetDevices(); len(devs) > 0 {
-							fmt.Fprintf(cmd.OutOrStdout(), "Devices:\t%s\n", strings.Join(devs, ", "))
-						}
-						if vmSpec.GetSshPort() != 0 {
-							user := vmSpec.GetDefaultUser()
-							if user == "" {
-								user = "root"
-							}
-							if c.Remote != "" && hostAddr == "" {
-								hostAddr = c.RemoteHostAddr(cmd.Context())
-							}
-							fmt.Fprint(cmd.OutOrStdout(), sshHint(c.Remote, hostAddr, vmSpec.GetSshPort(), user, inst.GetName()))
-						}
-						for _, p := range vmSpec.GetPorts() {
-							fmt.Fprintf(cmd.OutOrStdout(), "Port:\t%d -> %d/%s\n", p.GetHostPort(), p.GetGuestPort(), p.GetProtocol())
-						}
-						for _, m := range vmSpec.GetMounts() {
-							mode := "rw"
-							if m.GetReadOnly() {
-								mode = "ro"
-							}
-							fmt.Fprintf(cmd.OutOrStdout(), "Mount:\t%s -> %s (%s)\n", m.GetHostPath(), m.GetGuestPath(), mode)
-						}
-						printExtraHosts(cmd.OutOrStdout(), vmSpec.GetExtraHosts())
-						printGuestInfo(cmd.OutOrStdout(), inst)
-						if s := vmSpec.GetSnapshotSchedule(); s.GetEverySeconds() > 0 {
-							fmt.Fprintf(cmd.OutOrStdout(), "Snapshots:\t%s\n", format.Schedule(s, "2006-01-02 15:04"))
-						}
+					if ct := inst.GetContainer(); ct != nil {
+						printContainerInfo(out, ct)
 					}
-					if containerSpec := inst.GetContainer(); containerSpec != nil {
-						fmt.Fprintf(cmd.OutOrStdout(), "Image:\t%s\n", containerSpec.GetImageRef())
-						fmt.Fprintf(cmd.OutOrStdout(), "Engine:\t%s\n", format.Engine(containerSpec.GetEngine()))
-						if containerSpec.GetContainerId() != "" {
-							fmt.Fprintf(cmd.OutOrStdout(), "Container ID:\t%s\n", containerSpec.GetContainerId())
-						}
-						if containerSpec.GetNetworkAlias() != "" {
-							fmt.Fprintf(cmd.OutOrStdout(), "Network Alias:\t%s\n", containerSpec.GetNetworkAlias())
-						}
-						for _, p := range containerSpec.GetPorts() {
-							fmt.Fprintf(cmd.OutOrStdout(), "Port:\t%d -> %d/%s\n", p.GetHostPort(), p.GetGuestPort(), p.GetProtocol())
-						}
-						for _, v := range containerSpec.GetVolumes() {
-							mode := "rw"
-							if v.GetReadOnly() {
-								mode = "ro"
-							}
-							fmt.Fprintf(cmd.OutOrStdout(), "Volume:\t%s -> %s (%s)\n", v.GetHostPath(), v.GetContainerPath(), mode)
-						}
-						printExtraHosts(cmd.OutOrStdout(), containerSpec.GetExtraHosts())
-					}
-					fmt.Fprintln(cmd.OutOrStdout())
+					fmt.Fprintln(out)
 				}
 				return nil
 			})
 		},
 	}
+}
+
+func printInstanceInfo(out io.Writer, inst *anvilv1.Instance) {
+	fmt.Fprintf(out, "Name:\t%s\n", inst.GetName())
+	fmt.Fprintf(out, "Kind:\t%s\n", format.Kind(inst.GetKind()))
+	fmt.Fprintf(out, "State:\t%s\n", stateLabel(inst.GetState()))
+	fmt.Fprintf(out, "Autostart:\t%s\n", yesNo(inst.GetAutostart()))
+	fmt.Fprintf(out, "Restart:\t%s\n", format.RestartPolicy(inst.GetRestartPolicy()))
+	fmt.Fprintf(out, "GUI:\t%s\n", yesNo(inst.GetGuiEnabled()))
+	if intentName, role := inst.GetLabels()["intent"], inst.GetLabels()["role"]; intentName != "" {
+		fmt.Fprintf(out, "Intent:\t%s (role: %s)\n", intentName, role)
+	}
+}
+
+func printVMInfo(out io.Writer, inst *anvilv1.Instance, remote string, remoteHost func() string) {
+	vm := inst.GetVm()
+	fmt.Fprintf(out, "Image:\t%s\n", vm.GetImageRef())
+	fmt.Fprintf(out, "Hypervisor:\t%s\n", format.Hypervisor(vm.GetHypervisor()))
+	fmt.Fprintf(out, "CPUs:\t%d\n", vm.GetCpus())
+	fmt.Fprintf(out, "Memory:\t%d MiB\n", vm.GetMemoryMib())
+	fmt.Fprintf(out, "Disk:\t%d GiB\n", vm.GetDiskGib())
+	if devs := vm.GetDevices(); len(devs) > 0 {
+		fmt.Fprintf(out, "Devices:\t%s\n", strings.Join(devs, ", "))
+	}
+	if vm.GetSshPort() != 0 {
+		user := vm.GetDefaultUser()
+		if user == "" {
+			user = "root"
+		}
+		fmt.Fprint(out, sshHint(remote, remoteHost(), vm.GetSshPort(), user, inst.GetName()))
+	}
+	for _, p := range vm.GetPorts() {
+		fmt.Fprintf(out, "Port:\t%d -> %d/%s\n", p.GetHostPort(), p.GetGuestPort(), p.GetProtocol())
+	}
+	for _, m := range vm.GetMounts() {
+		fmt.Fprintf(out, "Mount:\t%s -> %s (%s)\n", m.GetHostPath(), m.GetGuestPath(), accessMode(m.GetReadOnly()))
+	}
+	printExtraHosts(out, vm.GetExtraHosts())
+	printGuestInfo(out, inst)
+	if s := vm.GetSnapshotSchedule(); s.GetEverySeconds() > 0 {
+		fmt.Fprintf(out, "Snapshots:\t%s\n", format.Schedule(s, "2006-01-02 15:04"))
+	}
+}
+
+func printContainerInfo(out io.Writer, ct *anvilv1.ContainerSpec) {
+	fmt.Fprintf(out, "Image:\t%s\n", ct.GetImageRef())
+	fmt.Fprintf(out, "Engine:\t%s\n", format.Engine(ct.GetEngine()))
+	if id := ct.GetContainerId(); id != "" {
+		fmt.Fprintf(out, "Container ID:\t%s\n", id)
+	}
+	if alias := ct.GetNetworkAlias(); alias != "" {
+		fmt.Fprintf(out, "Network Alias:\t%s\n", alias)
+	}
+	for _, p := range ct.GetPorts() {
+		fmt.Fprintf(out, "Port:\t%d -> %d/%s\n", p.GetHostPort(), p.GetGuestPort(), p.GetProtocol())
+	}
+	for _, v := range ct.GetVolumes() {
+		fmt.Fprintf(out, "Volume:\t%s -> %s (%s)\n", v.GetHostPath(), v.GetContainerPath(), accessMode(v.GetReadOnly()))
+	}
+	printExtraHosts(out, ct.GetExtraHosts())
+}
+
+func accessMode(readOnly bool) string {
+	if readOnly {
+		return "ro"
+	}
+	return "rw"
 }

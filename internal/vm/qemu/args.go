@@ -284,11 +284,7 @@ func BuildArgs(cfg Config) ([]string, error) {
 		)
 	}
 
-	netdevArgs, err := buildNetdev(cfg)
-	if err != nil {
-		return nil, err
-	}
-	args = append(args, netdevArgs...)
+	args = append(args, buildNetdev(cfg)...)
 
 	args = append(args, buildMounts(cfg.Mounts)...)
 	if t := cfg.ToolsShare; t != nil {
@@ -372,7 +368,7 @@ func buildPassthrough(cfg Config) []string {
 	return args
 }
 
-func buildNetdev(cfg Config) ([]string, error) {
+func buildNetdev(cfg Config) []string {
 	if cfg.BridgeTapDevice != "" {
 		device := "virtio-net-pci,netdev=" + NetdevID
 		if cfg.MACAddress != "" {
@@ -381,7 +377,7 @@ func buildNetdev(cfg Config) ([]string, error) {
 		return []string{
 			"-netdev", fmt.Sprintf("tap,id=%s,ifname=%s,script=no,downscript=no", NetdevID, cfg.BridgeTapDevice),
 			"-device", device,
-		}, nil
+		}
 	}
 
 	// SLIRP is the default networking mode even with zero host-forwards.
@@ -396,5 +392,5 @@ func buildNetdev(cfg Config) ([]string, error) {
 	return []string{
 		"-netdev", netdev,
 		"-device", "virtio-net-pci,netdev=" + NetdevID,
-	}, nil
+	}
 }

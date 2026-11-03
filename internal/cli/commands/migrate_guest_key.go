@@ -10,7 +10,7 @@ import (
 
 // newMigrateGuestKeyCommand prints this identity's default anvil
 // guest-access public key, generating it first if it doesn't exist yet.
-func newMigrateGuestKeyCommand(flags *globalFlags) *cobra.Command {
+func newMigrateGuestKeyCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:    "migrate-guest-key",
 		Short:  "Internal: print this identity's default anvil guest-access public key",

@@ -158,7 +158,7 @@ func startWaypipeClient(bin, dir string) (*exec.Cmd, error) {
 		}
 		select {
 		case err := <-exited:
-			return nil, fmt.Errorf("waypipe exited before it listened: %v", err)
+			return nil, fmt.Errorf("waypipe exited before it listened: %w", err)
 		case <-time.After(50 * time.Millisecond):
 		}
 		if time.Now().After(deadline) {

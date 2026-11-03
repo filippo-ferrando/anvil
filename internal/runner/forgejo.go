@@ -3,7 +3,9 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 )
@@ -59,7 +61,8 @@ func (f *forgejo) Register(ctx context.Context, name string, job Job) (Launch, e
 	}
 	body := map[string]any{"name": name, "ephemeral": true, "labels": job.Labels}
 	if err := f.do(ctx, "POST", "/actions/runners", body, &reg); err != nil {
-		if he, ok := err.(*httpError); ok && he.code == 404 {
+		var he *httpError
+		if errors.As(err, &he) && he.code == http.StatusNotFound {
 			return Launch{}, fmt.Errorf("forgejo: no ephemeral runners here, they need Forgejo 15 or later: %w", err)
 		}
 		return Launch{}, fmt.Errorf("forgejo: registering a runner: %w", err)

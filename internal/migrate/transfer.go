@@ -204,7 +204,7 @@ func uploadDisk(ctx context.Context, t target, localPath, remotePath string, cap
 	// An upload sent in one go is hashed on the way, so the disk isn't read twice.
 	h := sha256.New()
 	var offset int64
-	streamed := false
+	var streamed bool
 	for attempt := 1; ; attempt++ {
 		var ah hash.Hash
 		if offset == 0 && caps.sha256sum {

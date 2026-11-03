@@ -64,10 +64,8 @@ func run() error {
 	v, commit := version.Get()
 	log.Printf("anvild: starting %s (%s)", v, commit)
 
-	for _, dir := range []string{config.RunDir, config.StateDir, config.CacheDir, config.PreparedImageDir(), config.MigrateStagingDir(), config.ExportStagingDir()} {
-		if err := os.MkdirAll(dir, 0o750); err != nil {
-			return fmt.Errorf("creating %s: %w (run as root, or as the \"anvil\" system user once packaged)", dir, err)
-		}
+	if err := makeDirs(); err != nil {
+		return err
 	}
 
 	db, err := store.Open(config.DBPath())
@@ -110,51 +108,18 @@ func run() error {
 		log.Printf("anvild: reconciling intent networks: %v", err)
 	}
 
-	// Serves "<role>.<intent>.anvil" on each intent's gateway. The periodic
-	// refresh retries binds (e.g. a bridge not up yet) and picks up new container addresses.
-	dnsServer := dns.NewServer(func(ctx context.Context) ([]dns.Zone, error) {
-		zones, err := intentMgr.DNSZones(ctx)
-		return append(zones, platformDNSZones()...), err
-	})
-	intentMgr.DNS = dnsServer
-	platformDNSHook(func() {
-		if err := dnsServer.Refresh(ctx); err != nil {
-			log.Printf("dns: %v", err)
-		}
-	})
-	go dnsServer.Run(ctx, 30*time.Second)
-	// Announces this host to `anvil host discover` on the same network. It
-	// grants no access by itself, and ANVIL_MDNS=off turns it off.
-	if os.Getenv("ANVIL_MDNS") != "off" {
-		go func() {
-			if err := discovery.Serve(ctx, "", 0); err != nil {
-				log.Printf("anvild: mDNS discovery: %v", err)
-			}
-		}()
-	}
-
-	// Opt-in Prometheus endpoint: ANVIL_METRICS="127.0.0.1:9469" or "unix:/run/anvil/metrics.sock".
-	if addr := os.Getenv("ANVIL_METRICS"); addr != "" {
-		go func() {
-			if err := daemon.ServeMetrics(ctx, addr, mgr); err != nil {
-				log.Printf("anvild: metrics: %v", err)
-			}
-		}()
-	}
+	intentMgr.DNS = startDNS(ctx, intentMgr)
+	startDiscovery(ctx)
+	startMetrics(ctx, mgr)
 
 	migrateMgr := migrate.NewManager(db, mgr, vmBackend, intentMgr)
 	exportMgr := export.NewManager(db, mgr, intentMgr, vmBackend)
 
 	socketPath := config.SocketPath()
-	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("removing stale socket %s: %w", socketPath, err)
-	}
-	lis, err := net.Listen("unix", socketPath)
+	lis, err := listenSocket(socketPath)
 	if err != nil {
-		return fmt.Errorf("listening on %s: %w", socketPath, err)
+		return err
 	}
-	// Grants access to non-root CLI/TUI users via the "anvil" group; best-effort.
-	_ = os.Chmod(socketPath, 0o660)
 
 	grpcServer := grpc.NewServer(daemon.ActorInterceptors()...)
 	instanceServer := daemon.NewServer(mgr, intentMgr, vault)
@@ -208,35 +173,117 @@ func run() error {
 		log.Print("anvild: shutting down")
 		// GracefulStop waits for in-flight RPCs to finish; fall back to a
 		// hard Stop if that takes too long.
-		stopped := make(chan struct{})
-		go func() {
-			grpcServer.GracefulStop()
-			close(stopped)
-		}()
-		select {
-		case <-stopped:
-		case <-time.After(10 * time.Second):
+		if !waitTimeout(grpcServer.GracefulStop, 10*time.Second) {
 			log.Print("anvild: graceful shutdown timed out (an RPC, e.g. `logs --follow`, was still in flight), forcing stop")
 			grpcServer.Stop()
 		}
 		drainCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 		// Runner jobs and watched pipelines stop with ctx; their clones go before the pools.
-		waited := make(chan struct{})
-		go func() {
+		drained := waitContext(drainCtx, func() {
 			runnerMgr.Wait()
 			pipelineWatcher.Wait()
 			ephemeralMgr.WaitDeletes()
-			close(waited)
-		}()
-		select {
-		case <-waited:
-		case <-drainCtx.Done():
+		})
+		if !drained {
 			log.Print("anvild: timed out waiting for runner jobs, pipelines and clone deletes")
 		}
 		ephemeralMgr.Shutdown(drainCtx)
-		cancel()
 		return nil
 	case err := <-errCh:
 		return err
+	}
+}
+
+// makeDirs creates the run, state and cache directories anvild writes to.
+func makeDirs() error {
+	dirs := []string{
+		config.RunDir, config.StateDir, config.CacheDir,
+		config.PreparedImageDir(), config.MigrateStagingDir(), config.ExportStagingDir(),
+	}
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return fmt.Errorf("creating %s: %w (run as root, or as the \"anvil\" system user once packaged)", dir, err)
+		}
+	}
+	return nil
+}
+
+// listenSocket replaces any stale socket at path and listens on it.
+func listenSocket(path string) (net.Listener, error) {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("removing stale socket %s: %w", path, err)
+	}
+	lis, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, fmt.Errorf("listening on %s: %w", path, err)
+	}
+	// Grants access to non-root CLI/TUI users via the "anvil" group; best-effort.
+	_ = os.Chmod(path, 0o660)
+	return lis, nil
+}
+
+// startDNS serves "<role>.<intent>.anvil" on each intent's gateway. The periodic
+// refresh retries binds (e.g. a bridge not up yet) and picks up new container addresses.
+func startDNS(ctx context.Context, intents *intent.Manager) *dns.Server {
+	server := dns.NewServer(func(ctx context.Context) ([]dns.Zone, error) {
+		zones, err := intents.DNSZones(ctx)
+		return append(zones, platformDNSZones()...), err
+	})
+	platformDNSHook(func() {
+		if err := server.Refresh(ctx); err != nil {
+			log.Printf("dns: %v", err)
+		}
+	})
+	go server.Run(ctx, 30*time.Second)
+	return server
+}
+
+// startDiscovery announces this host to `anvil host discover` on the same network.
+// It grants no access by itself, and ANVIL_MDNS=off turns it off.
+func startDiscovery(ctx context.Context) {
+	if os.Getenv("ANVIL_MDNS") == "off" {
+		return
+	}
+	go func() {
+		if err := discovery.Serve(ctx, "", 0); err != nil {
+			log.Printf("anvild: mDNS discovery: %v", err)
+		}
+	}()
+}
+
+// startMetrics serves the opt-in Prometheus endpoint:
+// ANVIL_METRICS="127.0.0.1:9469" or "unix:/run/anvil/metrics.sock".
+func startMetrics(ctx context.Context, mgr *instance.Manager) {
+	addr := os.Getenv("ANVIL_METRICS")
+	if addr == "" {
+		return
+	}
+	go func() {
+		if err := daemon.ServeMetrics(ctx, addr, mgr); err != nil {
+			log.Printf("anvild: metrics: %v", err)
+		}
+	}()
+}
+
+// waitTimeout runs fn and reports whether it returned within d.
+func waitTimeout(fn func(), d time.Duration) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+	return waitContext(ctx, fn)
+}
+
+// waitContext runs fn and reports whether it returned before ctx was done.
+func waitContext(ctx context.Context, fn func()) bool {
+	done := make(chan struct{})
+	go func() {
+		fn()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }

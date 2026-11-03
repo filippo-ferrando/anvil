@@ -5,6 +5,7 @@
 package network
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -53,7 +54,7 @@ func (LinuxBridge) Detach(instanceID string) error {
 	tapName := TapName(instanceID)
 	link, err := netlink.LinkByName(tapName)
 	if err != nil {
-		if _, ok := err.(netlink.LinkNotFoundError); ok {
+		if errors.As(err, &netlink.LinkNotFoundError{}) {
 			return nil
 		}
 		return fmt.Errorf("network: finding tap device %q: %w", tapName, err)

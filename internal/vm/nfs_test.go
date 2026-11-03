@@ -13,9 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	nfsc "github.com/willscott/go-nfs-client/nfs"
 	"github.com/willscott/go-nfs-client/nfs/rpc"
+
+	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 )
 
 // mountTag mounts /tag from the hub listening on 127.0.0.1, as an NFS client would.

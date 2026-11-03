@@ -57,7 +57,8 @@ func DataHome() (string, error) {
 
 // Write writes the desktop entry (and icon) for s under dataDir, returning its path.
 func Write(dataDir string, s Spec, info *anvilv1.GUIAppInfoReply) (string, error) {
-	instance, app := s.Instance, ""
+	instance := s.Instance
+	var app string
 	if s.Package != "" {
 		instance, app = EphemeralPrefix+s.Instance, slug(s.Package)
 	} else {

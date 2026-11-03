@@ -2,7 +2,9 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 )
 
@@ -152,7 +154,8 @@ func (g *github) watch(ctx context.Context, id int64, name string, job Job) (Run
 	}
 	err := g.do(ctx, "GET", fmt.Sprintf("/actions/runners/%d", id), nil, &rn)
 	// A just-in-time runner goes away by itself once its job is done.
-	if he, ok := err.(*httpError); ok && he.code == 404 {
+	var he *httpError
+	if errors.As(err, &he) && he.code == http.StatusNotFound {
 		rn.Busy, err = true, nil
 	}
 	if err != nil || !rn.Busy {

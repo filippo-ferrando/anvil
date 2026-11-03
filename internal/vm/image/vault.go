@@ -257,7 +257,8 @@ func runQemuImgInfo(path string) (qemuImgInfo, error) {
 	cmd := exec.Command("qemu-img", "info", "-U", "--output=json", path)
 	out, err := cmd.Output()
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			return qemuImgInfo{}, fmt.Errorf("qemu-img info: %w: %s", err, exitErr.Stderr)
 		}
 		return qemuImgInfo{}, fmt.Errorf("qemu-img info: %w", err)

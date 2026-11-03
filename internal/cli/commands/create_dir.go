@@ -10,7 +10,7 @@ import (
 
 // newCreateDirCommand creates a host directory and grants the "anvil"
 // system user access to it, entirely client-side.
-func newCreateDirCommand(flags *globalFlags) *cobra.Command {
+func newCreateDirCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "create-dir <path>",
 		Short: "Create a host directory and prepare it for anvil mount",

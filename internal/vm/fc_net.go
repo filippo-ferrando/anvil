@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/netip"
@@ -87,7 +88,7 @@ func setupFCNetwork() (created bool, err error) {
 func ensureBridge(name string, addr netip.Prefix) (created bool, err error) {
 	link, err := netlink.LinkByName(name)
 	if err != nil {
-		if _, ok := err.(netlink.LinkNotFoundError); !ok {
+		if !errors.As(err, &netlink.LinkNotFoundError{}) {
 			return false, fmt.Errorf("vm: finding bridge %s: %w", name, err)
 		}
 		link = &netlink.Bridge{LinkAttrs: netlink.LinkAttrs{Name: name}}

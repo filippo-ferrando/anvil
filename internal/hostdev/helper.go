@@ -190,7 +190,7 @@ func claimPCI(addr string, uid int) (cl Claim, err error) {
 	}
 	if !exists(filepath.Join(sysRoot, "bus/pci/drivers/vfio-pci")) {
 		if out, err := exec.Command("modprobe", "vfio-pci").CombinedOutput(); err != nil {
-			return Claim{}, fmt.Errorf("loading vfio-pci: %v: %s", err, strings.TrimSpace(string(out)))
+			return Claim{}, fmt.Errorf("loading vfio-pci: %w: %s", err, strings.TrimSpace(string(out)))
 		}
 	}
 
