@@ -290,7 +290,7 @@ func (s *Server) pruneBaseImage(path string) error {
 			return err
 		}
 		err = s.Vault.DeleteUnused(img.Path, func() error {
-			users, err := usersOfLocked(img.Path, list, bases, s.Vault)
+			users, err := usersOfLocked(img.Path, list, bases, nil, s.Vault)
 			if err != nil {
 				return err
 			}

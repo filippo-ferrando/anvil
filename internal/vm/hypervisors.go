@@ -311,6 +311,15 @@ func (h *Hypervisors) ListCatalog() ([]image.DistroEntry, error) {
 	return h.QEMU.ListCatalog()
 }
 
+// FirecrackerKernel is the kernel Firecracker VMs of arch boot from, per the current catalog.
+func (h *Hypervisors) FirecrackerKernel(arch string) (image.FCKernel, error) {
+	catalog, err := h.QEMU.EffectiveCatalog()
+	if err != nil {
+		return image.FCKernel{}, err
+	}
+	return catalog.FirecrackerKernel(arch)
+}
+
 // diskMover is what migration and export bundles need from a hypervisor's disks.
 type diskMover interface {
 	ExportDisk(ctx context.Context, spec *instance.Spec, destPath string) error

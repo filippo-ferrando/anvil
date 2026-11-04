@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -17,6 +18,11 @@ import (
 // interface because internal/vm is Linux/QEMU-only and this package must build on every platform.
 type VMCatalog interface {
 	ListCatalog() ([]image.DistroEntry, error)
+}
+
+// FCKernelResolver is implemented by a VM backend that runs Firecracker VMs.
+type FCKernelResolver interface {
+	FirecrackerKernel(arch string) (image.FCKernel, error)
 }
 
 // ImageServer implements anvilv1.ImageServiceServer, managing the cached VM
@@ -78,9 +84,10 @@ func (s *ImageServer) List(ctx context.Context, req *anvilv1.ImageListRequest) (
 
 	bases := vmBases{}
 	bases.fill(specs, s.Vault)
+	kernel := s.kernelFiles()
 	reply := &anvilv1.ImageListReply{}
 	for _, img := range cached {
-		users := usersOf(img.Path, specs, bases)
+		users := usersOf(img.Path, specs, bases, kernel)
 		reply.Images = append(reply.Images, &anvilv1.CachedImage{
 			Id:        img.ID,
 			Arch:      img.Arch,
@@ -135,8 +142,9 @@ func (s *ImageServer) Delete(ctx context.Context, req *anvilv1.ImageDeleteReques
 	if err != nil {
 		return nil, err
 	}
+	kernel := s.kernelFiles()
 	err = s.Vault.DeleteUnused(target.Path, func() error {
-		users, err := usersOfLocked(target.Path, func() ([]*instance.Spec, error) { return s.Store.List(instance.KindVM) }, bases, s.Vault)
+		users, err := usersOfLocked(target.Path, func() ([]*instance.Spec, error) { return s.Store.List(instance.KindVM) }, bases, kernel, s.Vault)
 		if err != nil {
 			return err
 		}
@@ -198,14 +206,43 @@ func (b vmBases) fill(specs []*instance.Spec, vault *image.Vault) {
 	}
 }
 
+// kernelFileFunc returns the cache file name of the kernel Firecracker VMs of arch boot
+// from, or "" when none comes from the cache.
+type kernelFileFunc func(arch string) string
+
+// kernelFiles resolves each arch's kernel from the current catalog, once per arch.
+// With ANVIL_FC_KERNEL set no cached kernel is booted, so every one is unused.
+func (s *ImageServer) kernelFiles() kernelFileFunc {
+	r, ok := s.Backend.(FCKernelResolver)
+	if !ok || os.Getenv(image.KernelEnv) != "" {
+		return nil
+	}
+	seen := map[string]string{}
+	return func(arch string) string {
+		if name, ok := seen[arch]; ok {
+			return name
+		}
+		k, err := r.FirecrackerKernel(arch)
+		if err == nil {
+			seen[arch] = k.FileName()
+		} else {
+			seen[arch] = ""
+		}
+		return seen[arch]
+	}
+}
+
 // usersOf returns the names of specs whose disk sits on the base image at imagePath. A
-// Firecracker VM also uses that base's raw copy ("<id>-<arch>.raw") and its arch's kernel.
-func usersOf(imagePath string, specs []*instance.Spec, bases vmBases) (names []string) {
+// Firecracker VM also uses that base's raw copy ("<id>-<arch>.raw") and the kernel kernel
+// resolves for its arch, so an older kernel left in the cache has no users.
+func usersOf(imagePath string, specs []*instance.Spec, bases vmBases, kernel kernelFileFunc) (names []string) {
 	name := filepath.Base(imagePath)
 	for _, spec := range specs {
 		fc := spec.VM != nil && spec.VM.HypervisorOf() == instance.VMHypervisorFirecracker
-		if fc && strings.HasPrefix(name, "anvil-fc-kernel-") && strings.HasSuffix(name, "-"+spec.VM.Arch) {
-			names = append(names, spec.Name)
+		if fc && kernel != nil && strings.HasPrefix(name, "anvil-fc-kernel-") {
+			if name == kernel(spec.VM.Arch) {
+				names = append(names, spec.Name)
+			}
 			continue
 		}
 		base := bases[basesKey(spec)]
@@ -233,13 +270,13 @@ func preloadBases(list func() ([]*instance.Spec, error), vault *image.Vault) (vm
 
 // usersOfLocked is the in-use check run under the vault lock. bases is filled outside the
 // lock first, so only VMs created since then need a qemu-img lookup here.
-func usersOfLocked(imagePath string, list func() ([]*instance.Spec, error), bases vmBases, vault *image.Vault) ([]string, error) {
+func usersOfLocked(imagePath string, list func() ([]*instance.Spec, error), bases vmBases, kernel kernelFileFunc, vault *image.Vault) ([]string, error) {
 	specs, err := list()
 	if err != nil {
 		return nil, err
 	}
 	bases.fill(specs, vault)
-	return usersOf(imagePath, specs, bases), nil
+	return usersOf(imagePath, specs, bases, kernel), nil
 }
 
 // baseImageOf is the base image spec's disk was made from: a QEMU overlay's backing file, or

@@ -98,16 +98,23 @@ func TestUsersOfFirecracker(t *testing.T) {
 	specs := []*instance.Spec{fcVM("a", "debian-13"), fcVM("b", "ubuntu-24.04"), {Name: "c", VM: &instance.VMSpec{ImageRef: "debian-13", DiskPath: disk}}}
 	bases := vmBases{}
 	bases.fill(specs, vault)
-	if got := usersOf(base, specs, bases); len(got) != 1 || got[0] != "a" {
+	kernel := func(arch string) string { return "anvil-fc-kernel-6.18.57-" + arch }
+	if got := usersOf(base, specs, bases, kernel); len(got) != 1 || got[0] != "a" {
 		t.Fatalf("usersOf = %v, want [a]", got)
 	}
 	// The raw copy a Firecracker disk was made from counts too.
-	if got := usersOf(filepath.Join(dir, "firecracker", "debian-13-x86_64.raw"), specs, bases); len(got) != 1 || got[0] != "a" {
+	if got := usersOf(filepath.Join(dir, "firecracker", "debian-13-x86_64.raw"), specs, bases, kernel); len(got) != 1 || got[0] != "a" {
 		t.Fatalf("usersOf raw = %v, want [a]", got)
 	}
-	// Every Firecracker VM of the kernel's arch boots from it.
-	if got := usersOf(filepath.Join(dir, "firecracker", "anvil-fc-kernel-6.18.57-x86_64"), specs, bases); len(got) != 2 {
+	// Every Firecracker VM of the kernel's arch boots from the catalog's current kernel.
+	if got := usersOf(filepath.Join(dir, "firecracker", "anvil-fc-kernel-6.18.57-x86_64"), specs, bases, kernel); len(got) != 2 {
 		t.Fatalf("usersOf kernel = %v, want [a b]", got)
+	}
+	// An older kernel left in the cache, or one of another arch, has no users.
+	for _, old := range []string{"anvil-fc-kernel-6.12.1-x86_64", "anvil-fc-kernel-6.18.57-aarch64"} {
+		if got := usersOf(filepath.Join(dir, "firecracker", old), specs, bases, kernel); len(got) != 0 {
+			t.Fatalf("usersOf %s = %v, want none", old, got)
+		}
 	}
 }
 
@@ -171,7 +178,7 @@ func TestUsersOfLockedReusesBases(t *testing.T) {
 	// "a" was resolved earlier to another base, so the cached answer must win.
 	bases := vmBases{"a": "/elsewhere.qcow2"}
 	list := func() ([]*instance.Spec, error) { return []*instance.Spec{fcVM("a"), fcVM("b")}, nil }
-	users, err := usersOfLocked(base, list, bases, vault)
+	users, err := usersOfLocked(base, list, bases, nil, vault)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,5 +187,33 @@ func TestUsersOfLockedReusesBases(t *testing.T) {
 	}
 	if bases["b"] != base {
 		t.Fatalf("bases[b] = %q, want %q", bases["b"], base)
+	}
+}
+
+type fakeKernels struct{ calls int }
+
+func (f *fakeKernels) ListCatalog() ([]image.DistroEntry, error) { return nil, nil }
+
+func (f *fakeKernels) FirecrackerKernel(arch string) (image.FCKernel, error) {
+	f.calls++
+	return image.FCKernel{Arch: arch, Version: "6.18.57"}, nil
+}
+
+// kernelFiles resolves each arch once, and treats no cached kernel as booted under ANVIL_FC_KERNEL.
+func TestKernelFiles(t *testing.T) {
+	r := &fakeKernels{}
+	srv := NewImageServer(testStore(t), nil, r, nil, nil)
+	kernel := srv.kernelFiles()
+	for range 2 {
+		if got := kernel("x86_64"); got != "anvil-fc-kernel-6.18.57-x86_64" {
+			t.Fatalf("kernel = %q", got)
+		}
+	}
+	if r.calls != 1 {
+		t.Errorf("resolved %d times, want 1", r.calls)
+	}
+	t.Setenv(image.KernelEnv, "/some/vmlinux")
+	if srv.kernelFiles() != nil {
+		t.Error("expected no cached kernel in use with ANVIL_FC_KERNEL set")
 	}
 }

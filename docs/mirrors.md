@@ -85,7 +85,8 @@ Field notes:
 - `firecracker` is optional. It lists the guest kernel per arch and the distro ids that
   boot under `--hypervisor firecracker`, each with optional extra kernel arguments. A
   distro id still needs an image in some `distros` list, so a manifest can carry only this
-  section. Kernels and distro entries collide and win by `priority` like images do:
+  section. Kernels and distro entries collide and win by `priority` like images do. When
+  the winning priority lists more than one kernel for an arch, the newest `version` wins:
 
   ```json
   "firecracker": {

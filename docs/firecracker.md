@@ -35,6 +35,10 @@ everything built in. It downloads on the first Firecracker launch into
 `/var/cache/anvil/images/firecracker` and is checked against the catalog's sha256.
 `ANVIL_FC_KERNEL=<path>` in anvild's environment uses a local kernel instead.
 
+With several kernels for one arch in the catalog, the highest-priority manifest wins, then
+the newest `version` within it. The choice is made on every start, so a newer kernel in the
+catalog reaches existing VMs on their next start; the old file stays in the cache unused.
+
 Kernel updates inside the guest have no effect, since the guest never boots its own.
 
 The kernel is built and released from its own repo,
@@ -82,7 +86,8 @@ NFS server).
 - `ANVIL_FC_SUBNET` changes the standalone subnet (default `10.254.254.0/24`, a /24).
 - `ANVIL_FC_JAILER=off` runs firecracker without the jailer.
 - `anvil image list` shows the raw copies and kernels; deleting a base image also deletes
-  its raw copy.
+  its raw copy. Only the kernel the catalog picks for an arch counts as in use, so an
+  older one can be deleted without `--force`.
 
 ## Tests
 

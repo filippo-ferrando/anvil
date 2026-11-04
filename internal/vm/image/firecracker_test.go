@@ -143,6 +143,54 @@ func TestFirecrackerMirror(t *testing.T) {
 	}
 }
 
+// Priority always wins; within one priority the newest kernel version does.
+func TestFirecrackerKernelNewest(t *testing.T) {
+	kernels := func(versions ...string) string {
+		var ks []string
+		for _, v := range versions {
+			ks = append(ks, `{"arch": "x86_64", "version": "`+v+`", "url": "https://mirror/`+v+`"}`)
+		}
+		return `{"schema_version": 1, "distros": [], "firecracker": {"kernels": [` + strings.Join(ks, ",") + `]}}`
+	}
+	low := MirrorManifest{ManifestJSON: kernels("9.9.1", "10.2"), Priority: 5}
+	high := MirrorManifest{ManifestJSON: kernels("6.18.9", "6.18.57", "6.9.100"), Priority: 10}
+	c, err := (&Catalog{}).WithMirrors([]MirrorManifest{low, high})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k, _ := c.FirecrackerKernel("x86_64"); k.Version != "6.18.57" {
+		t.Errorf("kernel = %s, want 6.18.57 (newest of the highest priority)", k.Version)
+	}
+	c, err = (&Catalog{}).WithMirrors([]MirrorManifest{low})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k, _ := c.FirecrackerKernel("x86_64"); k.Version != "10.2" {
+		t.Errorf("kernel = %s, want 10.2", k.Version)
+	}
+	if _, err := c.FirecrackerKernel("aarch64"); err == nil {
+		t.Error("expected an error for an arch with no kernel")
+	}
+}
+
+func TestCompareVersions(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want int
+	}{
+		{"6.18.57", "6.18.57", 0},
+		{"6.18.57", "6.9.100", 1},
+		{"6.18", "6.18.1", -1},
+		{"6.18.57", "6.18.57-2", -1},
+		{"6.18.57-10", "6.18.57-9", 1},
+		{"10.0", "9.99", 1},
+	} {
+		if got := compareVersions(tc.a, tc.b); got != tc.want {
+			t.Errorf("compareVersions(%q, %q) = %d, want %d", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
 func TestCloneDisk(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "base.raw")
