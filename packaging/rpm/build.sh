@@ -36,11 +36,15 @@ topdir="$(mktemp -d)"
 trap 'rm -rf "$topdir"' EXIT
 mkdir -p "$topdir"/{SOURCES,SPECS,BUILD,RPMS,SRPMS,BUILDROOT}
 
+# The VM image catalog embedded by data/distros, gitignored so added to the tarball below.
+"$repo/scripts/fetch-catalog.sh"
+
 echo "==> archiving the working tree as anvil-${version} (tracked + untracked-and-not-gitignored files, skipping anything deleted-but-still-tracked)"
 filelist="$topdir/files.lst"
 git -C "$repo" ls-files --others --cached --exclude-standard -z \
   | while IFS= read -r -d '' f; do [ -f "$repo/$f" ] && printf '%s\0' "$f"; done \
   > "$filelist"
+( cd "$repo" && printf '%s\0' data/distros/*.json ) >> "$filelist"
 # Static waypipe/xwayland-satellite for `anvil gui` (gitignored), from scripts/build-gui-tools.sh.
 # Their rename to gui-tools/ has to come before the anvil-<version>/ prefix.
 gui_tools="${GUI_TOOLS_DIR:-$repo/build/gui-tools}"

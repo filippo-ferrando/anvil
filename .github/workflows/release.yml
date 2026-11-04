@@ -85,7 +85,7 @@ jobs:
           # here, not just PKGBUILD + anvild.install on their own.
           mkdir -p /tmp/pkgroot/archlinux /tmp/pkgroot/common
           sed -e "s/^pkgver=.*/pkgver=$VERSION/" \
-              -e "s#^source=.*#source=(\"anvil::git+file://$GITHUB_WORKSPACE\")#" \
+              -e "s#anvil::git+https://git.fferrando.cc/rdfilippo/anvil.git#anvil::git+file://$GITHUB_WORKSPACE#" \
               "$GITHUB_WORKSPACE/packaging/archlinux/PKGBUILD" > /tmp/pkgroot/archlinux/PKGBUILD
           cp "$GITHUB_WORKSPACE/packaging/archlinux/anvild.install" /tmp/pkgroot/archlinux/
           cp "$GITHUB_WORKSPACE"/packaging/common/* /tmp/pkgroot/common/

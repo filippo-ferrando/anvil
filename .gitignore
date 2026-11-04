@@ -6,6 +6,8 @@
 *.qcow2
 *.iso
 /data/distros/*.tmp
+# Fetched by scripts/fetch-catalog.sh, see data/distros/distros.go.
+/data/distros/*.json
 /packaging/*.log
 /packaging/*.zst
 /packaging/anvil/

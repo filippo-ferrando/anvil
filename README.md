@@ -324,11 +324,11 @@ usually installed outside `PATH`, e.g. `/usr/lib/virtiofsd`).
 
 ```
 make proto          # regenerate api/gen/anvil/v1 from the .proto file
-make build          # builds ./anvil, ./anvild and ./anvil-guest
+make catalog        # (re)fetch the VM image catalog from git.fferrando.cc/anvil/catalog
+make build          # builds ./anvil, ./anvild and ./anvil-guest (fetches the catalog if missing)
 make man            # optional: man pages into man/man1 and man/man8
 make gui-tools      # optional: static waypipe/xwayland-satellite for `anvil gui` with VMs (needs docker)
 make firecracker    # optional: static firecracker/jailer release into build/firecracker
-make fc-kernel      # optional: anvil's Firecracker guest kernel (needs docker, ARCH=aarch64 for arm64)
 make update-tools   # bump the pinned GUI tools and firecracker versions in scripts/tools.versions
 ```
 
@@ -450,7 +450,7 @@ internal/
   cli/commands/  cobra commands
   tui/           the Bubble Tea app
 api/proto/       the gRPC API definition
-data/distros/    the built-in VM image catalog
+data/distros/    embeds the VM image catalog, fetched from the anvil/catalog repo at build time
 catalog/         the official extra catalogue (git submodule)
 packaging/       PKGBUILD, deb/rpm build scripts, systemd unit, sysusers/tmpfiles rules
 scripts/         catalog checksum check, release notes and changelog, static GUI tools and

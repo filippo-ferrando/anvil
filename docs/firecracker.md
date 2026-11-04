@@ -37,8 +37,9 @@ everything built in. It downloads on the first Firecracker launch into
 
 Kernel updates inside the guest have no effect, since the guest never boots its own.
 
-The kernel is built by `scripts/build-fc-kernel.sh` (`make fc-kernel`, `ARCH=aarch64` for
-arm64) and published by `.github/workflows/fc-kernel.yml` on a `fc-kernel-<version>` tag.
+The kernel is built and released from its own repo,
+[anvil/fc-kernel](https://git.fferrando.cc/anvil/fc-kernel) (`make`, `ARCH=aarch64` for
+arm64), on a `v<version>` tag.
 
 ## The catalog
 

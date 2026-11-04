@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -16,6 +17,9 @@ type FCKernel struct {
 	URL     string `json:"url"`
 	SHA256  string `json:"sha256"`
 }
+
+// FileName is k's file name in the Firecracker cache.
+func (k FCKernel) FileName() string { return "anvil-fc-kernel-" + k.Version + "-" + k.Arch }
 
 // FCDistro marks a distro id of the distros list as bootable under Firecracker.
 type FCDistro struct {
@@ -46,12 +50,56 @@ func best[T any](entries []prioritized[T], match func(T) bool) (T, bool) {
 	return found.v, true
 }
 
-// FirecrackerKernel returns the guest kernel for arch.
+// FirecrackerKernel returns the guest kernel for arch: the highest-priority manifest's,
+// and its newest version when that manifest publishes more than one.
 func (c *Catalog) FirecrackerKernel(arch string) (FCKernel, error) {
-	if k, ok := best(c.fcKernels, func(k FCKernel) bool { return k.Arch == arch }); ok {
-		return k, nil
+	var found *prioritized[FCKernel]
+	for i := range c.fcKernels {
+		k := &c.fcKernels[i]
+		if k.v.Arch != arch {
+			continue
+		}
+		if found == nil || k.priority > found.priority ||
+			k.priority == found.priority && compareVersions(k.v.Version, found.v.Version) > 0 {
+			found = k
+		}
 	}
-	return FCKernel{}, fmt.Errorf("image: no firecracker kernel for %s", arch)
+	if found == nil {
+		return FCKernel{}, fmt.Errorf("image: no firecracker kernel for %s", arch)
+	}
+	return found.v, nil
+}
+
+// compareVersions orders versions like "6.18.57" or "6.18.57-2": runs of digits compare as
+// numbers, everything else as text.
+func compareVersions(a, b string) int {
+	for a != "" && b != "" {
+		pa, ra := versionPart(a)
+		pb, rb := versionPart(b)
+		na, errA := strconv.ParseUint(pa, 10, 64)
+		nb, errB := strconv.ParseUint(pb, 10, 64)
+		switch {
+		case errA == nil && errB == nil && na != nb:
+			if na < nb {
+				return -1
+			}
+			return 1
+		case (errA != nil || errB != nil) && pa != pb:
+			return strings.Compare(pa, pb)
+		}
+		a, b = ra, rb
+	}
+	return strings.Compare(a, b)
+}
+
+// versionPart splits off v's leading run of digits, or of non-digits.
+func versionPart(v string) (part, rest string) {
+	digit := func(r byte) bool { return r >= '0' && r <= '9' }
+	i := 1
+	for i < len(v) && digit(v[i]) == digit(v[0]) {
+		i++
+	}
+	return v[:i], v[i:]
 }
 
 // FirecrackerDistro returns id's Firecracker entry, failing for a distro not known to boot.
@@ -77,7 +125,7 @@ func (c *FCCache) Kernel(ctx context.Context, k FCKernel, progress func(status s
 	if path := os.Getenv(KernelEnv); path != "" {
 		return path, nil
 	}
-	dest := filepath.Join(c.Dir, "anvil-fc-kernel-"+k.Version+"-"+k.Arch)
+	dest := filepath.Join(c.Dir, k.FileName())
 	c.Vault.Use(ctx, dest)
 	entry := DistroEntry{ID: "firecracker kernel " + k.Version, Arch: k.Arch, URL: k.URL, SHA256: k.SHA256}
 	if err := c.Vault.Downloader.Fetch(ctx, entry, dest, progress); err != nil {

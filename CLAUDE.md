@@ -12,7 +12,8 @@ a single gRPC API, with a CLI (`anvil`) and a Bubble Tea TUI (`anvil tui`) as cl
 
 ```
 make proto   # regenerate api/gen/anvil/v1 from api/proto/anvil/v1/anvil.proto (needs protoc)
-make build   # anvil (CGO_ENABLED=0) + anvild
+make catalog # refetch the VM image catalog (anvil/catalog repo) into data/distros
+make build   # anvil (CGO_ENABLED=0) + anvild; build/test/vet fetch the catalog if it's missing
 make test    # go test ./...
 make vet     # go vet ./...
 make fmt     # gofmt -l -s . (lists files that need formatting; doesn't rewrite them)
@@ -20,7 +21,6 @@ make man     # regenerate man/man1 from the live command tree, copy hand-written
 make gui-tools  # static waypipe/xwayland-satellite for `anvil gui` into build/gui-tools (needs docker)
 make firecracker  # static firecracker/jailer release into build/firecracker, bundled by the packages
 make update-tools # bump scripts/tools.versions (GUI tools + firecracker) to the latest stable releases
-make fc-kernel  # anvil's Firecracker guest kernel into build/fc-kernel (needs docker, ARCH=aarch64 for arm64)
 ```
 
 Single test / package:
@@ -122,15 +122,14 @@ internal/
   version/       build version stamped from git
   cli/commands/  cobra commands (one file per command/command group)
   tui/           the Bubble Tea app
-data/distros/    built-in VM image catalog (embedded in the binary)
-catalog/         official extra catalogue (distro manifests + cloud-init templates), a git
-                 submodule consumed via `anvil mirror add` / `cloud-init import-repo`, not embedded
-scripts/         verify-catalog.sh (checksums), release-notes.sh (used by the release workflow),
+data/distros/    embeds the VM image catalog; its distros_*/firecracker_*.json are fetched from
+                 git.fferrando.cc/anvil/catalog by scripts/fetch-catalog.sh and gitignored, so a bare
+                 `go build` fails until `make catalog` ran. Edit the catalog in that repo, not here
+scripts/         fetch-catalog.sh (the catalog, CATALOG_REF/CATALOG_SRC), verify-catalog.sh (checksums), release-notes.sh (used by the release workflow),
                  changelog.sh (CHANGELOG.md from commit subjects),
                  build-gui-tools.sh (static GUI tools, used by `make gui-tools` and releases),
                  fetch-firecracker.sh (static firecracker/jailer), tools.versions (their pinned
-                 versions) and update-tools.sh (bumps it to the latest stable releases),
-                 build-fc-kernel.sh + fc-kernel.config (the Firecracker guest kernel, `make fc-kernel`)
+                 versions) and update-tools.sh (bumps it to the latest stable releases)
 packaging/       PKGBUILD/deb/rpm build scripts, systemd unit, sysusers/tmpfiles rules
 ```
 

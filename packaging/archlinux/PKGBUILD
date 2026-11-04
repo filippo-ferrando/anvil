@@ -10,8 +10,15 @@ license=('Apache-2.0')
 makedepends=('go' 'git')
 # makepkg.conf enables "debug" by default, which adds an unwanted anvil-debug package.
 options=('!debug')
-source=("anvil::git+https://git.fferrando.cc/rdfilippo/anvil.git")
-sha256sums=('SKIP') # VCS source, no fixed download to checksum
+# The VM image catalog, embedded into anvild by data/distros.
+source=("anvil::git+https://git.fferrando.cc/rdfilippo/anvil.git"
+        "catalog::git+https://git.fferrando.cc/anvil/catalog.git")
+sha256sums=('SKIP' 'SKIP') # VCS sources, no fixed download to checksum
+
+prepare() {
+  cd "$srcdir/anvil"
+  CATALOG_SRC="$srcdir/catalog" scripts/fetch-catalog.sh
+}
 
 build() {
   cd "$srcdir/anvil"

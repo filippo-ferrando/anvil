@@ -1,4 +1,4 @@
-.PHONY: proto tui-deps build gui-tools firecracker update-tools fc-kernel man test vet fmt clean
+.PHONY: proto tui-deps catalog build gui-tools firecracker update-tools man test vet fmt clean
 
 GOBIN := $(shell go env GOPATH)/bin
 
@@ -21,7 +21,17 @@ tui-deps:
 	go get github.com/charmbracelet/lipgloss@latest
 	go mod tidy
 
-build:
+# The VM image catalog embedded by data/distros, pulled from the anvil/catalog repo.
+CATALOG := data/distros/distros_x86_64.json
+
+# Refetches the catalog (CATALOG_REF picks a branch or tag, default main).
+catalog:
+	scripts/fetch-catalog.sh
+
+$(CATALOG):
+	scripts/fetch-catalog.sh
+
+build: $(CATALOG)
 	CGO_ENABLED=0 go build ./cmd/anvil/...
 	go build ./cmd/anvild/...
 	CGO_ENABLED=0 go build ./cmd/anvil-guest/...
@@ -38,27 +48,22 @@ firecracker:
 update-tools:
 	scripts/update-tools.sh
 
-# Builds anvil's Firecracker guest kernel into build/fc-kernel (needs docker).
-# ARCH=aarch64 cross-builds the arm64 one.
-fc-kernel:
-	scripts/build-fc-kernel.sh build/fc-kernel $(or $(ARCH),x86_64)
-
 # Regenerates man/man1 (one page per `anvil` subcommand, via the hidden
 # `anvil man` command in internal/cli/commands/man.go) and copies
 # docs/man/anvild.8, anvild's hand-written page, into man/man8. Both
 # directories are gitignored; the packaging scripts under packaging/
 # do their own equivalent of this rather than depending on it, since
 # each builds anvil-bin fresh in its own staging area.
-man:
+man: $(CATALOG)
 	rm -rf man
 	mkdir -p man/man1 man/man8
 	CGO_ENABLED=0 go run ./cmd/anvil man man/man1
 	cp docs/man/anvild.8 man/man8/anvild.8
 
-test:
+test: $(CATALOG)
 	go test ./...
 
-vet:
+vet: $(CATALOG)
 	go vet ./...
 
 fmt:

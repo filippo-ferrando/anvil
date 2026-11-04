@@ -1,13 +1,33 @@
-// Package distros embeds anvil's built-in default VM image catalog.
+// Package distros embeds anvil's default VM image catalog, fetched at build time from
+// the anvil/catalog repo by scripts/fetch-catalog.sh (`make catalog`).
 package distros
 
-import _ "embed"
+import (
+	"embed"
+	"io/fs"
+)
 
-//go:embed distribution-info.json
-var Raw []byte
-
-// FirecrackerRaw is a manifest with only a firecracker section: the guest kernel per
-// arch, and which distro ids of Raw boot under Firecracker.
+// The build fails here when the catalog was never fetched: run `make catalog`.
 //
-//go:embed firecracker.json
-var FirecrackerRaw []byte
+//go:embed distros_*.json firecracker_*.json
+var files embed.FS
+
+// Manifests returns every embedded manifest: the per-arch distro lists first, then the
+// Firecracker sections (guest kernel and bootable distro ids per arch).
+func Manifests() ([][]byte, error) {
+	var out [][]byte
+	for _, pattern := range []string{"distros_*.json", "firecracker_*.json"} {
+		names, err := fs.Glob(files, pattern)
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range names {
+			raw, err := files.ReadFile(n)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, raw)
+		}
+	}
+	return out, nil
+}

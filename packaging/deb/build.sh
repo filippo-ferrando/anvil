@@ -22,7 +22,7 @@ arch="${2:-amd64}"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$root/../.." && pwd)"
 
-for tool in go dpkg-deb; do
+for tool in go git dpkg-deb; do
   command -v "$tool" >/dev/null || { echo "packaging/deb/build.sh: needs '$tool' on PATH" >&2; exit 1; }
 done
 
@@ -30,6 +30,9 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 echo "==> building anvil ${version} for ${arch}"
+
+# The VM image catalog embedded by data/distros (gitignored), fresh for every package.
+"$repo/scripts/fetch-catalog.sh"
 
 echo "==> compiling"
 ( cd "$repo" && CGO_ENABLED=0 go build -trimpath -o "$work/anvil-bin" ./cmd/anvil )

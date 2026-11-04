@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Downloads every entry in data/distros/distribution-info.json, verifies
+# Downloads every entry in a distros manifest (from scripts/fetch-catalog.sh), verifies
 # the URL resolves to a real image, and prints its sha256.
 #
-# Usage: scripts/verify-catalog.sh [--keep]
-#   --keep   don't delete the downloaded images afterward (default: delete)
+# Usage: scripts/verify-catalog.sh [--keep] [manifest]
+#   --keep    don't delete the downloaded images afterward (default: delete)
+#   manifest  defaults to data/distros/distros_x86_64.json
 set -euo pipefail
 
-manifest="data/distros/distribution-info.json"
 keep=false
-[[ "${1:-}" == "--keep" ]] && keep=true
+[[ "${1:-}" == "--keep" ]] && { keep=true; shift; }
+manifest="${1:-data/distros/distros_x86_64.json}"
 
 # A real cloud image is realistically never smaller than this; an HTML
 # directory listing almost always is.
@@ -65,7 +66,7 @@ for i in $(seq 0 $((count - 1))); do
 
   sha=$(sha256sum "$dest" | cut -d' ' -f1)
   echo "OK ($size bytes, $content_type), sha256: $sha"
-  echo "-> paste this into distribution-info.json's \"$id\" entry's \"sha256\" field"
+  echo "-> paste this into $(basename "$manifest")'s (in the anvil/catalog repo) \"$id\" entry's \"sha256\" field"
   [[ "$keep" == false ]] && rm -f "$dest"
   echo
 done

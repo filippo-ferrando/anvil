@@ -119,3 +119,23 @@ func TestLoadManifestRejectsPathsInNames(t *testing.T) {
 		}
 	}
 }
+
+// The fetched catalog has one distros and one firecracker manifest per arch.
+func TestLoadEmbeddedCoversEveryArch(t *testing.T) {
+	cat, err := LoadEmbedded()
+	if err != nil {
+		t.Fatalf("LoadEmbedded: %v", err)
+	}
+	for _, arch := range []string{"x86_64", "aarch64"} {
+		found := false
+		for _, e := range cat.List() {
+			found = found || e.Arch == arch
+		}
+		if !found {
+			t.Errorf("no %s distro in the embedded catalog", arch)
+		}
+		if _, err := cat.FirecrackerKernel(arch); err != nil {
+			t.Errorf("FirecrackerKernel(%s): %v", arch, err)
+		}
+	}
+}

@@ -34,6 +34,9 @@ jobs:
             docker pull alpine:3.22
           fi
 
+      - name: Fetch the VM image catalog
+        run: scripts/fetch-catalog.sh
+
       - name: Check formatting
         run: |
           unformatted=$(gofmt -l -s .)
