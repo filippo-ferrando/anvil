@@ -294,6 +294,11 @@ address into `anvil host add`.
   (`internal/vm/image/downloader.go`). An entry without a checksum is accepted as
   downloaded. The README notes that the built-in catalogue's checksums are still being
   completed and points to `scripts/verify-catalog.sh`.
+- anvild fetches the official catalogue over HTTPS from git.fferrando.cc once a day
+  (`internal/vm/image/catalog_update.go`) and uses its image URLs, checksums and
+  Firecracker kernels in place of the embedded ones. Trust in image content therefore
+  extends to that server, as it already did at build time. `ANVIL_CATALOG_UPDATE=off`
+  stops the automatic checks; `ANVIL_CATALOG_URL` points them at a local copy.
 - VM mirror manifests are fetched once at `anvil mirror add` and cached in bbolt; later
   launches trust that cached copy. Container mirrors rewrite image references and can be
   marked `Insecure`.

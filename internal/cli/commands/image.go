@@ -20,6 +20,7 @@ func newImageCommand(flags *globalFlags) *cobra.Command {
 	cmd.AddCommand(
 		newImageListCommand(flags), newImageDeleteCommand(flags),
 		newImageChecksumCommand(flags), newImageContainersCommand(flags),
+		newImageCatalogCommand(flags),
 	)
 	return cmd
 }

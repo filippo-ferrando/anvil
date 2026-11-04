@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -92,6 +93,8 @@ type imagesModel struct {
 	catalogAll    []*anvilv1.CatalogEntry
 	catalogFilter textinput.Model
 	filtering     bool // the filter input has the keyboard
+	// Where the catalog comes from, shown in its panel title; nil until loaded.
+	catalogStatus *anvilv1.CatalogStatusReply
 
 	containerImages        list.Model
 	confirmDeleteContainer *anvilv1.ContainerImage
@@ -166,6 +169,27 @@ func (m model) updateImages(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.images.applyCatalogFilter()
 		return m, nil
 
+	case catalogStatusMsg:
+		if msg.err == nil {
+			m.images.catalogStatus = msg.status
+			m.images.applyCatalogFilter()
+		}
+		return m, nil
+
+	case catalogUpdatedMsg:
+		if msg.err != nil {
+			m.setStatus("catalog update: "+msg.err.Error(), true)
+			return m, nil
+		}
+		m.images.catalogStatus = msg.status
+		m.images.applyCatalogFilter()
+		if !msg.changed {
+			m.setStatus("catalog already up to date", false)
+			return m, nil
+		}
+		m.setStatus("catalog updated", false)
+		return m, loadCatalog(m.client)
+
 	case containerImagesLoadedMsg:
 		if msg.err != nil {
 			m.setStatus("listing container images: "+msg.err.Error(), true)
@@ -220,6 +244,9 @@ func (m *imagesModel) applyCatalogFilter() {
 	}
 	m.catalog.SetItems(items)
 	m.catalog.Title = "Available to launch"
+	if m.catalogStatus != nil {
+		m.catalog.Title += " [" + format.CatalogSource(m.catalogStatus, time.DateOnly) + "]"
+	}
 	if term != "" {
 		m.catalog.Title += fmt.Sprintf(" (%d match %q)", len(items), term)
 	}
@@ -299,7 +326,14 @@ func (m model) updateImagesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if im.mode == imagesModeContainer {
 			return m, loadContainerImages(m.client)
 		}
-		return m, tea.Batch(loadCachedImages(m.client), loadCatalog(m.client))
+		return m, tea.Batch(loadCachedImages(m.client), loadCatalog(m.client), loadCatalogStatus(m.client))
+	case "u":
+		if im.mode == imagesModeVM {
+			title := "updating the image catalog"
+			m.setStatus(inBackground(title), false)
+			return m, m.track(title, screenImages, updateCatalog(m.client))
+		}
+		return m, nil
 	case "h":
 		if im.mode == imagesModeVM && !im.focusCatalog {
 			if item, ok := im.cached.SelectedItem().(cachedImageItem); ok {
@@ -376,7 +410,7 @@ func (m imagesModel) View() string {
 	right := catalogBox.Render(pin.Render(m.catalog.View()))
 
 	help := helpBar("v", "VM images", "c", "container images", "tab", "switch panel", "/", "filter catalog",
-		"h", "checksum", "x", "delete cached", "r", "refresh", "esc", "back")
+		"h", "checksum", "x", "delete cached", "u", "update catalog", "r", "refresh", "esc", "back")
 	if m.filtering {
 		help = m.catalogFilter.View() + "  " + helpBar("enter", "keep filter", "esc", "clear filter")
 	}

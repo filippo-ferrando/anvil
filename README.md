@@ -280,11 +280,12 @@ anvil mirror add --kind vm --manifest-url <url> extra-images
 anvil cloud-init import-repo <url>
 ```
 
-The official catalogue (extra distro manifests for x86_64 and aarch64, plus cloud-init
-templates) is its own repo, checked out here as the `catalog/` git submodule. Its
-README has the exact URLs to pass to the two commands above. `git submodule update
---init` fetches it after a clone. See [docs/mirrors.md](docs/mirrors.md) for how
-mirrors and template repos work.
+The official catalogue (distro manifests for x86_64 and aarch64, Firecracker kernels,
+plus cloud-init templates) is its own repo, git.fferrando.cc/anvil/catalog. Its manifests
+are built into anvild, and a running anvild checks the repo once a day for updates, so
+new distros and kernels show up without a new release (`anvil image catalog status`,
+`ANVIL_CATALOG_UPDATE=off` to stop it). See [docs/mirrors.md](docs/mirrors.md) for how
+the catalogue, mirrors and template repos work.
 
 ## Install
 
@@ -451,7 +452,6 @@ internal/
   tui/           the Bubble Tea app
 api/proto/       the gRPC API definition
 data/distros/    embeds the VM image catalog, fetched from the anvil/catalog repo at build time
-catalog/         the official extra catalogue (git submodule)
 packaging/       PKGBUILD, deb/rpm build scripts, systemd unit, sysusers/tmpfiles rules
 scripts/         catalog checksum check, release notes and changelog, static GUI tools and
                  firecracker builds, pinned tool versions, Firecracker guest kernel build

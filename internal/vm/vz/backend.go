@@ -7,6 +7,7 @@ package vz
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
@@ -27,6 +28,8 @@ type Backend struct {
 	Catalog *image.Catalog
 	Vault   *image.Vault
 	Source  Source
+
+	catalogMu sync.Mutex // guards Catalog
 }
 
 var _ instance.Backend = (*Backend)(nil)
@@ -39,7 +42,16 @@ func NewBackend(catalog *image.Catalog, vault *image.Vault, source Source) *Back
 // ListCatalog returns every distro entry this backend resolves against.
 // Satisfies internal/daemon.VMCatalog, same as internal/vm.Backend.
 func (b *Backend) ListCatalog() ([]image.DistroEntry, error) {
+	b.catalogMu.Lock()
+	defer b.catalogMu.Unlock()
 	return b.Catalog.List(), nil
+}
+
+// SetCatalog replaces the base catalog, e.g. after the official catalog was updated.
+func (b *Backend) SetCatalog(c *image.Catalog) {
+	b.catalogMu.Lock()
+	defer b.catalogMu.Unlock()
+	b.Catalog = c
 }
 
 // ExportDisk satisfies internal/migrate.Exporter, same as internal/vm.Backend.

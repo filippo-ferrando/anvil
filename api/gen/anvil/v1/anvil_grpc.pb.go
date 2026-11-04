@@ -1851,6 +1851,8 @@ const (
 	ImageService_List_FullMethodName                 = "/anvil.v1.ImageService/List"
 	ImageService_Delete_FullMethodName               = "/anvil.v1.ImageService/Delete"
 	ImageService_Catalog_FullMethodName              = "/anvil.v1.ImageService/Catalog"
+	ImageService_CatalogStatus_FullMethodName        = "/anvil.v1.ImageService/CatalogStatus"
+	ImageService_UpdateCatalog_FullMethodName        = "/anvil.v1.ImageService/UpdateCatalog"
 	ImageService_ListContainerImages_FullMethodName  = "/anvil.v1.ImageService/ListContainerImages"
 	ImageService_DeleteContainerImage_FullMethodName = "/anvil.v1.ImageService/DeleteContainerImage"
 	ImageService_Checksum_FullMethodName             = "/anvil.v1.ImageService/Checksum"
@@ -1866,6 +1868,10 @@ type ImageServiceClient interface {
 	Delete(ctx context.Context, in *ImageDeleteRequest, opts ...grpc.CallOption) (*ImageDeleteReply, error)
 	// Catalog lists every distro image `anvil launch --kind vm <id>` can resolve against.
 	Catalog(ctx context.Context, in *CatalogRequest, opts ...grpc.CallOption) (*CatalogReply, error)
+	// CatalogStatus reports where the built-in catalog in use comes from and its last update check.
+	CatalogStatus(ctx context.Context, in *CatalogStatusRequest, opts ...grpc.CallOption) (*CatalogStatusReply, error)
+	// UpdateCatalog checks the official catalog now and switches to it if it changed.
+	UpdateCatalog(ctx context.Context, in *UpdateCatalogRequest, opts ...grpc.CallOption) (*UpdateCatalogReply, error)
 	// ListContainerImages lists every image cached by a container engine
 	// (Docker today), separate from the VM image cache above.
 	ListContainerImages(ctx context.Context, in *ContainerImageListRequest, opts ...grpc.CallOption) (*ContainerImageListReply, error)
@@ -1913,6 +1919,26 @@ func (c *imageServiceClient) Catalog(ctx context.Context, in *CatalogRequest, op
 	return out, nil
 }
 
+func (c *imageServiceClient) CatalogStatus(ctx context.Context, in *CatalogStatusRequest, opts ...grpc.CallOption) (*CatalogStatusReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CatalogStatusReply)
+	err := c.cc.Invoke(ctx, ImageService_CatalogStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *imageServiceClient) UpdateCatalog(ctx context.Context, in *UpdateCatalogRequest, opts ...grpc.CallOption) (*UpdateCatalogReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateCatalogReply)
+	err := c.cc.Invoke(ctx, ImageService_UpdateCatalog_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *imageServiceClient) ListContainerImages(ctx context.Context, in *ContainerImageListRequest, opts ...grpc.CallOption) (*ContainerImageListReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ContainerImageListReply)
@@ -1953,6 +1979,10 @@ type ImageServiceServer interface {
 	Delete(context.Context, *ImageDeleteRequest) (*ImageDeleteReply, error)
 	// Catalog lists every distro image `anvil launch --kind vm <id>` can resolve against.
 	Catalog(context.Context, *CatalogRequest) (*CatalogReply, error)
+	// CatalogStatus reports where the built-in catalog in use comes from and its last update check.
+	CatalogStatus(context.Context, *CatalogStatusRequest) (*CatalogStatusReply, error)
+	// UpdateCatalog checks the official catalog now and switches to it if it changed.
+	UpdateCatalog(context.Context, *UpdateCatalogRequest) (*UpdateCatalogReply, error)
 	// ListContainerImages lists every image cached by a container engine
 	// (Docker today), separate from the VM image cache above.
 	ListContainerImages(context.Context, *ContainerImageListRequest) (*ContainerImageListReply, error)
@@ -1978,6 +2008,12 @@ func (UnimplementedImageServiceServer) Delete(context.Context, *ImageDeleteReque
 }
 func (UnimplementedImageServiceServer) Catalog(context.Context, *CatalogRequest) (*CatalogReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method Catalog not implemented")
+}
+func (UnimplementedImageServiceServer) CatalogStatus(context.Context, *CatalogStatusRequest) (*CatalogStatusReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method CatalogStatus not implemented")
+}
+func (UnimplementedImageServiceServer) UpdateCatalog(context.Context, *UpdateCatalogRequest) (*UpdateCatalogReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateCatalog not implemented")
 }
 func (UnimplementedImageServiceServer) ListContainerImages(context.Context, *ContainerImageListRequest) (*ContainerImageListReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListContainerImages not implemented")
@@ -2063,6 +2099,42 @@ func _ImageService_Catalog_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ImageService_CatalogStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CatalogStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ImageServiceServer).CatalogStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ImageService_CatalogStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ImageServiceServer).CatalogStatus(ctx, req.(*CatalogStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ImageService_UpdateCatalog_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateCatalogRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ImageServiceServer).UpdateCatalog(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ImageService_UpdateCatalog_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ImageServiceServer).UpdateCatalog(ctx, req.(*UpdateCatalogRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ImageService_ListContainerImages_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ContainerImageListRequest)
 	if err := dec(in); err != nil {
@@ -2135,6 +2207,14 @@ var ImageService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Catalog",
 			Handler:    _ImageService_Catalog_Handler,
+		},
+		{
+			MethodName: "CatalogStatus",
+			Handler:    _ImageService_CatalogStatus_Handler,
+		},
+		{
+			MethodName: "UpdateCatalog",
+			Handler:    _ImageService_UpdateCatalog_Handler,
 		},
 		{
 			MethodName: "ListContainerImages",

@@ -313,6 +313,8 @@ func replyErr(msg tea.Msg) error {
 		return r.err
 	case imageChecksumMsg:
 		return r.err
+	case catalogUpdatedMsg:
+		return r.err
 	}
 	return nil
 }

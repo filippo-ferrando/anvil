@@ -36,10 +36,11 @@ import (
 )
 
 // VMBackend is what main needs from this platform's VM backend beyond the
-// plain instance.Backend contract: image-catalog listing, migration export, and import support.
+// plain instance.Backend contract: image-catalog listing and replacement, migration export, and import support.
 type VMBackend interface {
 	instance.Backend
 	daemon.VMCatalog
+	SetCatalog(*image.Catalog)
 	migrate.Exporter
 	export.VMImporter
 }
@@ -74,7 +75,11 @@ func run() error {
 	}
 	defer db.Close()
 
-	catalog, err := image.LoadEmbedded()
+	catalogUpdater, err := newCatalogUpdater()
+	if err != nil {
+		return err
+	}
+	catalog, err := catalogUpdater.Initial()
 	if err != nil {
 		return fmt.Errorf("loading image catalog: %w", err)
 	}
@@ -82,6 +87,8 @@ func run() error {
 	vault.RawDir = config.FirecrackerImageDir()
 	vault.Keep = instance.KeepUntilCreated
 	vmBackend := newVMBackend(catalog, vault, db)
+	catalogUpdater.Apply = vmBackend.SetCatalog
+	go catalogUpdater.Run(ctx)
 
 	// db satisfies container.Source, used to resolve container mirrors at pull time.
 	dockerBackend := container.NewDockerBackend(docker.DefaultSocket, db)
@@ -129,6 +136,7 @@ func run() error {
 	anvilv1.RegisterMirrorServiceServer(grpcServer, daemon.NewMirrorServer(db))
 	imageServer := daemon.NewImageServer(db, vault, vmBackend, containerBackend,
 		&image.FCCache{Dir: config.FirecrackerImageDir(), Vault: vault})
+	imageServer.CatalogUpdater = catalogUpdater
 	anvilv1.RegisterImageServiceServer(grpcServer, imageServer)
 	intentServer := daemon.NewIntentServer(intentMgr, mgr, instanceServer)
 	anvilv1.RegisterIntentServiceServer(grpcServer, intentServer)
@@ -193,6 +201,23 @@ func run() error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+// newCatalogUpdater keeps the image catalog in line with the official one.
+// ANVIL_CATALOG_URL changes where it's fetched from, ANVIL_CATALOG_UPDATE=off stops automatic checks.
+func newCatalogUpdater() (*image.CatalogUpdater, error) {
+	url := os.Getenv("ANVIL_CATALOG_URL")
+	if url == "" {
+		url = image.DefaultCatalogURL
+	}
+	u, err := image.NewCatalogUpdater(url, config.CatalogCachePath())
+	if err != nil {
+		return nil, err
+	}
+	if os.Getenv("ANVIL_CATALOG_UPDATE") == "off" {
+		u.Interval = 0
+	}
+	return u, nil
 }
 
 // makeDirs creates the run, state and cache directories anvild writes to.

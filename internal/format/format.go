@@ -153,3 +153,15 @@ func Uptime(seconds int64, sep string) string {
 		return fmt.Sprintf("%ds", secs)
 	}
 }
+
+// CatalogSource renders where the image catalog in use comes from, e.g. "built-in" or
+// "updated <time>", with the time in timeLayout.
+func CatalogSource(s *anvilv1.CatalogStatusReply, timeLayout string) string {
+	if s.GetSource() != "updated" {
+		return "built-in"
+	}
+	if s.GetUpdatedAtUnix() <= 0 {
+		return "updated"
+	}
+	return "updated " + time.Unix(s.GetUpdatedAtUnix(), 0).Format(timeLayout)
+}

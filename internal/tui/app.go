@@ -309,7 +309,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateSnapshots(msg)
 	case eventsLoadedMsg:
 		return m.updateEvents(msg)
-	case imageChecksumMsg:
+	case imageChecksumMsg, catalogStatusMsg, catalogUpdatedMsg:
 		return m.updateImages(msg)
 	case applyStreamMsg:
 		if typed.owner == screenManifests {
@@ -485,7 +485,7 @@ func (m model) loadCmdForScreen(s screen) tea.Cmd {
 	case screenSnapshots:
 		return loadInstances(c)
 	case screenImages:
-		return tea.Batch(loadCachedImages(c), loadCatalog(c))
+		return tea.Batch(loadCachedImages(c), loadCatalog(c), loadCatalogStatus(c))
 	case screenIntents:
 		return loadIntents(c)
 	case screenManifests:

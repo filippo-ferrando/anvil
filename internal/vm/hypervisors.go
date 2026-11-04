@@ -311,6 +311,9 @@ func (h *Hypervisors) ListCatalog() ([]image.DistroEntry, error) {
 	return h.QEMU.ListCatalog()
 }
 
+// SetCatalog replaces the base catalog every hypervisor resolves images against.
+func (h *Hypervisors) SetCatalog(c *image.Catalog) { h.QEMU.SetCatalog(c) }
+
 // FirecrackerKernel is the kernel Firecracker VMs of arch boot from, per the current catalog.
 func (h *Hypervisors) FirecrackerKernel(arch string) (image.FCKernel, error) {
 	catalog, err := h.QEMU.EffectiveCatalog()

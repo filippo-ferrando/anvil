@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/internal/instance"
 	"git.fferrando.cc/rdfilippo/anvil/internal/vm/image"
@@ -215,5 +218,30 @@ func TestKernelFiles(t *testing.T) {
 	t.Setenv(image.KernelEnv, "/some/vmlinux")
 	if srv.kernelFiles() != nil {
 		t.Error("expected no cached kernel in use with ANVIL_FC_KERNEL set")
+	}
+}
+
+func TestCatalogStatusAndUpdate(t *testing.T) {
+	srv := NewImageServer(testStore(t), nil, nil, nil, nil)
+	st, err := srv.CatalogStatus(context.Background(), &anvilv1.CatalogStatusRequest{})
+	if err != nil || st.GetSource() != image.CatalogEmbedded {
+		t.Errorf("CatalogStatus without an updater = %v, %v", st, err)
+	}
+	if _, err := srv.UpdateCatalog(context.Background(), &anvilv1.UpdateCatalogRequest{}); status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("UpdateCatalog without an updater: %v", err)
+	}
+
+	// Nothing listens on port 1, so the check fails and reports it.
+	u, err := image.NewCatalogUpdater("http://127.0.0.1:1", filepath.Join(t.TempDir(), "catalog.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.CatalogUpdater = u
+	if _, err := srv.UpdateCatalog(context.Background(), &anvilv1.UpdateCatalogRequest{}); status.Code(err) != codes.Unavailable {
+		t.Errorf("UpdateCatalog offline: %v", err)
+	}
+	st, err = srv.CatalogStatus(context.Background(), &anvilv1.CatalogStatusRequest{})
+	if err != nil || st.GetLastError() == "" || st.GetLastCheckUnix() == 0 || !st.GetAutoUpdate() || st.GetUrl() != "http://127.0.0.1:1" {
+		t.Errorf("CatalogStatus after a failed check = %v, %v", st, err)
 	}
 }

@@ -87,7 +87,8 @@ internal/
   guestexec/     anvil-guest's frame protocol (command, upload, stdio, tty, exit code), its
                  server and the host's client
   vm/qemu/       QEMU process, args, QMP and guest agent clients, qemu-img, virtiofsd
-  vm/image/      image catalog, mirrors, downloads and the prepared-image vault (plus Firecracker raw cache)
+  vm/image/      image catalog (plus its daily update from the official repo, catalog_update.go), mirrors,
+                 downloads and the prepared-image vault (plus Firecracker raw cache)
   vm/cloudinit/  NoCloud seed builder
   vm/network/    tap devices on a Linux bridge (netlink)
   vm/vz/         Apple Virtualization.framework backend (darwin), a stub, not implemented yet

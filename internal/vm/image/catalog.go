@@ -71,13 +71,18 @@ type Catalog struct {
 // LoadEmbedded parses the build's embedded default manifests: the per-arch distro
 // lists and their Firecracker catalogs, all at priority 0.
 func LoadEmbedded() (*Catalog, error) {
-	raws, err := distros.Manifests()
+	files, err := distros.Files()
 	if err != nil {
 		return nil, fmt.Errorf("image: reading embedded catalog: %w", err)
 	}
-	ms := make([]MirrorManifest, len(raws))
-	for i, raw := range raws {
-		ms[i] = MirrorManifest{ManifestJSON: string(raw)}
+	return loadFiles(files)
+}
+
+// loadFiles parses a full set of catalog manifests, all at priority 0.
+func loadFiles(files []distros.File) (*Catalog, error) {
+	ms := make([]MirrorManifest, len(files))
+	for i, f := range files {
+		ms[i] = MirrorManifest{ManifestJSON: string(f.Raw)}
 	}
 	return (&Catalog{}).WithMirrors(ms)
 }

@@ -21,7 +21,7 @@ API for containers (no SDK). It takes no command-line
 flags and its on-disk layout is fixed. Its runtime behavior is
 controlled through the requests it receives over the socket, with a few
 exceptions read from its environment, described under ENVIRONMENT:
-\fBANVIL_MDNS\fR, \fBANVIL_METRICS\fR, \fBANVIL_GUI_TOOLS\fR, \fBANVIL_GUEST_TOOLS\fR and the
+\fBANVIL_MDNS\fR, \fBANVIL_METRICS\fR, \fBANVIL_CATALOG_UPDATE\fR, \fBANVIL_CATALOG_URL\fR, \fBANVIL_GUI_TOOLS\fR, \fBANVIL_GUEST_TOOLS\fR and the
 \fBANVIL_FC_*\fR ones for Firecracker VMs and the \fBANVIL_EPH_*\fR ones for ephemeral clones.
 
 On startup it creates its run, state, and cache directories if missing,
@@ -108,6 +108,12 @@ Downloaded and checksum-verified base VM images.
 Firecracker guest kernels and raw copies of the prepared images.
 .RE
 .PP
+\fB/var/cache/anvil/catalog.json\fP
+.RS 4
+The last official image catalog fetched, used instead of the embedded one
+while it matches this anvild build. Safe to delete.
+.RE
+.PP
 \fB/var/cache/anvil/migrate-staging/\fP, \fB/var/cache/anvil/export-staging/\fP
 .RS 4
 Temporary data while a migration or an import is in progress.
@@ -148,6 +154,21 @@ socket. Unset, the default, serves nothing. The endpoint has no access
 control, so bind it to loopback or a socket unless the network is trusted.
 Each scrape reports every instance's state and the live stats of the running
 ones, the same numbers as \fBanvil stats\fR.
+.RE
+.PP
+\fBANVIL_CATALOG_UPDATE\fP
+.RS 4
+Set to \fBoff\fR to stop the automatic checks for a newer official image
+catalog (a minute after start, then daily). \fBanvil image catalog update\fR
+still checks on demand. Unset, the checks run; offline hosts keep the
+embedded catalog.
+.RE
+.PP
+\fBANVIL_CATALOG_URL\fP
+.RS 4
+Where the official image catalog is fetched from: each manifest is read from
+\fIurl\fB/\fIfile name\fR. Defaults to
+\fBhttps://git.fferrando.cc/anvil/catalog/raw/branch/main\fR.
 .RE
 .PP
 \fBANVIL_GUI_TOOLS\fP

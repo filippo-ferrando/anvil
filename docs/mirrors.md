@@ -375,19 +375,34 @@ and overwrites the matching saved configs by name.
 
 ## The official catalogue
 
-The `catalog/` git submodule holds the official catalogue repo: `distros_x86_64.json`
-and `distros_aarch64.json` are VM mirror manifests, `firecracker_x86_64.json` and
-`firecracker_aarch64.json` are VM mirror manifests with only a `firecracker` section,
+The official catalogue lives in its own repo, git.fferrando.cc/anvil/catalog:
+`distros_x86_64.json` and `distros_aarch64.json` are the distro lists,
+`firecracker_x86_64.json` and `firecracker_aarch64.json` hold only a `firecracker` section,
 and `cloudinits/` is a template repo.
-None of it is embedded in the binary; add it like any other source, with the URLs listed
-in `catalog/README.md`:
+
+The manifests are embedded in anvild at build time (`make catalog`, `data/distros`). A
+running anvild also checks the repo for a newer version a minute after it starts, then
+once a day, and switches to it without a restart: new distros, new image URLs and
+checksums, and new Firecracker kernels. Mirrors still apply on top of it.
+
+- The fetched copy is cached in `/var/cache/anvil/catalog.json`, so a restart without
+  network keeps it. A cache fetched by a different anvild build is ignored until the next
+  check, since that build's own embedded catalogue may be newer.
+- A check that can't reach the repo, or gets a manifest that doesn't parse (e.g. a newer
+  `schema_version`), changes nothing. Offline hosts keep the embedded catalogue.
+- `anvil image catalog status` shows where the catalogue in use comes from and the last
+  check; `anvil image catalog update` checks now. In `anvil tui`, the Images page shows
+  the source in the catalogue panel title, and `u` checks now.
+- `ANVIL_CATALOG_UPDATE=off` in anvild's environment stops the automatic checks
+  (`anvil image catalog update` still works). `ANVIL_CATALOG_URL` fetches from another
+  copy, which must serve each manifest at `<url>/<file name>`; the default is
+  `https://git.fferrando.cc/anvil/catalog/raw/branch/main`.
+
+The cloud-init templates are not part of this; import them like any other template repo:
 
 ```
-anvil mirror add --kind vm --manifest-url <distros manifest url> anvil-catalogue
 anvil cloud-init import-repo <templates.json url>
 ```
-
-`anvil find` then lists the extra distros next to the built-in ones.
 
 ## From the TUI
 

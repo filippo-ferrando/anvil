@@ -42,3 +42,34 @@ func TestEffectiveCatalogCaches(t *testing.T) {
 		t.Errorf("Find = %+v, %v", e, err)
 	}
 }
+
+// SetCatalog swaps the base catalog and drops the merge made over the old one.
+func TestSetCatalogDropsMerge(t *testing.T) {
+	cat, err := image.LoadEmbedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"schema_version": 1, "distros": [{"id": "mirror-only", "arch": "x86_64", "url": "https://a.example/m.img"}]}`
+	src := &mirrorList{mirrors: []store.Mirror{{Enabled: true, ManifestJSON: manifest, Priority: 10}}}
+	b := &Backend{Catalog: cat, Source: src}
+	first, err := b.EffectiveCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base, err := image.LoadEmbedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.SetCatalog(base)
+	second, err := b.EffectiveCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second == first {
+		t.Error("expected a new merge over the new base catalog")
+	}
+	if _, err := second.Find("mirror-only", "x86_64"); err != nil {
+		t.Errorf("mirrors still apply on top of the new base: %v", err)
+	}
+}

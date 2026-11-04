@@ -41,7 +41,7 @@ type Backend struct {
 	Networker Networker
 	Devices   DeviceClaimer
 
-	// The last merged catalog and the mirror manifests it came from.
+	// Guards Catalog, plus the last merged catalog and the mirror manifests it came from.
 	catalogMu   sync.Mutex
 	catalogFrom []image.MirrorManifest
 	catalogMem  *image.Catalog
@@ -93,12 +93,12 @@ func (b *Backend) EffectiveCatalog() (*image.Catalog, error) {
 		}
 		manifests = append(manifests, image.MirrorManifest{ManifestJSON: m.ManifestJSON, Priority: m.Priority})
 	}
-	if len(manifests) == 0 {
-		return b.Catalog, nil
-	}
 	// Parsing every manifest again is the costly part, so reuse the last merge while the mirrors match.
 	b.catalogMu.Lock()
 	defer b.catalogMu.Unlock()
+	if len(manifests) == 0 {
+		return b.Catalog, nil
+	}
 	if b.catalogMem != nil && slices.Equal(b.catalogFrom, manifests) {
 		return b.catalogMem, nil
 	}
@@ -108,6 +108,13 @@ func (b *Backend) EffectiveCatalog() (*image.Catalog, error) {
 	}
 	b.catalogFrom, b.catalogMem = manifests, merged
 	return merged, nil
+}
+
+// SetCatalog replaces the base catalog, e.g. after the official catalog was updated.
+func (b *Backend) SetCatalog(c *image.Catalog) {
+	b.catalogMu.Lock()
+	defer b.catalogMu.Unlock()
+	b.Catalog, b.catalogFrom, b.catalogMem = c, nil, nil
 }
 
 // ListCatalog returns every distro entry EffectiveCatalog resolves against.

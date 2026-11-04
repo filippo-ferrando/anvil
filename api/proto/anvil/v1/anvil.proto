@@ -715,6 +715,12 @@ service ImageService {
   // Catalog lists every distro image `anvil launch --kind vm <id>` can resolve against.
   rpc Catalog(CatalogRequest) returns (CatalogReply);
 
+  // CatalogStatus reports where the built-in catalog in use comes from and its last update check.
+  rpc CatalogStatus(CatalogStatusRequest) returns (CatalogStatusReply);
+
+  // UpdateCatalog checks the official catalog now and switches to it if it changed.
+  rpc UpdateCatalog(UpdateCatalogRequest) returns (UpdateCatalogReply);
+
   // ListContainerImages lists every image cached by a container engine
   // (Docker today), separate from the VM image cache above.
   rpc ListContainerImages(ContainerImageListRequest) returns (ContainerImageListReply);
@@ -767,6 +773,25 @@ message CatalogRequest {}
 
 message CatalogReply {
   repeated CatalogEntry entries = 1;
+}
+
+message CatalogStatusRequest {}
+
+message CatalogStatusReply {
+  bool auto_update = 1;       // false when ANVIL_CATALOG_UPDATE=off
+  string url = 2;             // where the official catalog is fetched from
+  int64 interval_seconds = 3; // time between automatic checks
+  string source = 4;          // "embedded" (built into anvild) or "updated" (fetched)
+  int64 updated_at_unix = 5;  // when the updated catalog in use was fetched, 0 if embedded
+  int64 last_check_unix = 6;  // 0 if no check ran since anvild started
+  string last_error = 7;      // error of the last check, empty if it worked
+}
+
+message UpdateCatalogRequest {}
+
+message UpdateCatalogReply {
+  bool changed = 1; // the catalog in use was replaced
+  CatalogStatusReply status = 2;
 }
 
 message ImageDeleteRequest {

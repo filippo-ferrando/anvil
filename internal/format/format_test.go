@@ -86,3 +86,15 @@ func TestCPUs(t *testing.T) {
 		t.Errorf("CPUs(4) = %q", got)
 	}
 }
+
+func TestCatalogSource(t *testing.T) {
+	if got := CatalogSource(&anvilv1.CatalogStatusReply{Source: "embedded"}, "2006"); got != "built-in" {
+		t.Errorf("embedded: got %q", got)
+	}
+	if got := CatalogSource(nil, "2006"); got != "built-in" {
+		t.Errorf("nil: got %q", got)
+	}
+	if got := CatalogSource(&anvilv1.CatalogStatusReply{Source: "updated", UpdatedAtUnix: 1_800_000_000}, "2006"); got != "updated 2027" {
+		t.Errorf("updated: got %q", got)
+	}
+}

@@ -117,6 +117,19 @@ type hostTestedMsg struct {
 	err           error
 }
 
+// catalogStatusMsg is where the image catalog in use comes from, and its last update check.
+type catalogStatusMsg struct {
+	status *anvilv1.CatalogStatusReply
+	err    error
+}
+
+// catalogUpdatedMsg is the reply to an on-demand catalog update.
+type catalogUpdatedMsg struct {
+	changed bool
+	status  *anvilv1.CatalogStatusReply
+	err     error
+}
+
 // imageChecksumMsg is the reply to a checksum request for one cached VM image.
 type imageChecksumMsg struct {
 	id, arch string
@@ -265,6 +278,20 @@ func loadCatalog(c *client.Client) tea.Cmd {
 			return catalogLoadedMsg{err: err}
 		}
 		return catalogLoadedMsg{entries: reply.GetEntries()}
+	}
+}
+
+func loadCatalogStatus(c *client.Client) tea.Cmd {
+	return func() tea.Msg {
+		reply, err := c.Image.CatalogStatus(context.Background(), &anvilv1.CatalogStatusRequest{})
+		return catalogStatusMsg{status: reply, err: err}
+	}
+}
+
+func updateCatalog(c *client.Client) tea.Cmd {
+	return func() tea.Msg {
+		reply, err := c.Image.UpdateCatalog(context.Background(), &anvilv1.UpdateCatalogRequest{})
+		return catalogUpdatedMsg{changed: reply.GetChanged(), status: reply.GetStatus(), err: err}
 	}
 }
 

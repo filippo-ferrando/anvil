@@ -76,3 +76,29 @@ func TestCatalogFilter(t *testing.T) {
 		t.Error("expected esc to clear the filter")
 	}
 }
+
+func TestCatalogUpdateKey(t *testing.T) {
+	m := model{screen: screenImages, images: newImagesModel()}
+	if _, cmd := m.Update(key("u")); cmd == nil {
+		t.Error("expected u to request a catalog update")
+	}
+	m.images.mode = imagesModeContainer
+	if _, cmd := m.Update(key("u")); cmd != nil {
+		t.Error("expected no catalog update from the container window")
+	}
+}
+
+func TestCatalogStatusInTitle(t *testing.T) {
+	m := model{screen: screenImages, images: newImagesModel()}
+	next, _ := m.Update(catalogStatusMsg{status: &anvilv1.CatalogStatusReply{Source: "updated", UpdatedAtUnix: 1_800_000_000}})
+	if title := next.(model).images.catalog.Title; !strings.Contains(title, "updated 2027-") {
+		t.Errorf("title = %q", title)
+	}
+	next, cmd := next.(model).Update(catalogUpdatedMsg{changed: true, status: &anvilv1.CatalogStatusReply{Source: "embedded"}})
+	if cmd == nil {
+		t.Error("expected a catalog reload after a change")
+	}
+	if title := next.(model).images.catalog.Title; !strings.Contains(title, "built-in") {
+		t.Errorf("title = %q", title)
+	}
+}

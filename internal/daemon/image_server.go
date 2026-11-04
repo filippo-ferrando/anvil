@@ -6,6 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	anvilv1 "git.fferrando.cc/rdfilippo/anvil/api/gen/anvil/v1"
 	"git.fferrando.cc/rdfilippo/anvil/internal/container"
@@ -35,6 +39,8 @@ type ImageServer struct {
 	Containers *container.Backend
 	// FC lists Firecracker's raw copies and kernels next to the base images.
 	FC *image.FCCache
+	// CatalogUpdater keeps the built-in catalog in line with the official one; nil disables it.
+	CatalogUpdater *image.CatalogUpdater
 }
 
 func NewImageServer(s *store.Store, v *image.Vault, backend VMCatalog, containers *container.Backend, fc *image.FCCache) *ImageServer {
@@ -70,6 +76,43 @@ func (s *ImageServer) Catalog(ctx context.Context, req *anvilv1.CatalogRequest) 
 		})
 	}
 	return reply, nil
+}
+
+func (s *ImageServer) CatalogStatus(ctx context.Context, req *anvilv1.CatalogStatusRequest) (*anvilv1.CatalogStatusReply, error) {
+	if s.CatalogUpdater == nil {
+		return &anvilv1.CatalogStatusReply{Source: image.CatalogEmbedded}, nil
+	}
+	return catalogStatusReply(s.CatalogUpdater.Status()), nil
+}
+
+func (s *ImageServer) UpdateCatalog(ctx context.Context, req *anvilv1.UpdateCatalogRequest) (*anvilv1.UpdateCatalogReply, error) {
+	if s.CatalogUpdater == nil {
+		return nil, status.Error(codes.FailedPrecondition, "catalog updates are not available on this daemon")
+	}
+	changed, err := s.CatalogUpdater.Check(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	return &anvilv1.UpdateCatalogReply{Changed: changed, Status: catalogStatusReply(s.CatalogUpdater.Status())}, nil
+}
+
+func catalogStatusReply(st image.CatalogStatus) *anvilv1.CatalogStatusReply {
+	return &anvilv1.CatalogStatusReply{
+		AutoUpdate:      st.AutoUpdate,
+		Url:             st.URL,
+		IntervalSeconds: int64(st.Interval / time.Second),
+		Source:          st.Source,
+		UpdatedAtUnix:   unixOrZero(st.UpdatedAt),
+		LastCheckUnix:   unixOrZero(st.LastCheck),
+		LastError:       st.LastError,
+	}
+}
+
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
 }
 
 func (s *ImageServer) List(ctx context.Context, req *anvilv1.ImageListRequest) (*anvilv1.ImageListReply, error) {

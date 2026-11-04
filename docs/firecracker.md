@@ -50,8 +50,10 @@ arm64), on a `v<version>` tag.
 The image catalog has a `firecracker` section: the kernel per arch, and the distro ids that
 boot with it, with extra kernel arguments where needed (`rootflags=subvol=root` for
 Fedora's btrfs root). Images, checksums and mirrors are the same as for QEMU. A mirror
-manifest can carry its own `firecracker` section (`docs/mirrors.md`), and the catalogue
-submodule has `firecracker_x86_64.json` and `firecracker_aarch64.json`.
+manifest can carry its own `firecracker` section (`docs/mirrors.md`), and the official
+catalogue has `firecracker_x86_64.json` and `firecracker_aarch64.json`. anvild picks up a
+new kernel from the official catalogue once a day without a release (`docs/mirrors.md`,
+"The official catalogue").
 
 ## How it differs from a QEMU VM
 

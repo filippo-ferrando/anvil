@@ -12,10 +12,16 @@ import (
 //go:embed distros_*.json firecracker_*.json
 var files embed.FS
 
-// Manifests returns every embedded manifest: the per-arch distro lists first, then the
+// File is one embedded manifest and its file name in the catalog repo.
+type File struct {
+	Name string
+	Raw  []byte
+}
+
+// Files returns every embedded manifest: the per-arch distro lists first, then the
 // Firecracker sections (guest kernel and bootable distro ids per arch).
-func Manifests() ([][]byte, error) {
-	var out [][]byte
+func Files() ([]File, error) {
+	var out []File
 	for _, pattern := range []string{"distros_*.json", "firecracker_*.json"} {
 		names, err := fs.Glob(files, pattern)
 		if err != nil {
@@ -26,8 +32,21 @@ func Manifests() ([][]byte, error) {
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, raw)
+			out = append(out, File{Name: n, Raw: raw})
 		}
+	}
+	return out, nil
+}
+
+// Manifests returns the content of every manifest Files returns, in the same order.
+func Manifests() ([][]byte, error) {
+	all, err := Files()
+	if err != nil {
+		return nil, err
+	}
+	out := make([][]byte, len(all))
+	for i, f := range all {
+		out[i] = f.Raw
 	}
 	return out, nil
 }

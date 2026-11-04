@@ -99,7 +99,10 @@ through the remote host: `jumpArgs` adds `ssh -J <remote>` and `DockerEnv` sets
 1. Create the runtime directories (`internal/config/paths.go`, `paths_linux.go`):
    `/run/anvil`, `/var/lib/anvil`, `/var/cache/anvil` and their subdirectories.
 2. Open the bbolt database (`store.Open`).
-3. Load the embedded image catalog (`data/distros`, fetched from the anvil/catalog repo at build time) and the image vault.
+3. Load the image catalog and the image vault: the last official catalog fetched
+   (`/var/cache/anvil/catalog.json`) if it matches this build, else the embedded one
+   (`data/distros`, fetched from the anvil/catalog repo at build time). A background check
+   (`image.CatalogUpdater`) refreshes it daily and swaps it into the VM backend.
 4. Build the VM backend (`newVMBackend`, chosen per platform) and the container backend.
 5. Build `instance.Manager` with one backend per kind, then run `Manager.Reconcile`.
 6. Build `intent.Manager`, run `ReconcileNetworks`, start the intent DNS server.

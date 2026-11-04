@@ -52,6 +52,9 @@ func JailerExe() string { return filepath.Join(StateDir+"-jailer", "jailer") }
 // PreparedImageDir holds downloaded and checksum-verified base images.
 func PreparedImageDir() string { return filepath.Join(CacheDir, "images", "prepared") }
 
+// CatalogCachePath holds the last official image catalog fetched by anvild.
+func CatalogCachePath() string { return filepath.Join(CacheDir, "catalog.json") }
+
 // FirecrackerImageDir holds Firecracker's guest kernels and raw copies of the prepared images.
 func FirecrackerImageDir() string { return filepath.Join(CacheDir, "images", "firecracker") }
 

@@ -383,6 +383,7 @@ Two modes, shown as tabs at the top.
 | `/` | VM mode: filter the catalog by id, distro, version or name, case-insensitive, like `anvil find <term>`. The list updates while typing; `enter` keeps the filter, `esc` clears it. |
 | `h` | VM mode, cached panel: compute a base image's sha256 (not offered for raw copies or the kernel). |
 | `x` | Delete the selected cached VM image (only the download, not the catalog entry; deleting a base also deletes its Firecracker raw copy) or container image, after a confirmation. There `f` deletes even if an instance still uses it (`--force`, this breaks that instance). |
+| `u` | VM mode: check the official image catalog now, like `anvil image catalog update`. The catalog panel title shows where the catalog in use comes from (built-in, or updated and when). |
 | `r` | Reload. |
 | `esc` `q` | Back to the sidebar. |
 
