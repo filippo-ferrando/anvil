@@ -2,6 +2,18 @@
 
 Built from commit subjects by `scripts/changelog.sh`.
 
+## v1.3.7 (2026-11-05)
+
+### Fixes
+
+- kernel selection (f565a8a)
+- fixing catalog (ec89234)
+- moved submodule (8cb1020)
+
+### Other changes
+
+- implemented catalog auto refresh from remote repo (f5bb5d6)
+
 ## v1.3.6 (2026-11-03)
 
 ### Fixes
